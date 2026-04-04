@@ -1,6 +1,6 @@
-PumpkinForth is an educational Forth implementation for ARM64 Linux, sister
-project to BasicForth (x86). Pure ARM64 assembly, no libc, raw syscalls,
-subroutine threaded code.
+BasicForth is a modern Forth environment for Linux, inspired by 1980s BASIC —
+boot up and start coding. Multi-architecture (ARM64 + x86-64), pure assembly
+with minimal library dependencies, targeting video games and robotics.
 
 ## Working Style
 
@@ -19,26 +19,35 @@ The process:
    concepts, algorithms (pseudocode), and data structures — but the assembly
    implementation is left as an exercise for the reader. Assembly hints are
    fine, but not the full code.
-4. The lesson style should match BasicForth's docs/Lessons.md.
 
 ## Development Environment
 
 - Development on x86 Linux laptop using Claude Code
-- Cross-compile with aarch64-linux-gnu-as + aarch64-linux-gnu-ld
-- Smoke test with qemu-aarch64 (user-mode emulation)
-- Deploy and test on Pumpkin Genio 510 board (Pumpkian Debian) via SSH
-- Makefile targets: build, test (QEMU), deploy (scp + ssh to board)
+- x86-64: build and run natively on laptop
+- ARM64: cross-compile with aarch64-linux-gnu-as + aarch64-linux-gnu-ld
+- ARM64 smoke test with qemu-aarch64 (user-mode emulation)
+- Deploy and test on Pumpkin Genio 510 board via SSH
+- Top-level Makefile dispatches to arch-specific builds
 
 ## Architecture
 
-- Pure ARM64 assembly (GNU as)
-- No libc, no dynamic linker — static ELF binary
-- Subroutine Threaded Code (STC) using BL/RET
-- 64-bit cells (native word size)
-- Register allocation: X19=DSP, X20=HERE, X21=LATEST, SP=return stack
-- Linux syscalls via SVC #0
+- Multi-arch: src/arch/arm64/ and src/arch/x86/
+- Shared Forth source: src/forth/ (future core.fs)
+- No libc, no dynamic linker — static ELF binaries
+- Subroutine Threaded Code (STC)
+- 64-bit cells (native word size on both architectures)
+- Linux syscalls (SVC #0 on ARM64, syscall on x86-64)
+- Open to minimal libraries for threading, graphics, sound where it makes sense
+
+## Register Allocation
+
+### ARM64
+- X19=DSP, X20=HERE, X21=LATEST, SP=return stack
+
+### x86-64
+- R15=DSP, R14=HERE, R13=LATEST, RSP=return stack
 
 ## Related Projects
 
-- BasicForth: ~/Dev/BasicForth/ (x86 sister project)
+- BareMetalForth: ~/Dev/BareMetalForth/ (original x86-32 bare metal project)
 - Pumpkian: ~/Dev/Pumpkian/ (Debian image builder for the target board)

@@ -1,4 +1,4 @@
-// PumpkinForth — Platform Layer (Linux)
+// BasicForth — Platform Layer (Linux/ARM64)
 // Linux-specific I/O via syscalls. Swap this file to port to bare metal.
 
 .equ SYS_ioctl, 29
@@ -27,12 +27,14 @@
 .equ OFFSET_CC,    17
 
 // c_iflag bits
-.equ ICRNL,  0x100          // translate CR to NL
+.equ IXON,   0x400          // XON/XOFF flow control (Ctrl+S/Ctrl+Q)
 
 // c_lflag bits
 .equ ECHO,   0x08           // echo input
 .equ ICANON, 0x02           // canonical (line-buffered) mode
-.equ ISIG,   0x04           // signal generation (Ctrl+C etc)
+
+// Additional ioctl commands
+.equ FIONREAD, 0x541B       // get bytes available to read (for future KEY?)
 
 // c_cc indices
 .equ VTIME, 5
@@ -64,11 +66,12 @@ platform_raw_mode:
     // Modify raw_termios for raw mode
     ADR X0, raw_termios
 
-    // Clear ICRNL in c_iflag (don't translate CR to NL)
+    // Clear IXON in c_iflag (free Ctrl+S and Ctrl+Q for input)
     LDR W1, [X0, #OFFSET_IFLAG]
-    MOV W2, #ICRNL
+    MOV W2, #IXON
     BIC W1, W1, W2
     STR W1, [X0, #OFFSET_IFLAG]
+    // Note: ICRNL left ON — terminal converts CR to NL for us
 
     // Clear ECHO, ICANON in c_lflag (keep ISIG for Ctrl+C)
     LDR W1, [X0, #OFFSET_LFLAG]

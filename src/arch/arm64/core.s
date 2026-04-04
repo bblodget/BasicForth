@@ -1,4 +1,4 @@
-// PumpkinForth — Core ASM Primitives
+// BasicForth — Core ASM Primitives (ARM64)
 // Platform-independent ARM64 assembly. Requires platform_linux.s (or equivalent).
 
 .equ CELL, 8                    // 64-bit cells

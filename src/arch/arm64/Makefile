@@ -1,4 +1,4 @@
-# PumpkinForth — Phase 2: Forth Core
+# BasicForth — ARM64 Build
 # Builds natively on ARM64 or cross-compiles from x86
 
 ARCH := $(shell uname -m)
@@ -11,14 +11,15 @@ endif
 AS      = $(CROSS)as
 LD      = $(CROSS)ld
 
-BIN     = pumpkinforth
+BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
 OBJS    = $(SRCS:.s=.o)
 
 QEMU    = qemu-aarch64-static
 BOARD   = p510
+BOARD_DIR = ~/Dev/BasicForth/src/arch/arm64
 
-.PHONY: all test deploy clean help
+.PHONY: all test deploy clean
 
 all: $(BIN)
 
@@ -31,18 +32,8 @@ $(BIN): $(OBJS)
 test: $(BIN)
 	$(QEMU) $(BIN)
 
-BOARD_DIR = /home/pk/Dev/PumpkinForth/src/forth
-
 deploy: $(BIN)
 	scp $(BIN) $(BOARD):$(BOARD_DIR)/
-
-help:
-	@echo "Targets:"
-	@echo "  all      Build pumpkinforth (default)"
-	@echo "  test     Build and run with QEMU"
-	@echo "  deploy   Build and copy to board"
-	@echo "  clean    Remove build artifacts"
-	@echo "  help     Show this help"
 
 clean:
 	rm -f $(OBJS) $(BIN)

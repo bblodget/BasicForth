@@ -1,13 +1,13 @@
-# Building PumpkinForth: An ARM64 Forth
+# Building BasicForth: An ARM64 Forth
 
-A step-by-step development journal documenting the creation of PumpkinForth,
-a Forth interpreter written in ARM64 assembly for Linux. No libc, no libraries —
-just raw system calls and the ARM64 instruction set.
+A step-by-step development journal documenting the creation of BasicForth,
+a multi-architecture Forth environment for Linux. No libc, no libraries —
+just raw system calls and native assembly (ARM64 and x86-64).
 
-This is a sister project to [BasicForth](https://github.com/bblodget/BasicForth),
-which does the same thing on x86. Where BasicForth explores bare metal PC
-hardware, PumpkinForth focuses on ARM64 — the architecture that powers phones,
-tablets, Raspberry Pis, and the OLogic Pumpkin Genio 510 board we develop on.
+Successor to [BareMetalForth](https://github.com/bblodget/BasicForth),
+which targeted bare metal x86. BasicForth builds on Linux instead, supporting
+modern hardware — from x86 laptops to ARM64 boards like the Raspberry Pi and
+OLogic Pumpkin Genio 510.
 
 ## What You'll Learn
 
@@ -28,12 +28,12 @@ tablets, Raspberry Pis, and the OLogic Pumpkin Genio 510 board we develop on.
 ## Lesson 1: Hello ARM64
 
 Our first goal is simple: write an ARM64 assembly program that prints
-"PumpkinForth" to the terminal and exits. No Forth yet — just prove we can
+"BasicForth" to the terminal and exits. No Forth yet — just prove we can
 build and run an ARM64 binary.
 
 This is the equivalent of BasicForth's early lessons on boot sectors and BIOS
 interrupts, but instead of bare metal we're targeting Linux. The ARM64 Linux
-syscall interface is our foundation — everything PumpkinForth does will be
+syscall interface is our foundation — everything BasicForth does will be
 built on top of it.
 
 ### Why ARM64?
@@ -135,7 +135,7 @@ SVC #0              // like INT 0x80 or SYSCALL on x86
 
 ### GNU Assembler Syntax
 
-PumpkinForth uses the GNU assembler (`as`), which has different syntax from
+BasicForth uses the GNU assembler (`as`), which has different syntax from
 NASM (used by BasicForth). Key differences:
 
 | Feature          | NASM (x86)       | GNU as (ARM64)                    |
@@ -202,7 +202,7 @@ memory, and jumps to `_start`. That's it.
 Write an ARM64 assembly program that:
 
 1. Defines constants for the `write` (64) and `exit` (93) syscall numbers
-2. Prints "PumpkinForth\n" to stdout using the `write` syscall
+2. Prints "BasicForth\n" to stdout using the `write` syscall
 3. Exits cleanly with status code 0
 4. Assembles and links into a static ELF binary
 5. Runs under QEMU user-mode emulation
@@ -232,7 +232,7 @@ constants.
 
 **Q: Why not use GCC with `-nostdlib`?**
 
-A: You can — `gcc -nostdlib -static -o pumpkinforth forth.s` would work. We
+A: You can — `gcc -nostdlib -static -o basicforth forth.s` would work. We
 use `as` + `ld` separately to make the build steps explicit and educational.
 GCC just calls them under the hood anyway. Either approach produces the same
 binary.

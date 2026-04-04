@@ -1,4 +1,4 @@
 # Build artifacts
 *.o
-src/hello/hello
-src/forth/pumpkinforth
+src/arch/arm64/basicforth
+src/arch/x86/basicforth

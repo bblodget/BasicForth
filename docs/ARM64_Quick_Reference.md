@@ -90,7 +90,7 @@ Writing to a W register zeroes the upper 32 bits of the corresponding X register
 | **SP**    | Stack pointer   | Return stack — must stay 16-byte aligned     |
 | **XZR**   | Zero register   | Constant 0 — useful for comparisons/clears   |
 
-### PumpkinForth Register Allocation
+### BasicForth Register Allocation
 
 ```
 X19 = Data stack pointer (DSP)     — callee-saved, persistent
@@ -152,7 +152,7 @@ MSUB X12, X10, X11, X9  // remainder
 LSL X0, X1, #3          // X0 = X1 * 8 (shift left by 3)
 LSR X0, X1, #1          // X0 = X1 / 2 (unsigned)
 ASR X0, X1, #1          // X0 = X1 / 2 (signed, preserves sign)
-LSL X0, X1, #3          // X0 = X1 * 8 (CELLS in PumpkinForth: 8 bytes)
+LSL X0, X1, #3          // X0 = X1 * 8 (CELLS in BasicForth: 8 bytes)
 ```
 
 ## Memory Access
@@ -308,7 +308,7 @@ my_function:
     RET
 ```
 
-For PumpkinForth primitives, X19-X21 are our engine registers (DSP, HERE,
+For BasicForth primitives, X19-X21 are our engine registers (DSP, HERE,
 LATEST) — they persist across all calls because they're callee-saved.
 
 ## Linux Syscall ABI (ARM64)

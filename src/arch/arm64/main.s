@@ -1,9 +1,9 @@
-// PumpkinForth — Main / Test Harness
+// BasicForth — Main / Test Harness (ARM64)
 // Phase 2, Step 2: Terminal raw mode + KEY
 //
 // Tests:
-//   1. Previous tests (stack primitives)
-//   2. Raw mode echo loop — type characters, see them echoed, press 'q' to quit
+//   1. Stack primitives (3+4=7, SWAP)
+//   2. Raw mode echo loop — type characters, see them echoed, 'q' to quit
 
 .global _start
 
@@ -65,14 +65,6 @@ echo_loop:
     LDR X9, [X19]             // peek at top (the char)
     CMP X9, #'q'
     B.EQ echo_done
-
-    // Check if char == CR (13), emit LF too
-    CMP X9, #13
-    B.NE echo_not_cr
-    MOV X9, #10
-    STR X9, [X19, #-8]!
-    BL forth_emit
-echo_not_cr:
 
     BL forth_drop              // drop the char
     B echo_loop
