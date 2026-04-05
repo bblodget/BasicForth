@@ -397,3 +397,44 @@ my_function:             // Global label
     B 1f                 // Branch to next '1:' label (f = forward)
 .L_local:                // Local label (convention: .L prefix)
 ```
+
+## FAQ
+
+**Q: Why `SVC #0` and not just `SVC`?**
+
+ARM's supervisor call instruction takes an immediate value that the kernel
+*could* use to distinguish different call types. Linux always uses 0 and
+ignores the immediate — the syscall number comes from X8 instead. But the
+assembler requires you to write `SVC #0` explicitly.
+
+**Q: Why `ADR` instead of loading an absolute address?**
+
+`ADR` computes a PC-relative address, which means the code works regardless
+of where it's loaded in memory. On ARM64, you can't load a full 64-bit
+address in a single instruction anyway (instructions are only 32 bits wide).
+`ADR` can reach +/- 1MB from the current instruction, which is plenty for
+string constants and nearby data. For larger ranges, use `ADRP` + `ADD`
+(page-relative, +/- 4GB).
+
+**Q: Why `as` + `ld` instead of `gcc -nostdlib`?**
+
+You can use `gcc -nostdlib -static -o basicforth main.s core.s platform_linux.s`
+and it works. We use `as` + `ld` separately to make the build steps explicit.
+GCC just calls them under the hood anyway. When we add C library dependencies
+later, we'll switch to `gcc -nostartfiles` to get dynamic linking while
+keeping our own `_start`.
+
+**Q: Why are ARM64 syscall numbers different from x86?**
+
+Each architecture has its own syscall table assigned by the kernel developers.
+ARM64 was designed from scratch (not inherited from 32-bit ARM), so the
+numbers are completely different from x86. For example, write is 64 on ARM64
+but 1 on x86-64. The arguments have the same meaning — only the numbers
+differ. See [arm64.syscall.sh](https://arm64.syscall.sh/) for the full table.
+
+**Q: Why does ARM64 have 3-operand instructions?**
+
+RISC design: `ADD X0, X1, X2` means X0 = X1 + X2 without destroying either
+input. x86 uses 2-operand form (`add %rbx, %rax` means RAX = RAX + RBX),
+which overwrites one of the inputs. The 3-operand form reduces the need for
+`MOV` instructions to save values before arithmetic.

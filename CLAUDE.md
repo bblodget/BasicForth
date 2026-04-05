@@ -7,18 +7,17 @@ with minimal library dependencies, targeting video games and robotics.
 The way we like to work is: first we make a plan together, once we agree on the
 plan and the go-ahead is given, then we execute the plan step by step.
 
-## Lessons and Documentation
+## Documentation
 
-We document the journey in docs/Lessons.md. The format is a series of
-"lessons" followed by a Q&A section. Each lesson is basically a chapter.
+Reference docs live in docs/. Each covers one topic and is kept up to date
+as the code evolves:
 
-The process:
-1. Plan and implement a step/milestone together.
-2. After the implementation is working, write the lesson in docs/Lessons.md.
-3. The lesson should be written so a third-party reader can understand the
-   concepts, algorithms (pseudocode), and data structures — but the assembly
-   implementation is left as an exercise for the reader. Assembly hints are
-   fine, but not the full code.
+- Planning.md — vision, phases, design decisions
+- Platform_Layer.md — platform API, termios, syscall reference
+- Core_Primitives.md — ASM primitives, data stack, TOS-in-register design
+- Forth_Core_Words.md — Forth 2012 standard core vocabulary
+- ARM64_Quick_Reference.md — ARM64 instruction and register reference
+- x86_Quick_Reference.md — x86-64 AT&T syntax reference
 
 ## Development Environment
 

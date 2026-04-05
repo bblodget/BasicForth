@@ -107,8 +107,11 @@ src/
 Makefile                  Top-level dispatcher
 docs/
   Planning.md             This file
-  Lessons.md              Educational walk-through
+  Platform_Layer.md       Platform API reference
+  Core_Primitives.md      ASM primitives reference
+  Forth_Core_Words.md     Forth vocabulary reference
   ARM64_Quick_Reference.md
+  x86_Quick_Reference.md
 ```
 
 ## Register Allocation
