@@ -18,6 +18,39 @@
 .equ CELL, 8                    # 64-bit cells
 .equ DATA_STACK_SIZE, 4096      # 512 cells
 
+# ---------- Dictionary Entry Layout ----------
+# [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
+#
+# Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
+.equ F_IMMEDIATE, 0x80
+.equ F_HIDDEN,    0x40
+.equ F_LENMASK,   0x3F
+
+# DEFWORD entry, name, label, link, flags
+#   entry: label for this dictionary entry
+#   name:  the Forth name string (lowercase)
+#   label: the assembly code address
+#   link:  label of previous entry (0 for first)
+#   flags: optional flags byte (default 0)
+.macro DEFWORD entry, name, label, link, flags=0
+.section .data
+.balign 8
+\entry:
+    .quad \link
+\entry\()_flags:
+    .byte ((\entry\()_name_end - \entry\()_name_start) | \flags)
+\entry\()_name_start:
+    .ascii "\name"
+\entry\()_name_end:
+    .balign 8
+\entry\()_xt:
+    .quad \label
+\entry\()_codelen:
+    .long 0
+    .balign 4
+.text
+.endm
+
 # ---------- Primitives ----------
 
 # DUP ( a -- a a )
@@ -367,6 +400,25 @@ forth_number:
     pop %rbp
     pop %rbx
     ret
+
+# ---------- Static Dictionary ----------
+
+DEFWORD dict_dup,     "dup",     forth_dup,     0
+DEFWORD dict_drop,    "drop",    forth_drop,    dict_dup
+DEFWORD dict_swap,    "swap",    forth_swap,    dict_drop
+DEFWORD dict_over,    "over",    forth_over,    dict_swap
+DEFWORD dict_add,     "+",       forth_add,     dict_over
+DEFWORD dict_sub,     "-",       forth_sub,     dict_add
+DEFWORD dict_negate,  "negate",  forth_negate,  dict_sub
+DEFWORD dict_fetch,   "@",       forth_fetch,   dict_negate
+DEFWORD dict_store,   "!",       forth_store,   dict_fetch
+DEFWORD dict_cfetch,  "c@",      forth_cfetch,  dict_store
+DEFWORD dict_cstore,  "c!",      forth_cstore,  dict_cfetch
+DEFWORD dict_emit,    "emit",    forth_emit,    dict_cstore
+DEFWORD dict_key,     "key",     forth_key,     dict_emit
+DEFWORD dict_accept,  "accept",  forth_accept,  dict_key
+DEFWORD dict_number,  "number",  forth_number,  dict_accept
+.global dict_number
 
 # ---------- Data Stack Memory ----------
 .bss

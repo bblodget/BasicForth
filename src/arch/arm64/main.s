@@ -17,7 +17,7 @@ _start:
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP
     ADR X21, dict_space             // HERE
-    MOV X22, #0                     // LATEST (0 = empty, updated in Step 3)
+    ADR X22, dict_number             // LATEST
 
     // --- Test 1: Stack primitives ---
 
