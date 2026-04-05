@@ -24,7 +24,7 @@ $(BIN): $(OBJS)
 test: $(BIN)
 	./$(BIN)
 
-$(TEST_BIN): core.o
+$(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_x86.s core.o
 

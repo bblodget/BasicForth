@@ -39,7 +39,7 @@ test: $(BIN)
 unit-test: $(TEST_BIN)
 	$(QEMU) ./$(TEST_BIN)
 
-$(TEST_BIN): core.o
+$(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_arm64.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_arm64.s core.o -static
 
