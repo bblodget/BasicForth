@@ -16,6 +16,8 @@
 _start:
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP
+    ADR X9, sp0
+    STR X19, [X9]                   // save initial DSP for .S
     ADR X21, dict_space             // HERE
     ADR X22, dict_bye                 // LATEST
 

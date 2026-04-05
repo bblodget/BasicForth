@@ -16,6 +16,7 @@
 _start:
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP
+    mov %r15, sp0(%rip)             # save initial DSP for .S
     lea dict_space(%rip), %r13      # HERE
     lea dict_bye(%rip), %r12        # LATEST
 
