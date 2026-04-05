@@ -2,93 +2,99 @@
 # Platform-independent x86-64 assembly. Requires platform_linux.s (or equivalent).
 #
 # Register allocation:
-#   R15 = Data stack pointer (DSP), grows downward
-#   R14 = HERE pointer (dictionary free space) — future
-#   R13 = LATEST pointer (most recent dictionary entry) — future
+#   R15 = Data stack pointer (DSP) — points to second item on stack
+#   R14 = Top of stack (TOS) — always holds the top value
+#   R13 = HERE pointer (dictionary free space) — future
+#   R12 = LATEST pointer (most recent dictionary entry) — future
 #   RSP = Return stack
 #
-# R13-R15 are callee-saved in the System V AMD64 ABI,
+# TOS-in-register invariant: R14 always holds the top of the data stack.
+# DSP (R15) points to the second item. Push = store R14 to memory, set R14.
+# Pop = move R14 out, load next from memory into R14.
+#
+# R12-R15 are callee-saved in the System V AMD64 ABI,
 # so C functions won't clobber them.
 
 .equ CELL, 8                    # 64-bit cells
 .equ DATA_STACK_SIZE, 4096      # 512 cells
-
-# ---------- Data Stack ----------
-# R15 = data stack pointer (DSP), grows downward
-# Stack lives in .bss, starts at the top (high address)
 
 # ---------- Primitives ----------
 
 # DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    mov (%r15), %rax            # peek top
     sub $CELL, %r15             # make room
-    mov %rax, (%r15)            # push copy
-    ret
+    mov %r14, (%r15)            # push TOS to memory
+    ret                          # TOS unchanged
 
 # DROP ( a -- )
 .global forth_drop
 forth_drop:
-    add $CELL, %r15             # discard top
+    mov (%r15), %r14            # pop next into TOS
+    add $CELL, %r15
     ret
 
 # SWAP ( a b -- b a )
+# TOS=b, [DSP]=a -> TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
-    mov (%r15), %rax            # rax = b (top)
-    mov CELL(%r15), %rdx        # rdx = a (second)
-    mov %rax, CELL(%r15)        # store b in second
-    mov %rdx, (%r15)            # store a on top
+    mov (%r15), %rax            # rax = a
+    mov %r14, (%r15)            # [DSP] = b
+    mov %rax, %r14              # TOS = a
     ret
 
 # OVER ( a b -- a b a )
+# TOS=b, [DSP]=a -> push b, TOS=a
 .global forth_over
 forth_over:
-    mov CELL(%r15), %rax        # rax = a (second)
     sub $CELL, %r15             # make room
-    mov %rax, (%r15)            # push copy of a
+    mov %r14, (%r15)            # push b to memory
+    mov CELL(%r15), %r14        # TOS = a
     ret
 
 # + ( a b -- a+b )
+# TOS=b, [DSP]=a -> TOS=a+b
 .global forth_add
 forth_add:
-    mov (%r15), %rax            # rax = b
-    add $CELL, %r15             # pop b
-    add %rax, (%r15)            # top = a + b
+    add (%r15), %r14            # TOS = a + b
+    add $CELL, %r15             # pop a
     ret
 
 # - ( a b -- a-b )
+# TOS=b, [DSP]=a -> TOS=a-b
 .global forth_sub
 forth_sub:
-    mov (%r15), %rax            # rax = b
-    add $CELL, %r15             # pop b
-    sub %rax, (%r15)            # top = a - b
+    mov (%r15), %rax            # rax = a
+    sub %r14, %rax              # rax = a - b
+    mov %rax, %r14              # TOS = a - b
+    add $CELL, %r15             # pop
     ret
 
 # NEGATE ( a -- -a )
 .global forth_negate
 forth_negate:
-    negq (%r15)                 # negate in place
+    neg %r14                    # negate TOS
     ret
 
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
-# Pops char from data stack, calls platform_emit
+# TOS = char. Pass to platform_emit, pop new TOS.
 .global forth_emit
 forth_emit:
-    mov (%r15), %rdi            # RDI = char
-    add $CELL, %r15             # pop
+    mov %r14, %rdi              # RDI = char (from TOS)
+    mov (%r15), %r14            # pop new TOS
+    add $CELL, %r15
     jmp platform_emit           # tail call
 
 # ---------- KEY (Forth-level) ----------
 # ( -- char )
-# Reads one character from stdin, pushes to data stack
+# Push old TOS, call platform_key, TOS = result.
 .global forth_key
 forth_key:
+    sub $CELL, %r15
+    mov %r14, (%r15)            # push old TOS to memory
     call platform_key           # RDI = character
-    sub $CELL, %r15             # make room
-    mov %rdi, (%r15)            # push to data stack
+    mov %rdi, %r14              # TOS = char
     ret
 
 # ---------- Data Stack Memory ----------

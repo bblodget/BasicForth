@@ -1,100 +1,92 @@
 // BasicForth — Core ASM Primitives (ARM64)
 // Platform-independent ARM64 assembly. Requires platform_linux.s (or equivalent).
+//
+// Register allocation:
+//   X19 = Data stack pointer (DSP) — points to second item on stack
+//   X20 = Top of stack (TOS) — always holds the top value
+//   X21 = HERE pointer (dictionary free space) — future
+//   X22 = LATEST pointer (most recent dictionary entry) — future
+//   SP  = Return stack
+//
+// TOS-in-register invariant: X20 always holds the top of the data stack.
+// DSP (X19) points to the second item. Push = store X20 to memory, set X20.
+// Pop = move X20 out, load next from memory into X20.
 
 .equ CELL, 8                    // 64-bit cells
 .equ DATA_STACK_SIZE, 4096      // 512 cells
-
-// ---------- Data Stack ----------
-// X19 = data stack pointer (DSP), grows downward
-// Stack lives in .bss, starts at the top (high address)
-// Stack grows downward in memory, so we initialize X19 to the top of the stack area.
-
-// Macros for data stack operations
-.macro dpush reg
-    STR \reg, [X19, #-CELL]!
-.endm
-
-.macro dpop reg
-    LDR \reg, [X19], #CELL
-.endm
 
 // ---------- Primitives ----------
 
 // DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    LDR X9, [X19]              // peek top
-    dpush X9                   // push copy
-    RET
+    STR X20, [X19, #-CELL]!    // push TOS to memory
+    RET                         // TOS unchanged
 
 // DROP ( a -- )
 .global forth_drop
 forth_drop:
-    ADD X19, X19, #CELL        // discard top
+    LDR X20, [X19], #CELL      // pop next into TOS
     RET
 
 // SWAP ( a b -- b a )
+// TOS=b, [DSP]=a → TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
-    LDR X9, [X19]              // X9 = b (top)
-    LDR X10, [X19, #CELL]     // X10 = a (second)
-    STR X9, [X19, #CELL]      // store b in second
-    STR X10, [X19]             // store a on top
+    LDR X9, [X19]              // X9 = a
+    STR X20, [X19]             // [DSP] = b
+    MOV X20, X9                // TOS = a
     RET
 
 // OVER ( a b -- a b a )
+// TOS=b, [DSP]=a → push b, TOS=a
 .global forth_over
 forth_over:
-    LDR X9, [X19, #CELL]      // X9 = a (second)
-    dpush X9                   // push copy of a
+    STR X20, [X19, #-CELL]!   // push b to memory
+    LDR X20, [X19, #CELL]     // TOS = a (one cell below new DSP)
     RET
 
 // + ( a b -- a+b )
+// TOS=b, [DSP]=a → TOS=a+b
 .global forth_add
 forth_add:
-    dpop X9                    // X9 = b
-    LDR X10, [X19]             // X10 = a
-    ADD X10, X10, X9           // X10 = a + b
-    STR X10, [X19]             // store result
+    LDR X9, [X19], #CELL      // X9 = a, pop
+    ADD X20, X9, X20           // TOS = a + b
     RET
 
 // - ( a b -- a-b )
+// TOS=b, [DSP]=a → TOS=a-b
 .global forth_sub
 forth_sub:
-    dpop X9                    // X9 = b
-    LDR X10, [X19]             // X10 = a
-    SUB X10, X10, X9           // X10 = a - b
-    STR X10, [X19]             // store result
+    LDR X9, [X19], #CELL      // X9 = a, pop
+    SUB X20, X9, X20           // TOS = a - b
     RET
 
 // NEGATE ( a -- -a )
 .global forth_negate
 forth_negate:
-    LDR X9, [X19]              // X9 = a
-    NEG X9, X9                 // X9 = -a
-    STR X9, [X19]              // store result
+    NEG X20, X20               // negate TOS
     RET
 
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
-// Pops char from data stack, calls platform_emit
+// TOS = char. Pass to platform_emit, pop new TOS.
 .global forth_emit
 forth_emit:
-    STR X30, [SP, #-16]!       // save return address (nested call)
-    dpop X0                    // X0 = char
-    BL platform_emit
-    LDR X30, [SP], #16         // restore return address
-    RET
+    MOV X0, X20                // X0 = char (from TOS)
+    LDR X20, [X19], #CELL     // pop new TOS
+    B platform_emit            // tail call (X30 untouched)
 
 // ---------- KEY (Forth-level) ----------
 // ( -- char )
-// Reads one character from stdin, pushes to data stack
+// Push old TOS, call platform_key, TOS = result.
 .global forth_key
 forth_key:
-    STR X30, [SP, #-16]!       // save return address (nested call)
+    STR X30, [SP, #-16]!      // save return address
+    STR X20, [X19, #-CELL]!   // push old TOS to memory
     BL platform_key            // X0 = character
-    dpush X0                   // push to data stack
-    LDR X30, [SP], #16         // restore return address
+    MOV X20, X0                // TOS = char
+    LDR X30, [SP], #16        // restore return address
     RET
 
 // ---------- Data Stack Memory ----------

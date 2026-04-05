@@ -42,10 +42,10 @@ The process:
 ## Register Allocation
 
 ### ARM64
-- X19=DSP, X20=HERE, X21=LATEST, SP=return stack
+- X19=DSP, X20=TOS, X21=HERE, X22=LATEST, SP=return stack
 
 ### x86-64
-- R15=DSP, R14=HERE, R13=LATEST, RSP=return stack
+- R15=DSP, R14=TOS, R13=HERE, R12=LATEST, RSP=return stack
 
 ## Related Projects
 
