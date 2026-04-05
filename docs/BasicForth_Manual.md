@@ -3,7 +3,33 @@
 A modern Forth environment for Linux, inspired by 1980s BASIC. Boot up and
 start coding — games, robots, whatever you want.
 
+## Prerequisites
+
+### x86-64 (native build)
+
+```
+sudo apt install binutils gcc make
+```
+
+### ARM64 (cross-compile from x86-64)
+
+```
+sudo apt install binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu make qemu-user-static
+```
+
+- `binutils-aarch64-linux-gnu` — cross-assembler and linker (`as`, `ld`)
+- `gcc-aarch64-linux-gnu` — cross-compiler (needed for unit tests)
+- `qemu-user-static` — user-mode emulation to run ARM64 binaries on x86
+
+### ARM64 (native build on ARM64 board)
+
+```
+sudo apt install binutils gcc make
+```
+
 ## Building and Running
+
+Run `make help` for a full list of targets.
 
 ### x86-64 (native)
 
@@ -12,17 +38,43 @@ make x86
 ./src/arch/x86/basicforth
 ```
 
-### ARM64 (native or cross-compile)
+### ARM64 (cross-compile and run via QEMU)
 
 ```
 make arm64
-./src/arch/arm64/basicforth
-```
-
-On an x86-64 host with QEMU user-mode installed:
-
-```
 make test-arm64
+```
+
+### ARM64 (deploy to Pumpkin board)
+
+```
+make deploy
+```
+
+### How QEMU User-Mode Works
+
+When you run `make test-arm64` on an x86-64 host, the Makefile invokes
+`qemu-aarch64-static` to run the ARM64 binary. This is QEMU **user-mode
+emulation** — it translates ARM64 instructions to x86-64 on the fly
+(dynamic binary translation), while Linux syscalls pass straight through
+to the host kernel.
+
+No virtual machine, no emulated OS — just CPU translation. That's why it's
+fast and why our syscall-based programs work perfectly.
+
+The `qemu-user-static` package also registers with the kernel via
+**binfmt_misc**, which teaches Linux to recognize ARM64 ELF binaries and
+run them through QEMU automatically. So `./basicforth` just works, even
+though it's an ARM64 binary on an x86 machine.
+
+**Limitation:** user-mode QEMU only emulates the CPU, not hardware. Programs
+that access framebuffers, GPIO, or device-specific ioctls need real hardware.
+
+### Unit Tests
+
+```
+make unit-test-x86
+make unit-test-arm64
 ```
 
 ## The Prompt
