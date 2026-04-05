@@ -160,6 +160,151 @@ forth_accept:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- NUMBER (Forth-level) ----------
+// ( c-addr u -- n true | c-addr u false )
+// Try to parse string as a number. Supports:
+//   - Decimal (default, or # prefix)
+//   - Hex ($ prefix)
+//   - Binary (% prefix)
+//   - Negative sign before or after prefix (-$FF or $-FF)
+//   - Case-insensitive hex digits (a-f, A-F)
+// Uses BASE variable for default base.
+.global forth_number
+forth_number:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
+
+    // Pop args: TOS = len, [DSP] = addr
+    MOV X24, X20                // X24 = len
+    LDR X23, [X19], #CELL      // X23 = addr
+    // Save original addr/len for failure case
+    MOV X27, X23                // X27 = orig addr
+    MOV X28, X24                // X28 = orig len
+
+    // Empty string is not a number
+    CBZ X24, .Lnum_fail
+
+    MOV X25, #0                 // X25 = result
+    MOV X26, #0                 // X26 = negate flag
+    ADR X9, base
+    LDR X10, [X9]               // X10 = base
+
+    // Check for leading '-'
+    LDRB W9, [X23]
+    CMP W9, #'-'
+    B.NE .Lnum_check_prefix
+    ADD X23, X23, #1
+    SUB X24, X24, #1
+    MOV X26, #1                 // set negate flag
+    CBZ X24, .Lnum_fail
+
+.Lnum_check_prefix:
+    LDRB W9, [X23]
+    CMP W9, #'$'
+    B.EQ .Lnum_hex
+    CMP W9, #'#'
+    B.EQ .Lnum_decimal
+    CMP W9, #'%'
+    B.EQ .Lnum_binary
+    B .Lnum_check_sign_after
+
+.Lnum_hex:
+    MOV X10, #16
+    B .Lnum_consume_prefix
+.Lnum_decimal:
+    MOV X10, #10
+    B .Lnum_consume_prefix
+.Lnum_binary:
+    MOV X10, #2
+.Lnum_consume_prefix:
+    ADD X23, X23, #1
+    SUB X24, X24, #1
+    CBZ X24, .Lnum_fail
+
+.Lnum_check_sign_after:
+    // Check for '-' after prefix (e.g., $-FF)
+    CBNZ X26, .Lnum_parse       // already have sign
+    LDRB W9, [X23]
+    CMP W9, #'-'
+    B.NE .Lnum_parse
+    ADD X23, X23, #1
+    SUB X24, X24, #1
+    MOV X26, #1
+    CBZ X24, .Lnum_fail
+
+.Lnum_parse:
+    // X23 = current char ptr, X24 = remaining len
+    // X25 = result, X10 = base, X26 = negate flag
+.Lnum_loop:
+    CBZ X24, .Lnum_done
+    LDRB W9, [X23]
+
+    // Convert char to digit value
+    CMP W9, #'0'
+    B.LO .Lnum_fail
+    CMP W9, #'9'
+    B.LS .Lnum_digit_09
+
+    CMP W9, #'A'
+    B.LO .Lnum_fail
+    CMP W9, #'Z'
+    B.LS .Lnum_letter_upper
+
+    CMP W9, #'a'
+    B.LO .Lnum_fail
+    CMP W9, #'z'
+    B.HI .Lnum_fail
+
+    // Lowercase letter
+    SUB W9, W9, #('a' - 10)
+    B .Lnum_check_digit
+
+.Lnum_letter_upper:
+    SUB W9, W9, #('A' - 10)
+    B .Lnum_check_digit
+
+.Lnum_digit_09:
+    SUB W9, W9, #'0'
+
+.Lnum_check_digit:
+    // Check digit < base
+    CMP X9, X10
+    B.GE .Lnum_fail
+
+    // result = result * base + digit
+    MUL X25, X25, X10
+    ADD X25, X25, X9
+
+    ADD X23, X23, #1
+    SUB X24, X24, #1
+    B .Lnum_loop
+
+.Lnum_done:
+    // Apply negate
+    CBZ X26, .Lnum_success
+    NEG X25, X25
+
+.Lnum_success:
+    // Push n and true: ( -- n true )
+    STR X25, [X19, #-CELL]!    // push n to memory
+    MOV X20, #-1                // TOS = true (-1)
+    B .Lnum_exit
+
+.Lnum_fail:
+    // Push c-addr, u, and false: ( -- c-addr u false )
+    STR X27, [X19, #-CELL]!    // push c-addr
+    STR X28, [X19, #-CELL]!    // push u
+    MOV X20, #0                 // TOS = false
+
+.Lnum_exit:
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Data Stack Memory ----------
 .bss
 .align 4
@@ -167,3 +312,10 @@ data_stack_bottom:
     .space DATA_STACK_SIZE
 .global data_stack_top
 data_stack_top:
+
+// ---------- Variables ----------
+.data
+.align 3
+.global base
+base:
+    .quad 10
