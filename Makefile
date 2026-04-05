@@ -3,7 +3,7 @@
 
 ARCH_DIRS = src/arch/arm64 src/arch/x86
 
-.PHONY: all clean arm64 x86 test-arm64 test-x86 unit-test-arm64 unit-test-x86 deploy deploy-test help
+.PHONY: all clean arm64 x86 test-arm64 test-x86 unit-test-arm64 unit-test-x86 deploy deploy-test deploy-all help
 
 # Default: build all architectures
 all: arm64 x86
@@ -27,6 +27,7 @@ help:
 	@echo "Deploy:"
 	@echo "  make deploy       Deploy ARM64 binary to Pumpkin board via SSH"
 	@echo "  make deploy-test  Deploy ARM64 test binary to Pumpkin board via SSH"
+	@echo "  make deploy-all   Deploy both ARM64 binaries to Pumpkin board via SSH"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean        Remove build artifacts for all architectures"
@@ -55,6 +56,9 @@ deploy:
 
 deploy-test:
 	$(MAKE) -C src/arch/arm64 deploy-test
+
+deploy-all:
+	$(MAKE) -C src/arch/arm64 deploy-all
 
 clean:
 	@for dir in $(ARCH_DIRS); do $(MAKE) -C $$dir clean; done
