@@ -1,5 +1,5 @@
 // BasicForth — Main / Test Harness (ARM64)
-// Phase 2, Step 2: Terminal raw mode + KEY
+// Phase 2, Step 3: Line input (ACCEPT)
 //
 // Register convention:
 //   X19 = DSP (points to second item)
@@ -7,9 +7,11 @@
 //
 // Tests:
 //   1. Stack primitives (3+4=7, SWAP)
-//   2. Raw mode echo loop — type characters, see them echoed, 'q' to quit
+//   2. ACCEPT — read a line, print it back
 
 .global _start
+
+.equ INPUT_BUF_SIZE, 80
 
 _start:
     // Initialize data stack pointer (empty stack)
@@ -49,38 +51,55 @@ _start:
     MOV X20, #10
     BL forth_emit
 
-    // --- Test 2: Raw mode echo loop ---
-
-    // Print prompt message
-    ADR X0, prompt_msg
-    MOV X1, #prompt_len
-    BL print_string
+    // --- Test 2: ACCEPT — read a line, print it back ---
 
     // Enter raw mode
     BL platform_raw_mode
 
-    // Echo loop: KEY, DUP, EMIT, check for 'q'
-echo_loop:
-    BL forth_key               // ( -- char )
-    BL forth_dup               // ( char -- char char )
-    BL forth_emit              // ( char char -- char )
+accept_loop:
+    // Print prompt
+    ADR X0, prompt_msg
+    MOV X1, #prompt_len
+    BL print_string
 
-    // Check if char == 'q' (TOS in X20)
-    CMP X20, #'q'
-    B.EQ echo_done
+    // Push args for ACCEPT: ( c-addr max_len -- count )
+    STR X20, [X19, #-8]!
+    ADR X20, input_buf         // TOS = buf address
+    STR X20, [X19, #-8]!
+    MOV X20, #INPUT_BUF_SIZE   // TOS = max length
+    BL forth_accept            // TOS = count
 
-    BL forth_drop              // drop the char
-    B echo_loop
+    // Check for empty line (just pressed Enter)
+    CBZ X20, accept_bye
 
-echo_done:
-    BL forth_drop              // drop the 'q'
+    // Print "You typed: "
+    ADR X0, echo_msg
+    MOV X1, #echo_len
+    BL print_string
+
+    // Print the buffer using write syscall
+    // TOS = count, need buf address
+    MOV X2, X20                // count
+    ADR X1, input_buf          // buf
+    MOV X0, #1                 // stdout
+    MOV X8, #64                // SYS_write
+    SVC #0
 
     // Print newline
     STR X20, [X19, #-8]!
     MOV X20, #10
     BL forth_emit
 
-    // Print goodbye message
+    // Drop the count (consumed by write above, but still in TOS)
+    // Actually TOS is still the count from forth_accept, and we used
+    // it via MOV X2, X20. We need to drop it to keep stack clean.
+    BL forth_drop
+
+    B accept_loop
+
+accept_bye:
+    BL forth_drop              // drop the 0 count
+
     ADR X0, bye_msg
     MOV X1, #bye_len
     BL print_string
@@ -100,7 +119,14 @@ print_string:
 
 // ---------- Data ----------
 .section .rodata
-prompt_msg: .ascii "Type characters (q to quit): "
+prompt_msg: .ascii "> "
 .equ prompt_len, . - prompt_msg
+echo_msg:   .ascii "You typed: "
+.equ echo_len, . - echo_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+
+.bss
+.align 4
+input_buf:
+    .space INPUT_BUF_SIZE

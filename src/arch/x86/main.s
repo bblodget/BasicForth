@@ -1,5 +1,5 @@
 # BasicForth — Main / Test Harness (x86-64)
-# Phase 2, Step 2: Terminal raw mode + KEY
+# Phase 2, Step 3: Line input (ACCEPT)
 #
 # Register convention:
 #   R15 = DSP (points to second item)
@@ -7,9 +7,11 @@
 #
 # Tests:
 #   1. Stack primitives (3+4=7, SWAP)
-#   2. Raw mode echo loop — type characters, see them echoed, 'q' to quit
+#   2. ACCEPT — read a line, print it back
 
 .global _start
+
+.equ INPUT_BUF_SIZE, 80
 
 _start:
     # Initialize data stack pointer (empty stack)
@@ -58,31 +60,42 @@ _start:
     mov $10, %r14
     call forth_emit
 
-    # --- Test 2: Raw mode echo loop ---
-
-    # Print prompt message
-    lea prompt_msg(%rip), %rsi
-    mov $prompt_len, %rdx
-    call print_string
+    # --- Test 2: ACCEPT — read a line, print it back ---
 
     # Enter raw mode
     call platform_raw_mode
 
-    # Echo loop: KEY, DUP, EMIT, check for 'q'
-echo_loop:
-    call forth_key              # ( -- char )
-    call forth_dup              # ( char -- char char )
-    call forth_emit             # ( char char -- char )
+accept_loop:
+    # Print prompt
+    lea prompt_msg(%rip), %rsi
+    mov $prompt_len, %rdx
+    call print_string
 
-    # Check if char == 'q' (TOS in R14)
-    cmp $'q', %r14
-    je echo_done
+    # Push args for ACCEPT: ( c-addr max_len -- count )
+    sub $8, %r15
+    mov %r14, (%r15)
+    lea input_buf(%rip), %r14   # TOS = buf address
+    sub $8, %r15
+    mov %r14, (%r15)
+    mov $INPUT_BUF_SIZE, %r14   # TOS = max length
+    call forth_accept           # TOS = count
 
-    call forth_drop             # drop the char
-    jmp echo_loop
+    # Check for empty line (just pressed Enter)
+    test %r14, %r14
+    jz accept_bye
 
-echo_done:
-    call forth_drop             # drop the 'q'
+    # Print "You typed: "
+    lea echo_msg(%rip), %rsi
+    mov $echo_len, %rdx
+    call print_string
+
+    # Print the buffer using write syscall
+    # TOS = count, need buf address
+    mov %r14, %rdx              # count
+    lea input_buf(%rip), %rsi   # buf
+    mov $1, %rax                # SYS_write
+    mov $1, %rdi                # stdout
+    syscall
 
     # Print newline
     sub $8, %r15
@@ -90,7 +103,14 @@ echo_done:
     mov $10, %r14
     call forth_emit
 
-    # Print goodbye message
+    # Drop the count
+    call forth_drop
+
+    jmp accept_loop
+
+accept_bye:
+    call forth_drop             # drop the 0 count
+
     lea bye_msg(%rip), %rsi
     mov $bye_len, %rdx
     call print_string
@@ -108,7 +128,14 @@ print_string:
 
 # ---------- Data ----------
 .section .rodata
-prompt_msg: .ascii "Type characters (q to quit): "
+prompt_msg: .ascii "> "
 .equ prompt_len, . - prompt_msg
+echo_msg:   .ascii "You typed: "
+.equ echo_len, . - echo_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+
+.bss
+.align 8
+input_buf:
+    .space INPUT_BUF_SIZE

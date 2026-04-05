@@ -97,6 +97,79 @@ forth_key:
     mov %rdi, %r14              # TOS = char
     ret
 
+# ---------- ACCEPT (Forth-level) ----------
+# ( c-addr +n1 -- +n2 )
+# Read a line from stdin into buffer at c-addr, max n1 chars.
+# Handles backspace editing and echo. Returns actual count.
+# Calls platform_key and platform_emit directly (register level).
+.global forth_accept
+forth_accept:
+    push %rbx
+    push %rbp
+    push %r12
+
+    # Pop args from data stack: TOS = max_len, [DSP] = buf_addr
+    mov %r14, %rbp              # RBP = max_len
+    mov (%r15), %rbx            # RBX = buf_addr
+    add $CELL, %r15
+    xor %r12d, %r12d            # R12 = count = 0
+
+.Laccept_loop:
+    call platform_key           # RDI = char
+
+    # Check for LF (Enter)
+    cmp $10, %rdi
+    je .Laccept_done
+
+    # Check for BS (8) or DEL (127)
+    cmp $8, %rdi
+    je .Laccept_bs
+    cmp $127, %rdi
+    je .Laccept_bs
+
+    # Ignore non-printable (< 32 or > 126)
+    cmp $32, %rdi
+    jb .Laccept_loop
+    cmp $126, %rdi
+    ja .Laccept_loop
+
+    # Buffer full?
+    cmp %rbp, %r12
+    jge .Laccept_loop
+
+    # Store char and echo
+    movb %dil, (%rbx,%r12)     # buf[count] = char
+    inc %r12                    # count++
+    call platform_emit          # echo (RDI still has char)
+    jmp .Laccept_loop
+
+.Laccept_bs:
+    # Ignore backspace if buffer empty
+    test %r12, %r12
+    jz .Laccept_loop
+    dec %r12                    # count--
+    # Erase on screen: \b space \b
+    mov $8, %rdi
+    call platform_emit
+    mov $32, %rdi
+    call platform_emit
+    mov $8, %rdi
+    call platform_emit
+    jmp .Laccept_loop
+
+.Laccept_done:
+    # Echo the newline
+    mov $10, %rdi
+    call platform_emit
+
+    # Push result: TOS = count
+    mov %r12, %r14
+
+    pop %r12
+    pop %rbp
+    pop %rbx
+    ret
+
 # ---------- Data Stack Memory ----------
 .bss
 .align 8
