@@ -2,12 +2,16 @@
 
 AS      = as
 LD      = ld
+CC      = gcc
 
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
 OBJS    = $(SRCS:.s=.o)
 
-.PHONY: all test clean
+TEST_DIR = ../../../tests
+TEST_BIN = test_basicforth
+
+.PHONY: all test unit-test clean help
 
 all: $(BIN)
 
@@ -20,5 +24,19 @@ $(BIN): $(OBJS)
 test: $(BIN)
 	./$(BIN)
 
+unit-test: core.o
+	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
+		$(TEST_DIR)/test_helper_x86.s core.o
+	./$(TEST_BIN)
+
 clean:
-	rm -f $(OBJS) $(BIN)
+	rm -f $(OBJS) $(BIN) $(TEST_BIN)
+
+help:
+	@echo "BasicForth x86-64 Build"
+	@echo ""
+	@echo "  make              Build basicforth binary"
+	@echo "  make test         Run basicforth interactively"
+	@echo "  make unit-test    Run unit tests (C harness)"
+	@echo "  make clean        Remove build artifacts"
+	@echo "  make help         Show this help"

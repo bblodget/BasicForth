@@ -10,6 +10,7 @@ endif
 
 AS      = $(CROSS)as
 LD      = $(CROSS)ld
+CC      = $(CROSS)gcc
 
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
@@ -19,7 +20,10 @@ QEMU    = qemu-aarch64-static
 BOARD   = p510
 BOARD_DIR = ~/Dev/BasicForth/src/arch/arm64
 
-.PHONY: all test deploy clean
+TEST_DIR = ../../../tests
+TEST_BIN = test_basicforth
+
+.PHONY: all test unit-test deploy clean help
 
 all: $(BIN)
 
@@ -32,8 +36,23 @@ $(BIN): $(OBJS)
 test: $(BIN)
 	$(QEMU) $(BIN)
 
+unit-test: core.o
+	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
+		$(TEST_DIR)/test_helper_arm64.s core.o -static
+	$(QEMU) ./$(TEST_BIN)
+
 deploy: $(BIN)
 	scp $(BIN) $(BOARD):$(BOARD_DIR)/
 
 clean:
-	rm -f $(OBJS) $(BIN)
+	rm -f $(OBJS) $(BIN) $(TEST_BIN)
+
+help:
+	@echo "BasicForth ARM64 Build"
+	@echo ""
+	@echo "  make              Build basicforth binary"
+	@echo "  make test         Run basicforth (via QEMU or native)"
+	@echo "  make unit-test    Run unit tests (C harness)"
+	@echo "  make deploy       Deploy to Pumpkin board via SSH"
+	@echo "  make clean        Remove build artifacts"
+	@echo "  make help         Show this help"

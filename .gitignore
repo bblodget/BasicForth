@@ -2,3 +2,5 @@
 *.o
 src/arch/arm64/basicforth
 src/arch/x86/basicforth
+src/arch/arm64/test_basicforth
+src/arch/x86/test_basicforth
