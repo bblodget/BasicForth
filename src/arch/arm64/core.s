@@ -373,6 +373,101 @@ forth_number:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- FIND (Forth-level) ----------
+// ( c-addr u -- xt 1 | xt -1 | c-addr u 0 )
+// Search dictionary for word by name. Case-insensitive.
+// Returns: xt and 1 (immediate), xt and -1 (normal), or
+//          original c-addr u and 0 (not found).
+.global forth_find
+forth_find:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    // Pop args: TOS = u (length), [DSP] = c-addr
+    MOV X24, X20                // X24 = search length
+    LDR X23, [X19], #CELL      // X23 = search c-addr
+
+    MOV X25, X22                // X25 = current entry (start at LATEST)
+
+.Lfind_loop:
+    CBZ X25, .Lfind_not_found
+
+    // Check HIDDEN flag
+    LDRB W9, [X25, #8]          // flags+len byte (offset 8 past link)
+    TST W9, #F_HIDDEN
+    B.NE .Lfind_next
+
+    // Save flags byte for IMMEDIATE check on match
+    MOV W26, W9                  // W26 = flags+len byte
+
+    // Compare lengths
+    AND W10, W9, #F_LENMASK     // W10 = entry name length
+    CMP X10, X24
+    B.NE .Lfind_next
+
+    // Lengths match — compare names case-insensitively
+    ADD X11, X25, #9             // X11 = entry name ptr
+    MOV X12, X23                 // X12 = search name ptr
+    MOV X13, X24                 // X13 = remaining count
+
+.Lfind_cmp:
+    CBZ X13, .Lfind_match
+
+    LDRB W14, [X12], #1         // search char (post-increment)
+    CMP W14, #'A'
+    B.LO .Lfind_s_done
+    CMP W14, #'Z'
+    B.HI .Lfind_s_done
+    ADD W14, W14, #32
+.Lfind_s_done:
+
+    LDRB W15, [X11], #1         // entry char (post-increment)
+    CMP W15, #'A'
+    B.LO .Lfind_e_done
+    CMP W15, #'Z'
+    B.HI .Lfind_e_done
+    ADD W15, W15, #32
+.Lfind_e_done:
+
+    CMP W14, W15
+    B.NE .Lfind_next
+
+    SUB X13, X13, #1
+    B .Lfind_cmp
+
+.Lfind_match:
+    // CodePtr is at offset align8(9 + name_len) from entry start
+    ADD X9, X24, #(9 + 7)       // 9 + len + 7
+    AND X9, X9, #~7             // round down to 8-byte boundary
+    // Push xt, set TOS to immediate flag
+    LDR X9, [X25, X9]           // X9 = xt
+    STR X9, [X19, #-CELL]!      // push xt to memory
+    // Check IMMEDIATE flag
+    TST W26, #F_IMMEDIATE
+    B.EQ .Lfind_normal
+    MOV X20, #1                  // TOS = 1 (immediate)
+    B .Lfind_done
+.Lfind_normal:
+    MOV X20, #-1                 // TOS = -1 (normal, using MOV with inverted)
+    B .Lfind_done
+
+.Lfind_next:
+    LDR X25, [X25]              // follow link
+    B .Lfind_loop
+
+.Lfind_not_found:
+    // Return original c-addr u 0: push c-addr and u back, TOS = 0
+    STR X23, [X19, #-CELL]!     // push c-addr
+    STR X24, [X19, #-CELL]!     // push u
+    MOV X20, #0                  // TOS = 0
+
+.Lfind_done:
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -390,7 +485,8 @@ DEFWORD dict_emit,    "emit",    forth_emit,    dict_cstore
 DEFWORD dict_key,     "key",     forth_key,     dict_emit
 DEFWORD dict_accept,  "accept",  forth_accept,  dict_key
 DEFWORD dict_number,  "number",  forth_number,  dict_accept
-.global dict_number
+DEFWORD dict_find,    "find",    forth_find,    dict_number
+.global dict_find
 
 // ---------- Data Stack Memory ----------
 .bss

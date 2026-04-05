@@ -32,6 +32,10 @@ extern void forth_fetch(void);
 extern void forth_store(void);
 extern void forth_cfetch(void);
 extern void forth_cstore(void);
+extern void forth_emit(void);
+extern void forth_key(void);
+extern void forth_accept(void);
+extern void forth_find(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -39,6 +43,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
+extern char dict_find;
 extern int64_t base;
 
 /* --- Test framework --- */
@@ -405,6 +410,83 @@ static void test_cstore(void)
              byte, tos_out, stack_depth(dsp_out));
 }
 
+/* --- FIND tests --- */
+
+/*
+ * FIND stack effect: ( c-addr u -- xt 1 | xt -1 | c-addr u 0 )
+ *   Match, immediate: xt 1
+ *   Match, normal:    xt -1
+ *   Not found:        c-addr u 0
+ */
+
+static void test_find_ok(const char *test_name, const char *word,
+                         void *expected_xt, int64_t expected_flag)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    setup_2((int64_t)word, (int64_t)strlen(word), &tos_in, &dsp_in);
+    call_primitive(forth_find, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    /* TOS = flag, [DSP] = xt */
+    if (tos_out == expected_flag && stack_depth(dsp_out) == 1
+        && dsp_out[0] == (int64_t)expected_xt)
+        pass(test_name);
+    else
+        fail(test_name, "flag=%ld xt=%p expected_flag=%ld expected_xt=%p depth=%d",
+             tos_out, (void *)dsp_out[0], expected_flag,
+             expected_xt, stack_depth(dsp_out));
+}
+
+static void test_find_not_found(const char *test_name, const char *word)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+    int64_t len = (int64_t)strlen(word);
+
+    setup_2((int64_t)word, len, &tos_in, &dsp_in);
+    call_primitive(forth_find, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    /* TOS = 0, [DSP] = u, [DSP+1] = c-addr */
+    if (tos_out == 0 && stack_depth(dsp_out) == 2
+        && dsp_out[0] == len && dsp_out[1] == (int64_t)word)
+        pass(test_name);
+    else
+        fail(test_name, "flag=%ld depth=%d", tos_out, stack_depth(dsp_out));
+}
+
+static void test_find(void)
+{
+    /* Basic lookups (all normal, flag = -1) */
+    test_find_ok("FIND: dup",     "dup",     forth_dup,     -1);
+    test_find_ok("FIND: drop",    "drop",    forth_drop,    -1);
+    test_find_ok("FIND: swap",    "swap",    forth_swap,    -1);
+    test_find_ok("FIND: over",    "over",    forth_over,    -1);
+    test_find_ok("FIND: negate",  "negate",  forth_negate,  -1);
+    test_find_ok("FIND: accept",  "accept",  forth_accept,  -1);
+    test_find_ok("FIND: find",    "find",    forth_find,    -1);
+
+    /* Single-char and symbol names */
+    test_find_ok("FIND: +",       "+",       forth_add,     -1);
+    test_find_ok("FIND: -",       "-",       forth_sub,     -1);
+    test_find_ok("FIND: @",       "@",       forth_fetch,   -1);
+    test_find_ok("FIND: !",       "!",       forth_store,   -1);
+    test_find_ok("FIND: c@",      "c@",      forth_cfetch,  -1);
+    test_find_ok("FIND: c!",      "c!",      forth_cstore,  -1);
+
+    /* Case insensitive */
+    test_find_ok("FIND: DUP",     "DUP",     forth_dup,     -1);
+    test_find_ok("FIND: Swap",    "Swap",    forth_swap,    -1);
+    test_find_ok("FIND: NEGATE",  "NEGATE",  forth_negate,  -1);
+    test_find_ok("FIND: C@",      "C@",      forth_cfetch,  -1);
+
+    /* Not found — original c-addr u preserved */
+    test_find_not_found("FIND: xyzzy",    "xyzzy");
+    test_find_not_found("FIND: du",       "du");
+    test_find_not_found("FIND: drops",    "drops");
+    test_find_not_found("FIND: empty",    "");
+}
+
 /* --- Main --- */
 
 int main(void)
@@ -434,6 +516,10 @@ int main(void)
     test_store();
     test_cfetch();
     test_cstore();
+
+    section("Dictionary Lookup");
+    init_engine((int64_t)&dict_space, (int64_t)&dict_find);
+    test_find();
 
     printf("\n=====================\n");
     printf("%d passed, %d failed, %d total\n", passed, failed, passed + failed);

@@ -17,7 +17,7 @@ _start:
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP
     lea dict_space(%rip), %r13      # HERE
-    lea dict_number(%rip), %r12     # LATEST
+    lea dict_find(%rip), %r12       # LATEST
 
     # --- Test 1: Stack primitives ---
 

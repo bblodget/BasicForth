@@ -401,6 +401,109 @@ forth_number:
     pop %rbx
     ret
 
+# ---------- FIND (Forth-level) ----------
+# ( c-addr u -- xt 1 | xt -1 | c-addr u 0 )
+# Search dictionary for word by name. Case-insensitive.
+# Returns: xt and 1 (immediate), xt and -1 (normal), or
+#          original c-addr u and 0 (not found).
+.global forth_find
+forth_find:
+    push %rbx
+    push %rbp
+    push %r12                   # save LATEST (read-only)
+
+    # Pop args: TOS = u (length), [DSP] = c-addr
+    mov %r14, %rcx              # RCX = search length
+    mov (%r15), %rsi            # RSI = search c-addr
+    add $CELL, %r15
+
+    mov %r12, %rbx              # RBX = current entry (start at LATEST)
+
+.Lfind_loop:
+    test %rbx, %rbx
+    jz .Lfind_not_found
+
+    # Check HIDDEN flag
+    movzbl 8(%rbx), %eax        # flags+len byte (offset 8 past link)
+    test $F_HIDDEN, %al
+    jnz .Lfind_next
+
+    # Save flags byte for later (need IMMEDIATE check on match)
+    mov %eax, %ebp              # RBP = flags+len byte
+
+    # Compare lengths
+    and $F_LENMASK, %eax        # EAX = entry name length
+    cmp %rcx, %rax
+    jne .Lfind_next
+
+    # Lengths match — compare names case-insensitively
+    lea 9(%rbx), %rdi           # RDI = entry name start
+    mov %rsi, %rdx              # RDX = search name ptr
+    mov %rcx, %r8               # R8 = remaining count
+
+.Lfind_cmp:
+    test %r8, %r8
+    jz .Lfind_match
+
+    movzbl (%rdx), %eax         # search char
+    cmp $'A', %al
+    jb .Lfind_s_done
+    cmp $'Z', %al
+    ja .Lfind_s_done
+    add $32, %al                # to lowercase
+.Lfind_s_done:
+
+    movzbl (%rdi), %r9d         # entry char
+    cmp $'A', %r9b
+    jb .Lfind_e_done
+    cmp $'Z', %r9b
+    ja .Lfind_e_done
+    add $32, %r9b
+.Lfind_e_done:
+
+    cmp %r9b, %al
+    jne .Lfind_next
+
+    inc %rdx
+    inc %rdi
+    dec %r8
+    jmp .Lfind_cmp
+
+.Lfind_match:
+    # CodePtr is at offset align8(9 + name_len) from entry start
+    lea 9+7(%rcx), %rax         # 9 + len + 7
+    and $~7, %rax               # round down to 8-byte boundary
+    # Push xt, set TOS to immediate flag
+    sub $CELL, %r15
+    mov (%rbx,%rax), %rax       # RAX = xt
+    mov %rax, (%r15)            # push xt to memory
+    # Check IMMEDIATE flag
+    test $F_IMMEDIATE, %ebp
+    jz .Lfind_normal
+    mov $1, %r14                # TOS = 1 (immediate)
+    jmp .Lfind_done
+.Lfind_normal:
+    mov $-1, %r14               # TOS = -1 (normal)
+    jmp .Lfind_done
+
+.Lfind_next:
+    mov (%rbx), %rbx            # follow link
+    jmp .Lfind_loop
+
+.Lfind_not_found:
+    # Return original c-addr u 0: push c-addr and u back, TOS = 0
+    sub $CELL, %r15
+    mov %rsi, (%r15)            # push c-addr
+    sub $CELL, %r15
+    mov %rcx, (%r15)            # push u
+    xor %r14d, %r14d            # TOS = 0
+
+.Lfind_done:
+    pop %r12
+    pop %rbp
+    pop %rbx
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -418,7 +521,8 @@ DEFWORD dict_emit,    "emit",    forth_emit,    dict_cstore
 DEFWORD dict_key,     "key",     forth_key,     dict_emit
 DEFWORD dict_accept,  "accept",  forth_accept,  dict_key
 DEFWORD dict_number,  "number",  forth_number,  dict_accept
-.global dict_number
+DEFWORD dict_find,    "find",    forth_find,    dict_number
+.global dict_find
 
 # ---------- Data Stack Memory ----------
 .bss
