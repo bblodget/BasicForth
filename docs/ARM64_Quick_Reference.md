@@ -104,20 +104,25 @@ X30 = Link register                — saved/restored by BL/RET
 
 ## Key Differences from x86
 
-| Aspect                | x86                              | ARM64                              |
-|-----------------------|----------------------------------|------------------------------------|
-| Instruction size      | Variable (1-15 bytes)            | Fixed (4 bytes always)             |
-| Operand count         | 2 (dst = dst op src)             | 3 (dst = src1 op src2)            |
-| Immediate prefix      | None (`mov eax, 1`)             | `#` prefix (`MOV X0, #1`)         |
-| Zero a register       | `xor eax, eax`                  | `MOV X0, XZR` or `MOV X0, #0`    |
-| Subroutine call       | `CALL` (pushes return to stack)  | `BL` (saves return in X30)        |
-| Subroutine return     | `RET` (pops from stack)          | `RET` (branches to X30)           |
-| Push/pop              | `PUSH EAX` / `POP EAX`          | `STP`/`LDP` pairs (no single push)|
-| Syscall instruction   | `SYSCALL` or `INT 0x80`         | `SVC #0`                           |
-| Syscall number in     | RAX (64-bit) / EAX (32-bit)    | X8                                 |
-| Division              | `DIV` uses EDX:EAX              | `SDIV X0, X1, X2` (clean 3-op)   |
-| Remainder             | `DIV` gives remainder in EDX    | Needs `MSUB` after `SDIV`         |
-| No-op                 | `NOP`                            | `NOP`                              |
+| Aspect                | x86-64 (AT&T)                    | ARM64                              |
+|-----------------------|-----------------------------------|------------------------------------|
+| Instruction size      | Variable (1-15 bytes)             | Fixed (4 bytes always)             |
+| Operand order         | src, dest (`add %rax, %rbx`)     | dest, src (`ADD X0, X1, X2`)      |
+| Operand count         | 2 (dest = dest op src)            | 3 (dest = src1 op src2)           |
+| Immediate prefix      | `$` prefix (`mov $1, %rax`)      | `#` prefix (`MOV X0, #1`)         |
+| Register prefix       | `%` prefix (`%rax`)              | None (`X0`)                        |
+| Zero a register       | `xor %eax, %eax`                | `MOV X0, XZR` or `MOV X0, #0`    |
+| Subroutine call       | `call` (pushes return to stack)   | `BL` (saves return in X30)        |
+| Subroutine return     | `ret` (pops from stack)           | `RET` (branches to X30)           |
+| Nested calls          | Automatic (stack-based)           | Must save X30 manually             |
+| Memory ops on regs    | Yes (`add (%r15), %r14`)         | No (must load first)               |
+| Syscall instruction   | `syscall`                         | `SVC #0`                           |
+| Syscall number in     | %rax                              | X8                                 |
+| Syscall clobbers      | %rcx, %r11                       | X0-X7                              |
+| Division              | `idiv` uses %rdx:%rax            | `SDIV X0, X1, X2` (clean 3-op)   |
+| Remainder             | `idiv` gives remainder in %rdx   | Needs `MSUB` after `SDIV`         |
+| Zero register         | None                              | XZR / WZR                          |
+| Comments              | `#` line comment                  | `//` line comment                  |
 
 ## Arithmetic
 
@@ -153,7 +158,7 @@ MSUB X12, X10, X11, X9  // remainder
 LSL X0, X1, #3          // X0 = X1 * 8 (shift left by 3)
 LSR X0, X1, #1          // X0 = X1 / 2 (unsigned)
 ASR X0, X1, #1          // X0 = X1 / 2 (signed, preserves sign)
-LSL X0, X1, #3          // X0 = X1 * 8 (CELLS in BasicForth: 8 bytes)
+ROR X0, X1, #4          // X0 = X1 rotated right by 4
 ```
 
 ## Memory Access
@@ -370,7 +375,7 @@ SVC #0                  // invoke kernel
 | `.word`            | 32-bit value                       | `.word 0x12345678`         |
 | `.quad`            | 64-bit value                       | `.quad 0x123456789ABCDEF0` |
 | `.space`           | Reserve N bytes (filled with 0)    | `.space 1024`              |
-| `.align`           | Align to boundary                  | `.align 4`                 |
+| `.align`           | Align to 2^N bytes                 | `.align 4` (= 16 bytes)   |
 | `.include`         | Include another source file        | `.include "defs.s"`        |
 | `.macro`/`.endm`   | Define macro                       | `.macro push reg` ...      |
 

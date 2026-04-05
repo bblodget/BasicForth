@@ -304,8 +304,8 @@ Allocated in the .bss section (zero-initialized, no space in the binary):
 
 ```asm
 .bss
-.align 4                        # ARM64: 16-byte aligned
-data_stack_bottom:              #        (or .align 8 on x86: 256-byte)
+.align 4                        # ARM64: .align 4 = 2^4 = 16-byte aligned
+data_stack_bottom:              #        (x86: .align 8 = 8-byte aligned)
     .space DATA_STACK_SIZE      # 4096 bytes = 512 cells
 .global data_stack_top
 data_stack_top:                 # DSP starts here (empty stack)
