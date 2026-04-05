@@ -570,6 +570,145 @@ forth_execute:
     add $CELL, %r15
     jmp *%rax                     # tail-call
 
+# ---------- print_signed (internal helper) ----------
+# Print signed 64-bit integer from RAX to stdout.
+# Uses stack buffer. Clobbers RAX, RCX, RDX, RSI, RDI, R8.
+# Caller must save any registers it needs preserved.
+.Lprint_signed:
+    sub $32, %rsp               # digit buffer
+
+    # Handle negative
+    xor %ecx, %ecx              # sign flag = 0
+    test %rax, %rax
+    jns .Lps_positive
+    neg %rax
+    mov $1, %ecx
+.Lps_positive:
+    push %rcx                   # save sign flag
+
+    # Build digits right-to-left
+    lea 39(%rsp), %rsi          # RSI = end of buffer
+    mov %rsi, %rdi              # RDI = current position
+    mov $10, %r8
+
+    # Handle zero
+    test %rax, %rax
+    jnz .Lps_divloop
+    dec %rdi
+    movb $'0', (%rdi)
+    jmp .Lps_sign
+
+.Lps_divloop:
+    test %rax, %rax
+    jz .Lps_sign
+    xor %edx, %edx
+    div %r8
+    add $'0', %dl
+    dec %rdi
+    movb %dl, (%rdi)
+    jmp .Lps_divloop
+
+.Lps_sign:
+    pop %rcx
+    test %ecx, %ecx
+    jz .Lps_print
+    dec %rdi
+    movb $'-', (%rdi)
+
+.Lps_print:
+    mov %rsi, %rdx              # length = end - start
+    sub %rdi, %rdx
+    mov %rdi, %rsi              # buf = start
+    call platform_write
+
+    add $32, %rsp
+    ret
+
+# ---------- DOT (Forth-level) ----------
+# ( n -- )
+# Print TOS as signed decimal with trailing space.
+.global forth_dot
+forth_dot:
+    push %rbx
+    mov %r14, %rax              # RAX = number to print
+    mov (%r15), %r14            # pop new TOS
+    add $CELL, %r15
+    call .Lprint_signed
+    mov $' ', %rdi
+    call platform_emit
+    pop %rbx
+    ret
+
+# ---------- DOT-S (Forth-level) ----------
+# ( -- )
+# Print stack contents non-destructively as <depth> item1 item2 ...
+.global forth_dot_s
+forth_dot_s:
+    push %rbx
+    push %rbp
+
+    # Compute depth = (sp0 - DSP) / CELL
+    mov sp0(%rip), %rbx         # RBX = sp0
+    mov %rbx, %rbp              # RBP = sp0 (saved for walking)
+    sub %r15, %rbx              # RBX = sp0 - DSP (byte diff)
+    sar $3, %rbx                # RBX = depth (items in memory)
+
+    # Print '<'
+    mov $'<', %rdi
+    call platform_emit
+
+    # Print depth
+    mov %rbx, %rax
+    call .Lprint_signed
+
+    # Print '> '
+    mov $'>', %rdi
+    call platform_emit
+    mov $' ', %rdi
+    call platform_emit
+
+    # If depth <= 0, nothing to print
+    test %rbx, %rbx
+    jle .Lds_done
+
+    # Print depth-1 memory items (bottom-to-top), then TOS
+    # Bottom (oldest) = DSP + (depth-2)*CELL, top (2nd) = DSP
+    cmp $1, %rbx
+    je .Lds_tos                 # depth==1: just TOS, no memory items
+
+    lea -2(%rbx), %rbp
+    shl $3, %rbp                # RBP = (depth-2)*CELL
+    add %r15, %rbp              # RBP = DSP + (depth-2)*CELL = bottom
+
+.Lds_mem_loop:
+    cmp %r15, %rbp              # RBP >= DSP?
+    jl .Lds_tos
+    mov (%rbp), %rax            # load stack item
+    call .Lprint_signed
+    mov $' ', %rdi
+    call platform_emit
+    sub $CELL, %rbp
+    jmp .Lds_mem_loop
+
+.Lds_tos:
+    # Print TOS (topmost item)
+    mov %r14, %rax
+    call .Lprint_signed
+    mov $' ', %rdi
+    call platform_emit
+
+.Lds_done:
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- BYE (Forth-level) ----------
+# ( -- )
+# Restore terminal and exit.
+.global forth_bye
+forth_bye:
+    jmp platform_bye
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -590,7 +729,10 @@ DEFWORD dict_number,  "number",  forth_number,  dict_accept
 DEFWORD dict_find,       "find",       forth_find,       dict_number
 DEFWORD dict_parse_word, "parse-word", forth_parse_word, dict_find
 DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
-.global dict_execute
+DEFWORD dict_dot,        ".",          forth_dot,        dict_execute
+DEFWORD dict_dot_s,      ".s",         forth_dot_s,      dict_dot
+DEFWORD dict_bye,        "bye",        forth_bye,        dict_dot_s
+.global dict_bye
 
 # ---------- Data Stack Memory ----------
 .bss

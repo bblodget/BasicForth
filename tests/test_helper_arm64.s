@@ -65,3 +65,7 @@ platform_key:
 .global platform_write
 platform_write:
     RET
+
+.global platform_bye
+platform_bye:
+    RET

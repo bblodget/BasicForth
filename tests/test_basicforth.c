@@ -45,7 +45,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_execute;
+extern char dict_bye;
 extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
@@ -629,7 +629,7 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_execute);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_bye);
     test_find();
 
     section("Parse Word");

@@ -536,6 +536,147 @@ forth_execute:
     LDR X20, [X19], #CELL        // pop new TOS
     BR X9                         // tail-call
 
+// ---------- print_signed (internal helper) ----------
+// Print signed 64-bit integer from X0 to stdout.
+// Uses stack buffer. Clobbers X0-X4, X9-X15.
+// Caller must save X30 if needed.
+.Lprint_signed:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #32             // digit buffer
+
+    MOV X9, X0                  // X9 = number
+
+    // Handle negative
+    MOV X11, #0                 // sign flag
+    CMP X9, #0
+    B.GE .Lps_positive
+    NEG X9, X9
+    MOV X11, #1
+.Lps_positive:
+
+    // Build digits right-to-left
+    ADD X12, SP, #31            // X12 = end of buffer
+    MOV X13, X12                // X13 = current position
+    MOV X14, #10                // divisor
+
+    // Handle zero
+    CBNZ X9, .Lps_divloop
+    SUB X13, X13, #1
+    MOV W10, #'0'
+    STRB W10, [X13]
+    B .Lps_sign
+
+.Lps_divloop:
+    CBZ X9, .Lps_sign
+    UDIV X10, X9, X14           // X10 = quotient
+    MSUB X15, X10, X14, X9      // X15 = remainder
+    ADD W15, W15, #'0'
+    SUB X13, X13, #1
+    STRB W15, [X13]
+    MOV X9, X10
+    B .Lps_divloop
+
+.Lps_sign:
+    CBZ X11, .Lps_print
+    SUB X13, X13, #1
+    MOV W10, #'-'
+    STRB W10, [X13]
+
+.Lps_print:
+    // Print via platform_write(buf, len)
+    MOV X0, X13                 // buf = start
+    SUB X1, X12, X13            // len = end - start
+    BL platform_write
+
+    ADD SP, SP, #32
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- DOT (Forth-level) ----------
+// ( n -- )
+// Print TOS as signed decimal with trailing space.
+.global forth_dot
+forth_dot:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, X20                 // X0 = number to print
+    LDR X20, [X19], #CELL      // pop new TOS
+    BL .Lprint_signed
+    MOV X0, #' '
+    BL platform_emit
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- DOT-S (Forth-level) ----------
+// ( -- )
+// Print stack contents non-destructively as <depth> item1 item2 ...
+.global forth_dot_s
+forth_dot_s:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+
+    // Compute depth = (sp0 - DSP) / CELL
+    ADR X9, sp0
+    LDR X23, [X9]               // X23 = sp0
+    MOV X24, X23                // X24 = sp0 (saved for walking)
+    SUB X23, X23, X19           // X23 = sp0 - DSP (byte diff)
+    ASR X23, X23, #3            // X23 = depth (items in memory)
+
+    // Print '<'
+    MOV X0, #'<'
+    BL platform_emit
+
+    // Print depth
+    MOV X0, X23
+    BL .Lprint_signed
+
+    // Print '> '
+    MOV X0, #'>'
+    BL platform_emit
+    MOV X0, #' '
+    BL platform_emit
+
+    // If depth <= 0, nothing to print
+    CMP X23, #0
+    B.LE .Lds_done
+
+    // Print depth-1 memory items (bottom-to-top), then TOS
+    // Bottom (oldest) = DSP + (depth-2)*CELL, top (2nd) = DSP
+    CMP X23, #1
+    B.EQ .Lds_tos               // depth==1: just TOS, no memory items
+
+    SUB X24, X23, #2
+    LSL X24, X24, #3            // X24 = (depth-2)*CELL
+    ADD X24, X19, X24           // X24 = DSP + (depth-2)*CELL = bottom
+
+.Lds_mem_loop:
+    CMP X24, X19                // X24 >= DSP?
+    B.LO .Lds_tos
+    LDR X0, [X24]               // load stack item
+    BL .Lprint_signed
+    MOV X0, #' '
+    BL platform_emit
+    SUB X24, X24, #CELL
+    B .Lds_mem_loop
+
+.Lds_tos:
+    // Print TOS (topmost item)
+    MOV X0, X20
+    BL .Lprint_signed
+    MOV X0, #' '
+    BL platform_emit
+
+.Lds_done:
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- BYE (Forth-level) ----------
+// ( -- )
+// Restore terminal and exit.
+.global forth_bye
+forth_bye:
+    B platform_bye
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -556,7 +697,10 @@ DEFWORD dict_number,  "number",  forth_number,  dict_accept
 DEFWORD dict_find,       "find",       forth_find,       dict_number
 DEFWORD dict_parse_word, "parse-word", forth_parse_word, dict_find
 DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
-.global dict_execute
+DEFWORD dict_dot,        ".",          forth_dot,        dict_execute
+DEFWORD dict_dot_s,      ".s",         forth_dot_s,      dict_dot
+DEFWORD dict_bye,        "bye",        forth_bye,        dict_dot_s
+.global dict_bye
 
 // ---------- Data Stack Memory ----------
 .bss
