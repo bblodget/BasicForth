@@ -142,6 +142,18 @@ platform_emit:
     LDR X30, [SP], #16
     RET
 
+// ---------- WRITE ----------
+// Write buffer to stdout.
+// Input: X0 = buffer, X1 = length
+.global platform_write
+platform_write:
+    MOV X2, X1                  // count
+    MOV X1, X0                  // buf
+    MOV X0, #STDOUT
+    MOV X8, #SYS_write
+    SVC #0
+    RET
+
 // ---------- BYE ----------
 // Restore terminal and exit.
 .global platform_bye

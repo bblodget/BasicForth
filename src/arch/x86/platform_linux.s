@@ -137,6 +137,16 @@ platform_emit:
     add $16, %rsp
     ret
 
+# ---------- WRITE ----------
+# Write buffer to stdout.
+# Input: RSI = buffer, RDX = length
+.global platform_write
+platform_write:
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    syscall
+    ret
+
 # ---------- BYE ----------
 # Restore terminal and exit.
 .global platform_bye

@@ -62,3 +62,7 @@ platform_emit:
 platform_key:
     xor %edi, %edi
     ret
+
+.global platform_write
+platform_write:
+    ret

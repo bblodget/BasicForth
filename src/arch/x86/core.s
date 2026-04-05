@@ -545,3 +545,15 @@ dict_space:
 .global base
 base:
     .quad 10
+.global source_addr
+source_addr:
+    .quad 0
+.global source_len
+source_len:
+    .quad 0
+.global to_in
+to_in:
+    .quad 0
+.global sp0
+sp0:
+    .quad 0

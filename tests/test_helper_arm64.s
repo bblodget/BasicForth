@@ -61,3 +61,7 @@ platform_emit:
 platform_key:
     MOV X0, #0
     RET
+
+.global platform_write
+platform_write:
+    RET
