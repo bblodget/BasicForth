@@ -468,6 +468,74 @@ forth_find:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- PARSE-WORD (Forth-level) ----------
+// ( -- c-addr u )
+// Extract next space-delimited token from the input buffer.
+// Reads source_addr, source_len, to_in globals.
+// Returns 0 0 if no more tokens.
+.global forth_parse_word
+forth_parse_word:
+    // Load globals
+    ADR X9, source_addr
+    LDR X10, [X9]                // X10 = buffer base
+    ADR X9, source_len
+    LDR X11, [X9]                // X11 = total length
+    ADR X9, to_in
+    LDR X12, [X9]                // X12 = current offset
+
+    // Skip leading spaces
+.Lpw_skip:
+    CMP X12, X11
+    B.GE .Lpw_empty
+    LDRB W13, [X10, X12]
+    CMP W13, #' '
+    B.NE .Lpw_found
+    ADD X12, X12, #1
+    B .Lpw_skip
+
+.Lpw_empty:
+    ADR X9, to_in
+    STR X12, [X9]
+    // Push 0 0
+    STR X20, [X19, #-CELL]!      // push old TOS
+    STR XZR, [X19, #-CELL]!      // c-addr = 0
+    MOV X20, #0                   // TOS = u = 0
+    RET
+
+.Lpw_found:
+    ADD X14, X10, X12             // X14 = start of word
+
+    // Scan to end of word
+.Lpw_scan:
+    CMP X12, X11
+    B.GE .Lpw_done
+    LDRB W13, [X10, X12]
+    CMP W13, #' '
+    B.EQ .Lpw_done
+    ADD X12, X12, #1
+    B .Lpw_scan
+
+.Lpw_done:
+    ADR X9, to_in
+    STR X12, [X9]                 // update to_in
+    // len = current position - start
+    ADD X15, X10, X12
+    SUB X15, X15, X14             // X15 = length
+    // Push c-addr and u
+    STR X20, [X19, #-CELL]!       // push old TOS
+    STR X14, [X19, #-CELL]!       // push c-addr
+    MOV X20, X15                   // TOS = u
+    RET
+
+// ---------- EXECUTE (Forth-level) ----------
+// ( xt -- )
+// Call the execution token. Tail-call: word's RET returns to our caller.
+.global forth_execute
+forth_execute:
+    MOV X9, X20                   // X9 = xt
+    LDR X20, [X19], #CELL        // pop new TOS
+    BR X9                         // tail-call
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -485,8 +553,10 @@ DEFWORD dict_emit,    "emit",    forth_emit,    dict_cstore
 DEFWORD dict_key,     "key",     forth_key,     dict_emit
 DEFWORD dict_accept,  "accept",  forth_accept,  dict_key
 DEFWORD dict_number,  "number",  forth_number,  dict_accept
-DEFWORD dict_find,    "find",    forth_find,    dict_number
-.global dict_find
+DEFWORD dict_find,       "find",       forth_find,       dict_number
+DEFWORD dict_parse_word, "parse-word", forth_parse_word, dict_find
+DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
+.global dict_execute
 
 // ---------- Data Stack Memory ----------
 .bss

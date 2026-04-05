@@ -36,6 +36,8 @@ extern void forth_emit(void);
 extern void forth_key(void);
 extern void forth_accept(void);
 extern void forth_find(void);
+extern void forth_parse_word(void);
+extern void forth_execute(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -43,8 +45,11 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_find;
+extern char dict_execute;
 extern int64_t base;
+extern int64_t source_addr;
+extern int64_t source_len;
+extern int64_t to_in;
 
 /* --- Test framework --- */
 
@@ -487,6 +492,112 @@ static void test_find(void)
     test_find_not_found("FIND: empty",    "");
 }
 
+/* --- PARSE-WORD tests --- */
+
+static void setup_source(const char *input)
+{
+    source_addr = (int64_t)input;
+    source_len = (int64_t)strlen(input);
+    to_in = 0;
+}
+
+static void test_parse_word_single(void)
+{
+    setup_source("hello");
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    /* Start with one item on stack (sentinel), PARSE-WORD pushes c-addr and u */
+    setup_1(99, &tos_in, &dsp_in);
+    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    /* Stack: ( 99 c-addr u ) — TOS=u, [DSP]=c-addr, [DSP+8]=99 */
+    if (tos_out == 5 && stack_depth(dsp_out) == 2
+        && memcmp((void *)dsp_out[0], "hello", 5) == 0)
+        pass("PARSE-WORD: hello");
+    else
+        fail("PARSE-WORD: hello", "u=%ld depth=%d", tos_out, stack_depth(dsp_out));
+}
+
+static void test_parse_word_spaces(void)
+{
+    setup_source("  foo  bar  ");
+    int64_t tos_in = 0, tos_out;
+    int64_t *dsp_in = stack_top(), *dsp_out;
+
+    /* First word: "foo" */
+    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+    if (tos_out == 3 && memcmp((void *)dsp_out[0], "foo", 3) == 0)
+        pass("PARSE-WORD: leading spaces -> foo");
+    else
+        fail("PARSE-WORD: leading spaces -> foo", "u=%ld", tos_out);
+
+    /* Second word: "bar" — call again with fresh stack but same globals */
+    dsp_in = stack_top();
+    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+    if (tos_out == 3 && memcmp((void *)dsp_out[0], "bar", 3) == 0)
+        pass("PARSE-WORD: second word -> bar");
+    else
+        fail("PARSE-WORD: second word -> bar", "u=%ld", tos_out);
+
+    /* Third call: no more tokens */
+    dsp_in = stack_top();
+    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+    if (tos_out == 0 && dsp_out[0] == 0)
+        pass("PARSE-WORD: end of input -> 0 0");
+    else
+        fail("PARSE-WORD: end of input -> 0 0", "u=%ld", tos_out);
+}
+
+static void test_parse_word_empty(void)
+{
+    setup_source("");
+    int64_t tos_in = 0, tos_out;
+    int64_t *dsp_in = stack_top(), *dsp_out;
+
+    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+    if (tos_out == 0 && dsp_out[0] == 0)
+        pass("PARSE-WORD: empty input");
+    else
+        fail("PARSE-WORD: empty input", "u=%ld", tos_out);
+}
+
+/* --- EXECUTE tests --- */
+
+static void test_execute(void)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    /* Push 42, then push xt of forth_dup as TOS. EXECUTE should DUP 42. */
+    /* Stack before EXECUTE: ( 42 xt ) where xt = forth_dup */
+    setup_2(42, (int64_t)forth_dup, &tos_in, &dsp_in);
+    call_primitive(forth_execute, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    /* After EXECUTE: xt is consumed, forth_dup ran, stack is ( 42 42 ) */
+    if (tos_out == 42 && stack_depth(dsp_out) == 1 && dsp_out[0] == 42)
+        pass("EXECUTE: dup via xt");
+    else
+        fail("EXECUTE: dup via xt", "tos=%ld depth=%d [dsp]=%ld",
+             tos_out, stack_depth(dsp_out),
+             stack_depth(dsp_out) >= 1 ? dsp_out[0] : -1);
+}
+
+static void test_execute_add(void)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    /* Stack: ( 3 4 xt_add ). EXECUTE should run +, leaving ( 7 ). */
+    setup_3(3, 4, (int64_t)forth_add, &tos_in, &dsp_in);
+    call_primitive(forth_execute, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (tos_out == 7 && stack_depth(dsp_out) == 0)
+        pass("EXECUTE: + via xt");
+    else
+        fail("EXECUTE: + via xt", "tos=%ld depth=%d", tos_out, stack_depth(dsp_out));
+}
+
 /* --- Main --- */
 
 int main(void)
@@ -518,8 +629,17 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_find);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_execute);
     test_find();
+
+    section("Parse Word");
+    test_parse_word_single();
+    test_parse_word_spaces();
+    test_parse_word_empty();
+
+    section("Execute");
+    test_execute();
+    test_execute_add();
 
     printf("\n=====================\n");
     printf("%d passed, %d failed, %d total\n", passed, failed, passed + failed);

@@ -504,6 +504,72 @@ forth_find:
     pop %rbx
     ret
 
+# ---------- PARSE-WORD (Forth-level) ----------
+# ( -- c-addr u )
+# Extract next space-delimited token from the input buffer.
+# Reads source_addr, source_len, to_in globals.
+# Returns 0 0 if no more tokens.
+.global forth_parse_word
+forth_parse_word:
+    # Load globals
+    mov source_addr(%rip), %rsi   # RSI = buffer base
+    mov source_len(%rip), %rcx    # RCX = total length
+    mov to_in(%rip), %rdx         # RDX = current offset
+
+    # Skip leading spaces
+.Lpw_skip:
+    cmp %rcx, %rdx
+    jge .Lpw_empty
+    cmpb $' ', (%rsi,%rdx)
+    jne .Lpw_found
+    inc %rdx
+    jmp .Lpw_skip
+
+.Lpw_empty:
+    mov %rdx, to_in(%rip)
+    # Push 0 0
+    sub $CELL, %r15
+    mov %r14, (%r15)              # push old TOS
+    sub $CELL, %r15
+    movq $0, (%r15)               # c-addr = 0
+    xor %r14d, %r14d              # TOS = u = 0
+    ret
+
+.Lpw_found:
+    lea (%rsi,%rdx), %rdi         # RDI = start of word
+
+    # Scan to end of word
+.Lpw_scan:
+    cmp %rcx, %rdx
+    jge .Lpw_done
+    cmpb $' ', (%rsi,%rdx)
+    je .Lpw_done
+    inc %rdx
+    jmp .Lpw_scan
+
+.Lpw_done:
+    mov %rdx, to_in(%rip)         # update to_in
+    # len = current position - start
+    lea (%rsi,%rdx), %rax
+    sub %rdi, %rax                # RAX = length
+    # Push c-addr and u
+    sub $CELL, %r15
+    mov %r14, (%r15)              # push old TOS
+    sub $CELL, %r15
+    mov %rdi, (%r15)              # push c-addr
+    mov %rax, %r14                # TOS = u
+    ret
+
+# ---------- EXECUTE (Forth-level) ----------
+# ( xt -- )
+# Call the execution token. Tail-call: word's RET returns to our caller.
+.global forth_execute
+forth_execute:
+    mov %r14, %rax                # RAX = xt
+    mov (%r15), %r14              # pop new TOS
+    add $CELL, %r15
+    jmp *%rax                     # tail-call
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -521,8 +587,10 @@ DEFWORD dict_emit,    "emit",    forth_emit,    dict_cstore
 DEFWORD dict_key,     "key",     forth_key,     dict_emit
 DEFWORD dict_accept,  "accept",  forth_accept,  dict_key
 DEFWORD dict_number,  "number",  forth_number,  dict_accept
-DEFWORD dict_find,    "find",    forth_find,    dict_number
-.global dict_find
+DEFWORD dict_find,       "find",       forth_find,       dict_number
+DEFWORD dict_parse_word, "parse-word", forth_parse_word, dict_find
+DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
+.global dict_execute
 
 # ---------- Data Stack Memory ----------
 .bss
