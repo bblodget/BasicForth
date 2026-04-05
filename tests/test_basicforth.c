@@ -28,9 +28,17 @@ extern void forth_add(void);
 extern void forth_sub(void);
 extern void forth_negate(void);
 extern void forth_number(void);
+extern void forth_fetch(void);
+extern void forth_store(void);
+extern void forth_cfetch(void);
+extern void forth_cstore(void);
 
-/* Data stack (defined in core.s) */
+/* Engine init (defined in test_helper) */
+extern void init_engine(int64_t here_val, int64_t latest_val);
+
+/* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
+extern char dict_space;
 extern int64_t base;
 
 /* --- Test framework --- */
@@ -332,6 +340,71 @@ static void test_number(void)
     test_number_fail_case("NUMBER: 12abc",       "12abc");
 }
 
+/* --- Memory tests --- */
+
+static void test_fetch(void)
+{
+    int64_t cell = 0xDEADBEEF12345678LL;
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    setup_1((int64_t)&cell, &tos_in, &dsp_in);
+    call_primitive(forth_fetch, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (tos_out == 0xDEADBEEF12345678LL && stack_depth(dsp_out) == 0)
+        pass("@ ( addr -- x )");
+    else
+        fail("@ ( addr -- x )", "tos=0x%lx", tos_out);
+}
+
+static void test_store(void)
+{
+    int64_t cell = 0;
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    /* Need 3 items: sentinel below x and addr (! consumes 2, pops new TOS) */
+    setup_3(99, 0x1234567890ABCDEFLL, (int64_t)&cell, &tos_in, &dsp_in);
+    call_primitive(forth_store, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (cell == 0x1234567890ABCDEFLL && tos_out == 99 && stack_depth(dsp_out) == 0)
+        pass("! ( x addr -- )");
+    else
+        fail("! ( x addr -- )", "cell=0x%lx tos=%ld depth=%d",
+             cell, tos_out, stack_depth(dsp_out));
+}
+
+static void test_cfetch(void)
+{
+    unsigned char byte = 0xA5;
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    setup_1((int64_t)&byte, &tos_in, &dsp_in);
+    call_primitive(forth_cfetch, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (tos_out == 0xA5 && stack_depth(dsp_out) == 0)
+        pass("C@ ( addr -- byte )");
+    else
+        fail("C@ ( addr -- byte )", "tos=0x%lx", tos_out);
+}
+
+static void test_cstore(void)
+{
+    unsigned char byte = 0;
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    setup_3(99, 0x42, (int64_t)&byte, &tos_in, &dsp_in);
+    call_primitive(forth_cstore, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (byte == 0x42 && tos_out == 99 && stack_depth(dsp_out) == 0)
+        pass("C! ( byte addr -- )");
+    else
+        fail("C! ( byte addr -- )", "byte=0x%x tos=%ld depth=%d",
+             byte, tos_out, stack_depth(dsp_out));
+}
+
 /* --- Main --- */
 
 int main(void)
@@ -355,6 +428,12 @@ int main(void)
     section("Number Parsing");
     base = 10;
     test_number();
+
+    section("Memory Access");
+    test_fetch();
+    test_store();
+    test_cfetch();
+    test_cstore();
 
     printf("\n=====================\n");
     printf("%d passed, %d failed, %d total\n", passed, failed, passed + failed);

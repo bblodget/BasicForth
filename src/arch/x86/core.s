@@ -76,6 +76,45 @@ forth_negate:
     neg %r14                    # negate TOS
     ret
 
+# ---------- Memory ----------
+
+# @ (fetch) ( addr -- x )
+# Read 8-byte cell from address
+.global forth_fetch
+forth_fetch:
+    mov (%r14), %r14            # TOS = [TOS]
+    ret
+
+# ! (store) ( x addr -- )
+# Write 8-byte cell to address
+.global forth_store
+forth_store:
+    mov (%r15), %rax            # RAX = x
+    mov %rax, (%r14)            # [addr] = x
+    add $CELL, %r15             # pop x
+    mov (%r15), %r14            # pop new TOS
+    add $CELL, %r15
+    ret
+
+# C@ (char fetch) ( addr -- byte )
+# Read 1 byte from address, zero-extended
+.global forth_cfetch
+forth_cfetch:
+    movzbl (%r14), %eax         # RAX = zero-extended byte
+    mov %rax, %r14              # TOS = byte
+    ret
+
+# C! (char store) ( byte addr -- )
+# Write 1 byte to address
+.global forth_cstore
+forth_cstore:
+    mov (%r15), %rax            # RAX = byte
+    movb %al, (%r14)            # [addr] = low byte
+    add $CELL, %r15             # pop byte
+    mov (%r15), %r14            # pop new TOS
+    add $CELL, %r15
+    ret
+
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
 # TOS = char. Pass to platform_emit, pop new TOS.
@@ -336,6 +375,13 @@ data_stack_bottom:
     .space DATA_STACK_SIZE
 .global data_stack_top
 data_stack_top:
+
+# ---------- Dictionary Space ----------
+.equ DICT_SPACE_SIZE, 65536     # 64KB
+.balign 8
+.global dict_space
+dict_space:
+    .space DICT_SPACE_SIZE
 
 # ---------- Variables ----------
 .data

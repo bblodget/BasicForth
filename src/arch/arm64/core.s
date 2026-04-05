@@ -68,6 +68,41 @@ forth_negate:
     NEG X20, X20               // negate TOS
     RET
 
+// ---------- Memory ----------
+
+// @ (fetch) ( addr -- x )
+// Read 8-byte cell from address
+.global forth_fetch
+forth_fetch:
+    LDR X20, [X20]              // TOS = [TOS]
+    RET
+
+// ! (store) ( x addr -- )
+// Write 8-byte cell to address
+.global forth_store
+forth_store:
+    LDR X9, [X19], #CELL        // X9 = x, pop
+    STR X9, [X20]               // [addr] = x
+    LDR X20, [X19], #CELL       // pop new TOS
+    RET
+
+// C@ (char fetch) ( addr -- byte )
+// Read 1 byte from address, zero-extended
+.global forth_cfetch
+forth_cfetch:
+    LDRB W9, [X20]              // W9 = byte (zero-extended)
+    MOV X20, X9                 // TOS = byte
+    RET
+
+// C! (char store) ( byte addr -- )
+// Write 1 byte to address
+.global forth_cstore
+forth_cstore:
+    LDR X9, [X19], #CELL        // X9 = byte, pop
+    STRB W9, [X20]              // [addr] = low byte
+    LDR X20, [X19], #CELL       // pop new TOS
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 // TOS = char. Pass to platform_emit, pop new TOS.
@@ -312,6 +347,13 @@ data_stack_bottom:
     .space DATA_STACK_SIZE
 .global data_stack_top
 data_stack_top:
+
+// ---------- Dictionary Space ----------
+.equ DICT_SPACE_SIZE, 65536     // 64KB
+.balign 8
+.global dict_space
+dict_space:
+    .space DICT_SPACE_SIZE
 
 // ---------- Variables ----------
 .data

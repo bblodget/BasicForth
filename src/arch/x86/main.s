@@ -14,8 +14,10 @@
 .equ INPUT_BUF_SIZE, 80
 
 _start:
-    # Initialize data stack pointer (empty stack)
-    lea data_stack_top(%rip), %r15
+    # Initialize engine registers
+    lea data_stack_top(%rip), %r15  # DSP
+    lea dict_space(%rip), %r13      # HERE
+    xor %r12d, %r12d                # LATEST (0 = empty, updated in Step 3)
 
     # --- Test 1: Stack primitives ---
 

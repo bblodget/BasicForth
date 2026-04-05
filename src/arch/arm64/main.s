@@ -14,8 +14,10 @@
 .equ INPUT_BUF_SIZE, 80
 
 _start:
-    // Initialize data stack pointer (empty stack)
-    ADR X19, data_stack_top
+    // Initialize engine registers
+    ADR X19, data_stack_top         // DSP
+    ADR X21, dict_space             // HERE
+    MOV X22, #0                     // LATEST (0 = empty, updated in Step 3)
 
     // --- Test 1: Stack primitives ---
 
