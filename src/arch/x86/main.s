@@ -36,10 +36,6 @@ repl_loop:
     mov $INPUT_BUF_SIZE, %r14
     call forth_accept               # TOS = count
 
-    # Newline (ACCEPT doesn't echo Enter)
-    mov $'\n', %rdi
-    call platform_emit
-
     # Empty line → exit
     test %r14, %r14
     jz repl_bye

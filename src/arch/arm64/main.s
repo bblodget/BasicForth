@@ -35,10 +35,6 @@ repl_loop:
     MOV X20, #INPUT_BUF_SIZE
     BL forth_accept                 // TOS = count
 
-    // Newline (ACCEPT doesn't echo Enter)
-    MOV X0, #'\n'
-    BL platform_emit
-
     // Empty line → exit
     CBZ X20, repl_bye
 
