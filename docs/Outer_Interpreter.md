@@ -2,7 +2,8 @@
 
 The outer interpreter is the main REPL loop that makes BasicForth
 interactive. It reads lines of input, breaks them into words, and for
-each word either executes it from the dictionary or parses it as a number.
+each word either executes it, compiles it, or parses it as a number —
+depending on the current STATE.
 
 ## REPL Loop
 
@@ -23,17 +24,21 @@ _start
               ├── u == 0? → end of line, print " ok", goto repl_loop
               │
               ├── FIND → ( xt flag | c-addr u 0 )
-              │   ├── flag != 0? → DROP flag, EXECUTE xt, loop
-              │   └── flag == 0? → fall through
+              │   ├── flag == 0?  → not found, fall through to NUMBER
+              │   ├── STATE == 0? → DROP flag, EXECUTE xt, loop
+              │   ├── flag == 1?  → IMMEDIATE: DROP flag, EXECUTE xt, loop
+              │   └── flag == -1? → normal: DROP flag, compile_call xt, loop
               │
               ├── DROP 0 flag
               ├── NUMBER → ( n true | c-addr u false )
-              │   ├── true? → DROP flag, n is on stack, loop
-              │   └── false? → fall through
+              │   ├── false?     → not a number, fall through to error
+              │   ├── STATE == 0? → DROP flag, leave n on stack, loop
+              │   └── STATE != 0? → DROP flag, compile_literal n, loop
               │
               └── Error: DROP false
                   Print "? " + token + newline
                   DROP c-addr and u
+                  If STATE != 0: reset STATE, restore LATEST, restore HERE
                   goto repl_loop (abort rest of line)
 ```
 
@@ -48,6 +53,22 @@ The key design is that FIND and NUMBER both preserve the original
 3. After dropping the 0, **NUMBER** gets `( c-addr u )` — the same string
 4. If NUMBER also fails, `( c-addr u )` is still available for the error
    message
+
+## Interpret vs Compile Mode
+
+The STATE variable controls whether the interpreter executes or compiles:
+
+| STATE    | Words                    | Numbers                   |
+|----------|--------------------------|---------------------------|
+| 0        | EXECUTE immediately      | Push to data stack        |
+| non-zero | compile_call (emit code) | compile_literal (emit code) |
+
+**IMMEDIATE words always execute**, even in compile mode. This is how `;`
+can end a definition and `'` can parse the next word at compile time.
+
+The FIND return flag distinguishes the two cases:
+- `flag == 1` — word is IMMEDIATE (always execute)
+- `flag == -1` — word is normal (compile in compile mode)
 
 ## Input Buffer Variables
 
@@ -65,17 +86,16 @@ successive tokens.
 
 ## Words Used by the Interpreter
 
-| Word         | Stack Effect                              | Role                          |
-|--------------|-------------------------------------------|-------------------------------|
-| `ACCEPT`     | `( c-addr max -- count )`                 | Read a line with editing      |
-| `PARSE-WORD` | `( -- c-addr u )`                         | Extract next token            |
-| `FIND`       | `( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )` | Dictionary lookup       |
-| `NUMBER`     | `( c-addr u -- n true \| c-addr u false )` | Parse as number              |
-| `EXECUTE`    | `( xt -- )`                               | Call execution token          |
-| `DROP`       | `( a -- )`                                | Clean up flags                |
-| `.`          | `( n -- )`                                | Print number (user-facing)    |
-| `.S`         | `( -- )`                                  | Show stack (user-facing)      |
-| `BYE`        | `( -- )`                                  | Exit                          |
+| Word             | Stack Effect                                       | Role                     |
+|------------------|----------------------------------------------------|--------------------------|
+| `ACCEPT`         | `( c-addr max -- count )`                          | Read a line with editing |
+| `PARSE-WORD`     | `( -- c-addr u )`                                  | Extract next token       |
+| `FIND`           | `( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )`    | Dictionary lookup        |
+| `NUMBER`         | `( c-addr u -- n true \| c-addr u false )`         | Parse as number          |
+| `EXECUTE`        | `( xt -- )`                                        | Call execution token     |
+| `compile_call`   | consumes xt from RAX/X0                            | Emit CALL/BL at HERE     |
+| `compile_literal`| consumes value from RAX/X0                         | Emit LIT + value at HERE |
+| `DROP`           | `( a -- )`                                         | Clean up flags           |
 
 ## Stack Persistence
 
@@ -105,10 +125,23 @@ already pushed or executed on that line remain on the stack.
 In this example, `1` and `2` were pushed before the error. `3` was never
 reached because `hello` caused an abort.
 
-## Interpret vs Compile Mode (Future)
+### Error During Compilation
 
-The current interpreter is interpret-only — every word is executed
-immediately. A future STATE variable will control compile mode, where
-non-IMMEDIATE words are compiled into new definitions instead of
-executed. The FIND return flag (`1` for IMMEDIATE, `-1` for normal)
-already supports this distinction.
+If an error occurs while compiling a definition, the interpreter also:
+
+1. Resets STATE to 0 (back to interpreting)
+2. Restores LATEST to the value saved by `:` before it started
+3. Restores HERE to the value saved by `:` before it started
+
+This discards the partial definition completely. Earlier definitions on the
+same line are not affected — the save point is per-definition (set by `:`),
+not per-line.
+
+```
+> : FOO 42 ; : BAR typo
+? typo
+> FOO .
+42  ok
+```
+
+FOO completed before the error and survives. BAR is rolled back.
