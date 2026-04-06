@@ -1,13 +1,11 @@
-// BasicForth — Main / Test Harness (ARM64)
-// Phase 2, Step 3: Line input + number parsing
+// BasicForth — Outer Interpreter (ARM64)
 //
 // Register convention:
-//   X19 = DSP (points to second item)
+//   X19 = DSP (data stack pointer, points to second item)
 //   X20 = TOS (top of stack value)
-//
-// Tests:
-//   1. Stack primitives (3+4=7, SWAP)
-//   2. ACCEPT + NUMBER — read a line, try to parse as number
+//   X21 = HERE (next free byte in dictionary)
+//   X22 = LATEST (most recent dictionary entry)
+//   SP  = Return stack
 
 .global _start
 
@@ -19,190 +17,124 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S
     ADR X21, dict_space             // HERE
-    ADR X22, dict_bye                 // LATEST
+    ADR X22, dict_bye               // LATEST
+    MOV X20, #0                     // TOS = 0
 
-    // --- Test 1: Stack primitives ---
-
-    // 3 + 4 = 7
-    STR X20, [X19, #-8]!
-    MOV X20, #3
-    STR X20, [X19, #-8]!
-    MOV X20, #4
-    BL forth_add
-    STR X20, [X19, #-8]!
-    MOV X20, #48
-    BL forth_add
-    BL forth_emit
-    STR X20, [X19, #-8]!
-    MOV X20, #10
-    BL forth_emit
-
-    // SWAP(1,2) → top=1, second=2
-    STR X20, [X19, #-8]!
-    MOV X20, #1
-    STR X20, [X19, #-8]!
-    MOV X20, #2
-    BL forth_swap
-    STR X20, [X19, #-8]!
-    MOV X20, #48
-    BL forth_add
-    BL forth_emit
-    STR X20, [X19, #-8]!
-    MOV X20, #48
-    BL forth_add
-    BL forth_emit
-    STR X20, [X19, #-8]!
-    MOV X20, #10
-    BL forth_emit
-
-    // --- Test 2: ACCEPT + NUMBER ---
-
-    // Enter raw mode
     BL platform_raw_mode
 
-accept_loop:
+repl_loop:
     // Print prompt
     ADR X0, prompt_msg
     MOV X1, #prompt_len
-    BL print_string
+    BL platform_write
 
-    // ACCEPT ( c-addr max_len -- count )
-    STR X20, [X19, #-8]!
+    // ACCEPT ( c-addr max -- count )
+    STR X20, [X19, #-8]!           // push old TOS
     ADR X20, input_buf
     STR X20, [X19, #-8]!
     MOV X20, #INPUT_BUF_SIZE
-    BL forth_accept            // TOS = count
+    BL forth_accept                 // TOS = count
 
-    // Check for empty line → exit
-    CBZ X20, accept_bye
+    // Newline (ACCEPT doesn't echo Enter)
+    MOV X0, #'\n'
+    BL platform_emit
 
-    // Set up for NUMBER: need ( c-addr u ) on stack
-    // TOS = count. Push input_buf below it as c-addr.
-    STR X20, [X19, #-8]!      // push count to memory
-    ADR X20, input_buf         // TOS = buf_addr
-    BL forth_swap              // now: TOS=count, [DSP]=buf_addr = ( c-addr u )
-    BL forth_number            // ( c-addr u -- n true | c-addr u false )
+    // Empty line → exit
+    CBZ X20, repl_bye
 
-    // Check flag (TOS)
-    CMP X20, #0
-    B.EQ not_a_number
+    // Set up source variables for PARSE-WORD
+    ADR X9, source_len
+    STR X20, [X9]
+    ADR X9, source_addr
+    ADR X10, input_buf
+    STR X10, [X9]
+    ADR X9, to_in
+    STR XZR, [X9]
 
-    // Success: TOS = true, [DSP] = n
-    BL forth_drop              // drop the true flag, TOS = n
+    // Drop count (restore user's TOS)
+    BL forth_drop
 
-    // Print "= "
-    ADR X0, eq_msg
-    MOV X1, #eq_len
-    BL print_string
+interpret_loop:
+    BL forth_parse_word             // ( -- c-addr u )
 
-    // Print the number (simple decimal print)
-    // TOS = n, call print_number helper
-    BL print_number
+    // End of line? (u == 0)
+    CBZ X20, interpret_done
 
-    // Print newline
-    STR X20, [X19, #-8]!
-    MOV X20, #10
-    BL forth_emit
+    // FIND ( c-addr u -- xt flag | c-addr u 0 )
+    BL forth_find
 
-    B accept_loop
+    // Found? (flag != 0)
+    CBZ X20, try_number
 
-not_a_number:
-    // TOS = false (0), [DSP] = u, [DSP+8] = c-addr
-    BL forth_drop              // drop false
-    BL forth_drop              // drop u
-    BL forth_drop              // drop c-addr
+    // Found — drop flag, execute word
+    BL forth_drop                   // drop flag, TOS = xt
+    BL forth_execute
+    B interpret_loop
 
-    ADR X0, nan_msg
-    MOV X1, #nan_len
-    BL print_string
+try_number:
+    // Not in dictionary — drop 0 flag, try NUMBER
+    BL forth_drop                   // ( c-addr u )
 
-    B accept_loop
+    // NUMBER ( c-addr u -- n true | c-addr u false )
+    BL forth_number
 
-accept_bye:
-    BL forth_drop              // drop the 0 count
+    CBZ X20, not_found
+
+    // Parsed — drop true flag, number is on stack
+    BL forth_drop
+    B interpret_loop
+
+not_found:
+    // Neither word nor number — error
+    BL forth_drop                   // drop false, ( c-addr u )
+
+    // Print "? " + token + newline
+    ADR X0, err_msg
+    MOV X1, #err_len
+    BL platform_write
+
+    MOV X1, X20                     // length = u (TOS)
+    LDR X0, [X19]                   // buf = c-addr ([DSP])
+    BL platform_write
+
+    MOV X0, #'\n'
+    BL platform_emit
+
+    // Clean up c-addr and u
+    BL forth_drop                   // drop u
+    BL forth_drop                   // drop c-addr
+
+    B repl_loop
+
+interpret_done:
+    // End of line — drop 0 0 from PARSE-WORD
+    BL forth_drop
+    BL forth_drop
+
+    // Print " ok"
+    ADR X0, ok_msg
+    MOV X1, #ok_len
+    BL platform_write
+
+    B repl_loop
+
+repl_bye:
+    BL forth_drop                   // drop 0 count
 
     ADR X0, bye_msg
     MOV X1, #bye_len
-    BL print_string
+    BL platform_write
 
     BL platform_bye
-
-// ---------- Helper: print_string ----------
-// Input: X0 = string pointer, X1 = length
-print_string:
-    MOV X2, X1
-    MOV X1, X0
-    MOV X0, #1
-    MOV X8, #64
-    SVC #0
-    RET
-
-// ---------- Helper: print_number ----------
-// Print signed decimal number from TOS. Consumes TOS.
-// Uses a stack buffer to build digits right-to-left.
-print_number:
-    STP X29, X30, [SP, #-16]!
-    SUB SP, SP, #32            // digit buffer on stack
-
-    MOV X9, X20                // X9 = number
-    LDR X20, [X19], #8        // pop TOS (consume the number)
-
-    // Handle negative
-    MOV X11, #0                // sign flag
-    CMP X9, #0
-    B.GE .Lpn_positive
-    NEG X9, X9
-    MOV X11, #1
-.Lpn_positive:
-
-    // Build digits right-to-left in stack buffer
-    ADD X12, SP, #31           // X12 = end of buffer
-    MOV X13, X12               // X13 = current position
-    MOV X14, #10               // divisor
-
-    // Handle zero specially
-    CBNZ X9, .Lpn_divloop
-    SUB X13, X13, #1
-    MOV W10, #'0'
-    STRB W10, [X13]
-    B .Lpn_sign
-
-.Lpn_divloop:
-    CBZ X9, .Lpn_sign
-    UDIV X10, X9, X14          // X10 = quotient
-    MSUB X15, X10, X14, X9     // X15 = remainder
-    ADD W15, W15, #'0'         // convert to ASCII
-    SUB X13, X13, #1
-    STRB W15, [X13]
-    MOV X9, X10                // quotient for next iteration
-    B .Lpn_divloop
-
-.Lpn_sign:
-    CBZ X11, .Lpn_print
-    SUB X13, X13, #1
-    MOV W10, #'-'
-    STRB W10, [X13]
-
-.Lpn_print:
-    // Print: X13 = start, X12 = end
-    SUB X2, X12, X13           // length
-    MOV X1, X13                // buf
-    MOV X0, #1                 // stdout
-    MOV X8, #64
-    SVC #0
-
-    ADD SP, SP, #32
-    LDP X29, X30, [SP], #16
-    RET
 
 // ---------- Data ----------
 .section .rodata
 prompt_msg: .ascii "> "
 .equ prompt_len, . - prompt_msg
-eq_msg:     .ascii "= "
-.equ eq_len, . - eq_msg
-nan_msg:    .ascii "  Not a number\n"
-.equ nan_len, . - nan_msg
+ok_msg:     .ascii " ok\n"
+.equ ok_len, . - ok_msg
+err_msg:    .ascii "? "
+.equ err_len, . - err_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
 

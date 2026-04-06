@@ -721,17 +721,17 @@ dict_space:
 .data
 .align 3
 .global base
-base:
+base:                               // NUMBER base (default decimal)
     .quad 10
 .global source_addr
-source_addr:
+source_addr:                        // PARSE-WORD: pointer to input buffer
     .quad 0
 .global source_len
-source_len:
+source_len:                         // PARSE-WORD: total length of input
     .quad 0
 .global to_in
-to_in:
+to_in:                              // PARSE-WORD: current parse offset
     .quad 0
 .global sp0
-sp0:
+sp0:                                // Initial DSP value (for .S depth)
     .quad 0
