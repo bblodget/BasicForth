@@ -17,7 +17,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S
     ADR X21, dict_space             // HERE
-    ADR X22, dict_bye               // LATEST
+    ADR X22, dict_tick              // LATEST
     MOV X20, #0                     // TOS = 0
 
     BL platform_raw_mode
@@ -62,7 +62,25 @@ interpret_loop:
     // Found? (flag != 0)
     CBZ X20, try_number
 
-    // Found — drop flag, execute word
+    // Found — TOS = flag (1=IMMEDIATE, -1=normal), [DSP] = xt
+    // If interpreting (STATE==0), always execute.
+    // If compiling: IMMEDIATE words execute, normal words get compiled.
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, found_execute           // interpreting → execute
+
+    // Compiling — check IMMEDIATE flag
+    CMP X20, #1
+    B.EQ found_execute              // IMMEDIATE → execute even in compile mode
+
+    // Normal word in compile mode — compile a BL to it
+    BL forth_drop                   // drop flag, TOS = xt
+    MOV X0, X20                     // X0 = xt
+    LDR X20, [X19], #8             // pop xt from stack
+    BL compile_call                 // emit BL xt at HERE
+    B interpret_loop
+
+found_execute:
     BL forth_drop                   // drop flag, TOS = xt
     BL forth_execute
     B interpret_loop
@@ -78,6 +96,16 @@ try_number:
 
     // Parsed — drop true flag, number is on stack
     BL forth_drop
+
+    // If compiling, compile the number as a literal
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, interpret_loop          // interpreting → leave on stack
+
+    // Compiling — compile literal
+    MOV X0, X20                     // X0 = number
+    LDR X20, [X19], #8             // pop number from stack
+    BL compile_literal              // emit BL LIT + value at HERE
     B interpret_loop
 
 not_found:
@@ -99,6 +127,16 @@ not_found:
     // Clean up c-addr and u
     BL forth_drop                   // drop u
     BL forth_drop                   // drop c-addr
+
+    // If we were compiling, abort the definition
+    ADR X9, state
+    LDR X10, [X9]
+    CBZ X10, repl_loop
+    STR XZR, [X9]                   // reset to interpret mode
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
 
     B repl_loop
 

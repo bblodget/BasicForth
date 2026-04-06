@@ -709,6 +709,225 @@ forth_dot_s:
 forth_bye:
     jmp platform_bye
 
+# ---------- LIT (runtime) ----------
+# Pushes the inline 8-byte value that follows the CALL to forth_lit.
+# At runtime, the return address on the hardware stack points to the
+# inline data.  We read the value, advance past it, and continue.
+#
+# Compiled code layout:
+#   CALL forth_lit      (5 bytes)
+#   .quad <value>       (8 bytes)
+#   <next instruction>
+#
+.global forth_lit
+forth_lit:
+    pop %rax                        # return addr = pointer to inline value
+    sub $CELL, %r15
+    mov %r14, (%r15)                # push old TOS
+    mov (%rax), %r14                # TOS = inline value
+    add $CELL, %rax                 # skip past the 8-byte value
+    jmp *%rax                       # continue execution
+
+# ---------- compile_call (internal) ----------
+# Compile a CALL instruction at HERE to the address in RAX.
+# Advances HERE (R13) by 5 bytes.
+# Clobbers RCX.
+.global compile_call
+compile_call:
+    movb $0xE8, (%r13)             # E8 opcode (CALL rel32)
+    lea 5(%r13), %rcx              # RCX = address after the CALL
+    sub %rcx, %rax                 # RAX = relative offset
+    mov %eax, 1(%r13)              # write 32-bit relative offset
+    add $5, %r13                   # advance HERE
+    ret
+
+# ---------- compile_ret (internal) ----------
+# Compile a RET instruction at HERE.  Advances HERE by 1 byte.
+.global compile_ret
+compile_ret:
+    movb $0xC3, (%r13)             # C3 opcode (RET)
+    inc %r13                       # advance HERE
+    ret
+
+# ---------- compile_literal (internal) ----------
+# Compile a CALL to forth_lit followed by an 8-byte inline value.
+# Value is taken from RAX.  Advances HERE by 13 bytes.
+# Clobbers RCX.
+.global compile_literal
+compile_literal:
+    push %rax                       # save the literal value
+    lea forth_lit(%rip), %rax       # target = forth_lit
+    call compile_call               # emit CALL forth_lit (5 bytes)
+    pop %rax
+    mov %rax, (%r13)               # emit inline 8-byte value
+    add $CELL, %r13                # advance HERE past value
+    ret
+
+# ---------- COLON (Forth-level) ----------
+# ( -- )
+# Parse the next word, create a dictionary header at HERE, and enter
+# compile mode.  The new entry is marked HIDDEN until ; completes it.
+#
+# Dictionary entry layout built here:
+#   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [pad to 4]
+#   Then HERE points to where compiled code will go.
+#
+.global forth_colon
+forth_colon:
+    # Save LATEST and HERE for error recovery before modifying anything
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
+
+    push %rbx
+    push %rbp
+
+    # Parse name
+    call forth_parse_word           # ( -- c-addr u )
+    mov %r14, %rcx                  # RCX = name length
+    mov (%r15), %rsi                # RSI = name c-addr
+    add $CELL, %r15                 # drop both from stack
+    mov (%r15), %r14
+    add $CELL, %r15
+
+    test %rcx, %rcx
+    jz .Lcolon_err                  # empty name — bail
+
+    # Clamp name length to F_LENMASK (63) max
+    cmp $F_LENMASK, %rcx
+    jbe .Lcolon_len_ok
+    mov $F_LENMASK, %rcx
+.Lcolon_len_ok:
+
+    # R13 = HERE, R12 = LATEST
+    # Align HERE to 8 before starting new entry
+    add $7, %r13
+    and $~7, %r13
+
+    # Write link pointer (8 bytes) — points to old LATEST
+    mov %r12, (%r13)
+    mov %r13, %rbx                  # RBX = new entry address (for LATEST)
+    add $CELL, %r13
+
+    # Write flags+len byte (HIDDEN | length)
+    mov %ecx, %eax
+    or $F_HIDDEN, %al
+    movb %al, (%r13)
+    inc %r13
+
+    # Write name (lowercase)
+    mov %rcx, %rbp                  # RBP = name length (loop counter)
+.Lcolon_name:
+    test %rbp, %rbp
+    jz .Lcolon_name_done
+    movzbl (%rsi), %eax
+    # Lowercase: if 'A'-'Z', add 0x20
+    cmp $'A', %al
+    jb .Lcolon_store
+    cmp $'Z', %al
+    ja .Lcolon_store
+    add $0x20, %al
+.Lcolon_store:
+    movb %al, (%r13)
+    inc %r13
+    inc %rsi
+    dec %rbp
+    jmp .Lcolon_name
+
+.Lcolon_name_done:
+    # Align HERE to 8
+    add $7, %r13
+    and $~7, %r13
+
+    # Write code pointer — will point just past code_len field
+    lea 12(%r13), %rax              # code starts after CodePtr(8)+CodeLen(4)
+    mov %rax, (%r13)
+    add $CELL, %r13                 # past CodePtr
+
+    # Write code_len placeholder (0), save its address for ;
+    mov %r13, colon_code_len_addr(%rip)
+    movl $0, (%r13)
+    add $4, %r13                    # past CodeLen
+
+    # Update LATEST and STATE
+    mov %rbx, %r12                  # LATEST = new entry
+    movq $1, state(%rip)            # STATE = compiling
+
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lcolon_err:
+    # No name given — just return without doing anything
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- SEMICOLON (Forth-level, IMMEDIATE) ----------
+# ( -- )
+# End a colon definition: compile RET, fill code_len, clear HIDDEN,
+# return to interpret mode.
+#
+.global forth_semicolon
+forth_semicolon:
+    # Guard: must be in compile mode
+    cmpq $0, state(%rip)
+    je .Lsemi_err
+
+    # Compile RET
+    call compile_ret
+
+    # Calculate code length and write it
+    mov colon_code_len_addr(%rip), %rax   # RAX = code_len field address
+    lea 4(%rax), %rcx                     # RCX = code start (right after field)
+    mov %r13, %rdx                        # RDX = HERE (right after compiled code)
+    sub %rcx, %rdx                        # RDX = code length
+    mov %edx, (%rax)                      # write code_len (32-bit)
+
+    # Clear HIDDEN flag on new entry (LATEST + 8 is flags byte)
+    andb $~F_HIDDEN, 8(%r12)
+
+    # Return to interpret mode
+    movq $0, state(%rip)
+    ret
+
+.Lsemi_err:
+    # ; outside compile mode — silently ignore
+    ret
+
+# ---------- IMMEDIATE (Forth-level) ----------
+# ( -- )
+# Set the IMMEDIATE flag on the most recent dictionary entry.
+.global forth_immediate
+forth_immediate:
+    orb $F_IMMEDIATE, 8(%r12)
+    ret
+
+# ---------- TICK (Forth-level) ----------
+# ( "<spaces>name" -- xt )
+# Parse the next word and look it up in the dictionary.
+# Pushes its execution token (code address).
+.global forth_tick
+forth_tick:
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
+
+    # Check if found (flag != 0)
+    test %r14, %r14
+    jz .Ltick_not_found
+
+    # Found — drop flag, TOS = xt
+    mov (%r15), %r14
+    add $CELL, %r15
+    ret
+
+.Ltick_not_found:
+    # Not found — drop 0 flag, c-addr, u; push 0 as error
+    call forth_drop                 # drop 0 flag
+    call forth_drop                 # drop u
+    call forth_drop                 # drop c-addr
+    xor %r14d, %r14d               # TOS = 0 (invalid xt)
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -732,7 +951,12 @@ DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
 DEFWORD dict_dot,        ".",          forth_dot,        dict_execute
 DEFWORD dict_dot_s,      ".s",         forth_dot_s,      dict_dot
 DEFWORD dict_bye,        "bye",        forth_bye,        dict_dot_s
-.global dict_bye
+DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
+DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
+DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
+DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
+DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate
+.global dict_tick
 
 # ---------- Data Stack Memory ----------
 .bss
@@ -766,4 +990,16 @@ to_in:                              # PARSE-WORD: current parse offset
     .quad 0
 .global sp0
 sp0:                                # Initial DSP value (for .S depth)
+    .quad 0
+.global state
+state:                              # Compiler state (0=interpret, non-zero=compile)
+    .quad 0
+.global colon_code_len_addr
+colon_code_len_addr:                # Saved code_len field address for ; to fill
+    .quad 0
+.global saved_latest
+saved_latest:                       # LATEST before current : for error recovery
+    .quad 0
+.global saved_here
+saved_here:                         # HERE before current : for error recovery
     .quad 0

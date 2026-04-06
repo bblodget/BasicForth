@@ -13,6 +13,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
 
 /* --- Assembly interface --- */
 
@@ -45,7 +46,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_bye;
+extern char dict_tick;
 extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
@@ -598,6 +599,112 @@ static void test_execute_add(void)
         fail("EXECUTE: + via xt", "tos=%ld depth=%d", tos_out, stack_depth(dsp_out));
 }
 
+/* --- Compiler tests --- */
+
+extern void forth_lit(void);
+extern void compile_call(void);
+extern void compile_ret(void);
+extern void compile_literal(void);
+extern int64_t state;
+extern void forth_colon(void);
+extern void forth_semicolon(void);
+
+/*
+ * Test forth_lit: compile a tiny code sequence in dict_space that
+ * calls forth_lit with inline value 42, then returns.
+ * Execute it via call_primitive to verify the literal lands on stack.
+ *
+ * For x86-64 the compiled code is:
+ *   CALL forth_lit   (5 bytes)
+ *   .quad 42         (8 bytes)
+ *   RET              (1 byte)
+ *
+ * For ARM64 the compiled code is:
+ *   STP X29, X30, [SP, #-16]!  (4 bytes, prolog)
+ *   BL forth_lit                (4 bytes)
+ *   .quad 42                    (8 bytes)
+ *   LDP X29, X30, [SP], #16    (4 bytes, epilog)
+ *   RET                         (4 bytes)
+ */
+static void test_lit(void)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    /* Build a tiny function in dict_space that pushes literal 42 */
+    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
+
+    uint8_t *code = (uint8_t *)&dict_space;
+
+#if defined(__x86_64__)
+    /* CALL forth_lit (E8 + rel32) */
+    code[0] = 0xE8;
+    int32_t offset = (int32_t)((uint8_t *)forth_lit - (code + 5));
+    *(int32_t *)(code + 1) = offset;
+    /* inline value */
+    *(int64_t *)(code + 5) = 42;
+    /* RET */
+    code[13] = 0xC3;
+#elif defined(__aarch64__)
+    /* STP X29, X30, [SP, #-16]! = 0xA9BF7BFD */
+    *(uint32_t *)(code + 0) = 0xA9BF7BFD;
+    /* BL forth_lit */
+    int32_t bl_offset = (int32_t)((uint8_t *)forth_lit - (code + 4)) >> 2;
+    *(uint32_t *)(code + 4) = 0x94000000 | (bl_offset & 0x03FFFFFF);
+    /* inline value */
+    *(int64_t *)(code + 8) = 42;
+    /* LDP X29, X30, [SP], #16 = 0xA8C17BFD */
+    *(uint32_t *)(code + 16) = 0xA8C17BFD;
+    /* RET = 0xD65F03C0 */
+    *(uint32_t *)(code + 20) = 0xD65F03C0;
+#endif
+
+    setup_1(99, &tos_in, &dsp_in);
+    call_primitive((void *)code, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (tos_out == 42 && dsp_out[0] == 99 && stack_depth(dsp_out) == 1)
+        pass("LIT: pushes inline 42");
+    else
+        fail("LIT: pushes inline 42",
+             "tos=%ld [dsp]=%ld depth=%d",
+             tos_out, dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_lit_negative(void)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+
+    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
+
+    uint8_t *code = (uint8_t *)&dict_space;
+
+#if defined(__x86_64__)
+    code[0] = 0xE8;
+    int32_t offset = (int32_t)((uint8_t *)forth_lit - (code + 5));
+    *(int32_t *)(code + 1) = offset;
+    *(int64_t *)(code + 5) = -7;
+    code[13] = 0xC3;
+#elif defined(__aarch64__)
+    *(uint32_t *)(code + 0) = 0xA9BF7BFD;
+    int32_t bl_offset = (int32_t)((uint8_t *)forth_lit - (code + 4)) >> 2;
+    *(uint32_t *)(code + 4) = 0x94000000 | (bl_offset & 0x03FFFFFF);
+    *(int64_t *)(code + 8) = -7;
+    *(uint32_t *)(code + 16) = 0xA8C17BFD;
+    *(uint32_t *)(code + 20) = 0xD65F03C0;
+#endif
+
+    setup_1(99, &tos_in, &dsp_in);
+    call_primitive((void *)code, tos_in, dsp_in, &tos_out, &dsp_out);
+
+    if (tos_out == -7 && dsp_out[0] == 99 && stack_depth(dsp_out) == 1)
+        pass("LIT: pushes inline -7");
+    else
+        fail("LIT: pushes inline -7",
+             "tos=%ld [dsp]=%ld depth=%d",
+             tos_out, dsp_out[0], stack_depth(dsp_out));
+}
+
 /* --- Main --- */
 
 int main(void)
@@ -629,7 +736,7 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_bye);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
     test_find();
 
     section("Parse Word");
@@ -640,6 +747,15 @@ int main(void)
     section("Execute");
     test_execute();
     test_execute_add();
+
+    section("Compiler");
+    /* Make dict_space executable for compiler tests */
+    {
+        uintptr_t page = (uintptr_t)&dict_space & ~0xFFF;
+        mprotect((void *)page, 65536 + 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+    }
+    test_lit();
+    test_lit_negative();
 
     printf("\n=====================\n");
     printf("%d passed, %d failed, %d total\n", passed, failed, passed + failed);

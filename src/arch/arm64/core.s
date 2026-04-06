@@ -677,6 +677,268 @@ forth_dot_s:
 forth_bye:
     B platform_bye
 
+// ---------- LIT (runtime) ----------
+// Pushes the inline 8-byte value that follows the BL to forth_lit.
+// At runtime, X30 (LR) points to the inline data.  We read the value,
+// advance past it, and continue.
+//
+// Compiled code layout:
+//   BL forth_lit        (4 bytes)
+//   .quad <value>       (8 bytes)
+//   <next instruction>
+//
+.global forth_lit
+forth_lit:
+    STR X20, [X19, #-CELL]!        // push old TOS
+    LDR X20, [X30]                  // TOS = inline value (LR points to it)
+    ADD X30, X30, #CELL             // skip past the 8-byte value
+    RET                             // continue execution (jumps to updated LR)
+
+// ---------- compile_call (internal) ----------
+// Compile a BL instruction at HERE to the address in X0.
+// Advances HERE (X21) by 4 bytes.
+// Clobbers X9, X10.
+.global compile_call
+compile_call:
+    SUB X9, X0, X21                // X9 = offset in bytes
+    ASR X9, X9, #2                 // X9 = offset in words (BL uses word offset)
+    AND X9, X9, #0x3FFFFFF         // mask to 26 bits
+    MOV X10, #0x94000000           // BL opcode
+    ORR X10, X10, X9               // BL with offset
+    STR W10, [X21]                 // write instruction at HERE
+    ADD X21, X21, #4               // advance HERE
+    RET
+
+// ---------- compile_prolog (internal) ----------
+// Compile STP X29, X30, [SP, #-16]! at HERE.  Advances HERE by 4 bytes.
+// This saves the link register so BL instructions within the compiled
+// word don't clobber the return address.
+// Clobbers X9.
+.global compile_prolog
+compile_prolog:
+    // STP X29, X30, [SP, #-16]! = 0xA9BF7BFD
+    MOV W9, #0x7BFD
+    MOVK W9, #0xA9BF, LSL #16
+    STR W9, [X21]
+    ADD X21, X21, #4
+    RET
+
+// ---------- compile_ret (internal) ----------
+// Compile the epilog: LDP X29, X30, [SP], #16 + RET.
+// Advances HERE by 8 bytes.
+// Clobbers X9.
+.global compile_ret
+compile_ret:
+    // LDP X29, X30, [SP], #16 = 0xA8C17BFD
+    MOV W9, #0x7BFD
+    MOVK W9, #0xA8C1, LSL #16
+    STR W9, [X21]
+    ADD X21, X21, #4
+    // RET = 0xD65F03C0
+    MOV W9, #0x03C0
+    MOVK W9, #0xD65F, LSL #16
+    STR W9, [X21]
+    ADD X21, X21, #4
+    RET
+
+// ---------- compile_literal (internal) ----------
+// Compile a BL to forth_lit followed by an 8-byte inline value.
+// Value is taken from X0.  Advances HERE by 12 bytes.
+// Clobbers X9, X10.
+.global compile_literal
+compile_literal:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X23, X0                    // save the literal value (callee-saved)
+    ADR X0, forth_lit              // target = forth_lit
+    BL compile_call                // emit BL forth_lit (4 bytes)
+    STR X23, [X21]                 // emit inline 8-byte value
+    ADD X21, X21, #CELL            // advance HERE past value
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- COLON (Forth-level) ----------
+// ( -- )
+// Parse the next word, create a dictionary header at HERE, and enter
+// compile mode.  The new entry is marked HIDDEN until ; completes it.
+//
+// Dictionary entry layout built here:
+//   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [pad to 4]
+//   Then HERE points to where compiled code will go.
+//
+.global forth_colon
+forth_colon:
+    // Save LATEST and HERE for error recovery before modifying anything
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
+
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    // Parse name
+    BL forth_parse_word             // ( -- c-addr u )
+    MOV X24, X20                    // X24 = name length
+    LDR X23, [X19], #CELL          // X23 = name c-addr
+    LDR X20, [X19], #CELL          // restore TOS (drop both)
+
+    CBZ X24, .Lcolon_err            // empty name — bail
+
+    // Clamp name length to F_LENMASK (63) max
+    CMP X24, #F_LENMASK
+    B.LS .Lcolon_len_ok
+    MOV X24, #F_LENMASK
+.Lcolon_len_ok:
+
+    // X21 = HERE, X22 = LATEST
+    // Align HERE to 8 before starting new entry
+    ADD X21, X21, #7
+    AND X21, X21, #~7
+
+    // Write link pointer (8 bytes) — points to old LATEST
+    STR X22, [X21]
+    MOV X25, X21                    // X25 = new entry address (for LATEST)
+    ADD X21, X21, #CELL
+
+    // Write flags+len byte (HIDDEN | length)
+    MOV W9, W24
+    ORR W9, W9, #F_HIDDEN
+    STRB W9, [X21]
+    ADD X21, X21, #1
+
+    // Write name (lowercase)
+    MOV X26, X24                    // X26 = name length (loop counter)
+.Lcolon_name:
+    CBZ X26, .Lcolon_name_done
+    LDRB W9, [X23], #1
+    // Lowercase: if 'A'-'Z', add 0x20
+    CMP W9, #'A'
+    B.LO .Lcolon_store
+    CMP W9, #'Z'
+    B.HI .Lcolon_store
+    ADD W9, W9, #0x20
+.Lcolon_store:
+    STRB W9, [X21], #1
+    SUB X26, X26, #1
+    B .Lcolon_name
+
+.Lcolon_name_done:
+    // Align HERE to 8
+    ADD X21, X21, #7
+    AND X21, X21, #~7
+
+    // Write code pointer — will point just past code_len field
+    ADD X9, X21, #12                // code starts after CodePtr(8)+CodeLen(4)
+    STR X9, [X21]
+    ADD X21, X21, #CELL             // past CodePtr
+
+    // Write code_len placeholder (0), save its address for ;
+    ADR X9, colon_code_len_addr
+    STR X21, [X9]
+    STR WZR, [X21]
+    ADD X21, X21, #4                // past CodeLen
+
+    // Compile prolog (STP X29, X30, [SP, #-16]!) as first instruction
+    BL compile_prolog
+
+    // Update LATEST and STATE
+    MOV X22, X25                    // LATEST = new entry
+    ADR X9, state
+    MOV X10, #1
+    STR X10, [X9]                   // STATE = compiling
+
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lcolon_err:
+    // No name given — just return without doing anything
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- SEMICOLON (Forth-level, IMMEDIATE) ----------
+// ( -- )
+// End a colon definition: compile RET, fill code_len, clear HIDDEN,
+// return to interpret mode.
+//
+.global forth_semicolon
+forth_semicolon:
+    // Guard: must be in compile mode
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, .Lsemi_err
+
+    STP X29, X30, [SP, #-16]!
+
+    // Compile RET
+    BL compile_ret
+
+    // Calculate code length and write it
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]                    // X9 = code_len field address
+    ADD X10, X9, #4                 // X10 = code start (right after field)
+    SUB X11, X21, X10               // X11 = code length
+    STR W11, [X9]                   // write code_len (32-bit)
+
+    // Clear HIDDEN flag on new entry (LATEST + 8 is flags byte)
+    LDRB W9, [X22, #8]
+    AND W9, W9, #~F_HIDDEN
+    STRB W9, [X22, #8]
+
+    // Return to interpret mode
+    ADR X9, state
+    STR XZR, [X9]
+
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lsemi_err:
+    // ; outside compile mode — silently ignore
+    RET
+
+// ---------- IMMEDIATE (Forth-level) ----------
+// ( -- )
+// Set the IMMEDIATE flag on the most recent dictionary entry.
+.global forth_immediate
+forth_immediate:
+    LDRB W9, [X22, #8]
+    ORR W9, W9, #F_IMMEDIATE
+    STRB W9, [X22, #8]
+    RET
+
+// ---------- TICK (Forth-level) ----------
+// ( "<spaces>name" -- xt )
+// Parse the next word and look it up in the dictionary.
+// Pushes its execution token (code address).
+.global forth_tick
+forth_tick:
+    STP X29, X30, [SP, #-16]!
+    BL forth_parse_word             // ( -- c-addr u )
+    BL forth_find                   // ( c-addr u -- xt flag | c-addr u 0 )
+
+    // Check if found (flag != 0)
+    CBZ X20, .Ltick_not_found
+
+    // Found — drop flag, TOS = xt
+    LDR X20, [X19], #CELL
+    LDP X29, X30, [SP], #16
+    RET
+
+.Ltick_not_found:
+    // Not found — drop 0 flag, c-addr, u; push 0 as error
+    BL forth_drop                   // drop 0 flag
+    BL forth_drop                   // drop u
+    BL forth_drop                   // drop c-addr
+    MOV X20, #0                     // TOS = 0 (invalid xt)
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -700,7 +962,12 @@ DEFWORD dict_execute,    "execute",    forth_execute,    dict_parse_word
 DEFWORD dict_dot,        ".",          forth_dot,        dict_execute
 DEFWORD dict_dot_s,      ".s",         forth_dot_s,      dict_dot
 DEFWORD dict_bye,        "bye",        forth_bye,        dict_dot_s
-.global dict_bye
+DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
+DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
+DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
+DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
+DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate
+.global dict_tick
 
 // ---------- Data Stack Memory ----------
 .bss
@@ -734,4 +1001,16 @@ to_in:                              // PARSE-WORD: current parse offset
     .quad 0
 .global sp0
 sp0:                                // Initial DSP value (for .S depth)
+    .quad 0
+.global state
+state:                              // Compiler state (0=interpret, non-zero=compile)
+    .quad 0
+.global colon_code_len_addr
+colon_code_len_addr:                // Saved code_len field address for ; to fill
+    .quad 0
+.global saved_latest
+saved_latest:                       // LATEST before current : for error recovery
+    .quad 0
+.global saved_here
+saved_here:                         // HERE before current : for error recovery
     .quad 0

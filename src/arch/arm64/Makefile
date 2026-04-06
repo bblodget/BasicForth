@@ -31,7 +31,7 @@ all: $(BIN)
 	$(AS) -o $@ $<
 
 $(BIN): $(OBJS)
-	$(LD) -o $@ $(OBJS)
+	$(LD) -N -o $@ $(OBJS)
 
 test: $(BIN)
 	$(QEMU) $(BIN)

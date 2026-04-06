@@ -16,7 +16,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP
     mov %r15, sp0(%rip)             # save initial DSP for .S
     lea dict_space(%rip), %r13      # HERE
-    lea dict_bye(%rip), %r12        # LATEST
+    lea dict_tick(%rip), %r12       # LATEST
     xor %r14d, %r14d                # TOS = 0
 
     call platform_raw_mode
@@ -63,7 +63,25 @@ interpret_loop:
     test %r14, %r14
     jz try_number
 
-    # Found — drop flag, execute word
+    # Found — TOS = flag (1=IMMEDIATE, -1=normal), [DSP] = xt
+    # If interpreting (STATE==0), always execute.
+    # If compiling: IMMEDIATE words execute, normal words get compiled.
+    cmpq $0, state(%rip)
+    je found_execute                # interpreting → execute
+
+    # Compiling — check IMMEDIATE flag
+    cmp $1, %r14
+    je found_execute                # IMMEDIATE → execute even in compile mode
+
+    # Normal word in compile mode — compile a CALL to it
+    call forth_drop                 # drop flag, TOS = xt
+    mov %r14, %rax                  # RAX = xt
+    mov (%r15), %r14                # pop xt from stack
+    add $8, %r15
+    call compile_call               # emit CALL xt at HERE
+    jmp interpret_loop
+
+found_execute:
     call forth_drop                 # drop flag, TOS = xt
     call forth_execute
     jmp interpret_loop
@@ -80,6 +98,16 @@ try_number:
 
     # Parsed — drop true flag, number is on stack
     call forth_drop
+
+    # If compiling, compile the number as a literal
+    cmpq $0, state(%rip)
+    je interpret_loop               # interpreting → leave on stack
+
+    # Compiling — compile literal
+    mov %r14, %rax                  # RAX = number
+    mov (%r15), %r14                # pop number from stack
+    add $8, %r15
+    call compile_literal            # emit CALL LIT + value at HERE
     jmp interpret_loop
 
 not_found:
@@ -101,6 +129,13 @@ not_found:
     # Clean up c-addr and u
     call forth_drop                 # drop u
     call forth_drop                 # drop c-addr
+
+    # If we were compiling, abort the definition
+    cmpq $0, state(%rip)
+    je repl_loop
+    movq $0, state(%rip)            # reset to interpret mode
+    mov saved_latest(%rip), %r12    # restore LATEST
+    mov saved_here(%rip), %r13      # restore HERE
 
     jmp repl_loop
 
