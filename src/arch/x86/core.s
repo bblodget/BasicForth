@@ -902,10 +902,11 @@ forth_immediate:
     orb $F_IMMEDIATE, 8(%r12)
     ret
 
-# ---------- TICK (Forth-level) ----------
+# ---------- TICK (Forth-level, IMMEDIATE) ----------
 # ( "<spaces>name" -- xt )
 # Parse the next word and look it up in the dictionary.
-# Pushes its execution token (code address).
+# In interpret mode: pushes xt to stack.
+# In compile mode: compiles xt as a literal (acts like ['] in std Forth).
 .global forth_tick
 forth_tick:
     call forth_parse_word           # ( -- c-addr u )
@@ -918,6 +919,17 @@ forth_tick:
     # Found — drop flag, TOS = xt
     mov (%r15), %r14
     add $CELL, %r15
+
+    # If compiling, compile xt as a literal
+    cmpq $0, state(%rip)
+    je .Ltick_done                  # interpreting → leave on stack
+
+    # Compiling — compile literal
+    mov %r14, %rax
+    mov (%r15), %r14
+    add $CELL, %r15
+    call compile_literal
+.Ltick_done:
     ret
 
 .Ltick_not_found:
@@ -955,7 +967,7 @@ DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
 DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
 DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
 DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
-DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate
+DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate, F_IMMEDIATE
 .global dict_tick
 
 # ---------- Data Stack Memory ----------
