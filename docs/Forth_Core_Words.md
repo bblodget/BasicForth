@@ -175,8 +175,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | VARIABLE  | ( "name" -- )                                 | forth | ( )    | CREATE 1 CELLS ALLOT     |
 | CONSTANT  | ( x "name" -- )                               | forth | ( )    | CREATE , DOES> @         |
 | IMMEDIATE | ( -- )                                        | asm   | ( )    | Mark word as immediate   |
-| '         | ( "name" -- xt )                              | forth | ( )    | Find execution token     |
-| [']       | ( "name" -- )                                 | forth | ( )    | Compile-time tick        |
+| '         | ( "name" -- xt )                              | asm   | ( )    | Find xt; in compile mode compiles xt as literal |
 | EXECUTE   | ( xt -- )                                     | asm   | ( )    | Call execution token     |
 | LITERAL   | ( x -- )                                      | forth | ( )    | Compile inline literal   |
 | POSTPONE  | ( "name" -- )                                 | forth | ( )    | Compile compilation      |
