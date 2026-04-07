@@ -73,18 +73,19 @@ completed. See Planning.md for high-level vision and design decisions.
 - [ ] RECURSE — compile call to current definition
 - [ ] Unit tests for control flow
 
-### 3c. More ASM Primitives
+### 3c. More ASM Primitives — COMPLETE
 
-- [ ] `*` (multiply)
-- [ ] `/MOD` (division with remainder)
-- [ ] ABS, MIN, MAX
-- [ ] 1+, 1-
-- [ ] Comparisons: `=`, `<`, `>`, `0=`, `0<`
-- [ ] Logic: AND, OR, XOR, INVERT
-- [ ] Stack: ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP
-- [ ] Return stack: `>R`, `R>`, `R@`
-- [ ] Dictionary entries for all new primitives
-- [ ] Unit tests for all new primitives
+- [x] `*` (multiply)
+- [x] `/MOD` (division with remainder, divide-by-zero and INT64_MIN/-1 safe)
+- [x] ABS, MIN, MAX
+- [x] 1+, 1-
+- [x] Comparisons: `=`, `<`, `>`, `0=`, `0<`
+- [x] Logic: AND, OR, XOR, INVERT
+- [x] Stack: ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP
+- [x] Return stack: `>R`, `R>`, `R@` (F_COMPILE_ONLY)
+- [x] Dictionary entries for all new primitives
+- [x] Unit tests for all new primitives (113 total)
+- [x] ARM64 I-cache flush (platform_flush_icache, CTR_EL0 cache line detection)
 
 ### 3d. Defining Words
 
