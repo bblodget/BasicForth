@@ -126,6 +126,82 @@ forth_negate:
     negq (%r15)
     ret
 
+# * ( a b -- a*b )
+.global forth_mul
+forth_mul:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    imulq (%r15)                # rdx:rax = rax * [r15]
+    mov %rax, (%r15)            # top = low 64 bits
+    ret
+
+# /MOD ( a b -- rem quot )
+# Division by zero returns 0 0.
+.global forth_divmod
+forth_divmod:
+
+    mov (%r15), %rcx            # rcx = b (divisor)
+    test %rcx, %rcx
+    jz .Ldivmod_zero
+    mov CELL(%r15), %rax        # rax = a (dividend)
+    cqo                         # sign-extend rax into rdx:rax
+    idiv %rcx                   # rax = quot, rdx = rem
+    mov %rdx, CELL(%r15)        # second = rem
+    mov %rax, (%r15)            # top = quot
+    ret
+.Ldivmod_zero:
+    movq $0, CELL(%r15)         # rem = 0
+    movq $0, (%r15)             # quot = 0
+    ret
+
+# 1+ ( a -- a+1 )
+.global forth_one_plus
+forth_one_plus:
+
+    addq $1, (%r15)
+    ret
+
+# 1- ( a -- a-1 )
+.global forth_one_minus
+forth_one_minus:
+
+    subq $1, (%r15)
+    ret
+
+# ABS ( n -- |n| )
+.global forth_abs
+forth_abs:
+
+    mov (%r15), %rax
+    cqo                         # rdx = sign extension (-1 or 0)
+    xor %rdx, %rax              # if negative: bitwise NOT
+    sub %rdx, %rax              # if negative: +1 (two's complement abs)
+    mov %rax, (%r15)
+    ret
+
+# MIN ( a b -- min )
+.global forth_min
+forth_min:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    cmp %rax, (%r15)            # compare a with b
+    jle 1f
+    mov %rax, (%r15)            # a > b, so store b
+1:  ret
+
+# MAX ( a b -- max )
+.global forth_max
+forth_max:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    cmp %rax, (%r15)            # compare a with b
+    jge 1f
+    mov %rax, (%r15)            # a < b, so store b
+1:  ret
+
 # ---------- Memory ----------
 
 # @ (fetch) ( addr -- x )
@@ -997,7 +1073,14 @@ DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
 DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
 DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
 DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
-DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate, F_IMMEDIATE
+DEFWORD dict_mul,        "*",          forth_mul,         dict_immediate
+DEFWORD dict_divmod,     "/mod",       forth_divmod,      dict_mul
+DEFWORD dict_one_plus,   "1+",         forth_one_plus,    dict_divmod
+DEFWORD dict_one_minus,  "1-",         forth_one_minus,   dict_one_plus
+DEFWORD dict_abs,        "abs",        forth_abs,         dict_one_minus
+DEFWORD dict_min,        "min",        forth_min,         dict_abs
+DEFWORD dict_max,        "max",        forth_max,         dict_min
+DEFWORD dict_tick,       "'",          forth_tick,        dict_max, F_IMMEDIATE
 .global dict_tick
 
 # ---------- Data Stack Memory ----------

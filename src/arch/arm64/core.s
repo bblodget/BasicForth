@@ -128,6 +128,84 @@ forth_negate:
     STR X9, [X19]
     RET
 
+// * ( a b -- a*b )
+.global forth_mul
+forth_mul:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    MUL X10, X10, X9
+    STR X10, [X19]              // top = a*b
+    RET
+
+// /MOD ( a b -- rem quot )
+// Division by zero returns 0 0.
+.global forth_divmod
+forth_divmod:
+
+    LDR X9, [X19]              // X9 = b (divisor)
+    CBZ X9, .Ldivmod_zero
+    LDR X10, [X19, #CELL]      // X10 = a (dividend)
+    SDIV X11, X10, X9           // X11 = quot = a / b
+    MSUB X12, X11, X9, X10     // X12 = rem = a - quot*b
+    STR X12, [X19, #CELL]      // second = rem
+    STR X11, [X19]             // top = quot
+    RET
+.Ldivmod_zero:
+    STR XZR, [X19, #CELL]      // rem = 0
+    STR XZR, [X19]             // quot = 0
+    RET
+
+// 1+ ( a -- a+1 )
+.global forth_one_plus
+forth_one_plus:
+
+    LDR X9, [X19]
+    ADD X9, X9, #1
+    STR X9, [X19]
+    RET
+
+// 1- ( a -- a-1 )
+.global forth_one_minus
+forth_one_minus:
+
+    LDR X9, [X19]
+    SUB X9, X9, #1
+    STR X9, [X19]
+    RET
+
+// ABS ( n -- |n| )
+.global forth_abs
+forth_abs:
+
+    LDR X9, [X19]
+    CMP X9, #0
+    CNEG X9, X9, LT            // negate if negative
+    STR X9, [X19]
+    RET
+
+// MIN ( a b -- min )
+.global forth_min
+forth_min:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSEL X10, X10, X9, LE      // X10 = (a <= b) ? a : b
+    STR X10, [X19]
+    RET
+
+// MAX ( a b -- max )
+.global forth_max
+forth_max:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSEL X10, X10, X9, GE      // X10 = (a >= b) ? a : b
+    STR X10, [X19]
+    RET
+
 // ---------- Memory ----------
 
 // @ (fetch) ( addr -- x )
@@ -1020,7 +1098,14 @@ DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
 DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
 DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
 DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
-DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate, F_IMMEDIATE
+DEFWORD dict_mul,        "*",          forth_mul,         dict_immediate
+DEFWORD dict_divmod,     "/mod",       forth_divmod,      dict_mul
+DEFWORD dict_one_plus,   "1+",         forth_one_plus,    dict_divmod
+DEFWORD dict_one_minus,  "1-",         forth_one_minus,   dict_one_plus
+DEFWORD dict_abs,        "abs",        forth_abs,         dict_one_minus
+DEFWORD dict_min,        "min",        forth_min,         dict_abs
+DEFWORD dict_max,        "max",        forth_max,         dict_min
+DEFWORD dict_tick,       "'",          forth_tick,        dict_max, F_IMMEDIATE
 .global dict_tick
 
 // ---------- Data Stack Memory ----------
