@@ -99,6 +99,78 @@ forth_over:
     STR X9, [X19, #-CELL]!    // push a
     RET
 
+// ROT ( a b c -- b c a )
+.global forth_rot
+forth_rot:
+
+    LDR X9, [X19]              // X9 = c
+    LDR X10, [X19, #CELL]      // X10 = b
+    LDR X11, [X19, #2*CELL]    // X11 = a
+    STR X10, [X19, #2*CELL]    // bottom = b
+    STR X9, [X19, #CELL]       // middle = c
+    STR X11, [X19]             // top = a
+    RET
+
+// NIP ( a b -- b )
+.global forth_nip
+forth_nip:
+
+    LDR X9, [X19], #CELL       // pop b
+    STR X9, [X19]              // top = b
+    RET
+
+// TUCK ( a b -- b a b )
+.global forth_tuck
+forth_tuck:
+
+    LDR X9, [X19]              // X9 = b
+    LDR X10, [X19, #CELL]      // X10 = a
+    STR X9, [X19, #CELL]       // second = b (will become bottom)
+    SUB X19, X19, #CELL         // make room
+    STR X9, [X19]              // top = b
+    STR X10, [X19, #CELL]      // middle = a
+    RET
+
+// 2DUP ( a b -- a b a b )
+.global forth_two_dup
+forth_two_dup:
+
+    LDR X9, [X19]              // X9 = b
+    LDR X10, [X19, #CELL]      // X10 = a
+    SUB X19, X19, #2*CELL       // make room for 2
+    STR X9, [X19]              // top = b
+    STR X10, [X19, #CELL]      // second = a
+    RET
+
+// 2DROP ( a b -- )
+.global forth_two_drop
+forth_two_drop:
+
+    LDR X9, [X19]              // touch top (guard page trigger)
+    LDR X9, [X19, #CELL]       // touch second (guard page trigger)
+    ADD X19, X19, #2*CELL
+    RET
+
+// DEPTH ( -- n )
+.global forth_depth
+forth_depth:
+
+    ADR X9, sp0
+    LDR X9, [X9]               // X9 = sp0
+    SUB X9, X9, X19            // X9 = sp0 - DSP (bytes)
+    ASR X9, X9, #3             // X9 = depth (cells)
+    STR X9, [X19, #-CELL]!     // push depth
+    RET
+
+// ?DUP ( x -- x x | 0 )
+.global forth_question_dup
+forth_question_dup:
+
+    LDR X9, [X19]
+    CBZ X9, 1f
+    STR X9, [X19, #-CELL]!     // push copy if non-zero
+1:  RET
+
 // + ( a b -- a+b )
 .global forth_add
 forth_add:
@@ -1205,7 +1277,14 @@ DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
 DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
 DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
-DEFWORD dict_tick,       "'",          forth_tick,        dict_invert, F_IMMEDIATE
+DEFWORD dict_rot,        "rot",        forth_rot,         dict_invert
+DEFWORD dict_nip,        "nip",        forth_nip,         dict_rot
+DEFWORD dict_tuck,       "tuck",       forth_tuck,        dict_nip
+DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
+DEFWORD dict_two_drop,   "2drop",      forth_two_drop,    dict_two_dup
+DEFWORD dict_depth,      "depth",      forth_depth,       dict_two_drop
+DEFWORD dict_question_dup, "?dup",     forth_question_dup, dict_depth
+DEFWORD dict_tick,       "'",          forth_tick,        dict_question_dup, F_IMMEDIATE
 .global dict_tick
 
 // ---------- Data Stack Memory ----------

@@ -57,6 +57,13 @@ extern void forth_and(void);
 extern void forth_or(void);
 extern void forth_xor(void);
 extern void forth_invert(void);
+extern void forth_rot(void);
+extern void forth_nip(void);
+extern void forth_tuck(void);
+extern void forth_two_dup(void);
+extern void forth_two_drop(void);
+extern void forth_depth(void);
+extern void forth_question_dup(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -772,6 +779,154 @@ static void test_invert_true(void)
              "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
+/* --- Stack operation tests --- */
+
+static void test_rot(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_3(1, 2, 3);
+    call_primitive(forth_rot, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 3
+        && dsp_out[0] == 1 && dsp_out[1] == 3 && dsp_out[2] == 2)
+        pass("ROT ( 1 2 3 -- 2 3 1 )");
+    else
+        fail("ROT ( 1 2 3 -- 2 3 1 )",
+             "[0]=%ld [1]=%ld [2]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out) >= 3 ? dsp_out[2] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_nip(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_nip, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 20)
+        pass("NIP ( 10 20 -- 20 )");
+    else
+        fail("NIP ( 10 20 -- 20 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_tuck(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_tuck, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 3
+        && dsp_out[0] == 20 && dsp_out[1] == 10 && dsp_out[2] == 20)
+        pass("TUCK ( 10 20 -- 20 10 20 )");
+    else
+        fail("TUCK ( 10 20 -- 20 10 20 )",
+             "[0]=%ld [1]=%ld [2]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out) >= 3 ? dsp_out[2] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_two_dup(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_two_dup, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 4
+        && dsp_out[0] == 20 && dsp_out[1] == 10
+        && dsp_out[2] == 20 && dsp_out[3] == 10)
+        pass("2DUP ( 10 20 -- 10 20 10 20 )");
+    else
+        fail("2DUP ( 10 20 -- 10 20 10 20 )",
+             "[0]=%ld [1]=%ld [2]=%ld [3]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out) >= 3 ? dsp_out[2] : -1,
+             stack_depth(dsp_out) >= 4 ? dsp_out[3] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_two_drop(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_3(1, 2, 3);
+    call_primitive(forth_two_drop, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 1)
+        pass("2DROP ( 1 2 3 -- 1 )");
+    else
+        fail("2DROP ( 1 2 3 -- 1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_depth_empty(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_0();
+    call_primitive(forth_depth, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("DEPTH ( empty -- 0 )");
+    else
+        fail("DEPTH ( empty -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_depth_three(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_3(1, 2, 3);
+    call_primitive(forth_depth, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 4 && dsp_out[0] == 3)
+        pass("DEPTH ( 1 2 3 -- 1 2 3 3 )");
+    else
+        fail("DEPTH ( 1 2 3 -- 1 2 3 3 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_question_dup_nonzero(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(42);
+    call_primitive(forth_question_dup, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 42 && dsp_out[1] == 42)
+        pass("?DUP ( 42 -- 42 42 )");
+    else
+        fail("?DUP ( 42 -- 42 42 )",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_question_dup_zero(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(0);
+    call_primitive(forth_question_dup, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("?DUP ( 0 -- 0 )");
+    else
+        fail("?DUP ( 0 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
 /* --- NUMBER tests --- */
 
 /*
@@ -1362,6 +1517,17 @@ int main(void)
     test_xor();
     test_invert();
     test_invert_true();
+
+    section("Stack Operations");
+    test_rot();
+    test_nip();
+    test_tuck();
+    test_two_dup();
+    test_two_drop();
+    test_depth_empty();
+    test_depth_three();
+    test_question_dup_nonzero();
+    test_question_dup_zero();
 
     section("Number Parsing");
     base = 10;
