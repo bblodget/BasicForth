@@ -23,9 +23,10 @@
 # [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
 #
 # Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
-.equ F_IMMEDIATE, 0x80
-.equ F_HIDDEN,    0x40
-.equ F_LENMASK,   0x3F
+.equ F_IMMEDIATE,   0x80
+.equ F_HIDDEN,      0x40
+.equ F_COMPILE_ONLY,0x20
+.equ F_LENMASK,     0x1F
 
 
 # CHECK_DICT n: verify HERE + n bytes fits in dict_space.
@@ -175,6 +176,42 @@ forth_question_dup:
     sub $CELL, %r15
     mov %rax, (%r15)
 1:  ret
+
+# >R ( x -- ) ( R: -- x )
+# Move top of data stack to return stack.
+# Must juggle around the return address left by CALL.
+# Marked F_COMPILE_ONLY — outer interpreter rejects in interpret mode.
+.global forth_to_r
+forth_to_r:
+
+    pop %rax                    # rax = return address
+    mov (%r15), %rcx            # rcx = x
+    add $CELL, %r15             # pop data stack
+    push %rcx                   # push x to return stack
+    push %rax                   # restore return address
+    ret
+
+# R> ( -- x ) ( R: x -- )
+# Move top of return stack to data stack.
+.global forth_r_from
+forth_r_from:
+
+    pop %rax                    # rax = return address
+    pop %rcx                    # rcx = x from return stack
+    push %rax                   # restore return address
+    sub $CELL, %r15
+    mov %rcx, (%r15)            # push x to data stack
+    ret
+
+# R@ ( -- x ) ( R: x -- x )
+# Copy top of return stack to data stack (non-destructive).
+.global forth_r_fetch
+forth_r_fetch:
+
+    mov 8(%rsp), %rax           # x is just below the return address
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
 
 # + ( a b -- a+b )
 .global forth_add
@@ -762,11 +799,17 @@ forth_find:
     mov (%rbx,%rax), %rax       # RAX = xt
     sub $CELL, %r15
     mov %rax, (%r15)            # push xt
-    # Check IMMEDIATE flag
+    # Check flags: IMMEDIATE, COMPILE_ONLY, or normal
     test $F_IMMEDIATE, %ebp
-    jz .Lfind_normal
+    jz .Lfind_not_imm
     sub $CELL, %r15
     movq $1, (%r15)             # push 1 (immediate)
+    jmp .Lfind_done
+.Lfind_not_imm:
+    test $F_COMPILE_ONLY, %ebp
+    jz .Lfind_normal
+    sub $CELL, %r15
+    movq $-2, (%r15)            # push -2 (compile-only)
     jmp .Lfind_done
 .Lfind_normal:
     sub $CELL, %r15
@@ -1076,7 +1119,7 @@ forth_colon:
     cmp %rax, %rdx
     ja .Lcolon_dict_full
 
-    # Clamp name length to F_LENMASK (63) max
+    # Clamp name length to F_LENMASK (31) max
     cmp $F_LENMASK, %rcx
     jbe .Lcolon_len_ok
     mov $F_LENMASK, %rcx
@@ -1277,7 +1320,10 @@ DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
 DEFWORD dict_two_drop,   "2drop",      forth_two_drop,    dict_two_dup
 DEFWORD dict_depth,      "depth",      forth_depth,       dict_two_drop
 DEFWORD dict_question_dup, "?dup",     forth_question_dup, dict_depth
-DEFWORD dict_tick,       "'",          forth_tick,        dict_question_dup, F_IMMEDIATE
+DEFWORD dict_to_r,       ">r",         forth_to_r,        dict_question_dup, F_COMPILE_ONLY
+DEFWORD dict_r_from,     "r>",         forth_r_from,      dict_to_r, F_COMPILE_ONLY
+DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE_ONLY
+DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
 .global dict_tick
 
 # ---------- Data Stack Memory ----------

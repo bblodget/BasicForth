@@ -182,6 +182,18 @@ only the dict_space pages, leaving the rest of the binary properly
 protected.  See BareMetalForth Lesson 37 for background on memory
 protection and JIT compilation.
 
+## I-Cache Flush (ARM64)
+
+On ARM64, writing code to `dict_space` updates the data cache but not
+the instruction cache.  Without an explicit flush, the CPU may execute
+stale or zeroed instructions, causing intermittent "Illegal instruction"
+crashes on real hardware (QEMU and x86-64 are unaffected).
+
+`forth_semicolon` calls `platform_flush_icache` after compilation to
+clean the D-cache and invalidate the I-cache for the compiled range.
+See [Platform_Layer.md](Platform_Layer.md#i-cache-coherency-arm64) for
+the full technical details.
+
 ## Dictionary Chain
 
 The static dictionary includes these compiler-related entries:

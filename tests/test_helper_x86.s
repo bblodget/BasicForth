@@ -70,6 +70,25 @@ platform_write:
 platform_bye:
     ret
 
+# --- Return stack test wrappers ---
+# These call >R / R> / R@ within a single stack frame so the return
+# stack context is correct. Called via call_primitive like any other word.
+
+# test_to_r_r_from: ( x -- x )  round-trip through return stack
+.global test_to_r_r_from
+test_to_r_r_from:
+    call forth_to_r             # data->return
+    call forth_r_from           # return->data
+    ret
+
+# test_to_r_r_fetch_r_from: ( x -- x x )  >R R@ R> leaves copy + original
+.global test_to_r_r_fetch_r_from
+test_to_r_r_fetch_r_from:
+    call forth_to_r             # data->return
+    call forth_r_fetch          # copy to data (non-destructive)
+    call forth_r_from           # return->data
+    ret
+
 # Error handler stubs for test harness.
 # Guard pages don't exist in the test binary, so stack_underflow/overflow
 # are stubs. dict_full is still used by CHECK_DICT.

@@ -154,6 +154,42 @@ platform_write:
     SVC #0
     RET
 
+// ---------- FLUSH ICACHE ----------
+// Flush instruction cache for a range of addresses.
+// Input: X0 = start address, X1 = end address (exclusive)
+// Required after writing code to memory on ARM64 (I-cache/D-cache not coherent).
+// Reads CTR_EL0 to determine cache line sizes (varies by CPU).
+.global platform_flush_icache
+platform_flush_icache:
+    MRS X3, CTR_EL0                 // read Cache Type Register
+
+    // D-cache line size: DminLine = CTR_EL0[19:16], size = 4 << DminLine
+    UBFX X4, X3, #16, #4           // X4 = DminLine
+    MOV X5, #4
+    LSL X4, X5, X4                  // X4 = D-cache line size
+
+    // Clean each cache line from D-cache to point of unification
+    MOV X2, X0
+1:  DC CVAU, X2
+    ADD X2, X2, X4
+    CMP X2, X1
+    B.LO 1b
+    DSB ISH
+
+    // I-cache line size: IminLine = CTR_EL0[3:0], size = 4 << IminLine
+    UBFX X4, X3, #0, #4            // X4 = IminLine
+    LSL X4, X5, X4                  // X4 = I-cache line size
+
+    // Invalidate each cache line in I-cache
+    MOV X2, X0
+2:  IC IVAU, X2
+    ADD X2, X2, X4
+    CMP X2, X1
+    B.LO 2b
+    DSB ISH
+    ISB
+    RET
+
 // ---------- BYE ----------
 // Restore terminal and exit.
 .global platform_bye

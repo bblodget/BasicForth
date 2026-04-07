@@ -84,7 +84,7 @@ interpret_loop:
     # If interpreting (STATE==0), always execute.
     # If compiling: IMMEDIATE words execute, normal words get compiled.
     cmpq $0, state(%rip)
-    je found_execute                # interpreting → execute
+    je found_interpret              # interpreting → check compile-only
 
     # Compiling — check IMMEDIATE flag
     cmpq $1, (%r15)                 # flag == 1?
@@ -96,6 +96,12 @@ interpret_loop:
     add $CELL, %r15                 # drop xt
     call compile_call               # emit CALL xt at HERE
     jmp interpret_loop
+
+found_interpret:
+    # Interpreting — reject compile-only words (flag == -2)
+    cmpq $-2, (%r15)
+    je compile_only_error
+    # Fall through to execute
 
 found_execute:
     add $CELL, %r15                 # drop flag
@@ -173,6 +179,15 @@ repl_bye:
 
     call platform_bye
 
+compile_only_error:
+    # Compile-only word used in interpret mode
+    # Stack: ( xt flag ) — drop both
+    add $2*CELL, %r15
+    lea msg_compile_only(%rip), %rsi
+    mov $msg_compile_only_len, %rdx
+    call platform_write
+    jmp interpret_loop
+
 # ---------- Error Handlers ----------
 # Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 # in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -208,6 +223,8 @@ bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
+msg_compile_only: .ascii "compile only\n"
+.equ msg_compile_only_len, . - msg_compile_only
 
 .bss
 .align 8

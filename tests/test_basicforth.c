@@ -64,6 +64,13 @@ extern void forth_two_dup(void);
 extern void forth_two_drop(void);
 extern void forth_depth(void);
 extern void forth_question_dup(void);
+extern void forth_to_r(void);
+extern void forth_r_from(void);
+extern void forth_r_fetch(void);
+
+/* Return stack test wrappers (defined in test_helper) */
+extern void test_to_r_r_from(void);
+extern void test_to_r_r_fetch_r_from(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -927,6 +934,40 @@ static void test_question_dup_zero(void)
              "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
+/* --- Return stack tests --- */
+
+static void test_to_r_r_from_round_trip(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(42);
+    call_primitive(test_to_r_r_from, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 42)
+        pass(">R R> ( 42 -- 42 ) round-trip");
+    else
+        fail(">R R> ( 42 -- 42 ) round-trip",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_r_fetch(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(99);
+    call_primitive(test_to_r_r_fetch_r_from, dsp_in, &dsp_out);
+
+    /* >R R@ R> leaves: original on top, copy below */
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 99 && dsp_out[1] == 99)
+        pass(">R R@ R> ( 99 -- 99 99 )");
+    else
+        fail(">R R@ R> ( 99 -- 99 99 )",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
+}
+
 /* --- NUMBER tests --- */
 
 /*
@@ -1334,6 +1375,7 @@ static void test_lit(void)
     *(uint32_t *)(code + 16) = 0xA8C17BFD;
     /* RET = 0xD65F03C0 */
     *(uint32_t *)(code + 20) = 0xD65F03C0;
+    __builtin___clear_cache((char *)code, (char *)(code + 24));
 #endif
 
     dsp_in = setup_0();
@@ -1367,6 +1409,7 @@ static void test_lit_negative(void)
     *(int64_t *)(code + 8) = -7;
     *(uint32_t *)(code + 16) = 0xA8C17BFD;
     *(uint32_t *)(code + 20) = 0xD65F03C0;
+    __builtin___clear_cache((char *)code, (char *)(code + 24));
 #endif
 
     dsp_in = setup_0();
@@ -1528,6 +1571,10 @@ int main(void)
     test_depth_three();
     test_question_dup_nonzero();
     test_question_dup_zero();
+
+    section("Return Stack");
+    test_to_r_r_from_round_trip();
+    test_r_fetch();
 
     section("Number Parsing");
     base = 10;

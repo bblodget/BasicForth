@@ -117,6 +117,104 @@ Calls `platform_restore_term` first, then the exit syscall. This is the
 only safe way to exit — calling exit directly would leave the terminal
 in raw mode.
 
+### platform_write
+
+Write a buffer to stdout.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = buffer, X1 = length           | RSI = buffer, RDX = length         |
+| **Output**   | none                               | none                               |
+| **Clobbers** | X0-X7 (syscall)                    | RAX, RCX, R11 (syscall)           |
+| **Syscall**  | write(1, buf, len) — SYS_write #64 | write(1, buf, len) — SYS_write #1 |
+
+Used by DOT, DOT-S, error messages, and other multi-character output.
+
+### platform_init_guard_pages
+
+Set up SIGSEGV handler and mprotect guard pages around the data stack.
+Must be called before `platform_raw_mode` (early in startup).
+See [Error_Handling.md](Error_Handling.md) for details.
+
+|              | ARM64              | x86-64             |
+|--------------|--------------------|---------------------|
+| **Input**    | none               | none                |
+| **Output**   | none (fatal on failure) | none (fatal on failure) |
+| **Syscall**  | mprotect, rt_sigaction | mprotect, rt_sigaction |
+
+### platform_flush_icache (ARM64 only)
+
+Flush the instruction cache for a range of addresses after writing
+compiled code to memory. Required because ARM64 has separate, non-coherent
+instruction and data caches. See [I-Cache Coherency](#i-cache-coherency-arm64)
+below.
+
+|              | ARM64                              |
+|--------------|------------------------------------|
+| **Input**    | X0 = start address, X1 = end address (exclusive) |
+| **Output**   | none                               |
+| **Clobbers** | X2-X5                              |
+
+Not needed on x86-64, where stores are immediately visible to instruction
+fetch (coherent I-cache).
+
+## I-Cache Coherency (ARM64)
+
+ARM64 CPUs have **separate instruction and data caches** that are not
+automatically kept in sync. When BasicForth's compiler writes machine
+code to `dict_space` (a data write via `STR`), the new instructions land
+in the D-cache but the I-cache may still hold stale data at those
+addresses. Attempting to execute the new code can fetch stale or zeroed
+instructions, causing intermittent **"Illegal instruction"** crashes.
+
+This does **not** happen on x86-64 (which has a coherent I-cache) or
+under QEMU user-mode emulation (which doesn't simulate cache incoherency).
+It only manifests on real ARM64 hardware, and intermittently — depending
+on what the I-cache happened to contain at those addresses from previous
+activity.
+
+### The Fix
+
+After writing code to memory and before executing it, we must flush the
+cache:
+
+1. **`DC CVAU, addr`** — Clean D-cache line to Point of Unification.
+   Ensures the written data is visible outside the D-cache.
+2. **`DSB ISH`** — Data Synchronization Barrier. Wait for all D-cache
+   operations to complete.
+3. **`IC IVAU, addr`** — Invalidate I-cache line. Forces the I-cache
+   to fetch fresh data on the next instruction fetch.
+4. **`DSB ISH`** — Wait for I-cache invalidation to complete.
+5. **`ISB`** — Instruction Synchronization Barrier. Flushes the
+   pipeline so subsequent fetches use the updated I-cache.
+
+Steps 1 and 3 must be repeated for each cache line in the range.
+
+### Cache Line Size
+
+Cache line sizes vary between ARM64 implementations (32, 64, or 128
+bytes). `platform_flush_icache` reads the **CTR_EL0** register (Cache
+Type Register, readable from userspace) to determine the correct stride:
+
+- **DminLine** = CTR_EL0[19:16] → D-cache line size = `4 << DminLine`
+- **IminLine** = CTR_EL0[3:0] → I-cache line size = `4 << IminLine`
+
+On the Genio 510 (Cortex-A78), both are 64 bytes. Other cores may differ.
+
+### Where We Flush
+
+| Call site              | When                                          |
+|------------------------|-----------------------------------------------|
+| `forth_semicolon`      | After `;` finishes compiling a colon definition |
+| Test harness (C)       | `__builtin___clear_cache()` after writing LIT test code |
+
+### Further Reading
+
+- ARM Architecture Reference Manual, section B2.2 (Caches and memory
+  hierarchy)
+- Linux kernel `arch/arm64/include/asm/cacheflush.h`
+- BareMetalForth Lesson 37 (Memory Protection and JIT Compilation)
+
 ## termios Structure
 
 The terminal settings are stored in a `termios` struct. The layout differs

@@ -91,7 +91,7 @@ interpret_loop:
     // If compiling: IMMEDIATE words execute, normal words get compiled.
     ADR X10, state
     LDR X10, [X10]
-    CBZ X10, found_execute          // interpreting → execute
+    CBZ X10, found_interpret         // interpreting → check compile-only
 
     // Compiling — check IMMEDIATE flag
     LDR X9, [X19]
@@ -103,6 +103,13 @@ interpret_loop:
     LDR X0, [X19], #CELL            // pop xt into X0
     BL compile_call                 // emit BL xt at HERE
     B interpret_loop
+
+found_interpret:
+    // Interpreting — reject compile-only words (flag == -2)
+    LDR X9, [X19]
+    CMN X9, #2                      // compare with -2
+    B.EQ compile_only_error
+    // Fall through to execute
 
 found_execute:
     ADD X19, X19, #CELL             // drop flag
@@ -183,6 +190,15 @@ repl_bye:
 
     BL platform_bye
 
+compile_only_error:
+    // Compile-only word used in interpret mode
+    // Stack: ( xt flag ) — drop both
+    ADD X19, X19, #2*CELL
+    ADR X0, msg_compile_only
+    MOV X1, #msg_compile_only_len
+    BL platform_write
+    B interpret_loop
+
 // ---------- Error Handlers ----------
 // Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 // in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -224,6 +240,8 @@ bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
+msg_compile_only: .ascii "compile only\n"
+.equ msg_compile_only_len, . - msg_compile_only
 
 .bss
 .align 4

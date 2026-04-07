@@ -64,6 +64,55 @@ platform_write:
 platform_bye:
     RET
 
+// I-cache flush for compiled code (same as platform_linux.s).
+// Needed by compiler tests that execute code written to dict_space.
+// Reads CTR_EL0 to determine cache line sizes (varies by CPU).
+.global platform_flush_icache
+platform_flush_icache:
+    MRS X3, CTR_EL0
+    UBFX X4, X3, #16, #4
+    MOV X5, #4
+    LSL X4, X5, X4                  // X4 = D-cache line size
+    MOV X2, X0
+1:  DC CVAU, X2
+    ADD X2, X2, X4
+    CMP X2, X1
+    B.LO 1b
+    DSB ISH
+    UBFX X4, X3, #0, #4
+    LSL X4, X5, X4                  // X4 = I-cache line size
+    MOV X2, X0
+2:  IC IVAU, X2
+    ADD X2, X2, X4
+    CMP X2, X1
+    B.LO 2b
+    DSB ISH
+    ISB
+    RET
+
+// --- Return stack test wrappers ---
+// These call >R / R> / R@ within a single stack frame so the return
+// stack context is correct. Called via call_primitive like any other word.
+
+// test_to_r_r_from: ( x -- x )  round-trip through return stack
+.global test_to_r_r_from
+test_to_r_r_from:
+    STP X29, X30, [SP, #-16]!
+    BL forth_to_r               // data->return
+    BL forth_r_from             // return->data
+    LDP X29, X30, [SP], #16
+    RET
+
+// test_to_r_r_fetch_r_from: ( x -- x x )  >R R@ R> leaves copy + original
+.global test_to_r_r_fetch_r_from
+test_to_r_r_fetch_r_from:
+    STP X29, X30, [SP, #-16]!
+    BL forth_to_r               // data->return
+    BL forth_r_fetch            // copy to data (non-destructive)
+    BL forth_r_from             // return->data
+    LDP X29, X30, [SP], #16
+    RET
+
 // Error handler stubs — set a flag so C tests can detect guard triggers.
 .data
 .global error_flag

@@ -23,9 +23,10 @@
 // [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
 //
 // Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
-.equ F_IMMEDIATE, 0x80
-.equ F_HIDDEN,    0x40
-.equ F_LENMASK,   0x3F
+.equ F_IMMEDIATE,   0x80
+.equ F_HIDDEN,      0x40
+.equ F_COMPILE_ONLY,0x20
+.equ F_LENMASK,     0x1F
 
 
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
@@ -170,6 +171,36 @@ forth_question_dup:
     CBZ X9, 1f
     STR X9, [X19, #-CELL]!     // push copy if non-zero
 1:  RET
+
+// >R ( x -- ) ( R: -- x )
+// Move top of data stack to return stack.
+// ARM64: BL puts return address in X30, not on SP, so we can push directly.
+// Uses 16-byte slots to maintain SP alignment.
+// Marked F_COMPILE_ONLY — outer interpreter rejects in interpret mode.
+.global forth_to_r
+forth_to_r:
+
+    LDR X9, [X19], #CELL       // pop x from data stack
+    STR X9, [SP, #-16]!        // push x to return stack (16-byte aligned)
+    RET
+
+// R> ( -- x ) ( R: x -- )
+// Move top of return stack to data stack.
+.global forth_r_from
+forth_r_from:
+
+    LDR X9, [SP], #16          // pop x from return stack
+    STR X9, [X19, #-CELL]!     // push x to data stack
+    RET
+
+// R@ ( -- x ) ( R: x -- x )
+// Copy top of return stack to data stack (non-destructive).
+.global forth_r_fetch
+forth_r_fetch:
+
+    LDR X9, [SP]               // peek x from return stack
+    STR X9, [X19, #-CELL]!     // push x to data stack
+    RET
 
 // + ( a b -- a+b )
 .global forth_add
@@ -722,15 +753,21 @@ forth_find:
     // Push xt and flag
     LDR X9, [X25, X9]           // X9 = xt
     STR X9, [X19, #-CELL]!      // push xt
-    // Check IMMEDIATE flag
+    // Check flags: IMMEDIATE, COMPILE_ONLY, or normal
     TST W26, #F_IMMEDIATE
-    B.EQ .Lfind_normal
+    B.NE .Lfind_immediate
+    TST W26, #F_COMPILE_ONLY
+    B.NE .Lfind_compile_only
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!      // push -1 (normal)
+    B .Lfind_done
+.Lfind_immediate:
     MOV X9, #1
     STR X9, [X19, #-CELL]!      // push 1 (immediate)
     B .Lfind_done
-.Lfind_normal:
-    MOV X9, #-1
-    STR X9, [X19, #-CELL]!      // push -1 (normal)
+.Lfind_compile_only:
+    MOV X9, #-2
+    STR X9, [X19, #-CELL]!      // push -2 (compile-only)
     B .Lfind_done
 
 .Lfind_next:
@@ -1066,7 +1103,7 @@ forth_colon:
     CMP X10, X9
     B.HI .Lcolon_dict_full
 
-    // Clamp name length to F_LENMASK (63) max
+    // Clamp name length to F_LENMASK (31) max
     CMP X24, #F_LENMASK
     B.LS .Lcolon_len_ok
     MOV X24, #F_LENMASK
@@ -1170,6 +1207,11 @@ forth_semicolon:
     ADD X10, X9, #4                 // X10 = code start (right after field)
     SUB X11, X21, X10               // X11 = code length
     STR W11, [X9]                   // write code_len (32-bit)
+
+    // Flush I-cache for compiled code (I-cache/D-cache not coherent on ARM64)
+    MOV X0, X10                     // start = code start
+    MOV X1, X21                     // end = HERE
+    BL platform_flush_icache
 
     // Clear HIDDEN flag on new entry (LATEST + 8 is flags byte)
     LDRB W9, [X22, #8]
@@ -1284,7 +1326,10 @@ DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
 DEFWORD dict_two_drop,   "2drop",      forth_two_drop,    dict_two_dup
 DEFWORD dict_depth,      "depth",      forth_depth,       dict_two_drop
 DEFWORD dict_question_dup, "?dup",     forth_question_dup, dict_depth
-DEFWORD dict_tick,       "'",          forth_tick,        dict_question_dup, F_IMMEDIATE
+DEFWORD dict_to_r,       ">r",         forth_to_r,        dict_question_dup, F_COMPILE_ONLY
+DEFWORD dict_r_from,     "r>",         forth_r_from,      dict_to_r, F_COMPILE_ONLY
+DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE_ONLY
+DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
 .global dict_tick
 
 // ---------- Data Stack Memory ----------
