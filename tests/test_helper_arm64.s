@@ -1,13 +1,15 @@
 // BasicForth — Test Helper (ARM64)
 // Bridge between C test harness and assembly primitives.
-// Provides call_primitive(), init_engine(), and platform stubs.
+// Provides call_primitive(), init_engine(), and platform/error stubs.
+//
+// Pure memory stack model:
+//   X19 = DSP (points to top item, or sp0 when empty)
+//   X21 = HERE, X22 = LATEST
 
-// call_primitive(fn, tos_in, dsp_in, tos_out_ptr, dsp_out_ptr)
+// call_primitive(fn, dsp_in, dsp_out_ptr)
 //   X0 = function pointer to call
-//   X1 = TOS value to set (X20)
-//   X2 = DSP value to set (X19)
-//   X3 = pointer to store TOS result
-//   X4 = pointer to store DSP result
+//   X1 = DSP value to set (X19)
+//   X2 = pointer to store DSP result
 .global call_primitive
 call_primitive:
     STP X29, X30, [SP, #-16]!
@@ -15,24 +17,18 @@ call_primitive:
     STP X21, X22, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
 
-    // Save output pointers in scratch callee-saved regs
-    MOV X23, X3                 // X23 = tos_out_ptr
-    MOV X24, X4                 // X24 = dsp_out_ptr
-
-    // Save function pointer (X0 is caller-saved)
-    MOV X9, X0
+    // Save output pointer in callee-saved reg
+    MOV X23, X2                 // X23 = dsp_out_ptr
 
     // Set engine registers
-    MOV X20, X1                 // TOS
-    MOV X19, X2                 // DSP
+    MOV X19, X1                 // DSP
     // X21 (HERE) and X22 (LATEST) preserved from init_engine
 
     // Call the primitive
-    BLR X9
+    BLR X0
 
-    // Store results
-    STR X20, [X23]              // *tos_out = TOS
-    STR X19, [X24]              // *dsp_out = DSP
+    // Store result
+    STR X19, [X23]              // *dsp_out = DSP
 
     LDP X23, X24, [SP], #16
     LDP X21, X22, [SP], #16
@@ -50,8 +46,6 @@ init_engine:
     RET
 
 // ---------- Platform stubs ----------
-// These satisfy linker references from core.o.
-// Not exercised by unit tests.
 
 .global platform_emit
 platform_emit:

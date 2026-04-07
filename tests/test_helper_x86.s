@@ -1,13 +1,15 @@
 # BasicForth — Test Helper (x86-64)
 # Bridge between C test harness and assembly primitives.
-# Provides call_primitive(), init_engine(), and platform stubs.
+# Provides call_primitive(), init_engine(), and platform/error stubs.
+#
+# Pure memory stack model:
+#   R15 = DSP (points to top item, or sp0 when empty)
+#   R13 = HERE, R12 = LATEST
 
-# call_primitive(fn, tos_in, dsp_in, tos_out_ptr, dsp_out_ptr)
+# call_primitive(fn, dsp_in, dsp_out_ptr)
 #   RDI = function pointer to call
-#   RSI = TOS value to set (R14)
-#   RDX = DSP value to set (R15)
-#   RCX = pointer to store TOS result
-#   R8  = pointer to store DSP result
+#   RSI = DSP value to set (R15)
+#   RDX = pointer to store DSP result
 .global call_primitive
 call_primitive:
     push %rbx
@@ -17,21 +19,18 @@ call_primitive:
     push %r14
     push %r15
 
-    # Save output pointers in callee-saved regs
-    mov %rcx, %rbx              # RBX = tos_out_ptr
-    mov %r8, %rbp               # RBP = dsp_out_ptr
+    # Save output pointer in callee-saved reg
+    mov %rdx, %rbx              # RBX = dsp_out_ptr
 
     # Set engine registers
-    mov %rsi, %r14              # TOS
-    mov %rdx, %r15              # DSP
+    mov %rsi, %r15              # DSP
     # R13 (HERE) and R12 (LATEST) preserved from init_engine
 
     # Call the primitive
     call *%rdi
 
-    # Store results
-    mov %r14, (%rbx)            # *tos_out = TOS
-    mov %r15, (%rbp)            # *dsp_out = DSP
+    # Store result
+    mov %r15, (%rbx)            # *dsp_out = DSP
 
     pop %r15
     pop %r14

@@ -1,23 +1,24 @@
 # BasicForth — Outer Interpreter (x86-64)
 #
-# Register convention:
-#   R15 = DSP (data stack pointer, points to second item)
-#   R14 = TOS (top of stack value)
+# Register convention (pure memory stack):
+#   R15 = DSP (data stack pointer, points to top item; equals sp0 when empty)
 #   R13 = HERE (next free byte in dictionary)
 #   R12 = LATEST (most recent dictionary entry)
 #   RSP = Return stack
+#
+# R14 is free (no longer used for TOS).
 
 .global _start
 
+.equ CELL, 8
 .equ INPUT_BUF_SIZE, 80
 
 _start:
     # Initialize engine registers
-    lea data_stack_top(%rip), %r15  # DSP
-    mov %r15, sp0(%rip)             # save initial DSP for .S
+    lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
+    mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
     lea dict_tick(%rip), %r12       # LATEST
-    xor %r14d, %r14d                # TOS = 0
 
     call platform_raw_mode
 
@@ -31,107 +32,108 @@ repl_loop:
     call platform_write
 
     # ACCEPT ( c-addr max -- count )
-    sub $8, %r15
-    mov %r14, (%r15)                # push old TOS
-    lea input_buf(%rip), %r14
-    sub $8, %r15
-    mov %r14, (%r15)
-    mov $INPUT_BUF_SIZE, %r14
-    call forth_accept               # TOS = count
+    lea input_buf(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movq $INPUT_BUF_SIZE, (%r15)    # push max
+    call forth_accept               # ( c-addr max -- count )
 
-    # Empty line → exit
-    test %r14, %r14
+    # Empty line → exit (count == 0)
+    mov (%r15), %rax
+    test %rax, %rax
     jz repl_bye
 
     # Set up source variables for PARSE-WORD
-    mov %r14, source_len(%rip)
+    mov (%r15), %rax                # count
+    mov %rax, source_len(%rip)
     lea input_buf(%rip), %rax
     mov %rax, source_addr(%rip)
     movq $0, to_in(%rip)
 
-    # Drop count (restore user's TOS)
-    call forth_drop
+    # Drop count
+    add $CELL, %r15
 
 interpret_loop:
     call forth_parse_word           # ( -- c-addr u )
 
     # End of line? (u == 0)
-    test %r14, %r14
+    mov (%r15), %rax                # u is on top
+    test %rax, %rax
     jz interpret_done
 
     # FIND ( c-addr u -- xt flag | c-addr u 0 )
     call forth_find
 
     # Found? (flag != 0)
-    test %r14, %r14
+    mov (%r15), %rax                # flag is on top
+    test %rax, %rax
     jz try_number
 
-    # Found — TOS = flag (1=IMMEDIATE, -1=normal), [DSP] = xt
+    # Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
     # If interpreting (STATE==0), always execute.
     # If compiling: IMMEDIATE words execute, normal words get compiled.
     cmpq $0, state(%rip)
     je found_execute                # interpreting → execute
 
     # Compiling — check IMMEDIATE flag
-    cmp $1, %r14
+    cmpq $1, (%r15)                 # flag == 1?
     je found_execute                # IMMEDIATE → execute even in compile mode
 
     # Normal word in compile mode — compile a CALL to it
-    call forth_drop                 # drop flag, TOS = xt
-    mov %r14, %rax                  # RAX = xt
-    mov (%r15), %r14                # pop xt from stack
-    add $8, %r15
+    add $CELL, %r15                 # drop flag
+    mov (%r15), %rax                # RAX = xt
+    add $CELL, %r15                 # drop xt
     call compile_call               # emit CALL xt at HERE
     jmp interpret_loop
 
 found_execute:
-    call forth_drop                 # drop flag, TOS = xt
-    call forth_execute
+    add $CELL, %r15                 # drop flag
+    call forth_execute              # pops xt and jumps
     jmp interpret_loop
 
 try_number:
     # Not in dictionary — drop 0 flag, try NUMBER
-    call forth_drop                 # ( c-addr u )
+    add $CELL, %r15                 # drop 0 flag ( c-addr u )
 
     # NUMBER ( c-addr u -- n true | c-addr u false )
     call forth_number
 
-    test %r14, %r14
+    mov (%r15), %rax                # top = true/false flag
+    test %rax, %rax
     jz not_found
 
     # Parsed — drop true flag, number is on stack
-    call forth_drop
+    add $CELL, %r15                 # drop true flag
 
     # If compiling, compile the number as a literal
     cmpq $0, state(%rip)
-    je interpret_loop               # interpreting → leave on stack
+    je interpret_loop               # interpreting → leave n on stack
 
     # Compiling — compile literal
-    mov %r14, %rax                  # RAX = number
-    mov (%r15), %r14                # pop number from stack
-    add $8, %r15
+    mov (%r15), %rax                # RAX = number
+    add $CELL, %r15                 # pop number
     call compile_literal            # emit CALL LIT + value at HERE
     jmp interpret_loop
 
 not_found:
     # Neither word nor number — error
-    call forth_drop                 # drop false, ( c-addr u )
+    add $CELL, %r15                 # drop false flag ( c-addr u )
 
     # Print "? " + token + newline
     lea err_msg(%rip), %rsi
     mov $err_len, %rdx
     call platform_write
 
-    mov %r14, %rdx                  # length = u (TOS)
-    mov (%r15), %rsi                # buf = c-addr ([DSP])
+    mov (%r15), %rdx                # length = u (top)
+    mov CELL(%r15), %rsi            # buf = c-addr (second)
     call platform_write
 
     mov $'\n', %rdi
     call platform_emit
 
     # Clean up c-addr and u
-    call forth_drop                 # drop u
-    call forth_drop                 # drop c-addr
+    add $2*CELL, %r15
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)
@@ -143,8 +145,7 @@ not_found:
 
 interpret_done:
     # End of line — drop 0 0 from PARSE-WORD
-    call forth_drop
-    call forth_drop
+    add $2*CELL, %r15
 
     # Print " ok"
     lea ok_msg(%rip), %rsi
@@ -154,7 +155,7 @@ interpret_done:
     jmp repl_loop
 
 repl_bye:
-    call forth_drop                 # drop 0 count
+    add $CELL, %r15                 # drop 0 count
 
     lea bye_msg(%rip), %rsi
     mov $bye_len, %rdx
@@ -195,7 +196,6 @@ error_reset:
 
     # Reset data stack to empty
     mov sp0(%rip), %r15             # DSP = sp0 (empty)
-    xor %r14d, %r14d                # TOS = 0
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)

@@ -2,15 +2,16 @@
 # Platform-independent x86-64 assembly. Requires platform_linux.s (or equivalent).
 #
 # Register allocation:
-#   R15 = Data stack pointer (DSP) — points to second item on stack
-#   R14 = Top of stack (TOS) — always holds the top value
-#   R13 = HERE pointer (dictionary free space) — future
-#   R12 = LATEST pointer (most recent dictionary entry) — future
+#   R15 = Data stack pointer (DSP) — points to top item on stack
+#         (equals sp0 when stack is empty)
+#   R14 = scratch (available — no longer used for TOS)
+#   R13 = HERE pointer (dictionary free space)
+#   R12 = LATEST pointer (most recent dictionary entry)
 #   RSP = Return stack
 #
-# TOS-in-register invariant: R14 always holds the top of the data stack.
-# DSP (R15) points to the second item. Push = store R14 to memory, set R14.
-# Pop = move R14 out, load next from memory into R14.
+# Pure memory stack: all data stack items live in memory.
+# DSP (R15) points to the topmost item. Push = decrement R15, store.
+# Pop = load from R15, increment R15. Depth = (sp0 - DSP) / CELL.
 #
 # R12-R15 are callee-saved in the System V AMD64 ABI,
 # so C functions won't clobber them.
@@ -29,60 +30,26 @@
 # ---------- Stack Guard Macros ----------
 # Build with `as -DFAST` (or `make FAST=1`) to disable runtime checks.
 
-# POP_TOS: pop new TOS from memory after consuming old TOS.
-# Safe: if stack empty (DSP >= sp0), set TOS=0 instead of reading past stack.
-# Fast: unconditional load.
-.macro POP_TOS
-.ifdef FAST
-    mov (%r15), %r14
-    add $CELL, %r15
-.else
-    cmp sp0(%rip), %r15
-    jae .Lsp_\@
-    mov (%r15), %r14
-    add $CELL, %r15
-    jmp .Lsp_done_\@
-.Lsp_\@:
-    xor %r14d, %r14d
-.Lsp_done_\@:
-.endif
-.endm
-
-# PUSH_TOS: push current TOS to memory, making room for a new TOS.
-# Safe: check for stack overflow before push.
-# Fast: unconditional push.
-.macro PUSH_TOS
-.ifdef FAST
-    sub $CELL, %r15
-    mov %r14, (%r15)
-.else
-    lea data_stack_bottom(%rip), %rax
-    cmp %rax, %r15
-    jbe stack_overflow
-    sub $CELL, %r15
-    mov %r14, (%r15)
-.endif
-.endm
-
-# CHECK_DEPTH_2: verify at least 2 items (TOS + 1 memory item).
-# Safe: jump to stack_underflow if DSP >= sp0.
-# Fast: no-op.
-.macro CHECK_DEPTH_2
-.ifndef FAST
-    cmp sp0(%rip), %r15
-    jae stack_underflow
-.endif
-.endm
-
-# CHECK_DEPTH_3: verify at least 3 items (TOS + 2 memory items).
-# Safe: jump to stack_underflow if DSP > sp0 - 2*CELL.
-# Fast: no-op.
-.macro CHECK_DEPTH_3
+# CHECK_DEPTH n: verify at least n items on stack.
+# In SAFE mode: compare DSP against sp0 - n*CELL, jump to stack_underflow if insufficient.
+# In FAST mode: no-op.
+.macro CHECK_DEPTH n
 .ifndef FAST
     mov sp0(%rip), %rax
-    sub $2*CELL, %rax
+    sub $\n*CELL, %rax
     cmp %rax, %r15
     ja stack_underflow
+.endif
+.endm
+
+# CHECK_OVERFLOW n: verify room to push n items (default 1).
+# Safe: check DSP - n*CELL > data_stack_bottom.
+# Fast: no-op.
+.macro CHECK_OVERFLOW n=1
+.ifndef FAST
+    lea data_stack_bottom+\n*CELL(%rip), %rax
+    cmp %rax, %r15
+    jbe stack_overflow
 .endif
 .endm
 
@@ -128,58 +95,63 @@
 # DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    PUSH_TOS
-    ret                          # TOS unchanged
+    CHECK_DEPTH 1
+    CHECK_OVERFLOW
+    mov (%r15), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
 
 # DROP ( a -- )
 .global forth_drop
 forth_drop:
-    POP_TOS
+    CHECK_DEPTH 1
+    add $CELL, %r15
     ret
 
 # SWAP ( a b -- b a )
-# TOS=b, [DSP]=a -> TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
-    CHECK_DEPTH_2
-    mov (%r15), %rax            # rax = a
-    mov %r14, (%r15)            # [DSP] = b
-    mov %rax, %r14              # TOS = a
+    CHECK_DEPTH 2
+    mov (%r15), %rax            # rax = b (top)
+    mov CELL(%r15), %rcx        # rcx = a (second)
+    mov %rcx, (%r15)            # top = a
+    mov %rax, CELL(%r15)        # second = b
     ret
 
 # OVER ( a b -- a b a )
-# TOS=b, [DSP]=a -> push b, TOS=a
 .global forth_over
 forth_over:
-    CHECK_DEPTH_2
-    PUSH_TOS
-    mov CELL(%r15), %r14        # TOS = a
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
+    mov CELL(%r15), %rax        # rax = a (second item)
+    sub $CELL, %r15
+    mov %rax, (%r15)            # push a on top
     ret
 
 # + ( a b -- a+b )
-# TOS=b, [DSP]=a -> TOS=a+b
 .global forth_add
 forth_add:
-    CHECK_DEPTH_2
-    add (%r15), %r14            # TOS = a + b
-    add $CELL, %r15             # pop a
+    CHECK_DEPTH 2
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    add %rax, (%r15)            # top = a + b
     ret
 
 # - ( a b -- a-b )
-# TOS=b, [DSP]=a -> TOS=a-b
 .global forth_sub
 forth_sub:
-    CHECK_DEPTH_2
-    mov (%r15), %rax            # rax = a
-    sub %r14, %rax              # rax = a - b
-    mov %rax, %r14              # TOS = a - b
-    add $CELL, %r15             # pop
+    CHECK_DEPTH 2
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    sub %rax, (%r15)            # top = a - b
     ret
 
 # NEGATE ( a -- -a )
 .global forth_negate
 forth_negate:
-    neg %r14                    # negate TOS
+    CHECK_DEPTH 1
+    negq (%r15)
     ret
 
 # ---------- Memory ----------
@@ -188,56 +160,61 @@ forth_negate:
 # Read 8-byte cell from address
 .global forth_fetch
 forth_fetch:
-    mov (%r14), %r14            # TOS = [TOS]
+    CHECK_DEPTH 1
+    mov (%r15), %rax            # rax = addr
+    mov (%rax), %rax            # rax = [addr]
+    mov %rax, (%r15)            # replace top
     ret
 
 # ! (store) ( x addr -- )
 # Write 8-byte cell to address
 .global forth_store
 forth_store:
-    CHECK_DEPTH_3
-    mov (%r15), %rax            # RAX = x
-    mov %rax, (%r14)            # [addr] = x
-    add $CELL, %r15             # pop x
-    POP_TOS
+    CHECK_DEPTH 2
+    mov (%r15), %rax            # rax = addr
+    mov CELL(%r15), %rcx        # rcx = x
+    mov %rcx, (%rax)            # [addr] = x
+    add $2*CELL, %r15           # pop both
     ret
 
 # C@ (char fetch) ( addr -- byte )
 # Read 1 byte from address, zero-extended
 .global forth_cfetch
 forth_cfetch:
-    movzbl (%r14), %eax         # RAX = zero-extended byte
-    mov %rax, %r14              # TOS = byte
+    CHECK_DEPTH 1
+    mov (%r15), %rax
+    movzbl (%rax), %eax
+    mov %rax, (%r15)
     ret
 
 # C! (char store) ( byte addr -- )
 # Write 1 byte to address
 .global forth_cstore
 forth_cstore:
-    CHECK_DEPTH_3
-    mov (%r15), %rax            # RAX = byte
-    movb %al, (%r14)            # [addr] = low byte
-    add $CELL, %r15             # pop byte
-    POP_TOS
+    CHECK_DEPTH 2
+    mov (%r15), %rax            # addr
+    mov CELL(%r15), %rcx        # byte
+    movb %cl, (%rax)
+    add $2*CELL, %r15
     ret
 
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
-# TOS = char. Pass to platform_emit, pop new TOS.
 .global forth_emit
 forth_emit:
-    mov %r14, %rdi              # RDI = char (from TOS)
-    POP_TOS
+    CHECK_DEPTH 1
+    mov (%r15), %rdi            # char
+    add $CELL, %r15             # pop
     jmp platform_emit           # tail call
 
 # ---------- KEY (Forth-level) ----------
 # ( -- char )
-# Push old TOS, call platform_key, TOS = result.
 .global forth_key
 forth_key:
-    PUSH_TOS
+    CHECK_OVERFLOW
     call platform_key           # RDI = character
-    mov %rdi, %r14              # TOS = char
+    sub $CELL, %r15
+    mov %rdi, (%r15)
     ret
 
 # ---------- ACCEPT (Forth-level) ----------
@@ -247,15 +224,15 @@ forth_key:
 # Calls platform_key and platform_emit directly (register level).
 .global forth_accept
 forth_accept:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
     push %rbx
     push %rbp
     push %r12
 
-    # Pop args from data stack: TOS = max_len, [DSP] = buf_addr
-    mov %r14, %rbp              # RBP = max_len
-    mov (%r15), %rbx            # RBX = buf_addr
-    add $CELL, %r15
+    # Pop args from data stack
+    mov (%r15), %rbp            # RBP = max_len (top)
+    mov CELL(%r15), %rbx        # RBX = buf_addr (second)
+    add $2*CELL, %r15
     xor %r12d, %r12d            # R12 = count = 0
 
 .Laccept_loop:
@@ -306,8 +283,9 @@ forth_accept:
     mov $10, %rdi
     call platform_emit
 
-    # Push result: TOS = count
-    mov %r12, %r14
+    # Push result: count
+    sub $CELL, %r15
+    mov %r12, (%r15)
 
     pop %r12
     pop %rbp
@@ -325,16 +303,17 @@ forth_accept:
 # Uses BASE variable for default base.
 .global forth_number
 forth_number:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
     push %rbx
     push %rbp
     push %r12
-    push %r13                   # temporarily borrow R13 (future HERE)
+    push %r13                   # temporarily borrow R13
 
-    # Pop args: TOS = len, [DSP] = addr
-    mov %r14, %rcx              # RCX = len
-    mov (%r15), %rbx            # RBX = addr
-    add $CELL, %r15
+    # Pop args: top = len, second = addr
+    mov (%r15), %rcx            # RCX = len
+    mov CELL(%r15), %rbx        # RBX = addr
+    add $2*CELL, %r15
     # Save originals for failure case
     mov %rbx, %r12              # R12 = orig addr
     mov %rcx, %r13              # R13 = orig len
@@ -453,8 +432,9 @@ forth_number:
 .Lnum_success:
     # Push n and true: ( -- n true )
     sub $CELL, %r15
-    mov %rax, (%r15)            # push n to memory
-    mov $-1, %r14               # TOS = true (-1)
+    mov %rax, (%r15)            # push n
+    sub $CELL, %r15
+    movq $-1, (%r15)            # push true (-1)
     jmp .Lnum_exit
 
 .Lnum_fail2:
@@ -465,7 +445,8 @@ forth_number:
     mov %r12, (%r15)            # push orig c-addr
     sub $CELL, %r15
     mov %r13, (%r15)            # push orig u
-    mov $0, %r14                # TOS = false
+    sub $CELL, %r15
+    movq $0, (%r15)             # push false
 
 .Lnum_exit:
     pop %r13
@@ -481,15 +462,16 @@ forth_number:
 #          original c-addr u and 0 (not found).
 .global forth_find
 forth_find:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
     push %rbx
     push %rbp
     push %r12                   # save LATEST (read-only)
 
-    # Pop args: TOS = u (length), [DSP] = c-addr
-    mov %r14, %rcx              # RCX = search length
-    mov (%r15), %rsi            # RSI = search c-addr
-    add $CELL, %r15
+    # Pop args: top = u (length), second = c-addr
+    mov (%r15), %rcx            # RCX = search length
+    mov CELL(%r15), %rsi        # RSI = search c-addr
+    add $2*CELL, %r15
 
     mov %r12, %rbx              # RBX = current entry (start at LATEST)
 
@@ -547,17 +529,19 @@ forth_find:
     # CodePtr is at offset align8(9 + name_len) from entry start
     lea 9+7(%rcx), %rax         # 9 + len + 7
     and $~7, %rax               # round down to 8-byte boundary
-    # Push xt, set TOS to immediate flag
-    sub $CELL, %r15
+    # Push xt and flag
     mov (%rbx,%rax), %rax       # RAX = xt
-    mov %rax, (%r15)            # push xt to memory
+    sub $CELL, %r15
+    mov %rax, (%r15)            # push xt
     # Check IMMEDIATE flag
     test $F_IMMEDIATE, %ebp
     jz .Lfind_normal
-    mov $1, %r14                # TOS = 1 (immediate)
+    sub $CELL, %r15
+    movq $1, (%r15)             # push 1 (immediate)
     jmp .Lfind_done
 .Lfind_normal:
-    mov $-1, %r14               # TOS = -1 (normal)
+    sub $CELL, %r15
+    movq $-1, (%r15)            # push -1 (normal)
     jmp .Lfind_done
 
 .Lfind_next:
@@ -565,12 +549,13 @@ forth_find:
     jmp .Lfind_loop
 
 .Lfind_not_found:
-    # Return original c-addr u 0: push c-addr and u back, TOS = 0
+    # Return original c-addr u 0
     sub $CELL, %r15
     mov %rsi, (%r15)            # push c-addr
     sub $CELL, %r15
     mov %rcx, (%r15)            # push u
-    xor %r14d, %r14d            # TOS = 0
+    sub $CELL, %r15
+    movq $0, (%r15)             # push 0
 
 .Lfind_done:
     pop %r12
@@ -585,6 +570,7 @@ forth_find:
 # Returns 0 0 if no more tokens.
 .global forth_parse_word
 forth_parse_word:
+    CHECK_OVERFLOW 2
     # Load globals
     mov source_addr(%rip), %rsi   # RSI = buffer base
     mov source_len(%rip), %rcx    # RCX = total length
@@ -603,10 +589,9 @@ forth_parse_word:
     mov %rdx, to_in(%rip)
     # Push 0 0
     sub $CELL, %r15
-    mov %r14, (%r15)              # push old TOS
-    sub $CELL, %r15
     movq $0, (%r15)               # c-addr = 0
-    xor %r14d, %r14d              # TOS = u = 0
+    sub $CELL, %r15
+    movq $0, (%r15)               # u = 0
     ret
 
 .Lpw_found:
@@ -626,12 +611,11 @@ forth_parse_word:
     # len = current position - start
     lea (%rsi,%rdx), %rax
     sub %rdi, %rax                # RAX = length
-    # Push c-addr and u
-    sub $CELL, %r15
-    mov %r14, (%r15)              # push old TOS
+    # Push c-addr and u (c-addr second, u on top)
     sub $CELL, %r15
     mov %rdi, (%r15)              # push c-addr
-    mov %rax, %r14                # TOS = u
+    sub $CELL, %r15
+    mov %rax, (%r15)              # push u (on top)
     ret
 
 # ---------- EXECUTE (Forth-level) ----------
@@ -639,12 +623,9 @@ forth_parse_word:
 # Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
-.ifndef FAST
-    test %r14, %r14
-    jz stack_underflow              # xt=0 means empty/invalid
-.endif
-    mov %r14, %rax                # RAX = xt
-    POP_TOS
+    CHECK_DEPTH 1
+    mov (%r15), %rax
+    add $CELL, %r15
     jmp *%rax                     # tail-call
 
 # ---------- print_signed (internal helper) ----------
@@ -703,12 +684,13 @@ forth_execute:
 
 # ---------- DOT (Forth-level) ----------
 # ( n -- )
-# Print TOS as signed decimal with trailing space.
+# Print top of stack as signed decimal with trailing space.
 .global forth_dot
 forth_dot:
+    CHECK_DEPTH 1
     push %rbx
-    mov %r14, %rax              # RAX = number to print
-    POP_TOS
+    mov (%r15), %rax            # RAX = number to print
+    add $CELL, %r15             # pop
     call .Lprint_signed
     mov $' ', %rdi
     call platform_emit
@@ -724,10 +706,9 @@ forth_dot_s:
     push %rbp
 
     # Compute depth = (sp0 - DSP) / CELL
-    mov sp0(%rip), %rbx         # RBX = sp0
-    mov %rbx, %rbp              # RBP = sp0 (saved for walking)
-    sub %r15, %rbx              # RBX = sp0 - DSP (byte diff)
-    sar $3, %rbx                # RBX = depth (items in memory)
+    mov sp0(%rip), %rbx
+    sub %r15, %rbx
+    sar $3, %rbx                # rbx = depth
 
     # Print '<'
     mov $'<', %rdi
@@ -743,35 +724,24 @@ forth_dot_s:
     mov $' ', %rdi
     call platform_emit
 
-    # If depth <= 0, nothing to print
+    # If depth <= 0, done
     test %rbx, %rbx
     jle .Lds_done
 
-    # Print depth-1 memory items (bottom-to-top), then TOS
-    # Bottom (oldest) = DSP + (depth-2)*CELL, top (2nd) = DSP
-    cmp $1, %rbx
-    je .Lds_tos                 # depth==1: just TOS, no memory items
+    # Walk from bottom (DSP + (depth-1)*CELL) to top (DSP)
+    lea -1(%rbx), %rbp
+    shl $3, %rbp
+    add %r15, %rbp              # rbp = bottom item address
 
-    lea -2(%rbx), %rbp
-    shl $3, %rbp                # RBP = (depth-2)*CELL
-    add %r15, %rbp              # RBP = DSP + (depth-2)*CELL = bottom
-
-.Lds_mem_loop:
-    cmp %r15, %rbp              # RBP >= DSP?
-    jl .Lds_tos
-    mov (%rbp), %rax            # load stack item
+.Lds_loop:
+    cmp %r15, %rbp
+    jl .Lds_done
+    mov (%rbp), %rax
     call .Lprint_signed
     mov $' ', %rdi
     call platform_emit
     sub $CELL, %rbp
-    jmp .Lds_mem_loop
-
-.Lds_tos:
-    # Print TOS (topmost item)
-    mov %r14, %rax
-    call .Lprint_signed
-    mov $' ', %rdi
-    call platform_emit
+    jmp .Lds_loop
 
 .Lds_done:
     pop %rbp
@@ -797,17 +767,13 @@ forth_bye:
 #
 .global forth_lit
 forth_lit:
-.ifndef FAST
-    lea data_stack_bottom(%rip), %rcx
-    cmp %rcx, %r15
-    jbe stack_overflow
-.endif
+    CHECK_OVERFLOW
     pop %rax                        # return addr = pointer to inline value
+    mov (%rax), %rcx                # rcx = inline value
     sub $CELL, %r15
-    mov %r14, (%r15)                # push old TOS
-    mov (%rax), %r14                # TOS = inline value
-    add $CELL, %rax                 # skip past the 8-byte value
-    jmp *%rax                       # continue execution
+    mov %rcx, (%r15)                # push value to stack
+    add $CELL, %rax                 # skip past inline value
+    jmp *%rax                       # continue
 
 # ---------- compile_call (internal) ----------
 # Compile a CALL instruction at HERE to the address in RAX.
@@ -867,11 +833,10 @@ forth_colon:
 
     # Parse name
     call forth_parse_word           # ( -- c-addr u )
-    mov %r14, %rcx                  # RCX = name length
-    mov (%r15), %rsi                # RSI = name c-addr
-    add $CELL, %r15                 # drop both from stack
-    mov (%r15), %r14
-    add $CELL, %r15
+    # Pop c-addr and u from stack
+    mov (%r15), %rcx                # RCX = u (name length, on top)
+    mov CELL(%r15), %rsi            # RSI = c-addr (second)
+    add $2*CELL, %r15
 
     test %rcx, %rcx
     jz .Lcolon_err                  # empty name — bail
@@ -1010,31 +975,29 @@ forth_tick:
     call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
 
     # Check if found (flag != 0)
-    test %r14, %r14
+    mov (%r15), %rax                # rax = flag (top)
+    test %rax, %rax
     jz .Ltick_not_found
 
-    # Found — drop flag, TOS = xt
-    mov (%r15), %r14
-    add $CELL, %r15
+    # Found — drop flag, leave xt on top
+    add $CELL, %r15                 # drop flag, xt is now on top
 
     # If compiling, compile xt as a literal
     cmpq $0, state(%rip)
-    je .Ltick_done                  # interpreting → leave on stack
+    je .Ltick_done                  # interpreting -> leave on stack
 
-    # Compiling — compile literal
-    mov %r14, %rax
-    mov (%r15), %r14
+    # Compiling — pop xt and compile as literal
+    mov (%r15), %rax
     add $CELL, %r15
     call compile_literal
 .Ltick_done:
     ret
 
 .Ltick_not_found:
-    # Not found — drop 0 flag, c-addr, u; push 0 as error
-    call forth_drop                 # drop 0 flag
-    call forth_drop                 # drop u
-    call forth_drop                 # drop c-addr
-    xor %r14d, %r14d               # TOS = 0 (invalid xt)
+    # Not found — drop flag, u, c-addr; push 0 as error
+    add $3*CELL, %r15               # drop flag, u, c-addr
+    sub $CELL, %r15
+    movq $0, (%r15)                 # push 0 (invalid xt)
     ret
 
 # ---------- Static Dictionary ----------

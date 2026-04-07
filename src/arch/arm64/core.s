@@ -2,15 +2,19 @@
 // Platform-independent ARM64 assembly. Requires platform_linux.s (or equivalent).
 //
 // Register allocation:
-//   X19 = Data stack pointer (DSP) — points to second item on stack
-//   X20 = Top of stack (TOS) — always holds the top value
-//   X21 = HERE pointer (dictionary free space) — future
-//   X22 = LATEST pointer (most recent dictionary entry) — future
+//   X19 = Data stack pointer (DSP) — points to top item on stack
+//         (equals sp0 when stack is empty)
+//   X20 = scratch (available — no longer used for TOS)
+//   X21 = HERE pointer (dictionary free space)
+//   X22 = LATEST pointer (most recent dictionary entry)
 //   SP  = Return stack
 //
-// TOS-in-register invariant: X20 always holds the top of the data stack.
-// DSP (X19) points to the second item. Push = store X20 to memory, set X20.
-// Pop = move X20 out, load next from memory into X20.
+// Pure memory stack: all data stack items live in memory.
+// DSP (X19) points to the topmost item. Push = decrement X19, store.
+// Pop = load from X19, increment X19. Depth = (sp0 - DSP) / CELL.
+//
+// X19-X28 are callee-saved in the AAPCS64 ABI,
+// so C functions won't clobber them.
 
 .equ CELL, 8                    // 64-bit cells
 .equ DATA_STACK_SIZE, 4096      // 512 cells
@@ -26,66 +30,33 @@
 // ---------- Stack Guard Macros ----------
 // Build with `as -DFAST` (or `make FAST=1`) to disable runtime checks.
 
-// POP_TOS: pop new TOS from memory after consuming old TOS.
-// Safe: if stack empty (DSP >= sp0), set TOS=0 instead of reading past stack.
-// Fast: unconditional load.  Clobbers X9.
-.macro POP_TOS
-.ifdef FAST
-    LDR X20, [X19], #CELL
-.else
-    ADR X9, sp0
-    LDR X9, [X9]
-    CMP X19, X9
-    B.HS .Lsp_\@
-    LDR X20, [X19], #CELL
-    B .Lsp_done_\@
-.Lsp_\@:
-    MOV X20, #0
-.Lsp_done_\@:
-.endif
-.endm
-
-// PUSH_TOS: push current TOS to memory, making room for a new TOS.
-// Safe: check for stack overflow before push.
-// Fast: unconditional push.  Clobbers X9.
-.macro PUSH_TOS
-.ifdef FAST
-    STR X20, [X19, #-CELL]!
-.else
-    ADR X9, data_stack_bottom
-    CMP X19, X9
-    B.LS stack_overflow
-    STR X20, [X19, #-CELL]!
-.endif
-.endm
-
-// CHECK_DEPTH_2: verify at least 2 items (TOS + 1 memory item).
-// Safe: branch to stack_underflow if DSP >= sp0.
-// Fast: no-op.  Clobbers X9.
-.macro CHECK_DEPTH_2
+// CHECK_DEPTH n: verify at least n items on stack.
+// In SAFE mode: compare DSP against sp0 - n*CELL, jump to stack_underflow if insufficient.
+// In FAST mode: no-op.  Clobbers X9.
+.macro CHECK_DEPTH n
 .ifndef FAST
     ADR X9, sp0
     LDR X9, [X9]
-    CMP X19, X9
-    B.HS stack_underflow
-.endif
-.endm
-
-// CHECK_DEPTH_3: verify at least 3 items (TOS + 2 memory items).
-// Safe: branch to stack_underflow if DSP > sp0 - 2*CELL.
-// Fast: no-op.  Clobbers X9.
-.macro CHECK_DEPTH_3
-.ifndef FAST
-    ADR X9, sp0
-    LDR X9, [X9]
-    SUB X9, X9, #2*CELL
+    SUB X9, X9, #\n*CELL
     CMP X19, X9
     B.HI stack_underflow
 .endif
 .endm
 
+// CHECK_OVERFLOW n: verify room to push n items (default 1).
+// In SAFE mode: compare DSP - n*CELL against data_stack_bottom.
+// In FAST mode: no-op.  Clobbers X9.
+.macro CHECK_OVERFLOW n=1
+.ifndef FAST
+    ADR X9, data_stack_bottom
+    ADD X9, X9, #\n*CELL
+    CMP X19, X9
+    B.LS stack_overflow
+.endif
+.endm
+
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
-// Safe: branch to dict_full if past end.
+// Safe: jump to dict_full if past end.
 // Fast: no-op.  Clobbers X9, X10.
 .macro CHECK_DICT n
 .ifndef FAST
@@ -126,56 +97,65 @@
 // DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    PUSH_TOS
-    RET                         // TOS unchanged
+    CHECK_DEPTH 1
+    CHECK_OVERFLOW
+    LDR X9, [X19]
+    STR X9, [X19, #-CELL]!
+    RET
 
 // DROP ( a -- )
 .global forth_drop
 forth_drop:
-    POP_TOS
+    CHECK_DEPTH 1
+    ADD X19, X19, #CELL
     RET
 
 // SWAP ( a b -- b a )
-// TOS=b, [DSP]=a → TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
-    CHECK_DEPTH_2
-    LDR X9, [X19]              // X9 = a
-    STR X20, [X19]             // [DSP] = b
-    MOV X20, X9                // TOS = a
+    CHECK_DEPTH 2
+    LDR X9, [X19]              // b (top)
+    LDR X10, [X19, #CELL]     // a (second)
+    STR X10, [X19]             // top = a
+    STR X9, [X19, #CELL]      // second = b
     RET
 
 // OVER ( a b -- a b a )
-// TOS=b, [DSP]=a → push b, TOS=a
 .global forth_over
 forth_over:
-    CHECK_DEPTH_2
-    PUSH_TOS
-    LDR X20, [X19, #CELL]     // TOS = a (one cell below new DSP)
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
+    LDR X9, [X19, #CELL]      // a (second item)
+    STR X9, [X19, #-CELL]!    // push a
     RET
 
 // + ( a b -- a+b )
-// TOS=b, [DSP]=a → TOS=a+b
 .global forth_add
 forth_add:
-    CHECK_DEPTH_2
-    LDR X9, [X19], #CELL      // X9 = a, pop
-    ADD X20, X9, X20           // TOS = a + b
+    CHECK_DEPTH 2
+    LDR X9, [X19], #CELL      // pop b
+    LDR X10, [X19]             // a
+    ADD X10, X10, X9
+    STR X10, [X19]             // top = a+b
     RET
 
 // - ( a b -- a-b )
-// TOS=b, [DSP]=a → TOS=a-b
 .global forth_sub
 forth_sub:
-    CHECK_DEPTH_2
-    LDR X9, [X19], #CELL      // X9 = a, pop
-    SUB X20, X9, X20           // TOS = a - b
+    CHECK_DEPTH 2
+    LDR X9, [X19], #CELL      // pop b
+    LDR X10, [X19]             // a
+    SUB X10, X10, X9
+    STR X10, [X19]             // top = a-b
     RET
 
 // NEGATE ( a -- -a )
 .global forth_negate
 forth_negate:
-    NEG X20, X20               // negate TOS
+    CHECK_DEPTH 1
+    LDR X9, [X19]
+    NEG X9, X9
+    STR X9, [X19]
     RET
 
 // ---------- Memory ----------
@@ -184,56 +164,59 @@ forth_negate:
 // Read 8-byte cell from address
 .global forth_fetch
 forth_fetch:
-    LDR X20, [X20]              // TOS = [TOS]
+    CHECK_DEPTH 1
+    LDR X9, [X19]              // addr
+    LDR X9, [X9]               // [addr]
+    STR X9, [X19]              // replace top
     RET
 
 // ! (store) ( x addr -- )
 // Write 8-byte cell to address
 .global forth_store
 forth_store:
-    CHECK_DEPTH_3
-    LDR X9, [X19], #CELL        // X9 = x, pop
-    STR X9, [X20]               // [addr] = x
-    POP_TOS
+    CHECK_DEPTH 2
+    LDR X9, [X19], #CELL      // pop addr
+    LDR X10, [X19], #CELL     // pop x
+    STR X10, [X9]              // [addr] = x
     RET
 
 // C@ (char fetch) ( addr -- byte )
 // Read 1 byte from address, zero-extended
 .global forth_cfetch
 forth_cfetch:
-    LDRB W9, [X20]              // W9 = byte (zero-extended)
-    MOV X20, X9                 // TOS = byte
+    CHECK_DEPTH 1
+    LDR X9, [X19]
+    LDRB W9, [X9]
+    STR X9, [X19]
     RET
 
 // C! (char store) ( byte addr -- )
 // Write 1 byte to address
 .global forth_cstore
 forth_cstore:
-    CHECK_DEPTH_3
-    LDR X9, [X19], #CELL        // X9 = byte, pop
-    STRB W9, [X20]              // [addr] = low byte
-    POP_TOS
+    CHECK_DEPTH 2
+    LDR X9, [X19], #CELL      // pop addr
+    LDR X10, [X19], #CELL     // pop byte
+    STRB W10, [X9]
     RET
 
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
-// TOS = char. Pass to platform_emit, pop new TOS.
 .global forth_emit
 forth_emit:
-    MOV X0, X20                // X0 = char (from TOS)
-    POP_TOS
-    B platform_emit            // tail call (X30 untouched)
+    CHECK_DEPTH 1
+    LDR X0, [X19], #CELL      // pop char
+    B platform_emit            // tail call
 
 // ---------- KEY (Forth-level) ----------
 // ( -- char )
-// Push old TOS, call platform_key, TOS = result.
 .global forth_key
 forth_key:
-    STR X30, [SP, #-16]!      // save return address
-    PUSH_TOS
+    CHECK_OVERFLOW
+    STP X29, X30, [SP, #-16]!
     BL platform_key            // X0 = character
-    MOV X20, X0                // TOS = char
-    LDR X30, [SP], #16        // restore return address
+    STR X0, [X19, #-CELL]!    // push char
+    LDP X29, X30, [SP], #16
     RET
 
 // ---------- ACCEPT (Forth-level) ----------
@@ -243,14 +226,14 @@ forth_key:
 // Calls platform_key and platform_emit directly (register level).
 .global forth_accept
 forth_accept:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
 
-    // Pop args from data stack: TOS = max_len, [DSP] = buf_addr
-    MOV X24, X20                // X24 = max_len
-    LDR X23, [X19], #CELL      // X23 = buf_addr
+    // Pop args from data stack: top = max_len, second = buf_addr
+    LDR X24, [X19], #CELL      // X24 = max_len (top)
+    LDR X23, [X19], #CELL      // X23 = buf_addr (second)
     MOV X25, #0                 // X25 = count
 
 .Laccept_loop:
@@ -300,8 +283,8 @@ forth_accept:
     MOV X0, #10
     BL platform_emit
 
-    // Push result: TOS = count
-    MOV X20, X25
+    // Push result: count
+    STR X25, [X19, #-CELL]!
 
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
@@ -319,15 +302,16 @@ forth_accept:
 // Uses BASE variable for default base.
 .global forth_number
 forth_number:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
     STP X27, X28, [SP, #-16]!
 
-    // Pop args: TOS = len, [DSP] = addr
-    MOV X24, X20                // X24 = len
-    LDR X23, [X19], #CELL      // X23 = addr
+    // Pop args: top = len, second = addr
+    LDR X24, [X19], #CELL      // X24 = len (top)
+    LDR X23, [X19], #CELL      // X23 = addr (second)
     // Save original addr/len for failure case
     MOV X27, X23                // X27 = orig addr
     MOV X28, X24                // X28 = orig len
@@ -437,15 +421,16 @@ forth_number:
 
 .Lnum_success:
     // Push n and true: ( -- n true )
-    STR X25, [X19, #-CELL]!    // push n to memory
-    MOV X20, #-1                // TOS = true (-1)
+    STR X25, [X19, #-CELL]!    // push n
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!     // push true (-1)
     B .Lnum_exit
 
 .Lnum_fail:
     // Push c-addr, u, and false: ( -- c-addr u false )
     STR X27, [X19, #-CELL]!    // push c-addr
     STR X28, [X19, #-CELL]!    // push u
-    MOV X20, #0                 // TOS = false
+    STR XZR, [X19, #-CELL]!    // push false (0)
 
 .Lnum_exit:
     LDP X27, X28, [SP], #16
@@ -461,14 +446,15 @@ forth_number:
 //          original c-addr u and 0 (not found).
 .global forth_find
 forth_find:
-    CHECK_DEPTH_2
+    CHECK_DEPTH 2
+    CHECK_OVERFLOW
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
 
-    // Pop args: TOS = u (length), [DSP] = c-addr
-    MOV X24, X20                // X24 = search length
-    LDR X23, [X19], #CELL      // X23 = search c-addr
+    // Pop args: top = u (length), second = c-addr
+    LDR X24, [X19], #CELL      // X24 = search length (top)
+    LDR X23, [X19], #CELL      // X23 = search c-addr (second)
 
     MOV X25, X22                // X25 = current entry (start at LATEST)
 
@@ -522,16 +508,18 @@ forth_find:
     // CodePtr is at offset align8(9 + name_len) from entry start
     ADD X9, X24, #(9 + 7)       // 9 + len + 7
     AND X9, X9, #~7             // round down to 8-byte boundary
-    // Push xt, set TOS to immediate flag
+    // Push xt and flag
     LDR X9, [X25, X9]           // X9 = xt
-    STR X9, [X19, #-CELL]!      // push xt to memory
+    STR X9, [X19, #-CELL]!      // push xt
     // Check IMMEDIATE flag
     TST W26, #F_IMMEDIATE
     B.EQ .Lfind_normal
-    MOV X20, #1                  // TOS = 1 (immediate)
+    MOV X9, #1
+    STR X9, [X19, #-CELL]!      // push 1 (immediate)
     B .Lfind_done
 .Lfind_normal:
-    MOV X20, #-1                 // TOS = -1 (normal, using MOV with inverted)
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!      // push -1 (normal)
     B .Lfind_done
 
 .Lfind_next:
@@ -539,10 +527,10 @@ forth_find:
     B .Lfind_loop
 
 .Lfind_not_found:
-    // Return original c-addr u 0: push c-addr and u back, TOS = 0
+    // Return original c-addr u 0
     STR X23, [X19, #-CELL]!     // push c-addr
     STR X24, [X19, #-CELL]!     // push u
-    MOV X20, #0                  // TOS = 0
+    STR XZR, [X19, #-CELL]!     // push 0
 
 .Lfind_done:
     LDP X25, X26, [SP], #16
@@ -557,6 +545,7 @@ forth_find:
 // Returns 0 0 if no more tokens.
 .global forth_parse_word
 forth_parse_word:
+    CHECK_OVERFLOW 2
     // Load globals
     ADR X9, source_addr
     LDR X10, [X9]                // X10 = buffer base
@@ -579,9 +568,8 @@ forth_parse_word:
     ADR X9, to_in
     STR X12, [X9]
     // Push 0 0
-    STR X20, [X19, #-CELL]!      // push old TOS
     STR XZR, [X19, #-CELL]!      // c-addr = 0
-    MOV X20, #0                   // TOS = u = 0
+    STR XZR, [X19, #-CELL]!      // u = 0
     RET
 
 .Lpw_found:
@@ -603,10 +591,9 @@ forth_parse_word:
     // len = current position - start
     ADD X15, X10, X12
     SUB X15, X15, X14             // X15 = length
-    // Push c-addr and u
-    STR X20, [X19, #-CELL]!       // push old TOS
+    // Push c-addr and u (c-addr second, u on top)
     STR X14, [X19, #-CELL]!       // push c-addr
-    MOV X20, X15                   // TOS = u
+    STR X15, [X19, #-CELL]!       // push u (on top)
     RET
 
 // ---------- EXECUTE (Forth-level) ----------
@@ -614,12 +601,9 @@ forth_parse_word:
 // Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
-.ifndef FAST
-    CBZ X20, stack_underflow        // xt=0 means empty/invalid
-.endif
-    MOV X10, X20                  // X10 = xt (use X10, POP_TOS clobbers X9)
-    POP_TOS
-    BR X10                        // tail-call
+    CHECK_DEPTH 1
+    LDR X9, [X19], #CELL         // pop xt
+    BR X9                         // tail-call
 
 // ---------- print_signed (internal helper) ----------
 // Print signed 64-bit integer from X0 to stdout.
@@ -679,12 +663,12 @@ forth_execute:
 
 // ---------- DOT (Forth-level) ----------
 // ( n -- )
-// Print TOS as signed decimal with trailing space.
+// Print top of stack as signed decimal with trailing space.
 .global forth_dot
 forth_dot:
+    CHECK_DEPTH 1
     STP X29, X30, [SP, #-16]!
-    MOV X0, X20                 // X0 = number to print
-    POP_TOS
+    LDR X0, [X19], #CELL       // pop n
     BL .Lprint_signed
     MOV X0, #' '
     BL platform_emit
@@ -702,9 +686,8 @@ forth_dot_s:
     // Compute depth = (sp0 - DSP) / CELL
     ADR X9, sp0
     LDR X23, [X9]               // X23 = sp0
-    MOV X24, X23                // X24 = sp0 (saved for walking)
     SUB X23, X23, X19           // X23 = sp0 - DSP (byte diff)
-    ASR X23, X23, #3            // X23 = depth (items in memory)
+    ASR X23, X23, #3            // X23 = depth
 
     // Print '<'
     MOV X0, #'<'
@@ -724,31 +707,20 @@ forth_dot_s:
     CMP X23, #0
     B.LE .Lds_done
 
-    // Print depth-1 memory items (bottom-to-top), then TOS
-    // Bottom (oldest) = DSP + (depth-2)*CELL, top (2nd) = DSP
-    CMP X23, #1
-    B.EQ .Lds_tos               // depth==1: just TOS, no memory items
+    // Walk from bottom (DSP + (depth-1)*CELL) to top (DSP)
+    SUB X24, X23, #1
+    LSL X24, X24, #3            // X24 = (depth-1)*CELL
+    ADD X24, X19, X24           // X24 = bottom item address
 
-    SUB X24, X23, #2
-    LSL X24, X24, #3            // X24 = (depth-2)*CELL
-    ADD X24, X19, X24           // X24 = DSP + (depth-2)*CELL = bottom
-
-.Lds_mem_loop:
+.Lds_loop:
     CMP X24, X19                // X24 >= DSP?
-    B.LO .Lds_tos
+    B.LO .Lds_done
     LDR X0, [X24]               // load stack item
     BL .Lprint_signed
     MOV X0, #' '
     BL platform_emit
     SUB X24, X24, #CELL
-    B .Lds_mem_loop
-
-.Lds_tos:
-    // Print TOS (topmost item)
-    MOV X0, X20
-    BL .Lprint_signed
-    MOV X0, #' '
-    BL platform_emit
+    B .Lds_loop
 
 .Lds_done:
     LDP X23, X24, [SP], #16
@@ -774,10 +746,11 @@ forth_bye:
 //
 .global forth_lit
 forth_lit:
-    PUSH_TOS
-    LDR X20, [X30]                  // TOS = inline value (LR points to it)
-    ADD X30, X30, #CELL             // skip past the 8-byte value
-    RET                             // continue execution (jumps to updated LR)
+    CHECK_OVERFLOW
+    LDR X9, [X30]                  // inline value (LR points to it)
+    STR X9, [X19, #-CELL]!        // push to stack
+    ADD X30, X30, #CELL            // skip past value
+    RET                            // continue execution (jumps to updated LR)
 
 // ---------- compile_call (internal) ----------
 // Compile a BL instruction at HERE to the address in X0.
@@ -870,9 +843,9 @@ forth_colon:
 
     // Parse name
     BL forth_parse_word             // ( -- c-addr u )
-    MOV X24, X20                    // X24 = name length
-    LDR X23, [X19], #CELL          // X23 = name c-addr
-    LDR X20, [X19], #CELL          // restore TOS (drop both)
+    // Pop c-addr and u from stack
+    LDR X24, [X19], #CELL          // X24 = u (name length, on top)
+    LDR X23, [X19], #CELL          // X23 = c-addr (second)
 
     CBZ X24, .Lcolon_err            // empty name — bail
 
@@ -1027,30 +1000,28 @@ forth_tick:
     BL forth_find                   // ( c-addr u -- xt flag | c-addr u 0 )
 
     // Check if found (flag != 0)
-    CBZ X20, .Ltick_not_found
+    LDR X9, [X19]                  // X9 = flag (top)
+    CBZ X9, .Ltick_not_found
 
-    // Found — drop flag, TOS = xt
-    LDR X20, [X19], #CELL
+    // Found — drop flag, leave xt on top
+    ADD X19, X19, #CELL            // drop flag, xt is now on top
 
     // If compiling, compile xt as a literal
     ADR X9, state
     LDR X9, [X9]
-    CBZ X9, .Ltick_done             // interpreting → leave on stack
+    CBZ X9, .Ltick_done             // interpreting -> leave on stack
 
-    // Compiling — compile literal
-    MOV X0, X20
-    LDR X20, [X19], #CELL
+    // Compiling — pop xt and compile as literal
+    LDR X0, [X19], #CELL
     BL compile_literal
 .Ltick_done:
     LDP X29, X30, [SP], #16
     RET
 
 .Ltick_not_found:
-    // Not found — drop 0 flag, c-addr, u; push 0 as error
-    BL forth_drop                   // drop 0 flag
-    BL forth_drop                   // drop u
-    BL forth_drop                   // drop c-addr
-    MOV X20, #0                     // TOS = 0 (invalid xt)
+    // Not found — drop flag, u, c-addr; push 0 as error
+    ADD X19, X19, #3*CELL           // drop flag, u, c-addr
+    STR XZR, [X19, #-CELL]!        // push 0 (invalid xt)
     LDP X29, X30, [SP], #16
     RET
 

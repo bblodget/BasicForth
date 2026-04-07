@@ -3,7 +3,10 @@
  *
  * Tests core assembly primitives by calling them directly from C.
  * Links against core.o and a per-architecture test_helper.s that
- * bridges C calling conventions to the engine registers (TOS/DSP).
+ * bridges C calling conventions to the engine register (DSP).
+ *
+ * Pure memory data stack model: everything lives on the memory stack
+ * addressed by DSP. No separate TOS register.
  *
  * Build: gcc -o test_basicforth test_basicforth.c test_helper_<arch>.s core.o
  * Run:   ./test_basicforth
@@ -17,8 +20,7 @@
 
 /* --- Assembly interface --- */
 
-extern void call_primitive(void *fn, int64_t tos_in, int64_t *dsp_in,
-                           int64_t *tos_out, int64_t **dsp_out);
+extern void call_primitive(void *fn, int64_t *dsp_in, int64_t **dsp_out);
 
 /* Core primitives */
 extern void forth_dup(void);
@@ -84,12 +86,13 @@ static void section(const char *name)
 /* --- Stack helpers --- */
 
 /*
- * Stack convention:
- *   TOS = top value (in register)
- *   DSP = pointer to second item (grows downward from data_stack_top)
+ * Pure memory data stack model:
+ *   DSP points to the top item on stack (grows downward from data_stack_top).
+ *   Stack depth = (stack_top() - dsp).
+ *   An empty stack has DSP = stack_top() (depth 0).
  *
- * setup_N() prepares the stack with N items.
- * Items are listed bottom-to-top: setup_2(a, b) → [DSP]=a, TOS=b.
+ * Items are listed bottom-to-top: setup_2(a, b) places a below b.
+ *   [DSP+8] = a (bottom), [DSP] = b (top)
  */
 
 static int64_t *stack_top(void)
@@ -97,172 +100,181 @@ static int64_t *stack_top(void)
     return (int64_t *)&data_stack_top;
 }
 
-/* 1 item: TOS = a, DSP = empty */
-static void setup_1(int64_t a, int64_t *tos, int64_t **dsp)
+static int stack_depth(int64_t *dsp)
 {
-    *tos = a;
-    *dsp = stack_top();
+    return (int)(stack_top() - dsp);
 }
 
-/* 2 items: [DSP] = a, TOS = b */
-static void setup_2(int64_t a, int64_t b, int64_t *tos, int64_t **dsp)
+/* Empty stack (depth 0): DSP = stack_top */
+static int64_t *setup_0(void)
+{
+    return stack_top();
+}
+
+/* 1 item: [DSP] = a */
+static int64_t *setup_1(int64_t a)
 {
     int64_t *sp = stack_top();
     *(--sp) = a;
-    *dsp = sp;
-    *tos = b;
+    return sp;
 }
 
-/* 3 items: [DSP+8] = a, [DSP] = b, TOS = c */
-static void setup_3(int64_t a, int64_t b, int64_t c,
-                    int64_t *tos, int64_t **dsp)
+/* 2 items: [DSP+8] = a (bottom), [DSP] = b (top) */
+static int64_t *setup_2(int64_t a, int64_t b)
 {
     int64_t *sp = stack_top();
     *(--sp) = a;
     *(--sp) = b;
-    *dsp = sp;
-    *tos = c;
+    return sp;
 }
 
-/* Stack depth: number of items below TOS in memory */
-static int stack_depth(int64_t *dsp)
+/* 3 items: a (bottom), b (middle), c (top) */
+static int64_t *setup_3(int64_t a, int64_t b, int64_t c)
 {
-    return (int)(stack_top() - dsp);
+    int64_t *sp = stack_top();
+    *(--sp) = a;
+    *(--sp) = b;
+    *(--sp) = c;
+    return sp;
 }
 
 /* --- Primitive tests --- */
 
 static void test_dup(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_1(42, &tos_in, &dsp_in);
-    call_primitive(forth_dup, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_1(42);
+    call_primitive(forth_dup, dsp_in, &dsp_out);
 
-    if (tos_out == 42 && dsp_out[0] == 42 && stack_depth(dsp_out) == 1)
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 42 && dsp_out[1] == 42)
         pass("DUP ( 42 -- 42 42 )");
     else
         fail("DUP ( 42 -- 42 42 )",
-             "tos=%ld [dsp]=%ld depth=%d",
-             tos_out, dsp_out[0], stack_depth(dsp_out));
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
 }
 
 static void test_drop(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(10, 20, &tos_in, &dsp_in);
-    call_primitive(forth_drop, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_drop, dsp_in, &dsp_out);
 
-    if (tos_out == 10 && stack_depth(dsp_out) == 0)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 10)
         pass("DROP ( 10 20 -- 10 )");
     else
         fail("DROP ( 10 20 -- 10 )",
-             "tos=%ld depth=%d", tos_out, stack_depth(dsp_out));
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_swap(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(1, 2, &tos_in, &dsp_in);
-    call_primitive(forth_swap, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_swap, dsp_in, &dsp_out);
 
-    if (tos_out == 1 && dsp_out[0] == 2 && stack_depth(dsp_out) == 1)
-        pass("SWAP ( 1 2 -- 2 1 )");
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 10 && dsp_out[1] == 20)
+        pass("SWAP ( 10 20 -- 20 10 )");
     else
-        fail("SWAP ( 1 2 -- 2 1 )",
-             "tos=%ld [dsp]=%ld", tos_out, dsp_out[0]);
+        fail("SWAP ( 10 20 -- 20 10 )",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
 }
 
 static void test_over(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(1, 2, &tos_in, &dsp_in);
-    call_primitive(forth_over, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_over, dsp_in, &dsp_out);
 
-    if (tos_out == 1 && dsp_out[0] == 2 && dsp_out[1] == 1
-        && stack_depth(dsp_out) == 2)
-        pass("OVER ( 1 2 -- 1 2 1 )");
+    if (stack_depth(dsp_out) == 3 && dsp_out[0] == 10
+        && dsp_out[1] == 20 && dsp_out[2] == 10)
+        pass("OVER ( 10 20 -- 10 20 10 )");
     else
-        fail("OVER ( 1 2 -- 1 2 1 )",
-             "tos=%ld [dsp]=%ld [dsp+1]=%ld depth=%d",
-             tos_out, dsp_out[0], dsp_out[1], stack_depth(dsp_out));
+        fail("OVER ( 10 20 -- 10 20 10 )",
+             "[0]=%ld [1]=%ld [2]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out) >= 3 ? dsp_out[2] : -1,
+             stack_depth(dsp_out));
 }
 
 static void test_add(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(3, 4, &tos_in, &dsp_in);
-    call_primitive(forth_add, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, 20);
+    call_primitive(forth_add, dsp_in, &dsp_out);
 
-    if (tos_out == 7 && stack_depth(dsp_out) == 0)
-        pass("+ ( 3 4 -- 7 )");
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 30)
+        pass("+ ( 10 20 -- 30 )");
     else
-        fail("+ ( 3 4 -- 7 )", "tos=%ld", tos_out);
+        fail("+ ( 10 20 -- 30 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_add_negative(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(-10, 3, &tos_in, &dsp_in);
-    call_primitive(forth_add, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, -3);
+    call_primitive(forth_add, dsp_in, &dsp_out);
 
-    if (tos_out == -7 && stack_depth(dsp_out) == 0)
-        pass("+ ( -10 3 -- -7 )");
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 7)
+        pass("+ ( 10 -3 -- 7 )");
     else
-        fail("+ ( -10 3 -- -7 )", "tos=%ld", tos_out);
+        fail("+ ( 10 -3 -- 7 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_sub(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2(10, 3, &tos_in, &dsp_in);
-    call_primitive(forth_sub, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2(10, 3);
+    call_primitive(forth_sub, dsp_in, &dsp_out);
 
-    if (tos_out == 7 && stack_depth(dsp_out) == 0)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 7)
         pass("- ( 10 3 -- 7 )");
     else
-        fail("- ( 10 3 -- 7 )", "tos=%ld", tos_out);
+        fail("- ( 10 3 -- 7 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_negate(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_1(5, &tos_in, &dsp_in);
-    call_primitive(forth_negate, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_1(42);
+    call_primitive(forth_negate, dsp_in, &dsp_out);
 
-    if (tos_out == -5)
-        pass("NEGATE ( 5 -- -5 )");
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -42)
+        pass("NEGATE ( 42 -- -42 )");
     else
-        fail("NEGATE ( 5 -- -5 )", "tos=%ld", tos_out);
+        fail("NEGATE ( 42 -- -42 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_negate_negative(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_1(-42, &tos_in, &dsp_in);
-    call_primitive(forth_negate, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_1(-7);
+    call_primitive(forth_negate, dsp_in, &dsp_out);
 
-    if (tos_out == 42)
-        pass("NEGATE ( -42 -- 42 )");
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 7)
+        pass("NEGATE ( -7 -- 7 )");
     else
-        fail("NEGATE ( -42 -- 42 )", "tos=%ld", tos_out);
+        fail("NEGATE ( -7 -- 7 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 /* --- NUMBER tests --- */
@@ -272,6 +284,8 @@ static void test_negate_negative(void)
  * test_number_fail: parse string, expect failure.
  *
  * NUMBER stack effect: ( c-addr u -- n true | c-addr u false )
+ *   Success: depth 2, [1] = n (bottom), [0] = -1 (true, top)
+ *   Failure: depth 3, [2] = c-addr, [1] = u, [0] = 0 (false)
  */
 
 static void test_number_ok(const char *name, const char *input,
@@ -281,19 +295,21 @@ static void test_number_ok(const char *name, const char *input,
     int64_t len = (int64_t)strlen(input);
     memcpy(buf, input, len);
 
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    /* Stack: ( c-addr u ) → [DSP] = c-addr, TOS = u */
-    setup_2((int64_t)buf, len, &tos_in, &dsp_in);
-    call_primitive(forth_number, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* Stack: ( c-addr u ) → [DSP+8] = c-addr, [DSP] = u */
+    dsp_in = setup_2((int64_t)buf, len);
+    call_primitive(forth_number, dsp_in, &dsp_out);
 
-    /* Success: TOS = true (-1), [DSP] = n */
-    if (tos_out == -1 && dsp_out[0] == expected)
+    /* Success: [0] = true (-1), [1] = n */
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == -1
+        && dsp_out[1] == expected)
         pass(name);
     else
-        fail(name, "tos=%ld [dsp]=%ld (expected tos=-1 [dsp]=%ld)",
-             tos_out, dsp_out[0], expected);
+        fail(name, "[0]=%ld [1]=%ld depth=%d (expected [0]=-1 [1]=%ld)",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out), expected);
 }
 
 static void test_number_fail_case(const char *name, const char *input)
@@ -302,17 +318,16 @@ static void test_number_fail_case(const char *name, const char *input)
     int64_t len = (int64_t)strlen(input);
     memcpy(buf, input, len);
 
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2((int64_t)buf, len, &tos_in, &dsp_in);
-    call_primitive(forth_number, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2((int64_t)buf, len);
+    call_primitive(forth_number, dsp_in, &dsp_out);
 
-    /* Failure: TOS = false (0) */
-    if (tos_out == 0)
+    /* Failure: [0] = false (0) */
+    if (dsp_out[0] == 0)
         pass(name);
     else
-        fail(name, "tos=%ld (expected 0)", tos_out);
+        fail(name, "[0]=%ld (expected 0)", dsp_out[0]);
 }
 
 static void test_number(void)
@@ -358,109 +373,107 @@ static void test_number(void)
 static void test_fetch(void)
 {
     int64_t cell = 0xDEADBEEF12345678LL;
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_1((int64_t)&cell, &tos_in, &dsp_in);
-    call_primitive(forth_fetch, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_1((int64_t)&cell);
+    call_primitive(forth_fetch, dsp_in, &dsp_out);
 
-    if (tos_out == 0xDEADBEEF12345678LL && stack_depth(dsp_out) == 0)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0xDEADBEEF12345678LL)
         pass("@ ( addr -- x )");
     else
-        fail("@ ( addr -- x )", "tos=0x%lx", tos_out);
+        fail("@ ( addr -- x )",
+             "[0]=0x%lx depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_store(void)
 {
     int64_t cell = 0;
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    /* Need 3 items: sentinel below x and addr (! consumes 2, pops new TOS) */
-    setup_3(99, 0x1234567890ABCDEFLL, (int64_t)&cell, &tos_in, &dsp_in);
-    call_primitive(forth_store, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* ! ( x addr -- ) : consumes both, depth 0 after */
+    dsp_in = setup_2(0x1234567890ABCDEFLL, (int64_t)&cell);
+    call_primitive(forth_store, dsp_in, &dsp_out);
 
-    if (cell == 0x1234567890ABCDEFLL && tos_out == 99 && stack_depth(dsp_out) == 0)
+    if (cell == 0x1234567890ABCDEFLL && stack_depth(dsp_out) == 0)
         pass("! ( x addr -- )");
     else
-        fail("! ( x addr -- )", "cell=0x%lx tos=%ld depth=%d",
-             cell, tos_out, stack_depth(dsp_out));
+        fail("! ( x addr -- )",
+             "cell=0x%lx depth=%d", cell, stack_depth(dsp_out));
 }
 
 static void test_cfetch(void)
 {
     unsigned char byte = 0xA5;
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_1((int64_t)&byte, &tos_in, &dsp_in);
-    call_primitive(forth_cfetch, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_1((int64_t)&byte);
+    call_primitive(forth_cfetch, dsp_in, &dsp_out);
 
-    if (tos_out == 0xA5 && stack_depth(dsp_out) == 0)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0xA5)
         pass("C@ ( addr -- byte )");
     else
-        fail("C@ ( addr -- byte )", "tos=0x%lx", tos_out);
+        fail("C@ ( addr -- byte )",
+             "[0]=0x%lx depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_cstore(void)
 {
     unsigned char byte = 0;
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_3(99, 0x42, (int64_t)&byte, &tos_in, &dsp_in);
-    call_primitive(forth_cstore, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* C! ( byte addr -- ) : consumes both, depth 0 after */
+    dsp_in = setup_2(0x42, (int64_t)&byte);
+    call_primitive(forth_cstore, dsp_in, &dsp_out);
 
-    if (byte == 0x42 && tos_out == 99 && stack_depth(dsp_out) == 0)
+    if (byte == 0x42 && stack_depth(dsp_out) == 0)
         pass("C! ( byte addr -- )");
     else
-        fail("C! ( byte addr -- )", "byte=0x%x tos=%ld depth=%d",
-             byte, tos_out, stack_depth(dsp_out));
+        fail("C! ( byte addr -- )",
+             "byte=0x%x depth=%d", byte, stack_depth(dsp_out));
 }
 
 /* --- FIND tests --- */
 
 /*
  * FIND stack effect: ( c-addr u -- xt 1 | xt -1 | c-addr u 0 )
- *   Match, immediate: xt 1
- *   Match, normal:    xt -1
- *   Not found:        c-addr u 0
+ *   Match, immediate: depth 2, [1]=xt, [0]=1
+ *   Match, normal:    depth 2, [1]=xt, [0]=-1
+ *   Not found:        depth 3, [2]=c-addr, [1]=u, [0]=0
  */
 
 static void test_find_ok(const char *test_name, const char *word,
                          void *expected_xt, int64_t expected_flag)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    setup_2((int64_t)word, (int64_t)strlen(word), &tos_in, &dsp_in);
-    call_primitive(forth_find, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2((int64_t)word, (int64_t)strlen(word));
+    call_primitive(forth_find, dsp_in, &dsp_out);
 
-    /* TOS = flag, [DSP] = xt */
-    if (tos_out == expected_flag && stack_depth(dsp_out) == 1
-        && dsp_out[0] == (int64_t)expected_xt)
+    /* [0] = flag, [1] = xt */
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == expected_flag
+        && dsp_out[1] == (int64_t)expected_xt)
         pass(test_name);
     else
         fail(test_name, "flag=%ld xt=%p expected_flag=%ld expected_xt=%p depth=%d",
-             tos_out, (void *)dsp_out[0], expected_flag,
-             expected_xt, stack_depth(dsp_out));
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? (void *)dsp_out[1] : NULL,
+             expected_flag, expected_xt, stack_depth(dsp_out));
 }
 
 static void test_find_not_found(const char *test_name, const char *word)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
     int64_t len = (int64_t)strlen(word);
 
-    setup_2((int64_t)word, len, &tos_in, &dsp_in);
-    call_primitive(forth_find, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_2((int64_t)word, len);
+    call_primitive(forth_find, dsp_in, &dsp_out);
 
-    /* TOS = 0, [DSP] = u, [DSP+1] = c-addr */
-    if (tos_out == 0 && stack_depth(dsp_out) == 2
-        && dsp_out[0] == len && dsp_out[1] == (int64_t)word)
+    /* [0] = 0, [1] = u, [2] = c-addr */
+    if (stack_depth(dsp_out) == 3 && dsp_out[0] == 0
+        && dsp_out[1] == len && dsp_out[2] == (int64_t)word)
         pass(test_name);
     else
-        fail(test_name, "flag=%ld depth=%d", tos_out, stack_depth(dsp_out));
+        fail(test_name, "flag=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_find(void)
@@ -507,98 +520,111 @@ static void setup_source(const char *input)
 static void test_parse_word_single(void)
 {
     setup_source("hello");
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    /* Start with one item on stack (sentinel), PARSE-WORD pushes c-addr and u */
-    setup_1(99, &tos_in, &dsp_in);
-    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* Empty stack — PARSE-WORD pushes ( c-addr u ) */
+    dsp_in = setup_0();
+    call_primitive(forth_parse_word, dsp_in, &dsp_out);
 
-    /* Stack: ( 99 c-addr u ) — TOS=u, [DSP]=c-addr, [DSP+8]=99 */
-    if (tos_out == 5 && stack_depth(dsp_out) == 2
-        && memcmp((void *)dsp_out[0], "hello", 5) == 0)
+    /* Stack: ( c-addr u ) — [0]=u (top), [1]=c-addr (bottom) */
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 5
+        && memcmp((void *)dsp_out[1], "hello", 5) == 0)
         pass("PARSE-WORD: hello");
     else
-        fail("PARSE-WORD: hello", "u=%ld depth=%d", tos_out, stack_depth(dsp_out));
+        fail("PARSE-WORD: hello",
+             "u=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_parse_word_spaces(void)
 {
     setup_source("  foo  bar  ");
-    int64_t tos_in = 0, tos_out;
-    int64_t *dsp_in = stack_top(), *dsp_out;
+    int64_t *dsp_in, *dsp_out;
 
     /* First word: "foo" */
-    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
-    if (tos_out == 3 && memcmp((void *)dsp_out[0], "foo", 3) == 0)
+    dsp_in = setup_0();
+    call_primitive(forth_parse_word, dsp_in, &dsp_out);
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 3
+        && memcmp((void *)dsp_out[1], "foo", 3) == 0)
         pass("PARSE-WORD: leading spaces -> foo");
     else
-        fail("PARSE-WORD: leading spaces -> foo", "u=%ld", tos_out);
+        fail("PARSE-WORD: leading spaces -> foo",
+             "u=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 
     /* Second word: "bar" — call again with fresh stack but same globals */
-    dsp_in = stack_top();
-    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
-    if (tos_out == 3 && memcmp((void *)dsp_out[0], "bar", 3) == 0)
+    dsp_in = setup_0();
+    call_primitive(forth_parse_word, dsp_in, &dsp_out);
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 3
+        && memcmp((void *)dsp_out[1], "bar", 3) == 0)
         pass("PARSE-WORD: second word -> bar");
     else
-        fail("PARSE-WORD: second word -> bar", "u=%ld", tos_out);
+        fail("PARSE-WORD: second word -> bar",
+             "u=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 
     /* Third call: no more tokens */
-    dsp_in = stack_top();
-    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
-    if (tos_out == 0 && dsp_out[0] == 0)
+    dsp_in = setup_0();
+    call_primitive(forth_parse_word, dsp_in, &dsp_out);
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 0 && dsp_out[1] == 0)
         pass("PARSE-WORD: end of input -> 0 0");
     else
-        fail("PARSE-WORD: end of input -> 0 0", "u=%ld", tos_out);
+        fail("PARSE-WORD: end of input -> 0 0",
+             "u=%ld c-addr=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
 }
 
 static void test_parse_word_empty(void)
 {
     setup_source("");
-    int64_t tos_in = 0, tos_out;
-    int64_t *dsp_in = stack_top(), *dsp_out;
+    int64_t *dsp_in, *dsp_out;
 
-    call_primitive(forth_parse_word, tos_in, dsp_in, &tos_out, &dsp_out);
-    if (tos_out == 0 && dsp_out[0] == 0)
+    dsp_in = setup_0();
+    call_primitive(forth_parse_word, dsp_in, &dsp_out);
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 0 && dsp_out[1] == 0)
         pass("PARSE-WORD: empty input");
     else
-        fail("PARSE-WORD: empty input", "u=%ld", tos_out);
+        fail("PARSE-WORD: empty input",
+             "u=%ld c-addr=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
 }
 
 /* --- EXECUTE tests --- */
 
 static void test_execute(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    /* Push 42, then push xt of forth_dup as TOS. EXECUTE should DUP 42. */
-    /* Stack before EXECUTE: ( 42 xt ) where xt = forth_dup */
-    setup_2(42, (int64_t)forth_dup, &tos_in, &dsp_in);
-    call_primitive(forth_execute, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* Stack: ( 42 xt_dup ). EXECUTE consumes xt, runs DUP on 42. */
+    dsp_in = setup_2(42, (int64_t)forth_dup);
+    call_primitive(forth_execute, dsp_in, &dsp_out);
 
-    /* After EXECUTE: xt is consumed, forth_dup ran, stack is ( 42 42 ) */
-    if (tos_out == 42 && stack_depth(dsp_out) == 1 && dsp_out[0] == 42)
+    /* After EXECUTE: DUP ran on 42 → ( 42 42 ) */
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 42 && dsp_out[1] == 42)
         pass("EXECUTE: dup via xt");
     else
-        fail("EXECUTE: dup via xt", "tos=%ld depth=%d [dsp]=%ld",
-             tos_out, stack_depth(dsp_out),
-             stack_depth(dsp_out) >= 1 ? dsp_out[0] : -1);
+        fail("EXECUTE: dup via xt",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
 }
 
 static void test_execute_add(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
-    /* Stack: ( 3 4 xt_add ). EXECUTE should run +, leaving ( 7 ). */
-    setup_3(3, 4, (int64_t)forth_add, &tos_in, &dsp_in);
-    call_primitive(forth_execute, tos_in, dsp_in, &tos_out, &dsp_out);
+    /* Stack: ( 10 20 xt_add ). EXECUTE consumes xt, runs + on 10 20. */
+    dsp_in = setup_3(10, 20, (int64_t)forth_add);
+    call_primitive(forth_execute, dsp_in, &dsp_out);
 
-    if (tos_out == 7 && stack_depth(dsp_out) == 0)
+    /* After EXECUTE: + ran → ( 30 ) */
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 30)
         pass("EXECUTE: + via xt");
     else
-        fail("EXECUTE: + via xt", "tos=%ld depth=%d", tos_out, stack_depth(dsp_out));
+        fail("EXECUTE: + via xt",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 /* --- Compiler tests --- */
@@ -630,7 +656,6 @@ extern void forth_semicolon(void);
  */
 static void test_lit(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
     /* Build a tiny function in dict_space that pushes literal 42 */
@@ -661,20 +686,18 @@ static void test_lit(void)
     *(uint32_t *)(code + 20) = 0xD65F03C0;
 #endif
 
-    setup_1(99, &tos_in, &dsp_in);
-    call_primitive((void *)code, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_0();
+    call_primitive((void *)code, dsp_in, &dsp_out);
 
-    if (tos_out == 42 && dsp_out[0] == 99 && stack_depth(dsp_out) == 1)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 42)
         pass("LIT: pushes inline 42");
     else
         fail("LIT: pushes inline 42",
-             "tos=%ld [dsp]=%ld depth=%d",
-             tos_out, dsp_out[0], stack_depth(dsp_out));
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 static void test_lit_negative(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
 
     init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
@@ -696,34 +719,31 @@ static void test_lit_negative(void)
     *(uint32_t *)(code + 20) = 0xD65F03C0;
 #endif
 
-    setup_1(99, &tos_in, &dsp_in);
-    call_primitive((void *)code, tos_in, dsp_in, &tos_out, &dsp_out);
+    dsp_in = setup_0();
+    call_primitive((void *)code, dsp_in, &dsp_out);
 
-    if (tos_out == -7 && dsp_out[0] == 99 && stack_depth(dsp_out) == 1)
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -7)
         pass("LIT: pushes inline -7");
     else
         fail("LIT: pushes inline -7",
-             "tos=%ld [dsp]=%ld depth=%d",
-             tos_out, dsp_out[0], stack_depth(dsp_out));
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
 /* --- Stack guard tests --- */
 
 /* Helper: call primitive with given stack setup and return the error_flag */
-static int64_t call_check_error(void *fn, int64_t tos_in, int64_t *dsp_in)
+static int64_t call_check_error(void *fn, int64_t *dsp_in)
 {
-    int64_t tos_out;
     int64_t *dsp_out;
     error_flag = 0;
-    call_primitive(fn, tos_in, dsp_in, &tos_out, &dsp_out);
+    call_primitive(fn, dsp_in, &dsp_out);
     return error_flag;
 }
 
 /* + on empty stack should trigger underflow */
 static void test_underflow_add(void)
 {
-    /* Empty stack: TOS=0 (stale), DSP=stack_top (sp0) */
-    int64_t err = call_check_error(forth_add, 0, stack_top());
+    int64_t err = call_check_error(forth_add, setup_0());
     if (err == 1)
         pass("guard: + on empty stack triggers underflow");
     else
@@ -734,10 +754,7 @@ static void test_underflow_add(void)
 /* SWAP on 1 item should trigger underflow */
 static void test_underflow_swap(void)
 {
-    int64_t tos_in;
-    int64_t *dsp_in;
-    setup_1(42, &tos_in, &dsp_in);
-    int64_t err = call_check_error(forth_swap, tos_in, dsp_in);
+    int64_t err = call_check_error(forth_swap, setup_1(42));
     if (err == 1)
         pass("guard: SWAP on 1 item triggers underflow");
     else
@@ -745,35 +762,28 @@ static void test_underflow_swap(void)
              "error_flag=%ld (expected 1)", err);
 }
 
-/* ! on 2 items should trigger underflow (needs 3) */
+/* ! on 1 item should trigger underflow (needs 2) */
 static void test_underflow_store(void)
 {
-    int64_t tos_in;
-    int64_t *dsp_in;
-    /* Use a safe dummy address for the addr argument */
     int64_t dummy = 0;
-    setup_2((int64_t)&dummy, 99, &tos_in, &dsp_in);
-    int64_t err = call_check_error(forth_store, tos_in, dsp_in);
+    int64_t err = call_check_error(forth_store, setup_1((int64_t)&dummy));
     if (err == 1)
-        pass("guard: ! on 2 items triggers underflow");
+        pass("guard: ! on 1 item triggers underflow");
     else
-        fail("guard: ! on 2 items triggers underflow",
+        fail("guard: ! on 1 item triggers underflow",
              "error_flag=%ld (expected 1)", err);
 }
 
 /* DUP in a loop should eventually trigger overflow */
 static void test_overflow_dup(void)
 {
-    int64_t tos_out;
     int64_t *dsp_out;
-    int64_t tos = 1;
-    int64_t *dsp = stack_top();
+    int64_t *dsp = setup_1(1);
 
     error_flag = 0;
     /* DUP 600 times — stack is 512 cells, should overflow */
     for (int i = 0; i < 600 && error_flag == 0; i++) {
-        call_primitive(forth_dup, tos, dsp, &tos_out, &dsp_out);
-        tos = tos_out;
+        call_primitive(forth_dup, dsp, &dsp_out);
         dsp = dsp_out;
     }
     if (error_flag == 2)
@@ -786,16 +796,16 @@ static void test_overflow_dup(void)
 /* + with valid 2 items should NOT trigger error */
 static void test_no_underflow_add(void)
 {
-    int64_t tos_in, tos_out;
     int64_t *dsp_in, *dsp_out;
-    setup_2(10, 20, &tos_in, &dsp_in);
+    dsp_in = setup_2(10, 20);
     error_flag = 0;
-    call_primitive(forth_add, tos_in, dsp_in, &tos_out, &dsp_out);
-    if (error_flag == 0 && tos_out == 30)
+    call_primitive(forth_add, dsp_in, &dsp_out);
+    if (error_flag == 0 && stack_depth(dsp_out) == 1 && dsp_out[0] == 30)
         pass("guard: + with 2 items succeeds (no false alarm)");
     else
         fail("guard: + with 2 items succeeds (no false alarm)",
-             "error_flag=%ld tos=%ld", error_flag, tos_out);
+             "error_flag=%ld [0]=%ld depth=%d",
+             error_flag, dsp_out[0], stack_depth(dsp_out));
 }
 
 /* --- Main --- */

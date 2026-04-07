@@ -1,24 +1,25 @@
 // BasicForth — Outer Interpreter (ARM64)
 //
-// Register convention:
-//   X19 = DSP (data stack pointer, points to second item)
-//   X20 = TOS (top of stack value)
+// Register convention (pure memory stack):
+//   X19 = DSP (data stack pointer, points to top item; equals sp0 when empty)
 //   X21 = HERE (next free byte in dictionary)
 //   X22 = LATEST (most recent dictionary entry)
 //   SP  = Return stack
+//
+// X20 is free (no longer used for TOS).
 
 .global _start
 
+.equ CELL, 8
 .equ INPUT_BUF_SIZE, 80
 
 _start:
     // Initialize engine registers
-    ADR X19, data_stack_top         // DSP
+    ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
-    STR X19, [X9]                   // save initial DSP for .S
+    STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
     ADR X22, dict_tick              // LATEST
-    MOV X20, #0                     // TOS = 0
 
     BL platform_raw_mode
 
@@ -34,104 +35,107 @@ repl_loop:
     BL platform_write
 
     // ACCEPT ( c-addr max -- count )
-    STR X20, [X19, #-8]!           // push old TOS
-    ADR X20, input_buf
-    STR X20, [X19, #-8]!
-    MOV X20, #INPUT_BUF_SIZE
-    BL forth_accept                 // TOS = count
+    ADR X9, input_buf
+    STR X9, [X19, #-CELL]!         // push c-addr
+    MOV X9, #INPUT_BUF_SIZE
+    STR X9, [X19, #-CELL]!         // push max
+    BL forth_accept                 // ( c-addr max -- count )
 
-    // Empty line → exit
-    CBZ X20, repl_bye
+    // Empty line → exit (count == 0)
+    LDR X9, [X19]
+    CBZ X9, repl_bye
 
     // Set up source variables for PARSE-WORD
-    ADR X9, source_len
-    STR X20, [X9]
+    LDR X9, [X19]                   // count
+    ADR X10, source_len
+    STR X9, [X10]
     ADR X9, source_addr
     ADR X10, input_buf
     STR X10, [X9]
     ADR X9, to_in
     STR XZR, [X9]
 
-    // Drop count (restore user's TOS)
-    BL forth_drop
+    // Drop count
+    ADD X19, X19, #CELL
 
 interpret_loop:
     BL forth_parse_word             // ( -- c-addr u )
 
     // End of line? (u == 0)
-    CBZ X20, interpret_done
+    LDR X9, [X19]                   // u is on top
+    CBZ X9, interpret_done
 
     // FIND ( c-addr u -- xt flag | c-addr u 0 )
     BL forth_find
 
     // Found? (flag != 0)
-    CBZ X20, try_number
+    LDR X9, [X19]                   // flag is on top
+    CBZ X9, try_number
 
-    // Found — TOS = flag (1=IMMEDIATE, -1=normal), [DSP] = xt
+    // Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
     // If interpreting (STATE==0), always execute.
     // If compiling: IMMEDIATE words execute, normal words get compiled.
-    ADR X9, state
-    LDR X9, [X9]
-    CBZ X9, found_execute           // interpreting → execute
+    ADR X10, state
+    LDR X10, [X10]
+    CBZ X10, found_execute          // interpreting → execute
 
     // Compiling — check IMMEDIATE flag
-    CMP X20, #1
+    LDR X9, [X19]
+    CMP X9, #1
     B.EQ found_execute              // IMMEDIATE → execute even in compile mode
 
     // Normal word in compile mode — compile a BL to it
-    BL forth_drop                   // drop flag, TOS = xt
-    MOV X0, X20                     // X0 = xt
-    LDR X20, [X19], #8             // pop xt from stack
+    ADD X19, X19, #CELL             // drop flag
+    LDR X0, [X19], #CELL            // pop xt into X0
     BL compile_call                 // emit BL xt at HERE
     B interpret_loop
 
 found_execute:
-    BL forth_drop                   // drop flag, TOS = xt
-    BL forth_execute
+    ADD X19, X19, #CELL             // drop flag
+    BL forth_execute                // pops xt and jumps
     B interpret_loop
 
 try_number:
     // Not in dictionary — drop 0 flag, try NUMBER
-    BL forth_drop                   // ( c-addr u )
+    ADD X19, X19, #CELL             // drop 0 flag ( c-addr u )
 
     // NUMBER ( c-addr u -- n true | c-addr u false )
     BL forth_number
 
-    CBZ X20, not_found
+    LDR X9, [X19]                   // top = true/false flag
+    CBZ X9, not_found
 
     // Parsed — drop true flag, number is on stack
-    BL forth_drop
+    ADD X19, X19, #CELL             // drop true flag
 
     // If compiling, compile the number as a literal
     ADR X9, state
     LDR X9, [X9]
-    CBZ X9, interpret_loop          // interpreting → leave on stack
+    CBZ X9, interpret_loop          // interpreting → leave n on stack
 
     // Compiling — compile literal
-    MOV X0, X20                     // X0 = number
-    LDR X20, [X19], #8             // pop number from stack
+    LDR X0, [X19], #CELL            // pop number into X0
     BL compile_literal              // emit BL LIT + value at HERE
     B interpret_loop
 
 not_found:
     // Neither word nor number — error
-    BL forth_drop                   // drop false, ( c-addr u )
+    ADD X19, X19, #CELL             // drop false flag ( c-addr u )
 
     // Print "? " + token + newline
     ADR X0, err_msg
     MOV X1, #err_len
     BL platform_write
 
-    MOV X1, X20                     // length = u (TOS)
-    LDR X0, [X19]                   // buf = c-addr ([DSP])
+    LDR X1, [X19]                   // length = u (top)
+    LDR X0, [X19, #CELL]            // buf = c-addr (second)
     BL platform_write
 
     MOV X0, #'\n'
     BL platform_emit
 
     // Clean up c-addr and u
-    BL forth_drop                   // drop u
-    BL forth_drop                   // drop c-addr
+    ADD X19, X19, #2*CELL
 
     // If we were compiling, abort the definition
     ADR X9, state
@@ -147,8 +151,7 @@ not_found:
 
 interpret_done:
     // End of line — drop 0 0 from PARSE-WORD
-    BL forth_drop
-    BL forth_drop
+    ADD X19, X19, #2*CELL
 
     // Print " ok"
     ADR X0, ok_msg
@@ -158,7 +161,7 @@ interpret_done:
     B repl_loop
 
 repl_bye:
-    BL forth_drop                   // drop 0 count
+    ADD X19, X19, #CELL             // drop 0 count
 
     ADR X0, bye_msg
     MOV X1, #bye_len
@@ -202,7 +205,6 @@ error_reset:
     // Reset data stack to empty
     ADR X9, sp0
     LDR X19, [X9]                   // DSP = sp0 (empty)
-    MOV X20, #0                     // TOS = 0
 
     // If we were compiling, abort the definition
     ADR X9, state
