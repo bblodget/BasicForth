@@ -1,8 +1,16 @@
 # BasicForth — x86-64 Build
+#
+# Build modes:
+#   make              Safe build (stack/dict guards enabled)
+#   make FAST=1       Fast build (guards disabled)
 
 AS      = as
 LD      = ld
 CC      = gcc
+
+ifdef FAST
+ASFLAGS = --defsym FAST=1
+endif
 
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
@@ -16,7 +24,7 @@ TEST_BIN = test_basicforth
 all: $(BIN)
 
 %.o: %.s
-	$(AS) -o $@ $<
+	$(AS) $(ASFLAGS) -o $@ $<
 
 $(BIN): $(OBJS)
 	$(LD) -N -o $@ $(OBJS)
@@ -37,7 +45,8 @@ clean:
 help:
 	@echo "BasicForth x86-64 Build"
 	@echo ""
-	@echo "  make              Build basicforth binary"
+	@echo "  make              Build basicforth (safe mode, guards enabled)"
+	@echo "  make FAST=1       Build basicforth (fast mode, guards disabled)"
 	@echo "  make test         Run basicforth interactively"
 	@echo "  make unit-test    Run unit tests (C harness)"
 	@echo "  make clean        Remove build artifacts"

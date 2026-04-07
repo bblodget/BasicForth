@@ -70,3 +70,25 @@ platform_write:
 .global platform_bye
 platform_bye:
     ret
+
+# Error handler stubs — set a flag so C tests can detect guard triggers.
+.data
+.global error_flag
+error_flag:
+    .quad 0                     # 0=none, 1=underflow, 2=overflow, 3=dict_full
+
+.text
+.global stack_underflow
+stack_underflow:
+    movq $1, error_flag(%rip)
+    ret
+
+.global stack_overflow
+stack_overflow:
+    movq $2, error_flag(%rip)
+    ret
+
+.global dict_full
+dict_full:
+    movq $3, error_flag(%rip)
+    ret

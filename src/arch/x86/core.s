@@ -26,6 +26,78 @@
 .equ F_HIDDEN,    0x40
 .equ F_LENMASK,   0x3F
 
+# ---------- Stack Guard Macros ----------
+# Build with `as -DFAST` (or `make FAST=1`) to disable runtime checks.
+
+# POP_TOS: pop new TOS from memory after consuming old TOS.
+# Safe: if stack empty (DSP >= sp0), set TOS=0 instead of reading past stack.
+# Fast: unconditional load.
+.macro POP_TOS
+.ifdef FAST
+    mov (%r15), %r14
+    add $CELL, %r15
+.else
+    cmp sp0(%rip), %r15
+    jae .Lsp_\@
+    mov (%r15), %r14
+    add $CELL, %r15
+    jmp .Lsp_done_\@
+.Lsp_\@:
+    xor %r14d, %r14d
+.Lsp_done_\@:
+.endif
+.endm
+
+# PUSH_TOS: push current TOS to memory, making room for a new TOS.
+# Safe: check for stack overflow before push.
+# Fast: unconditional push.
+.macro PUSH_TOS
+.ifdef FAST
+    sub $CELL, %r15
+    mov %r14, (%r15)
+.else
+    lea data_stack_bottom(%rip), %rax
+    cmp %rax, %r15
+    jbe stack_overflow
+    sub $CELL, %r15
+    mov %r14, (%r15)
+.endif
+.endm
+
+# CHECK_DEPTH_2: verify at least 2 items (TOS + 1 memory item).
+# Safe: jump to stack_underflow if DSP >= sp0.
+# Fast: no-op.
+.macro CHECK_DEPTH_2
+.ifndef FAST
+    cmp sp0(%rip), %r15
+    jae stack_underflow
+.endif
+.endm
+
+# CHECK_DEPTH_3: verify at least 3 items (TOS + 2 memory items).
+# Safe: jump to stack_underflow if DSP > sp0 - 2*CELL.
+# Fast: no-op.
+.macro CHECK_DEPTH_3
+.ifndef FAST
+    mov sp0(%rip), %rax
+    sub $2*CELL, %rax
+    cmp %rax, %r15
+    ja stack_underflow
+.endif
+.endm
+
+# CHECK_DICT n: verify HERE + n bytes fits in dict_space.
+# Safe: jump to dict_full if past end.
+# Fast: no-op.
+.macro CHECK_DICT n
+.ifndef FAST
+    lea dict_space+DICT_SPACE_SIZE(%rip), %rcx
+    lea \n(%r13), %rdx
+    cmp %rcx, %rdx
+    ja dict_full
+.endif
+.endm
+
 # DEFWORD entry, name, label, link, flags
 #   entry: label for this dictionary entry
 #   name:  the Forth name string (lowercase)
@@ -56,21 +128,20 @@
 # DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    sub $CELL, %r15             # make room
-    mov %r14, (%r15)            # push TOS to memory
+    PUSH_TOS
     ret                          # TOS unchanged
 
 # DROP ( a -- )
 .global forth_drop
 forth_drop:
-    mov (%r15), %r14            # pop next into TOS
-    add $CELL, %r15
+    POP_TOS
     ret
 
 # SWAP ( a b -- b a )
 # TOS=b, [DSP]=a -> TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
+    CHECK_DEPTH_2
     mov (%r15), %rax            # rax = a
     mov %r14, (%r15)            # [DSP] = b
     mov %rax, %r14              # TOS = a
@@ -80,8 +151,8 @@ forth_swap:
 # TOS=b, [DSP]=a -> push b, TOS=a
 .global forth_over
 forth_over:
-    sub $CELL, %r15             # make room
-    mov %r14, (%r15)            # push b to memory
+    CHECK_DEPTH_2
+    PUSH_TOS
     mov CELL(%r15), %r14        # TOS = a
     ret
 
@@ -89,6 +160,7 @@ forth_over:
 # TOS=b, [DSP]=a -> TOS=a+b
 .global forth_add
 forth_add:
+    CHECK_DEPTH_2
     add (%r15), %r14            # TOS = a + b
     add $CELL, %r15             # pop a
     ret
@@ -97,6 +169,7 @@ forth_add:
 # TOS=b, [DSP]=a -> TOS=a-b
 .global forth_sub
 forth_sub:
+    CHECK_DEPTH_2
     mov (%r15), %rax            # rax = a
     sub %r14, %rax              # rax = a - b
     mov %rax, %r14              # TOS = a - b
@@ -122,11 +195,11 @@ forth_fetch:
 # Write 8-byte cell to address
 .global forth_store
 forth_store:
+    CHECK_DEPTH_3
     mov (%r15), %rax            # RAX = x
     mov %rax, (%r14)            # [addr] = x
     add $CELL, %r15             # pop x
-    mov (%r15), %r14            # pop new TOS
-    add $CELL, %r15
+    POP_TOS
     ret
 
 # C@ (char fetch) ( addr -- byte )
@@ -141,11 +214,11 @@ forth_cfetch:
 # Write 1 byte to address
 .global forth_cstore
 forth_cstore:
+    CHECK_DEPTH_3
     mov (%r15), %rax            # RAX = byte
     movb %al, (%r14)            # [addr] = low byte
     add $CELL, %r15             # pop byte
-    mov (%r15), %r14            # pop new TOS
-    add $CELL, %r15
+    POP_TOS
     ret
 
 # ---------- EMIT (Forth-level) ----------
@@ -154,8 +227,7 @@ forth_cstore:
 .global forth_emit
 forth_emit:
     mov %r14, %rdi              # RDI = char (from TOS)
-    mov (%r15), %r14            # pop new TOS
-    add $CELL, %r15
+    POP_TOS
     jmp platform_emit           # tail call
 
 # ---------- KEY (Forth-level) ----------
@@ -163,8 +235,7 @@ forth_emit:
 # Push old TOS, call platform_key, TOS = result.
 .global forth_key
 forth_key:
-    sub $CELL, %r15
-    mov %r14, (%r15)            # push old TOS to memory
+    PUSH_TOS
     call platform_key           # RDI = character
     mov %rdi, %r14              # TOS = char
     ret
@@ -176,6 +247,7 @@ forth_key:
 # Calls platform_key and platform_emit directly (register level).
 .global forth_accept
 forth_accept:
+    CHECK_DEPTH_2
     push %rbx
     push %rbp
     push %r12
@@ -253,6 +325,7 @@ forth_accept:
 # Uses BASE variable for default base.
 .global forth_number
 forth_number:
+    CHECK_DEPTH_2
     push %rbx
     push %rbp
     push %r12
@@ -408,6 +481,7 @@ forth_number:
 #          original c-addr u and 0 (not found).
 .global forth_find
 forth_find:
+    CHECK_DEPTH_2
     push %rbx
     push %rbp
     push %r12                   # save LATEST (read-only)
@@ -566,8 +640,7 @@ forth_parse_word:
 .global forth_execute
 forth_execute:
     mov %r14, %rax                # RAX = xt
-    mov (%r15), %r14              # pop new TOS
-    add $CELL, %r15
+    POP_TOS
     jmp *%rax                     # tail-call
 
 # ---------- print_signed (internal helper) ----------
@@ -631,8 +704,7 @@ forth_execute:
 forth_dot:
     push %rbx
     mov %r14, %rax              # RAX = number to print
-    mov (%r15), %r14            # pop new TOS
-    add $CELL, %r15
+    POP_TOS
     call .Lprint_signed
     mov $' ', %rdi
     call platform_emit
@@ -721,6 +793,11 @@ forth_bye:
 #
 .global forth_lit
 forth_lit:
+.ifndef FAST
+    lea data_stack_bottom(%rip), %rcx
+    cmp %rcx, %r15
+    jbe stack_overflow
+.endif
     pop %rax                        # return addr = pointer to inline value
     sub $CELL, %r15
     mov %r14, (%r15)                # push old TOS
@@ -734,6 +811,7 @@ forth_lit:
 # Clobbers RCX.
 .global compile_call
 compile_call:
+    CHECK_DICT 5
     movb $0xE8, (%r13)             # E8 opcode (CALL rel32)
     lea 5(%r13), %rcx              # RCX = address after the CALL
     sub %rcx, %rax                 # RAX = relative offset
@@ -745,6 +823,7 @@ compile_call:
 # Compile a RET instruction at HERE.  Advances HERE by 1 byte.
 .global compile_ret
 compile_ret:
+    CHECK_DICT 1
     movb $0xC3, (%r13)             # C3 opcode (RET)
     inc %r13                       # advance HERE
     ret
@@ -755,6 +834,7 @@ compile_ret:
 # Clobbers RCX.
 .global compile_literal
 compile_literal:
+    CHECK_DICT 13
     push %rax                       # save the literal value
     lea forth_lit(%rip), %rax       # target = forth_lit
     call compile_call               # emit CALL forth_lit (5 bytes)
@@ -791,6 +871,14 @@ forth_colon:
 
     test %rcx, %rcx
     jz .Lcolon_err                  # empty name — bail
+
+    # Check dictionary space (need ~128 bytes for header)
+.ifndef FAST
+    lea dict_space+DICT_SPACE_SIZE(%rip), %rax
+    lea 128(%r13), %rdx
+    cmp %rax, %rdx
+    ja .Lcolon_dict_full
+.endif
 
     # Clamp name length to F_LENMASK (63) max
     cmp $F_LENMASK, %rcx
@@ -855,6 +943,11 @@ forth_colon:
     pop %rbp
     pop %rbx
     ret
+
+.Lcolon_dict_full:
+    pop %rbp
+    pop %rbx
+    jmp dict_full
 
 .Lcolon_err:
     # No name given — just return without doing anything
@@ -1014,4 +1107,7 @@ saved_latest:                       # LATEST before current : for error recovery
     .quad 0
 .global saved_here
 saved_here:                         # HERE before current : for error recovery
+    .quad 0
+.global rp0
+rp0:                                # Return stack pointer at repl_loop entry
     .quad 0

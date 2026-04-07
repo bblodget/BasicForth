@@ -22,6 +22,9 @@ _start:
     call platform_raw_mode
 
 repl_loop:
+    # Save return stack pointer for error recovery
+    mov %rsp, rp0(%rip)
+
     # Print prompt
     lea prompt_msg(%rip), %rsi
     mov $prompt_len, %rdx
@@ -136,7 +139,6 @@ not_found:
     movq $0, state(%rip)            # reset to interpret mode
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
-
     jmp repl_loop
 
 interpret_done:
@@ -160,6 +162,50 @@ repl_bye:
 
     call platform_bye
 
+# ---------- Error Handlers ----------
+# These are jumped to (not called) from primitives in core.s.
+# They print a message, reset the stack, recover from compile mode
+# if needed, and return to the REPL.
+
+.global stack_underflow
+stack_underflow:
+    lea msg_underflow(%rip), %rsi
+    mov $msg_underflow_len, %rdx
+    call platform_write
+    jmp error_reset
+
+.global stack_overflow
+stack_overflow:
+    lea msg_overflow(%rip), %rsi
+    mov $msg_overflow_len, %rdx
+    call platform_write
+    jmp error_reset
+
+.global dict_full
+dict_full:
+    lea msg_dict_full(%rip), %rsi
+    mov $msg_dict_full_len, %rdx
+    call platform_write
+    jmp error_reset
+
+# Shared recovery: reset stack, abort compilation if needed, return to REPL.
+error_reset:
+    # Reset return stack (discard stale frames from nested calls)
+    mov rp0(%rip), %rsp
+
+    # Reset data stack to empty
+    mov sp0(%rip), %r15             # DSP = sp0 (empty)
+    xor %r14d, %r14d                # TOS = 0
+
+    # If we were compiling, abort the definition
+    cmpq $0, state(%rip)
+    je repl_loop
+    movq $0, state(%rip)
+    mov saved_latest(%rip), %r12
+    mov saved_here(%rip), %r13
+
+    jmp repl_loop
+
 # ---------- Data ----------
 .section .rodata
 prompt_msg: .ascii "> "
@@ -170,6 +216,12 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+msg_underflow:  .ascii "stack underflow\n"
+.equ msg_underflow_len, . - msg_underflow
+msg_overflow:   .ascii "stack overflow\n"
+.equ msg_overflow_len, . - msg_overflow
+msg_dict_full:  .ascii "dictionary full\n"
+.equ msg_dict_full_len, . - msg_dict_full
 
 .bss
 .align 8

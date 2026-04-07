@@ -23,6 +23,79 @@
 .equ F_HIDDEN,    0x40
 .equ F_LENMASK,   0x3F
 
+// ---------- Stack Guard Macros ----------
+// Build with `as -DFAST` (or `make FAST=1`) to disable runtime checks.
+
+// POP_TOS: pop new TOS from memory after consuming old TOS.
+// Safe: if stack empty (DSP >= sp0), set TOS=0 instead of reading past stack.
+// Fast: unconditional load.  Clobbers X9.
+.macro POP_TOS
+.ifdef FAST
+    LDR X20, [X19], #CELL
+.else
+    ADR X9, sp0
+    LDR X9, [X9]
+    CMP X19, X9
+    B.HS .Lsp_\@
+    LDR X20, [X19], #CELL
+    B .Lsp_done_\@
+.Lsp_\@:
+    MOV X20, #0
+.Lsp_done_\@:
+.endif
+.endm
+
+// PUSH_TOS: push current TOS to memory, making room for a new TOS.
+// Safe: check for stack overflow before push.
+// Fast: unconditional push.  Clobbers X9.
+.macro PUSH_TOS
+.ifdef FAST
+    STR X20, [X19, #-CELL]!
+.else
+    ADR X9, data_stack_bottom
+    CMP X19, X9
+    B.LS stack_overflow
+    STR X20, [X19, #-CELL]!
+.endif
+.endm
+
+// CHECK_DEPTH_2: verify at least 2 items (TOS + 1 memory item).
+// Safe: branch to stack_underflow if DSP >= sp0.
+// Fast: no-op.  Clobbers X9.
+.macro CHECK_DEPTH_2
+.ifndef FAST
+    ADR X9, sp0
+    LDR X9, [X9]
+    CMP X19, X9
+    B.HS stack_underflow
+.endif
+.endm
+
+// CHECK_DEPTH_3: verify at least 3 items (TOS + 2 memory items).
+// Safe: branch to stack_underflow if DSP > sp0 - 2*CELL.
+// Fast: no-op.  Clobbers X9.
+.macro CHECK_DEPTH_3
+.ifndef FAST
+    ADR X9, sp0
+    LDR X9, [X9]
+    SUB X9, X9, #2*CELL
+    CMP X19, X9
+    B.HI stack_underflow
+.endif
+.endm
+
+// CHECK_DICT n: verify HERE + n bytes fits in dict_space.
+// Safe: branch to dict_full if past end.
+// Fast: no-op.  Clobbers X9, X10.
+.macro CHECK_DICT n
+.ifndef FAST
+    ADR X9, dict_space_end
+    ADD X10, X21, #\n
+    CMP X10, X9
+    B.HI dict_full
+.endif
+.endm
+
 // DEFWORD entry, name, label, link, flags
 //   entry: label for this dictionary entry
 //   name:  the Forth name string (lowercase)
@@ -53,19 +126,20 @@
 // DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    STR X20, [X19, #-CELL]!    // push TOS to memory
+    PUSH_TOS
     RET                         // TOS unchanged
 
 // DROP ( a -- )
 .global forth_drop
 forth_drop:
-    LDR X20, [X19], #CELL      // pop next into TOS
+    POP_TOS
     RET
 
 // SWAP ( a b -- b a )
 // TOS=b, [DSP]=a → TOS=a, [DSP]=b
 .global forth_swap
 forth_swap:
+    CHECK_DEPTH_2
     LDR X9, [X19]              // X9 = a
     STR X20, [X19]             // [DSP] = b
     MOV X20, X9                // TOS = a
@@ -75,7 +149,8 @@ forth_swap:
 // TOS=b, [DSP]=a → push b, TOS=a
 .global forth_over
 forth_over:
-    STR X20, [X19, #-CELL]!   // push b to memory
+    CHECK_DEPTH_2
+    PUSH_TOS
     LDR X20, [X19, #CELL]     // TOS = a (one cell below new DSP)
     RET
 
@@ -83,6 +158,7 @@ forth_over:
 // TOS=b, [DSP]=a → TOS=a+b
 .global forth_add
 forth_add:
+    CHECK_DEPTH_2
     LDR X9, [X19], #CELL      // X9 = a, pop
     ADD X20, X9, X20           // TOS = a + b
     RET
@@ -91,6 +167,7 @@ forth_add:
 // TOS=b, [DSP]=a → TOS=a-b
 .global forth_sub
 forth_sub:
+    CHECK_DEPTH_2
     LDR X9, [X19], #CELL      // X9 = a, pop
     SUB X20, X9, X20           // TOS = a - b
     RET
@@ -114,9 +191,10 @@ forth_fetch:
 // Write 8-byte cell to address
 .global forth_store
 forth_store:
+    CHECK_DEPTH_3
     LDR X9, [X19], #CELL        // X9 = x, pop
     STR X9, [X20]               // [addr] = x
-    LDR X20, [X19], #CELL       // pop new TOS
+    POP_TOS
     RET
 
 // C@ (char fetch) ( addr -- byte )
@@ -131,9 +209,10 @@ forth_cfetch:
 // Write 1 byte to address
 .global forth_cstore
 forth_cstore:
+    CHECK_DEPTH_3
     LDR X9, [X19], #CELL        // X9 = byte, pop
     STRB W9, [X20]              // [addr] = low byte
-    LDR X20, [X19], #CELL       // pop new TOS
+    POP_TOS
     RET
 
 // ---------- EMIT (Forth-level) ----------
@@ -142,7 +221,7 @@ forth_cstore:
 .global forth_emit
 forth_emit:
     MOV X0, X20                // X0 = char (from TOS)
-    LDR X20, [X19], #CELL     // pop new TOS
+    POP_TOS
     B platform_emit            // tail call (X30 untouched)
 
 // ---------- KEY (Forth-level) ----------
@@ -151,7 +230,7 @@ forth_emit:
 .global forth_key
 forth_key:
     STR X30, [SP, #-16]!      // save return address
-    STR X20, [X19, #-CELL]!   // push old TOS to memory
+    PUSH_TOS
     BL platform_key            // X0 = character
     MOV X20, X0                // TOS = char
     LDR X30, [SP], #16        // restore return address
@@ -164,6 +243,7 @@ forth_key:
 // Calls platform_key and platform_emit directly (register level).
 .global forth_accept
 forth_accept:
+    CHECK_DEPTH_2
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
@@ -239,6 +319,7 @@ forth_accept:
 // Uses BASE variable for default base.
 .global forth_number
 forth_number:
+    CHECK_DEPTH_2
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
@@ -380,6 +461,7 @@ forth_number:
 //          original c-addr u and 0 (not found).
 .global forth_find
 forth_find:
+    CHECK_DEPTH_2
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
@@ -532,9 +614,9 @@ forth_parse_word:
 // Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
-    MOV X9, X20                   // X9 = xt
-    LDR X20, [X19], #CELL        // pop new TOS
-    BR X9                         // tail-call
+    MOV X10, X20                  // X10 = xt (use X10, POP_TOS clobbers X9)
+    POP_TOS
+    BR X10                        // tail-call
 
 // ---------- print_signed (internal helper) ----------
 // Print signed 64-bit integer from X0 to stdout.
@@ -599,7 +681,7 @@ forth_execute:
 forth_dot:
     STP X29, X30, [SP, #-16]!
     MOV X0, X20                 // X0 = number to print
-    LDR X20, [X19], #CELL      // pop new TOS
+    POP_TOS
     BL .Lprint_signed
     MOV X0, #' '
     BL platform_emit
@@ -689,7 +771,7 @@ forth_bye:
 //
 .global forth_lit
 forth_lit:
-    STR X20, [X19, #-CELL]!        // push old TOS
+    PUSH_TOS
     LDR X20, [X30]                  // TOS = inline value (LR points to it)
     ADD X30, X30, #CELL             // skip past the 8-byte value
     RET                             // continue execution (jumps to updated LR)
@@ -700,6 +782,7 @@ forth_lit:
 // Clobbers X9, X10.
 .global compile_call
 compile_call:
+    CHECK_DICT 4
     SUB X9, X0, X21                // X9 = offset in bytes
     ASR X9, X9, #2                 // X9 = offset in words (BL uses word offset)
     AND X9, X9, #0x3FFFFFF         // mask to 26 bits
@@ -716,6 +799,7 @@ compile_call:
 // Clobbers X9.
 .global compile_prolog
 compile_prolog:
+    CHECK_DICT 4
     // STP X29, X30, [SP, #-16]! = 0xA9BF7BFD
     MOV W9, #0x7BFD
     MOVK W9, #0xA9BF, LSL #16
@@ -729,6 +813,7 @@ compile_prolog:
 // Clobbers X9.
 .global compile_ret
 compile_ret:
+    CHECK_DICT 8
     // LDP X29, X30, [SP], #16 = 0xA8C17BFD
     MOV W9, #0x7BFD
     MOVK W9, #0xA8C1, LSL #16
@@ -747,6 +832,7 @@ compile_ret:
 // Clobbers X9, X10.
 .global compile_literal
 compile_literal:
+    CHECK_DICT 12
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     MOV X23, X0                    // save the literal value (callee-saved)
@@ -786,6 +872,14 @@ forth_colon:
     LDR X20, [X19], #CELL          // restore TOS (drop both)
 
     CBZ X24, .Lcolon_err            // empty name — bail
+
+    // Check dictionary space (need ~128 bytes for header)
+.ifndef FAST
+    ADR X9, dict_space_end
+    ADD X10, X21, #128
+    CMP X10, X9
+    B.HI .Lcolon_dict_full
+.endif
 
     // Clamp name length to F_LENMASK (63) max
     CMP X24, #F_LENMASK
@@ -854,6 +948,12 @@ forth_colon:
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
+
+.Lcolon_dict_full:
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    B dict_full
 
 .Lcolon_err:
     // No name given — just return without doing anything
@@ -995,6 +1095,7 @@ data_stack_top:
 .global dict_space
 dict_space:
     .space DICT_SPACE_SIZE
+dict_space_end:
 
 // ---------- Variables ----------
 .data
@@ -1025,4 +1126,7 @@ saved_latest:                       // LATEST before current : for error recover
     .quad 0
 .global saved_here
 saved_here:                         // HERE before current : for error recovery
+    .quad 0
+.global rp0
+rp0:                                // Return stack pointer at repl_loop entry
     .quad 0

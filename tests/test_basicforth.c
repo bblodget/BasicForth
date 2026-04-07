@@ -51,6 +51,8 @@ extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
 extern int64_t to_in;
+extern int64_t sp0;
+extern int64_t error_flag;
 
 /* --- Test framework --- */
 
@@ -705,12 +707,106 @@ static void test_lit_negative(void)
              tos_out, dsp_out[0], stack_depth(dsp_out));
 }
 
+/* --- Stack guard tests --- */
+
+/* Helper: call primitive with given stack setup and return the error_flag */
+static int64_t call_check_error(void *fn, int64_t tos_in, int64_t *dsp_in)
+{
+    int64_t tos_out;
+    int64_t *dsp_out;
+    error_flag = 0;
+    call_primitive(fn, tos_in, dsp_in, &tos_out, &dsp_out);
+    return error_flag;
+}
+
+/* + on empty stack should trigger underflow */
+static void test_underflow_add(void)
+{
+    /* Empty stack: TOS=0 (stale), DSP=stack_top (sp0) */
+    int64_t err = call_check_error(forth_add, 0, stack_top());
+    if (err == 1)
+        pass("guard: + on empty stack triggers underflow");
+    else
+        fail("guard: + on empty stack triggers underflow",
+             "error_flag=%ld (expected 1)", err);
+}
+
+/* SWAP on 1 item should trigger underflow */
+static void test_underflow_swap(void)
+{
+    int64_t tos_in;
+    int64_t *dsp_in;
+    setup_1(42, &tos_in, &dsp_in);
+    int64_t err = call_check_error(forth_swap, tos_in, dsp_in);
+    if (err == 1)
+        pass("guard: SWAP on 1 item triggers underflow");
+    else
+        fail("guard: SWAP on 1 item triggers underflow",
+             "error_flag=%ld (expected 1)", err);
+}
+
+/* ! on 2 items should trigger underflow (needs 3) */
+static void test_underflow_store(void)
+{
+    int64_t tos_in;
+    int64_t *dsp_in;
+    /* Use a safe dummy address for the addr argument */
+    int64_t dummy = 0;
+    setup_2((int64_t)&dummy, 99, &tos_in, &dsp_in);
+    int64_t err = call_check_error(forth_store, tos_in, dsp_in);
+    if (err == 1)
+        pass("guard: ! on 2 items triggers underflow");
+    else
+        fail("guard: ! on 2 items triggers underflow",
+             "error_flag=%ld (expected 1)", err);
+}
+
+/* DUP in a loop should eventually trigger overflow */
+static void test_overflow_dup(void)
+{
+    int64_t tos_out;
+    int64_t *dsp_out;
+    int64_t tos = 1;
+    int64_t *dsp = stack_top();
+
+    error_flag = 0;
+    /* DUP 600 times — stack is 512 cells, should overflow */
+    for (int i = 0; i < 600 && error_flag == 0; i++) {
+        call_primitive(forth_dup, tos, dsp, &tos_out, &dsp_out);
+        tos = tos_out;
+        dsp = dsp_out;
+    }
+    if (error_flag == 2)
+        pass("guard: DUP loop triggers overflow");
+    else
+        fail("guard: DUP loop triggers overflow",
+             "error_flag=%ld (expected 2)", error_flag);
+}
+
+/* + with valid 2 items should NOT trigger error */
+static void test_no_underflow_add(void)
+{
+    int64_t tos_in, tos_out;
+    int64_t *dsp_in, *dsp_out;
+    setup_2(10, 20, &tos_in, &dsp_in);
+    error_flag = 0;
+    call_primitive(forth_add, tos_in, dsp_in, &tos_out, &dsp_out);
+    if (error_flag == 0 && tos_out == 30)
+        pass("guard: + with 2 items succeeds (no false alarm)");
+    else
+        fail("guard: + with 2 items succeeds (no false alarm)",
+             "error_flag=%ld tos=%ld", error_flag, tos_out);
+}
+
 /* --- Main --- */
 
 int main(void)
 {
     printf("BasicForth Unit Tests\n");
     printf("=====================\n");
+
+    /* Initialize sp0 so stack guards work correctly */
+    sp0 = (int64_t)&data_stack_top;
 
     section("Stack Primitives");
     test_dup();
@@ -756,6 +852,13 @@ int main(void)
     }
     test_lit();
     test_lit_negative();
+
+    section("Stack Guards");
+    test_underflow_add();
+    test_underflow_swap();
+    test_underflow_store();
+    test_overflow_dup();
+    test_no_underflow_add();
 
     printf("\n=====================\n");
     printf("%d passed, %d failed, %d total\n", passed, failed, passed + failed);

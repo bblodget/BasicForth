@@ -23,6 +23,11 @@ _start:
     BL platform_raw_mode
 
 repl_loop:
+    // Save return stack pointer for error recovery
+    MOV X9, SP
+    ADR X10, rp0
+    STR X9, [X10]
+
     // Print prompt
     ADR X0, prompt_msg
     MOV X1, #prompt_len
@@ -161,6 +166,56 @@ repl_bye:
 
     BL platform_bye
 
+// ---------- Error Handlers ----------
+// These are branched to (not called) from primitives in core.s.
+// They print a message, reset the stack, recover from compile mode
+// if needed, and return to the REPL.
+
+.global stack_underflow
+stack_underflow:
+    ADR X0, msg_underflow
+    MOV X1, #msg_underflow_len
+    BL platform_write
+    B error_reset
+
+.global stack_overflow
+stack_overflow:
+    ADR X0, msg_overflow
+    MOV X1, #msg_overflow_len
+    BL platform_write
+    B error_reset
+
+.global dict_full
+dict_full:
+    ADR X0, msg_dict_full
+    MOV X1, #msg_dict_full_len
+    BL platform_write
+    B error_reset
+
+// Shared recovery: reset stack, abort compilation if needed, return to REPL.
+error_reset:
+    // Reset return stack (discard stale frames from nested calls)
+    ADR X9, rp0
+    LDR X9, [X9]
+    MOV SP, X9
+
+    // Reset data stack to empty
+    ADR X9, sp0
+    LDR X19, [X9]                   // DSP = sp0 (empty)
+    MOV X20, #0                     // TOS = 0
+
+    // If we were compiling, abort the definition
+    ADR X9, state
+    LDR X10, [X9]
+    CBZ X10, repl_loop
+    STR XZR, [X9]                   // reset to interpret mode
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
+
+    B repl_loop
+
 // ---------- Data ----------
 .section .rodata
 prompt_msg: .ascii "> "
@@ -171,6 +226,12 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+msg_underflow:  .ascii "stack underflow\n"
+.equ msg_underflow_len, . - msg_underflow
+msg_overflow:   .ascii "stack overflow\n"
+.equ msg_overflow_len, . - msg_overflow
+msg_dict_full:  .ascii "dictionary full\n"
+.equ msg_dict_full_len, . - msg_dict_full
 
 .bss
 .align 4
