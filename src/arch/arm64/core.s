@@ -614,6 +614,9 @@ forth_parse_word:
 // Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
+.ifndef FAST
+    CBZ X20, stack_underflow        // xt=0 means empty/invalid
+.endif
     MOV X10, X20                  // X10 = xt (use X10, POP_TOS clobbers X9)
     POP_TOS
     BR X10                        // tail-call

@@ -639,6 +639,10 @@ forth_parse_word:
 # Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
+.ifndef FAST
+    test %r14, %r14
+    jz stack_underflow              # xt=0 means empty/invalid
+.endif
     mov %r14, %rax                # RAX = xt
     POP_TOS
     jmp *%rax                     # tail-call
