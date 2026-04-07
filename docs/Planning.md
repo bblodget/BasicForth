@@ -125,7 +125,7 @@ docs/
 | X9-X15   | Caller-saved temps    | Scratch within primitives         |
 | X16-X18  | Platform / linker     | Avoid                             |
 | X19      | Callee-saved          | Data stack pointer (DSP)          |
-| X20      | Callee-saved          | Top of stack (TOS)                |
+| X20      | Callee-saved          | Scratch (available)               |
 | X21      | Callee-saved          | HERE pointer                      |
 | X22      | Callee-saved          | LATEST pointer                    |
 | X23-X28  | Callee-saved          | Engine state (STATE, BASE, etc.)  |
@@ -143,7 +143,7 @@ docs/
 | R10      | 4th syscall arg       | Scratch                           |
 | R12      | Callee-saved          | LATEST pointer                    |
 | R13      | Callee-saved          | HERE pointer                      |
-| R14      | Callee-saved          | Top of stack (TOS)                |
+| R14      | Callee-saved          | Scratch (available)               |
 | R15      | Callee-saved          | Data stack pointer (DSP)          |
 | RSP      | Stack pointer         | Return stack                      |
 
@@ -237,7 +237,7 @@ build the rest in the language itself.
 BasicForth's register usage follows each platform's C calling convention,
 keeping the door open for linking with C and C++ libraries.
 
-On both architectures, our engine registers (DSP, TOS, HERE, LATEST) live in
+On both architectures, our engine registers (DSP, HERE, LATEST) live in
 callee-saved registers. This means C functions won't clobber them, and we
 preserve them if C calls into Forth.
 

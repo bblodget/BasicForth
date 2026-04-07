@@ -71,10 +71,10 @@ movzbl %al, %eax            # RAX = 0x00000000000000FF (explicit zero-extend)
 ### BasicForth Register Allocation
 
 ```
-%r15 = Data stack pointer (DSP)     — callee-saved, points to second item
-%r14 = Top of stack (TOS)           — callee-saved, always holds top value
-%r13 = HERE pointer                 — dictionary free space (future)
-%r12 = LATEST pointer               — most recent dictionary entry (future)
+%r15 = Data stack pointer (DSP)     — callee-saved, points to top item
+%r14 = scratch (available)          — callee-saved, no longer used for TOS
+%r13 = HERE pointer                 — dictionary free space
+%r12 = LATEST pointer               — most recent dictionary entry
 %rsp = Return stack                 — hardware stack
 ```
 
@@ -88,7 +88,7 @@ movzbl %al, %eax            # RAX = 0x00000000000000FF (explicit zero-extend)
 | **Callee-saved (must preserve)**   | %rbx, %rbp, %r12-%r15              |
 | **Stack pointer**                  | %rsp (must be 16-byte aligned before `call`) |
 
-BasicForth uses callee-saved registers for engine state (DSP, TOS, HERE,
+BasicForth uses callee-saved registers for engine state (DSP, HERE,
 LATEST), so C library functions won't clobber them.
 
 ## Common Instructions

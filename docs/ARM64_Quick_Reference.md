@@ -93,8 +93,8 @@ Writing to a W register zeroes the upper 32 bits of the corresponding X register
 ### BasicForth Register Allocation
 
 ```
-X19 = Data stack pointer (DSP)     — callee-saved, points to second item
-X20 = Top of stack (TOS)           — callee-saved, always holds top value
+X19 = Data stack pointer (DSP)     — callee-saved, points to top item
+X20 = scratch (available)          — callee-saved, no longer used for TOS
 X21 = HERE pointer                 — dictionary free space
 X22 = LATEST pointer               — most recent dictionary entry
 X23-X28 = Available for STATE, BASE, etc.
@@ -314,7 +314,7 @@ my_function:
     RET
 ```
 
-For BasicForth primitives, X19-X22 are our engine registers (DSP, TOS,
+For BasicForth primitives, X19/X21/X22 are our engine registers (DSP,
 HERE, LATEST) — they persist across all calls because they're callee-saved.
 
 ## Linux Syscall ABI (ARM64)

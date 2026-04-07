@@ -14,7 +14,7 @@ arithmetic, number parsing, etc.
 
 **How:** A C program links directly against the assembled `core.o` and calls
 primitives as functions. A small per-architecture `test_helper.s` provides
-bridge functions to get/set engine registers (TOS, DSP) from C.
+bridge functions to get/set engine registers (DSP, HERE, LATEST) from C.
 
 **Why C:**
 - No external dependencies (no Python, no scripting runtime)
@@ -26,8 +26,8 @@ bridge functions to get/set engine registers (TOS, DSP) from C.
 ```
 tests/
   test_basicforth.c       Shared C test harness (both architectures)
-  test_helper_x86.s       get/set TOS (R14), DSP (R15) for x86-64
-  test_helper_arm64.s     get/set TOS (X20), DSP (X19) for ARM64
+  test_helper_x86.s       get/set DSP (R15) for x86-64
+  test_helper_arm64.s     get/set DSP (X19) for ARM64
 ```
 
 **Build:** Each architecture's Makefile provides a `make test` target that
@@ -39,9 +39,9 @@ functions (`platform_emit`, `platform_key`) are stubbed or linked as needed.
 
 **Example test flow:**
 1. Initialize DSP to `data_stack_top`
-2. Push values onto the stack via `set_tos()` and DSP manipulation
+2. Push values onto the stack via DSP manipulation
 3. Call a primitive (e.g., `forth_add`)
-4. Read TOS and DSP to verify the result
+4. Read DSP and stack contents to verify the result
 5. Report pass/fail
 
 ### 2. Integration Tests — Full Binary (Future, Phase 2-3)

@@ -14,7 +14,7 @@ as the code evolves:
 
 - Planning.md — vision, phases, design decisions
 - Platform_Layer.md — platform API, termios, syscall reference
-- Core_Primitives.md — ASM primitives, data stack, TOS-in-register design
+- Core_Primitives.md — ASM primitives, data stack, pure memory stack design
 - Forth_Core_Words.md — Forth 2012 standard core vocabulary
 - ARM64_Quick_Reference.md — ARM64 instruction and register reference
 - x86_Quick_Reference.md — x86-64 AT&T syntax reference
@@ -41,10 +41,12 @@ as the code evolves:
 ## Register Allocation
 
 ### ARM64
-- X19=DSP, X20=TOS, X21=HERE, X22=LATEST, SP=return stack
+- X19=DSP, X21=HERE, X22=LATEST, SP=return stack
+- Pure memory stack: TOS at [X19], no TOS-in-register
 
 ### x86-64
-- R15=DSP, R14=TOS, R13=HERE, R12=LATEST, RSP=return stack
+- R15=DSP, R13=HERE, R12=LATEST, RSP=return stack
+- Pure memory stack: TOS at [R15], no TOS-in-register
 
 ## Related Projects
 

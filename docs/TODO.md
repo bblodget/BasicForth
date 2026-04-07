@@ -18,7 +18,7 @@ completed. See Planning.md for high-level vision and design decisions.
 
 - [x] Terminal raw mode (ioctl TCGETS/TCSETS)
 - [x] Platform layer (platform_emit, platform_key, platform_bye, platform_write)
-- [x] Data stack with TOS-in-register
+- [x] Data stack (pure memory, DSP points to top item)
 - [x] Stack primitives (DUP, DROP, SWAP, OVER)
 - [x] Arithmetic (+, -, NEGATE)
 - [x] Memory access (@, !, C@, C!)
@@ -30,7 +30,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] DOT, DOT-S, BYE
 - [x] Outer interpreter REPL (PARSE-WORD → FIND → EXECUTE → NUMBER → error)
 - [x] Multi-architecture (ARM64 + x86-64) for all of the above
-- [x] C unit test harness (66 tests, both architectures)
+- [x] C unit test harness (69 tests, both architectures)
 - [x] Documentation (Manual, Dictionary, Outer Interpreter, Testing Framework)
 
 ---
@@ -50,9 +50,16 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Update outer interpreter to check STATE (compile vs interpret)
 - [x] IMMEDIATE — mark most recent word as immediate
 - [x] `'` (TICK) — parse next word, push its xt
-- [x] Unit tests for LIT (68 tests total)
+- [x] Unit tests for LIT (69 tests total)
 - [x] Error recovery: errors during compilation reset STATE, restore LATEST/HERE
 - [x] Linker flag `ld -N` for RWX segments (dict_space must be executable)
+- [x] CHECK_DICT macro — software bounds check before dictionary writes
+- [x] Refactored TOS-in-register to pure memory stack (eliminated phantom item bug)
+- [x] Hardware guard pages (mprotect PROT_NONE) for stack underflow/overflow
+- [x] SIGSEGV signal handler with ucontext register recovery to REPL
+- [x] Per-definition rollback (saved_latest/saved_here in forth_colon)
+- [x] DROP dummy load to trigger guard page on empty stack
+- [x] Error handling documentation (docs/Error_Handling.md)
 
 ### 3b. Control Flow
 
@@ -141,3 +148,7 @@ completed. See Planning.md for high-level vision and design decisions.
     code in dict_space can execute.  The proper approach is to keep normal
     segment permissions and call `SYS_mprotect` on just the dict_space pages
     to add PROT_EXEC.  See BareMetalForth Lesson 37 for background.
+- [ ] Guard page after dict_space for dictionary overflow detection
+  - Currently dict_space uses a software CHECK_DICT macro.  A guard page
+    would provide zero-cost hardware detection, consistent with the data
+    stack approach.

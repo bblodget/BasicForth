@@ -27,85 +27,61 @@ stack, or because they can't be expressed in Forth.
 
 ## Data Stack
 
-The data stack holds Forth values. It consists of two parts: a dedicated
-**TOS register** that always holds the top value, and a **memory region**
-in .bss that holds the remaining items. This TOS-in-register design
-eliminates a memory access on most operations.
-
-### TOS-in-Register Invariant
-
-A dedicated register always holds the top of the data stack:
-
-- **ARM64:** X20 = TOS
-- **x86-64:** R14 = TOS
-
-The data stack pointer (DSP) points to the **second** item on the stack,
-not the top. This is the key invariant that every primitive must maintain.
-
-```
-  TOS register ──► top value (always in X20 / R14)
-
-         DSP ───► ├── second item     (in memory)
-                   ├── third item
-                   ┊
-                   ├── data_stack_top  (initial DSP value)
-                   High addresses
-```
-
-### Why TOS-in-Register?
-
-Many Forth primitives operate on the top of stack. With TOS in a register:
-
-| Operation      | Memory TOS (old)       | Register TOS (current)    |
-|----------------|------------------------|---------------------------|
-| DUP            | load + store           | store only (TOS stays)    |
-| DROP           | adjust pointer         | load next into TOS        |
-| NEGATE         | load + negate + store  | negate register           |
-| EMIT           | pop from memory + call | pass register + tail call |
-| Compare to 'q' | load from memory + CMP | CMP register directly     |
-
-The tradeoff: every primitive must maintain the invariant that TOS is in the
-register and DSP points to the second item. This adds complexity to each
-word's implementation, but the performance benefit compounds across the
-entire system.
-
-### Layout
+The data stack holds Forth values. All items live in a memory region in
+.bss. The data stack pointer (DSP) always points to the **top item** on
+the stack (or equals `sp0` when the stack is empty).
 
 ```
                     Low addresses
                     ┊
-                    ├── data_stack_bottom (start of .bss allocation)
+  guard_page_overflow   4096 bytes   PROT_NONE
+  ──────────────────────────────────────────────
+  data_stack_bottom     page-aligned
                     │
                     │   ... unused space ...
                     │
-          DSP ───► ├── second item (next below TOS)
-                    ├── third item
+          DSP ───► ├── top item
+                    ├── second item
                     ┊
-                    ├── data_stack_top (initial DSP value)
+  data_stack_top ──► ├── bottom item
+  ──────────────────────────────────────────────
+  guard_page_underflow  4096 bytes   PROT_NONE
                     High addresses
-
-          TOS ───► (in register, not in memory)
 ```
 
-`data_stack_top` is a label at the *end* of the allocated region. DSP
-starts here (empty stack) and decrements as values are pushed to memory.
+The stack grows **downward**. Pushing decrements DSP, popping increments
+it. When the stack is empty, DSP equals `sp0` (which points to
+`data_stack_top`). Stack depth is `(sp0 - DSP) / CELL`.
+
+### Guard Pages
+
+The data stack is bracketed by two 4096-byte guard pages marked
+`PROT_NONE` via `mprotect` at startup. Any access to a guard page
+triggers a SIGSEGV, which our signal handler catches and recovers from.
+See [Error_Handling.md](Error_Handling.md) for details.
+
+- **Underflow**: reading past `sp0` touches the underflow guard page.
+- **Overflow**: pushing past `data_stack_bottom` touches the overflow
+  guard page.
+
+This provides zero-cost bounds checking — the CPU's MMU does the work as
+part of normal memory access, with no extra instructions in the normal case.
 
 ### Configuration
 
 | Parameter       | Value                   | Notes                        |
 |-----------------|-------------------------|------------------------------|
 | CELL            | 8 bytes                 | 64-bit cells, native word    |
-| DATA_STACK_SIZE | 4096                    | 512 cells (4096 / 8)        |
-| Alignment       | 8 (x86) or 16 (arm64)  | .align directive in .bss     |
+| DATA_STACK_SIZE | 4096                    | 512 cells (4096 / 8)         |
+| Alignment       | page-aligned            | Required for guard pages     |
 
 ### Register Allocation
 
 | Register | ARM64 | x86-64 | Notes                                        |
 |----------|-------|--------|----------------------------------------------|
-| DSP      | X19   | R15    | Data stack pointer (second item)             |
-| TOS      | X20   | R14    | Top of stack value                           |
-| HERE     | X21   | R13    | Dictionary free-space pointer (future)       |
-| LATEST   | X22   | R12    | Most recent dictionary entry (future)        |
+| DSP      | X19   | R15    | Data stack pointer (top item)                |
+| HERE     | X21   | R13    | Dictionary free-space pointer                |
+| LATEST   | X22   | R12    | Most recent dictionary entry                 |
 | RSP      | SP    | RSP    | Return stack (hardware stack)                |
 
 All engine registers are **callee-saved** in their respective ABIs
@@ -117,26 +93,22 @@ All engine registers are **callee-saved** in their respective ABIs
 
 ### Push and Pop
 
-With TOS in a register, "push" and "pop" have specific meanings:
-
 **Push a new value onto the stack:**
-1. Store current TOS to memory (DSP decrements)
-2. Set TOS register to the new value
+1. Decrement DSP by CELL
+2. Store the value at the new DSP
 
 **Pop a value off the stack:**
-1. Read TOS register (that's the value)
-2. Load next value from memory into TOS (DSP increments)
+1. Load the value from DSP
+2. Increment DSP by CELL
 
 **ARM64:**
 
 ```asm
-// Push: save TOS to memory, set new TOS
-STR X20, [X19, #-CELL]!        // pre-decrement: X19 -= 8, store X20
-MOV X20, <new_value>
+// Push value in X9 onto the stack
+STR X9, [X19, #-CELL]!         // pre-decrement: X19 -= 8, store X9
 
-// Pop: use TOS, load next
-MOV <dest>, X20                 // read current TOS
-LDR X20, [X19], #CELL          // post-increment: load, X19 += 8
+// Pop top of stack into X9
+LDR X9, [X19], #CELL           // post-increment: load, X19 += 8
 ```
 
 ARM64's pre-decrement and post-increment addressing modes combine the
@@ -145,19 +117,17 @@ pointer arithmetic and memory access in a single instruction.
 **x86-64:**
 
 ```asm
-# Push: save TOS to memory, set new TOS
+# Push value in %rax onto the stack
 sub $CELL, %r15                 # make room
-mov %r14, (%r15)               # store TOS
-mov <new_value>, %r14          # set new TOS
+mov %rax, (%r15)               # store value
 
-# Pop: use TOS, load next
-mov %r14, <dest>               # read current TOS
-mov (%r15), %r14               # load next
+# Pop top of stack into %rax
+mov (%r15), %rax               # load value
 add $CELL, %r15                # reclaim space
 ```
 
 x86 doesn't have pre-decrement/post-increment addressing modes, so push
-and pop are each two instructions for the memory portion.
+and pop are each two instructions.
 
 ## Current Primitives
 
@@ -169,11 +139,12 @@ Duplicate the top of stack.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `STR X20, [X19, #-CELL]!`     | `sub $CELL, %r15`              |
-|                                 | `mov %r14, (%r15)`             |
+| `LDR X9, [X19]`               | `mov (%r15), %rax`             |
+| `STR X9, [X19, #-CELL]!`      | `sub $CELL, %r15`              |
+|                                 | `mov %rax, (%r15)`             |
 
-Push TOS to memory. TOS register is unchanged — it already holds the
-value we want on top. One of the simplest benefits of TOS-in-register.
+Load the top item, then push a copy. ARM64's pre-decrement store does
+the push in one instruction.
 
 #### DROP ( a -- )
 
@@ -181,11 +152,13 @@ Discard the top of stack.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `LDR X20, [X19], #CELL`       | `mov (%r15), %r14`             |
-|                                 | `add $CELL, %r15`              |
+| `LDR X9, [X19]`               | `mov (%r15), %rax`             |
+| `ADD X19, X19, #CELL`          | `add $CELL, %r15`              |
 
-Load the next value from memory into the TOS register. The old TOS value
-is simply abandoned — no need to write it anywhere.
+The dummy load (`LDR` / `mov`) reads from the current top before
+incrementing DSP. This is essential: without it, DROP on an empty stack
+would silently move DSP into the guard page without faulting. The load
+ensures the guard page triggers immediately.
 
 #### SWAP ( a b -- b a )
 
@@ -194,11 +167,12 @@ Exchange the top two stack items.
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
 | `LDR X9, [X19]`               | `mov (%r15), %rax`             |
-| `STR X20, [X19]`              | `mov %r14, (%r15)`             |
-| `MOV X20, X9`                 | `mov %rax, %r14`              |
+| `LDR X10, [X19, #CELL]`       | `mov CELL(%r15), %rcx`         |
+| `STR X10, [X19]`              | `mov %rcx, (%r15)`             |
+| `STR X9, [X19, #CELL]`        | `mov %rax, CELL(%r15)`         |
 
-Exchange TOS register with the value in memory at DSP. Only one memory
-location is touched (the second item). DSP doesn't move.
+Load both items into registers, write them back in swapped positions.
+DSP doesn't move.
 
 #### OVER ( a b -- a b a )
 
@@ -206,12 +180,11 @@ Copy the second item to the top.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `STR X20, [X19, #-CELL]!`     | `sub $CELL, %r15`              |
-| `LDR X20, [X19, #CELL]`       | `mov %r14, (%r15)`             |
-|                                 | `mov CELL(%r15), %r14`         |
+| `LDR X9, [X19, #CELL]`        | `mov CELL(%r15), %rax`         |
+| `STR X9, [X19, #-CELL]!`      | `sub $CELL, %r15`              |
+|                                 | `mov %rax, (%r15)`             |
 
-Push current TOS (b) to memory, then load the second item (a) into TOS.
-After the push, a is at DSP+CELL (one cell below the newly stored b).
+Load the second item (at DSP+CELL), push it onto the stack.
 
 ### Arithmetic
 
@@ -221,11 +194,13 @@ Add the top two items.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `LDR X9, [X19], #CELL`        | `add (%r15), %r14`             |
-| `ADD X20, X9, X20`            | `add $CELL, %r15`              |
+| `LDR X9, [X19], #CELL`        | `mov (%r15), %rax`             |
+| `LDR X10, [X19]`              | `add $CELL, %r15`              |
+| `ADD X10, X10, X9`            | `add %rax, (%r15)`             |
+| `STR X10, [X19]`              |                                 |
 
-Pop second item (a) from memory, add to TOS (b). x86 is particularly
-compact — `add (%r15), %r14` adds memory directly to the TOS register.
+Pop b, add to a in place. x86's `add %rax, (%r15)` adds a register
+directly to memory, making this compact.
 
 #### - ( a b -- a-b )
 
@@ -234,13 +209,12 @@ Subtract b from a.
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
 | `LDR X9, [X19], #CELL`        | `mov (%r15), %rax`             |
-| `SUB X20, X9, X20`            | `sub %r14, %rax`               |
-|                                 | `mov %rax, %r14`               |
-|                                 | `add $CELL, %r15`              |
+| `LDR X10, [X19]`              | `add $CELL, %r15`              |
+| `SUB X10, X10, X9`            | `sub %rax, (%r15)`             |
+| `STR X10, [X19]`              |                                 |
 
-Pop a from memory, compute a - b. ARM64 handles this in two instructions
-since SUB can place the result directly in X20. x86 needs a temporary
-because `sub` computes dest - src, and we need [DSP] - R14, not R14 - [DSP].
+Pop b, subtract from a in place. x86's `sub %rax, (%r15)` computes
+`[r15] - rax` and stores back, which is exactly `a - b`.
 
 #### NEGATE ( a -- -a )
 
@@ -248,67 +222,68 @@ Negate the top of stack.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `NEG X20, X20`                 | `neg %r14`                     |
+| `LDR X9, [X19]`               | `negq (%r15)`                  |
+| `NEG X9, X9`                  |                                 |
+| `STR X9, [X19]`               |                                 |
 
-One instruction on both architectures. No memory access needed — TOS is
-already in a register. This is a clear win over the old memory-TOS approach,
-which required load-negate-store (3 instructions on ARM64).
+ARM64 requires a load-negate-store sequence since NEG operates on
+registers. x86's `negq` operates directly on memory in one instruction.
 
 ### I/O Wrappers
 
 These primitives bridge the data stack to the platform layer. They move
-values between the TOS register and the platform's argument/return registers.
+values between the stack and the platform's argument/return registers.
 
 #### forth_emit ( char -- )
 
-Pass TOS to `platform_emit`, pop new TOS from memory.
+Pop a character from the stack and write it to stdout.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `MOV X0, X20`                 | `mov %r14, %rdi`               |
-| `LDR X20, [X19], #CELL`      | `mov (%r15), %r14`             |
-| `B platform_emit`             | `add $CELL, %r15`              |
+| `LDR X0, [X19], #CELL`        | `mov (%r15), %rdi`             |
+| `B platform_emit`              | `add $CELL, %r15`              |
 |                                 | `jmp platform_emit`            |
 
-Both use a **tail call** (ARM64: `B`, x86: `jmp`). Since forth_emit has
-nothing to do after platform_emit returns, it jumps directly — platform_emit's
-return goes straight back to the original caller. On ARM64, this means no
-X30 save/restore is needed, unlike the old approach which required
-`STR X30`/`BL`/`LDR X30`/`RET`.
-
-The argument passes directly from TOS register to the platform's argument
-register (X0 or RDI) — no memory round-trip.
+Pop the character into the platform's first argument register (X0 or
+RDI) and tail-call `platform_emit`. Since there's nothing to do after
+the platform call returns, the tail call lets `platform_emit`'s RET
+return directly to the original caller.
 
 #### forth_key ( -- char )
 
-Push old TOS to memory, call `platform_key`, set TOS to result.
+Read one character from stdin and push it onto the stack.
 
 | ARM64                           | x86-64                         |
 |---------------------------------|--------------------------------|
-| `STR X30, [SP, #-16]!`        | `sub $CELL, %r15`              |
-| `STR X20, [X19, #-CELL]!`    | `mov %r14, (%r15)`             |
-| `BL platform_key`             | `call platform_key`            |
-| `MOV X20, X0`                 | `mov %rdi, %r14`              |
-| `LDR X30, [SP], #16`          | `ret`                          |
-| `RET`                          |                                 |
+| `STP X29, X30, [SP, #-16]!`   | `call platform_key`            |
+| `BL platform_key`              | `sub $CELL, %r15`              |
+| `STR X0, [X19, #-CELL]!`      | `mov %rdi, (%r15)`             |
+| `LDP X29, X30, [SP], #16`     | `ret`                          |
+| `RET`                           |                                 |
 
-KEY cannot use a tail call because we need to move the return value into
-TOS after platform_key returns. ARM64 must save/restore X30 since BL
-overwrites it.
+Call `platform_key`, push the returned character. KEY cannot use a tail
+call because we need to push the return value after the platform call.
+ARM64 must save/restore X30 (link register) since BL overwrites it.
 
-platform_key returns the character in X0 (ARM64) or RDI (x86-64).
+`platform_key` returns the character in X0 (ARM64) or RDI (x86-64).
 
 ## Data Stack Memory
 
-Allocated in the .bss section (zero-initialized, no space in the binary):
+Allocated in the .bss section with page-aligned guard pages:
 
 ```asm
 .bss
-.align 4                        # ARM64: .align 4 = 2^4 = 16-byte aligned
-data_stack_bottom:              #        (x86: .align 8 = 8-byte aligned)
-    .space DATA_STACK_SIZE      # 4096 bytes = 512 cells
+.balign 4096
+guard_page_overflow:                # mprotect PROT_NONE at startup
+    .space 4096
+.balign 4096
+data_stack_bottom:
+    .space DATA_STACK_SIZE          # 4096 bytes = 512 cells
 .global data_stack_top
-data_stack_top:                 # DSP starts here (empty stack)
+data_stack_top:                     # DSP starts here (empty stack)
+.balign 4096
+guard_page_underflow:               # mprotect PROT_NONE at startup
+    .space 4096
 ```
 
 `data_stack_top` is exported as a global symbol so that main.s can
@@ -319,9 +294,7 @@ initialize the DSP register:
 ADR X19, data_stack_top           lea data_stack_top(%rip), %r15
 ```
 
-TOS (X20 / R14) is undefined on an empty stack. The first push stores the
-undefined value to memory (harmless — it's never accessed) and sets TOS to
-the pushed value.
+On an empty stack, DSP equals `sp0` and no items exist in memory.
 
 ## Future Primitives
 
