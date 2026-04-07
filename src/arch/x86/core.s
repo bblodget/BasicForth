@@ -274,6 +274,40 @@ forth_zero_less:
     mov %rax, (%r15)
     ret
 
+# AND ( a b -- a&b )
+.global forth_and
+forth_and:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    and %rax, (%r15)            # top = a & b
+    ret
+
+# OR ( a b -- a|b )
+.global forth_or
+forth_or:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    or %rax, (%r15)             # top = a | b
+    ret
+
+# XOR ( a b -- a^b )
+.global forth_xor
+forth_xor:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %rax, (%r15)            # top = a ^ b
+    ret
+
+# INVERT ( a -- ~a )
+.global forth_invert
+forth_invert:
+
+    notq (%r15)
+    ret
+
 # ---------- Memory ----------
 
 # @ (fetch) ( addr -- x )
@@ -1157,7 +1191,11 @@ DEFWORD dict_less,       "<",          forth_less,        dict_equal
 DEFWORD dict_greater,    ">",          forth_greater,     dict_less
 DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_greater
 DEFWORD dict_zero_less,  "0<",         forth_zero_less,   dict_zero_equal
-DEFWORD dict_tick,       "'",          forth_tick,        dict_zero_less, F_IMMEDIATE
+DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
+DEFWORD dict_or,         "or",         forth_or,          dict_and
+DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
+DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
+DEFWORD dict_tick,       "'",          forth_tick,        dict_invert, F_IMMEDIATE
 .global dict_tick
 
 # ---------- Data Stack Memory ----------

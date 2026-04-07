@@ -53,6 +53,10 @@ extern void forth_less(void);
 extern void forth_greater(void);
 extern void forth_zero_equal(void);
 extern void forth_zero_less(void);
+extern void forth_and(void);
+extern void forth_or(void);
+extern void forth_xor(void);
+extern void forth_invert(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -696,6 +700,78 @@ static void test_zero_less_zero(void)
              "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
+/* --- Logic tests --- */
+
+static void test_and(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(0xFF00, 0x0FF0);
+    call_primitive(forth_and, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0x0F00)
+        pass("AND ( $FF00 $0FF0 -- $0F00 )");
+    else
+        fail("AND ( $FF00 $0FF0 -- $0F00 )",
+             "[0]=$%lx depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_or(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(0xFF00, 0x0FF0);
+    call_primitive(forth_or, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0xFFF0)
+        pass("OR ( $FF00 $0FF0 -- $FFF0 )");
+    else
+        fail("OR ( $FF00 $0FF0 -- $FFF0 )",
+             "[0]=$%lx depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_xor(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(0xFF00, 0x0FF0);
+    call_primitive(forth_xor, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0xF0F0)
+        pass("XOR ( $FF00 $0FF0 -- $F0F0 )");
+    else
+        fail("XOR ( $FF00 $0FF0 -- $F0F0 )",
+             "[0]=$%lx depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_invert(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(0);
+    call_primitive(forth_invert, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("INVERT ( 0 -- -1 )");
+    else
+        fail("INVERT ( 0 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_invert_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(-1);
+    call_primitive(forth_invert, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("INVERT ( -1 -- 0 )");
+    else
+        fail("INVERT ( -1 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
 /* --- NUMBER tests --- */
 
 /*
@@ -1279,6 +1355,13 @@ int main(void)
     test_zero_less_true();
     test_zero_less_false();
     test_zero_less_zero();
+
+    section("Logic");
+    test_and();
+    test_or();
+    test_xor();
+    test_invert();
+    test_invert_true();
 
     section("Number Parsing");
     base = 10;
