@@ -20,11 +20,21 @@ _start:
     lea dict_space(%rip), %r13      # HERE
     lea dict_tick(%rip), %r12       # LATEST
 
+    # Initialize saved state for error recovery
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
+
+    call platform_init_guard_pages
     call platform_raw_mode
 
+.global repl_loop
 repl_loop:
     # Save return stack pointer for error recovery
     mov %rsp, rp0(%rip)
+
+    # Save LATEST and HERE for guard page recovery
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
 
     # Print prompt
     lea prompt_msg(%rip), %rsi
@@ -164,38 +174,18 @@ repl_bye:
     call platform_bye
 
 # ---------- Error Handlers ----------
-# These are jumped to (not called) from primitives in core.s.
-# They print a message, reset the stack, recover from compile mode
-# if needed, and return to the REPL.
-
-.global stack_underflow
-stack_underflow:
-    lea msg_underflow(%rip), %rsi
-    mov $msg_underflow_len, %rdx
-    call platform_write
-    jmp error_reset
-
-.global stack_overflow
-stack_overflow:
-    lea msg_overflow(%rip), %rsi
-    mov $msg_overflow_len, %rdx
-    call platform_write
-    jmp error_reset
+# Stack underflow/overflow are caught by guard pages (SIGSEGV handler
+# in platform_linux.s). Only dict_full remains as an explicit handler.
 
 .global dict_full
 dict_full:
     lea msg_dict_full(%rip), %rsi
     mov $msg_dict_full_len, %rdx
     call platform_write
-    jmp error_reset
 
-# Shared recovery: reset stack, abort compilation if needed, return to REPL.
-error_reset:
-    # Reset return stack (discard stale frames from nested calls)
+    # Reset return stack and data stack
     mov rp0(%rip), %rsp
-
-    # Reset data stack to empty
-    mov sp0(%rip), %r15             # DSP = sp0 (empty)
+    mov sp0(%rip), %r15
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)
@@ -216,10 +206,6 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_underflow:  .ascii "stack underflow\n"
-.equ msg_underflow_len, . - msg_underflow
-msg_overflow:   .ascii "stack overflow\n"
-.equ msg_overflow_len, . - msg_overflow
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 

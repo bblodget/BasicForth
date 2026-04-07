@@ -156,6 +156,196 @@ platform_bye:
     xor %rdi, %rdi              # status = 0
     syscall
 
+# ---------- Guard Pages ----------
+# Set up SIGSEGV handler and mprotect guard pages around the data stack.
+# Must be called before platform_raw_mode (early in startup).
+
+.equ SYS_mprotect,     10
+.equ SYS_rt_sigaction, 13
+.equ SIGSEGV,          11
+.equ PROT_NONE,        0
+.equ SA_SIGINFO,       0x04
+.equ SA_NODEFER,       0x40000000
+.equ SA_RESTORER,      0x04000000
+.equ PAGE_SIZE,        4096
+
+# ucontext_t offsets for x86-64 (from kernel headers)
+.equ UC_MCONTEXT_GREGS, 40       # offset of uc_mcontext.gregs in ucontext_t
+.equ GREGS_R12,  72              # UC_MCONTEXT_GREGS + 4*8  (REG_R12=4)
+.equ GREGS_R13,  80              # UC_MCONTEXT_GREGS + 5*8  (REG_R13=5)
+.equ GREGS_R15,  96              # UC_MCONTEXT_GREGS + 7*8  (REG_R15=7)
+.equ GREGS_RSP, 160              # UC_MCONTEXT_GREGS + 15*8 (REG_RSP=15)
+.equ GREGS_RIP, 168              # UC_MCONTEXT_GREGS + 16*8 (REG_RIP=16)
+
+# siginfo_t offset
+.equ SI_ADDR, 16                 # offset of si_addr in siginfo_t
+
+.global platform_init_guard_pages
+platform_init_guard_pages:
+    push %rbx
+
+    # mprotect(guard_page_underflow, PAGE_SIZE, PROT_NONE)
+    mov $SYS_mprotect, %rax
+    lea guard_page_underflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx              # PROT_NONE = 0
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
+    # mprotect(guard_page_overflow, PAGE_SIZE, PROT_NONE)
+    mov $SYS_mprotect, %rax
+    lea guard_page_overflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
+    # rt_sigaction(SIGSEGV, &sigact, NULL, 8)
+    # Kernel sigaction struct: [handler:8][flags:8][restorer:8][mask:128]
+    lea sigact(%rip), %rbx
+
+    # Set handler
+    lea sigsegv_handler(%rip), %rax
+    mov %rax, (%rbx)
+
+    # Set flags: SA_SIGINFO | SA_NODEFER | SA_RESTORER
+    movq $(SA_SIGINFO | SA_NODEFER | SA_RESTORER), 8(%rbx)
+
+    # Set restorer (required by kernel on x86-64)
+    lea sa_restorer_trampoline(%rip), %rax
+    mov %rax, 16(%rbx)
+
+    # Zero the signal mask (128 bytes at offset 24)
+    lea 24(%rbx), %rdi
+    xor %eax, %eax
+    mov $16, %rcx               # 16 qwords = 128 bytes
+    cld
+    rep stosq
+
+    # rt_sigaction(SIGSEGV, &sigact, NULL, sizeof(sigset_t))
+    mov $SYS_rt_sigaction, %rax
+    mov $SIGSEGV, %rdi
+    mov %rbx, %rsi              # &sigact
+    xor %edx, %edx              # old = NULL
+    mov $8, %r10                # sizeof(sigset_t) for kernel
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
+    pop %rbx
+    ret
+
+.Lguard_fail:
+    # Fatal: guard page setup failed — exit with error message
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_guard_fail(%rip), %rsi
+    mov $msg_guard_fail_len, %rdx
+    syscall
+    mov $SYS_exit, %rax
+    mov $1, %rdi
+    syscall
+
+# sa_restorer trampoline — kernel requires this for signal return
+sa_restorer_trampoline:
+    mov $15, %rax               # SYS_rt_sigreturn
+    syscall
+
+# SIGSEGV signal handler
+# Called with: RDI = signum, RSI = siginfo_t*, RDX = ucontext_t*
+sigsegv_handler:
+    push %rbx
+    mov %rdx, %rbx              # RBX = ucontext (save before syscalls clobber RDX)
+
+    # Get faulting address from siginfo_t
+    mov SI_ADDR(%rsi), %rax     # RAX = faulting address
+
+    # Check if fault is in underflow guard page
+    lea guard_page_underflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_check_overflow
+    lea guard_page_underflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_underflow
+
+.Lsig_check_overflow:
+    # Check if fault is in overflow guard page
+    lea guard_page_overflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_unknown
+    lea guard_page_overflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_overflow
+
+.Lsig_unknown:
+    # Not our guard page — re-raise default SIGSEGV
+    # Reset handler to SIG_DFL (0) and re-raise
+    lea sigact(%rip), %rsi
+    movq $0, (%rsi)             # handler = SIG_DFL
+    movq $0, 8(%rsi)            # flags = 0
+    mov $SYS_rt_sigaction, %rax
+    mov $SIGSEGV, %rdi
+    xor %edx, %edx
+    mov $8, %r10
+    syscall
+    # Return from handler — the faulting instruction re-executes,
+    # this time with default handler → crash with core dump
+    pop %rbx
+    ret
+
+.Lsig_underflow:
+    # Print "stack underflow\n"
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_underflow(%rip), %rsi
+    mov $msg_underflow_len, %rdx
+    syscall
+    jmp .Lsig_recover
+
+.Lsig_overflow:
+    # Print "stack overflow\n"
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_overflow(%rip), %rsi
+    mov $msg_overflow_len, %rdx
+    syscall
+
+.Lsig_recover:
+    # Modify ucontext registers to resume at repl_loop with clean state
+    # RBX = ucontext_t* (saved at handler entry)
+    lea repl_loop(%rip), %rax
+    mov %rax, GREGS_RIP(%rbx)           # RIP = repl_loop
+
+    mov rp0(%rip), %rax
+    mov %rax, GREGS_RSP(%rbx)           # RSP = rp0
+
+    mov sp0(%rip), %rax
+    mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
+
+    # Always restore LATEST and HERE — a fault during forth_colon may
+    # have partially modified R12/R13 before STATE was set to compiling.
+    movq $0, state(%rip)
+    mov saved_latest(%rip), %rax
+    mov %rax, GREGS_R12(%rbx)           # R12 = saved LATEST
+    mov saved_here(%rip), %rax
+    mov %rax, GREGS_R13(%rbx)           # R13 = saved HERE
+
+.Lsig_done:
+    # Return from signal handler — kernel restores modified ucontext
+    pop %rbx
+    ret
+
+# ---------- Signal Handler Messages ----------
+.section .rodata
+msg_underflow:  .ascii "stack underflow\n"
+.equ msg_underflow_len, . - msg_underflow
+msg_overflow:   .ascii "stack overflow\n"
+.equ msg_overflow_len, . - msg_overflow
+msg_guard_fail: .ascii "fatal: guard page setup failed\n"
+.equ msg_guard_fail_len, . - msg_guard_fail
+
 # ---------- Terminal Data ----------
 .bss
 .align 4
@@ -163,3 +353,8 @@ orig_termios:
     .space TERMIOS_SIZE
 raw_termios:
     .space TERMIOS_SIZE
+
+# Kernel sigaction struct (152 bytes)
+.align 8
+sigact:
+    .space 152

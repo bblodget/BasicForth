@@ -1,10 +1,5 @@
 # BasicForth — ARM64 Build
 # Builds natively on ARM64 or cross-compiles from x86
-#
-# Build modes:
-#   make              Safe build (stack/dict guards enabled)
-#   make FAST=1       Fast build (guards disabled)
-
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),aarch64)
     CROSS :=
@@ -16,9 +11,6 @@ AS      = $(CROSS)as
 LD      = $(CROSS)ld
 CC      = $(CROSS)gcc
 
-ifdef FAST
-ASFLAGS = --defsym FAST=1
-endif
 
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
@@ -36,7 +28,7 @@ TEST_BIN = test_basicforth
 all: $(BIN)
 
 %.o: %.s
-	$(AS) $(ASFLAGS) -o $@ $<
+	$(AS) -o $@ $<
 
 $(BIN): $(OBJS)
 	$(LD) -N -o $@ $(OBJS)
@@ -66,9 +58,7 @@ clean:
 help:
 	@echo "BasicForth ARM64 Build"
 	@echo ""
-	@echo "  make              Build basicforth (safe mode, guards enabled)"
-	@echo "  make FAST=1       Build basicforth (fast mode, guards disabled)"
-	@echo ""
+	@echo "  make              Build basicforth binary"
 	@echo "  make test         Run basicforth (via QEMU or native)"
 	@echo "  make unit-test    Run unit tests (C harness)"
 	@echo "  make deploy       Deploy basicforth to Pumpkin board via SSH"

@@ -21,13 +21,27 @@ _start:
     ADR X21, dict_space             // HERE
     ADR X22, dict_tick              // LATEST
 
+    // Initialize saved state for error recovery
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
+
+    BL platform_init_guard_pages
     BL platform_raw_mode
 
+.global repl_loop
 repl_loop:
     // Save return stack pointer for error recovery
     MOV X9, SP
     ADR X10, rp0
     STR X9, [X10]
+
+    // Save LATEST and HERE for guard page recovery
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
 
     // Print prompt
     ADR X0, prompt_msg
@@ -170,51 +184,31 @@ repl_bye:
     BL platform_bye
 
 // ---------- Error Handlers ----------
-// These are branched to (not called) from primitives in core.s.
-// They print a message, reset the stack, recover from compile mode
-// if needed, and return to the REPL.
-
-.global stack_underflow
-stack_underflow:
-    ADR X0, msg_underflow
-    MOV X1, #msg_underflow_len
-    BL platform_write
-    B error_reset
-
-.global stack_overflow
-stack_overflow:
-    ADR X0, msg_overflow
-    MOV X1, #msg_overflow_len
-    BL platform_write
-    B error_reset
+// Stack underflow/overflow are caught by guard pages (SIGSEGV handler
+// in platform_linux.s). Only dict_full remains as an explicit handler.
 
 .global dict_full
 dict_full:
     ADR X0, msg_dict_full
     MOV X1, #msg_dict_full_len
     BL platform_write
-    B error_reset
 
-// Shared recovery: reset stack, abort compilation if needed, return to REPL.
-error_reset:
-    // Reset return stack (discard stale frames from nested calls)
+    // Reset return stack and data stack
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9
-
-    // Reset data stack to empty
     ADR X9, sp0
-    LDR X19, [X9]                   // DSP = sp0 (empty)
+    LDR X19, [X9]
 
     // If we were compiling, abort the definition
     ADR X9, state
     LDR X10, [X9]
     CBZ X10, repl_loop
-    STR XZR, [X9]                   // reset to interpret mode
+    STR XZR, [X9]
     ADR X9, saved_latest
-    LDR X22, [X9]                   // restore LATEST
+    LDR X22, [X9]
     ADR X9, saved_here
-    LDR X21, [X9]                   // restore HERE
+    LDR X21, [X9]
 
     B repl_loop
 
@@ -228,10 +222,6 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_underflow:  .ascii "stack underflow\n"
-.equ msg_underflow_len, . - msg_underflow
-msg_overflow:   .ascii "stack overflow\n"
-.equ msg_overflow_len, . - msg_overflow
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 

@@ -27,42 +27,14 @@
 .equ F_HIDDEN,    0x40
 .equ F_LENMASK,   0x3F
 
-# ---------- Stack Guard Macros ----------
-# Build with `as -DFAST` (or `make FAST=1`) to disable runtime checks.
-
-# CHECK_DEPTH n: verify at least n items on stack.
-# In SAFE mode: compare DSP against sp0 - n*CELL, jump to stack_underflow if insufficient.
-# In FAST mode: no-op.
-.macro CHECK_DEPTH n
-.ifndef FAST
-    mov sp0(%rip), %rax
-    sub $\n*CELL, %rax
-    cmp %rax, %r15
-    ja stack_underflow
-.endif
-.endm
-
-# CHECK_OVERFLOW n: verify room to push n items (default 1).
-# Safe: check DSP - n*CELL > data_stack_bottom.
-# Fast: no-op.
-.macro CHECK_OVERFLOW n=1
-.ifndef FAST
-    lea data_stack_bottom+\n*CELL(%rip), %rax
-    cmp %rax, %r15
-    jbe stack_overflow
-.endif
-.endm
 
 # CHECK_DICT n: verify HERE + n bytes fits in dict_space.
-# Safe: jump to dict_full if past end.
-# Fast: no-op.
+# Always active — dictionary has no guard page.
 .macro CHECK_DICT n
-.ifndef FAST
     lea dict_space+DICT_SPACE_SIZE(%rip), %rcx
     lea \n(%r13), %rdx
     cmp %rcx, %rdx
     ja dict_full
-.endif
 .endm
 
 # DEFWORD entry, name, label, link, flags
@@ -95,8 +67,8 @@
 # DUP ( a -- a a )
 .global forth_dup
 forth_dup:
-    CHECK_DEPTH 1
-    CHECK_OVERFLOW
+
+
     mov (%r15), %rax
     sub $CELL, %r15
     mov %rax, (%r15)
@@ -105,14 +77,14 @@ forth_dup:
 # DROP ( a -- )
 .global forth_drop
 forth_drop:
-    CHECK_DEPTH 1
+    mov (%r15), %rax            # touch top item (triggers guard page if empty)
     add $CELL, %r15
     ret
 
 # SWAP ( a b -- b a )
 .global forth_swap
 forth_swap:
-    CHECK_DEPTH 2
+
     mov (%r15), %rax            # rax = b (top)
     mov CELL(%r15), %rcx        # rcx = a (second)
     mov %rcx, (%r15)            # top = a
@@ -122,8 +94,8 @@ forth_swap:
 # OVER ( a b -- a b a )
 .global forth_over
 forth_over:
-    CHECK_DEPTH 2
-    CHECK_OVERFLOW
+
+
     mov CELL(%r15), %rax        # rax = a (second item)
     sub $CELL, %r15
     mov %rax, (%r15)            # push a on top
@@ -132,7 +104,7 @@ forth_over:
 # + ( a b -- a+b )
 .global forth_add
 forth_add:
-    CHECK_DEPTH 2
+
     mov (%r15), %rax            # rax = b
     add $CELL, %r15             # pop b
     add %rax, (%r15)            # top = a + b
@@ -141,7 +113,7 @@ forth_add:
 # - ( a b -- a-b )
 .global forth_sub
 forth_sub:
-    CHECK_DEPTH 2
+
     mov (%r15), %rax            # rax = b
     add $CELL, %r15             # pop b
     sub %rax, (%r15)            # top = a - b
@@ -150,7 +122,7 @@ forth_sub:
 # NEGATE ( a -- -a )
 .global forth_negate
 forth_negate:
-    CHECK_DEPTH 1
+
     negq (%r15)
     ret
 
@@ -160,7 +132,7 @@ forth_negate:
 # Read 8-byte cell from address
 .global forth_fetch
 forth_fetch:
-    CHECK_DEPTH 1
+
     mov (%r15), %rax            # rax = addr
     mov (%rax), %rax            # rax = [addr]
     mov %rax, (%r15)            # replace top
@@ -170,7 +142,7 @@ forth_fetch:
 # Write 8-byte cell to address
 .global forth_store
 forth_store:
-    CHECK_DEPTH 2
+
     mov (%r15), %rax            # rax = addr
     mov CELL(%r15), %rcx        # rcx = x
     mov %rcx, (%rax)            # [addr] = x
@@ -181,7 +153,7 @@ forth_store:
 # Read 1 byte from address, zero-extended
 .global forth_cfetch
 forth_cfetch:
-    CHECK_DEPTH 1
+
     mov (%r15), %rax
     movzbl (%rax), %eax
     mov %rax, (%r15)
@@ -191,7 +163,7 @@ forth_cfetch:
 # Write 1 byte to address
 .global forth_cstore
 forth_cstore:
-    CHECK_DEPTH 2
+
     mov (%r15), %rax            # addr
     mov CELL(%r15), %rcx        # byte
     movb %cl, (%rax)
@@ -202,7 +174,7 @@ forth_cstore:
 # ( char -- )
 .global forth_emit
 forth_emit:
-    CHECK_DEPTH 1
+
     mov (%r15), %rdi            # char
     add $CELL, %r15             # pop
     jmp platform_emit           # tail call
@@ -211,7 +183,7 @@ forth_emit:
 # ( -- char )
 .global forth_key
 forth_key:
-    CHECK_OVERFLOW
+
     call platform_key           # RDI = character
     sub $CELL, %r15
     mov %rdi, (%r15)
@@ -224,7 +196,7 @@ forth_key:
 # Calls platform_key and platform_emit directly (register level).
 .global forth_accept
 forth_accept:
-    CHECK_DEPTH 2
+
     push %rbx
     push %rbp
     push %r12
@@ -303,8 +275,8 @@ forth_accept:
 # Uses BASE variable for default base.
 .global forth_number
 forth_number:
-    CHECK_DEPTH 2
-    CHECK_OVERFLOW
+
+
     push %rbx
     push %rbp
     push %r12
@@ -462,8 +434,8 @@ forth_number:
 #          original c-addr u and 0 (not found).
 .global forth_find
 forth_find:
-    CHECK_DEPTH 2
-    CHECK_OVERFLOW
+
+
     push %rbx
     push %rbp
     push %r12                   # save LATEST (read-only)
@@ -570,7 +542,7 @@ forth_find:
 # Returns 0 0 if no more tokens.
 .global forth_parse_word
 forth_parse_word:
-    CHECK_OVERFLOW 2
+
     # Load globals
     mov source_addr(%rip), %rsi   # RSI = buffer base
     mov source_len(%rip), %rcx    # RCX = total length
@@ -623,7 +595,7 @@ forth_parse_word:
 # Call the execution token. Tail-call: word's RET returns to our caller.
 .global forth_execute
 forth_execute:
-    CHECK_DEPTH 1
+
     mov (%r15), %rax
     add $CELL, %r15
     jmp *%rax                     # tail-call
@@ -687,7 +659,7 @@ forth_execute:
 # Print top of stack as signed decimal with trailing space.
 .global forth_dot
 forth_dot:
-    CHECK_DEPTH 1
+
     push %rbx
     mov (%r15), %rax            # RAX = number to print
     add $CELL, %r15             # pop
@@ -767,7 +739,7 @@ forth_bye:
 #
 .global forth_lit
 forth_lit:
-    CHECK_OVERFLOW
+
     pop %rax                        # return addr = pointer to inline value
     mov (%rax), %rcx                # rcx = inline value
     sub $CELL, %r15
@@ -842,12 +814,10 @@ forth_colon:
     jz .Lcolon_err                  # empty name — bail
 
     # Check dictionary space (need ~128 bytes for header)
-.ifndef FAST
     lea dict_space+DICT_SPACE_SIZE(%rip), %rax
     lea 128(%r13), %rdx
     cmp %rax, %rdx
     ja .Lcolon_dict_full
-.endif
 
     # Clamp name length to F_LENMASK (63) max
     cmp $F_LENMASK, %rcx
@@ -1031,12 +1001,28 @@ DEFWORD dict_tick,       "'",          forth_tick,        dict_immediate, F_IMME
 .global dict_tick
 
 # ---------- Data Stack Memory ----------
+# Layout (grows downward):
+#   guard_page_underflow  4096 bytes — mprotect PROT_NONE at startup
+#   data_stack_top (sp0)  page-aligned
+#   data_stack            4096 bytes (512 cells)
+#   data_stack_bottom     page-aligned
+#   guard_page_overflow   4096 bytes — mprotect PROT_NONE at startup
+#
+# Reading past sp0 hits the underflow guard page → SIGSEGV → handler recovers.
+# Writing past bottom hits the overflow guard page → SIGSEGV → handler recovers.
 .bss
-.align 8
+.balign 4096
+.global guard_page_overflow
+guard_page_overflow:
+    .space 4096
+.global data_stack_bottom
 data_stack_bottom:
     .space DATA_STACK_SIZE
 .global data_stack_top
 data_stack_top:
+.global guard_page_underflow
+guard_page_underflow:
+    .space 4096
 
 # ---------- Dictionary Space ----------
 .equ DICT_SPACE_SIZE, 65536     # 64KB

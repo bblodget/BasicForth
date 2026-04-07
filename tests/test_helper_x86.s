@@ -70,7 +70,9 @@ platform_write:
 platform_bye:
     ret
 
-# Error handler stubs — set a flag so C tests can detect guard triggers.
+# Error handler stubs for test harness.
+# Guard pages don't exist in the test binary, so stack_underflow/overflow
+# are stubs. dict_full is still used by CHECK_DICT.
 .data
 .global error_flag
 error_flag:

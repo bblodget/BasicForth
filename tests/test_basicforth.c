@@ -863,11 +863,10 @@ int main(void)
     test_lit();
     test_lit_negative();
 
+    /* Stack underflow/overflow is caught by guard pages (SIGSEGV handler)
+     * in the real binary. Guard pages don't exist in the test binary, so
+     * we only test that valid operations don't produce false alarms. */
     section("Stack Guards");
-    test_underflow_add();
-    test_underflow_swap();
-    test_underflow_store();
-    test_overflow_dup();
     test_no_underflow_add();
 
     printf("\n=====================\n");
