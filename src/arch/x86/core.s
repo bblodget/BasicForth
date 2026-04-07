@@ -138,6 +138,7 @@ forth_mul:
 
 # /MOD ( a b -- rem quot )
 # Division by zero returns 0 0.
+# INT64_MIN / -1 returns 0 INT64_MIN (matches ARM64 SDIV behavior).
 .global forth_divmod
 forth_divmod:
 
@@ -145,6 +146,13 @@ forth_divmod:
     test %rcx, %rcx
     jz .Ldivmod_zero
     mov CELL(%r15), %rax        # rax = a (dividend)
+    # Check for INT64_MIN / -1 overflow (idiv would raise SIGFPE)
+    cmp $-1, %rcx
+    jne .Ldivmod_ok
+    movabs $0x8000000000000000, %rdx
+    cmp %rdx, %rax
+    je .Ldivmod_overflow
+.Ldivmod_ok:
     cqo                         # sign-extend rax into rdx:rax
     idiv %rcx                   # rax = quot, rdx = rem
     mov %rdx, CELL(%r15)        # second = rem
@@ -153,6 +161,11 @@ forth_divmod:
 .Ldivmod_zero:
     movq $0, CELL(%r15)         # rem = 0
     movq $0, (%r15)             # quot = 0
+    ret
+.Ldivmod_overflow:
+    movq $0, CELL(%r15)         # rem = 0
+    # quot = INT64_MIN (already in rax)
+    mov %rax, (%r15)
     ret
 
 # 1+ ( a -- a+1 )

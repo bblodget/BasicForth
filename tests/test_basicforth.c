@@ -361,6 +361,24 @@ static void test_divmod_negative(void)
              dsp_out[0], stack_depth(dsp_out));
 }
 
+static void test_divmod_overflow(void)
+{
+    int64_t *dsp_in, *dsp_out;
+    int64_t int64_min = (int64_t)0x8000000000000000LL;
+
+    dsp_in = setup_2(int64_min, -1);
+    call_primitive(forth_divmod, dsp_in, &dsp_out);
+
+    /* INT64_MIN / -1 overflows; we return 0 INT64_MIN (matches ARM64 SDIV) */
+    if (stack_depth(dsp_out) == 2 && dsp_out[1] == 0 && dsp_out[0] == int64_min)
+        pass("/MOD ( INT64_MIN -1 -- 0 INT64_MIN )");
+    else
+        fail("/MOD ( INT64_MIN -1 -- 0 INT64_MIN )",
+             "rem=%ld quot=%ld depth=%d",
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             dsp_out[0], stack_depth(dsp_out));
+}
+
 static void test_divmod_by_zero(void)
 {
     int64_t *dsp_in, *dsp_out;
@@ -1047,6 +1065,7 @@ int main(void)
     test_divmod();
     test_divmod_exact();
     test_divmod_negative();
+    test_divmod_overflow();
     test_divmod_by_zero();
     test_one_plus();
     test_one_minus();
