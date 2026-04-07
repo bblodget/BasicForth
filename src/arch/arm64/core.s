@@ -206,6 +206,58 @@ forth_max:
     STR X10, [X19]
     RET
 
+// = ( a b -- flag )
+.global forth_equal
+forth_equal:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSETM X10, EQ              // -1 if equal, 0 otherwise
+    STR X10, [X19]
+    RET
+
+// < ( a b -- flag )
+.global forth_less
+forth_less:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSETM X10, LT              // -1 if a < b, 0 otherwise
+    STR X10, [X19]
+    RET
+
+// > ( a b -- flag )
+.global forth_greater
+forth_greater:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSETM X10, GT              // -1 if a > b, 0 otherwise
+    STR X10, [X19]
+    RET
+
+// 0= ( a -- flag )
+.global forth_zero_equal
+forth_zero_equal:
+
+    LDR X9, [X19]
+    CMP X9, #0
+    CSETM X9, EQ               // -1 if zero, 0 otherwise
+    STR X9, [X19]
+    RET
+
+// 0< ( a -- flag )
+.global forth_zero_less
+forth_zero_less:
+
+    LDR X9, [X19]
+    ASR X9, X9, #63            // -1 if negative, 0 if non-negative
+    STR X9, [X19]
+    RET
+
 // ---------- Memory ----------
 
 // @ (fetch) ( addr -- x )
@@ -1105,7 +1157,12 @@ DEFWORD dict_one_minus,  "1-",         forth_one_minus,   dict_one_plus
 DEFWORD dict_abs,        "abs",        forth_abs,         dict_one_minus
 DEFWORD dict_min,        "min",        forth_min,         dict_abs
 DEFWORD dict_max,        "max",        forth_max,         dict_min
-DEFWORD dict_tick,       "'",          forth_tick,        dict_max, F_IMMEDIATE
+DEFWORD dict_equal,      "=",          forth_equal,       dict_max
+DEFWORD dict_less,       "<",          forth_less,        dict_equal
+DEFWORD dict_greater,    ">",          forth_greater,     dict_less
+DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_greater
+DEFWORD dict_zero_less,  "0<",         forth_zero_less,   dict_zero_equal
+DEFWORD dict_tick,       "'",          forth_tick,        dict_zero_less, F_IMMEDIATE
 .global dict_tick
 
 // ---------- Data Stack Memory ----------

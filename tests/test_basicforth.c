@@ -48,6 +48,11 @@ extern void forth_one_minus(void);
 extern void forth_abs(void);
 extern void forth_min(void);
 extern void forth_max(void);
+extern void forth_equal(void);
+extern void forth_less(void);
+extern void forth_greater(void);
+extern void forth_zero_equal(void);
+extern void forth_zero_less(void);
 
 /* Engine init (defined in test_helper) */
 extern void init_engine(int64_t here_val, int64_t latest_val);
@@ -504,6 +509,190 @@ static void test_max_negative(void)
         pass("MAX ( -5 3 -- 3 )");
     else
         fail("MAX ( -5 3 -- 3 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+/* --- Comparison tests --- */
+
+static void test_equal_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(42, 42);
+    call_primitive(forth_equal, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("= ( 42 42 -- -1 )");
+    else
+        fail("= ( 42 42 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_equal_false(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(42, 7);
+    call_primitive(forth_equal, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("= ( 42 7 -- 0 )");
+    else
+        fail("= ( 42 7 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_less_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(3, 10);
+    call_primitive(forth_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("< ( 3 10 -- -1 )");
+    else
+        fail("< ( 3 10 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_less_false(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(10, 3);
+    call_primitive(forth_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("< ( 10 3 -- 0 )");
+    else
+        fail("< ( 10 3 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_less_equal(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(5, 5);
+    call_primitive(forth_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("< ( 5 5 -- 0 )");
+    else
+        fail("< ( 5 5 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_less_negative(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(-5, 3);
+    call_primitive(forth_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("< ( -5 3 -- -1 )");
+    else
+        fail("< ( -5 3 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_greater_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(10, 3);
+    call_primitive(forth_greater, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("> ( 10 3 -- -1 )");
+    else
+        fail("> ( 10 3 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_greater_false(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_2(3, 10);
+    call_primitive(forth_greater, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("> ( 3 10 -- 0 )");
+    else
+        fail("> ( 3 10 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_zero_equal_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(0);
+    call_primitive(forth_zero_equal, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("0= ( 0 -- -1 )");
+    else
+        fail("0= ( 0 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_zero_equal_false(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(42);
+    call_primitive(forth_zero_equal, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("0= ( 42 -- 0 )");
+    else
+        fail("0= ( 42 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_zero_less_true(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(-7);
+    call_primitive(forth_zero_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == -1)
+        pass("0< ( -7 -- -1 )");
+    else
+        fail("0< ( -7 -- -1 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_zero_less_false(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(7);
+    call_primitive(forth_zero_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("0< ( 7 -- 0 )");
+    else
+        fail("0< ( 7 -- 0 )",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_zero_less_zero(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    dsp_in = setup_1(0);
+    call_primitive(forth_zero_less, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 0)
+        pass("0< ( 0 -- 0 )");
+    else
+        fail("0< ( 0 -- 0 )",
              "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
@@ -1075,6 +1264,21 @@ int main(void)
     test_min_negative();
     test_max();
     test_max_negative();
+
+    section("Comparisons");
+    test_equal_true();
+    test_equal_false();
+    test_less_true();
+    test_less_false();
+    test_less_equal();
+    test_less_negative();
+    test_greater_true();
+    test_greater_false();
+    test_zero_equal_true();
+    test_zero_equal_false();
+    test_zero_less_true();
+    test_zero_less_false();
+    test_zero_less_zero();
 
     section("Number Parsing");
     base = 10;

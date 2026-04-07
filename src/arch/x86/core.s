@@ -215,6 +215,65 @@ forth_max:
     mov %rax, (%r15)            # a < b, so store b
 1:  ret
 
+# = ( a b -- flag )
+.global forth_equal
+forth_equal:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmp %rax, (%r15)            # compare a with b
+    jne 1f
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
+# < ( a b -- flag )
+.global forth_less
+forth_less:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmp %rax, (%r15)            # compare a with b
+    jge 1f
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
+# > ( a b -- flag )
+.global forth_greater
+forth_greater:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmp %rax, (%r15)            # compare a with b
+    jle 1f
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
+# 0= ( a -- flag )
+.global forth_zero_equal
+forth_zero_equal:
+
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmpq $0, (%r15)
+    jne 1f
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
+# 0< ( a -- flag )
+.global forth_zero_less
+forth_zero_less:
+
+    mov (%r15), %rax
+    sar $63, %rax               # -1 if negative, 0 if non-negative
+    mov %rax, (%r15)
+    ret
+
 # ---------- Memory ----------
 
 # @ (fetch) ( addr -- x )
@@ -1093,7 +1152,12 @@ DEFWORD dict_one_minus,  "1-",         forth_one_minus,   dict_one_plus
 DEFWORD dict_abs,        "abs",        forth_abs,         dict_one_minus
 DEFWORD dict_min,        "min",        forth_min,         dict_abs
 DEFWORD dict_max,        "max",        forth_max,         dict_min
-DEFWORD dict_tick,       "'",          forth_tick,        dict_max, F_IMMEDIATE
+DEFWORD dict_equal,      "=",          forth_equal,       dict_max
+DEFWORD dict_less,       "<",          forth_less,        dict_equal
+DEFWORD dict_greater,    ">",          forth_greater,     dict_less
+DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_greater
+DEFWORD dict_zero_less,  "0<",         forth_zero_less,   dict_zero_equal
+DEFWORD dict_tick,       "'",          forth_tick,        dict_zero_less, F_IMMEDIATE
 .global dict_tick
 
 # ---------- Data Stack Memory ----------
