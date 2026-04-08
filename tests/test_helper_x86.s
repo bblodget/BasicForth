@@ -1,4 +1,7 @@
 # BasicForth — Test Helper (x86-64)
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
+#
 # Bridge between C test harness and assembly primitives.
 # Provides call_primitive(), init_engine(), and platform/error stubs.
 #

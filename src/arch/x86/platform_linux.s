@@ -1,4 +1,7 @@
 # BasicForth — Platform Layer (Linux/x86-64)
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
+#
 # Linux-specific I/O via syscalls. Swap this file to port to bare metal.
 #
 # x86-64 Linux syscall ABI:

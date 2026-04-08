@@ -1,5 +1,7 @@
 /*
  * BasicForth — Unit Test Harness
+ * Copyright (C) 2026 Brandon Blodget
+ * SPDX-License-Identifier: GPL-2.0-only
  *
  * Tests core assembly primitives by calling them directly from C.
  * Links against core.o and a per-architecture test_helper.s that

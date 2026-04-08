@@ -1,4 +1,6 @@
 // BasicForth — Outer Interpreter (ARM64)
+// Copyright (C) 2026 Brandon Blodget
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Register convention (pure memory stack):
 //   X19 = DSP (data stack pointer, points to top item; equals sp0 when empty)

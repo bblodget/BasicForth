@@ -1,4 +1,6 @@
 # BasicForth — Outer Interpreter (x86-64)
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Register convention (pure memory stack):
 #   R15 = DSP (data stack pointer, points to top item; equals sp0 when empty)

@@ -1,4 +1,7 @@
 // BasicForth — Core ASM Primitives (ARM64)
+// Copyright (C) 2026 Brandon Blodget
+// SPDX-License-Identifier: GPL-2.0-only
+//
 // Platform-independent ARM64 assembly. Requires platform_linux.s (or equivalent).
 //
 // Register allocation:
