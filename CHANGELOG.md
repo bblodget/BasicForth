@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.2.0 — 2026-04-09
+
+Control flow, file loading, and the core.fs bootstrap. BasicForth can now
+load Forth source files and compile definitions with conditionals, loops,
+and recursion.
+
+### Features
+- Control flow: `IF`, `ELSE`, `THEN`, `BEGIN`, `UNTIL`, `AGAIN`, `WHILE`, `REPEAT`
+- Recursion: `RECURSE` (compile call to current definition)
+- Comments: `(` paren comments, `\` line comments
+- `EVALUATE` — interpret a string as Forth source
+- `INCLUDED` — load and interpret a Forth source file (via mmap)
+- Startup auto-load of `core.fs` (silent skip if not found)
+- core.fs words: `CR`, `SPACE`, `BL`, `TRUE`, `FALSE`, `MOD`, `/`, `CELL+`, `CELLS`, `<>`, `0<>`
+- Control-flow safety: tag checking detects mismatched pairs (e.g., `BEGIN...THEN`)
+- Unresolved control flow detected by `;` with clean rollback
+- File error reporting with filename and line number
+
+### Architecture
+- Inline native branches (not BRANCH/0BRANCH primitives) — true STC
+- x86-64: `JZ`/`JMP` rel32 with forward-reference patching
+- ARM64: `CBZ`/`B` with bitfield offset encoding and I-cache flush
+- Nest-safe longjmp recovery for errors inside EVALUATE/INCLUDED
+- FIND returns flag=2 for IMMEDIATE+COMPILE_ONLY words
+- Platform file I/O: `open`, `fstat`, `mmap`, `munmap`, `close` syscalls
+
+### Testing
+- 119 unit tests (C harness)
+- 113 integration tests (shell-based, piped I/O)
+
+---
+
 ## v0.1.0 — 2026-04-08
 
 Initial tagged release. Interactive REPL with compiler on ARM64 and x86-64.
