@@ -13,7 +13,7 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all tests run run-tests clean help
+.PHONY: all test run run-test clean help
 
 # Default: build binary only
 $(BIN): $(OBJS)
@@ -24,7 +24,7 @@ $(BIN): $(OBJS)
 
 all: $(BIN) $(TEST_BIN)
 
-tests: $(TEST_BIN)
+test: $(TEST_BIN)
 
 $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
@@ -33,7 +33,7 @@ $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 run: $(BIN)
 	./$(BIN)
 
-run-tests: $(TEST_BIN)
+run-test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 clean:
@@ -43,9 +43,9 @@ help:
 	@echo "BasicForth x86-64 Build"
 	@echo ""
 	@echo "  make                  Build basicforth binary"
-	@echo "  make tests            Build unit tests (C harness)"
-	@echo "  make all              Build basicforth and unit tests"
+	@echo "  make test            Build unit test (C harness)"
+	@echo "  make all              Build basicforth and unit test"
 	@echo "  make run              Run basicforth interactively"
-	@echo "  make run-tests        Run unit tests (C harness)"
+	@echo "  make run-test        Run unit test (C harness)"
 	@echo "  make clean            Remove build artifacts"
 	@echo "  make help             Show this help"

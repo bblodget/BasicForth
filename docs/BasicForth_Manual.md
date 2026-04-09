@@ -31,7 +31,16 @@ sudo apt install binutils gcc make
 
 Run `make help` for a full list of targets.
 
-### x86-64 (native)
+### Native build
+
+```
+make
+make run
+```
+
+This auto-detects your architecture — builds x86-64 on x86 hosts, ARM64 on ARM64 hosts.
+
+### x86-64 (explicit)
 
 ```
 make x86
@@ -72,8 +81,8 @@ that access framebuffers, GPIO, or device-specific ioctls need real hardware.
 ### Unit Tests
 
 ```
-make run-tests-x86
-make run-tests-arm64
+make run-test-x86
+make run-test-arm64
 ```
 
 ## The Prompt

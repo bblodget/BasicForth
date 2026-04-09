@@ -48,9 +48,10 @@ On Debian/Ubuntu: `apt install binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu 
 ### Build Commands
 
 ```sh
-make              # Build all architectures
+make              # Build for native architecture
+make all          # Build all architectures
 make x86          # Build x86-64 binary
-make arm64        # Build ARM64 binary (cross-compile)
+make arm64        # Build ARM64 binary (cross-compile or native)
 make clean        # Remove build artifacts
 ```
 
@@ -67,8 +68,8 @@ src/arch/x86/basicforth
 ### Unit Tests
 
 ```sh
-make run-tests-x86     # Run x86-64 tests
-make run-tests-arm64   # Run ARM64 tests
+make run-test-x86     # Run x86-64 tests
+make run-test-arm64   # Run ARM64 tests
 ```
 
 ### Deploy to ARM64 Board
