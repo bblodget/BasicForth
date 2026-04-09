@@ -98,14 +98,19 @@ completed. See Planning.md for high-level vision and design decisions.
 - [ ] `C,` — compile a byte into dict space
 - [ ] HERE as a Forth word (push current HERE value)
 
-### 3e. core.fs Bootstrap
+### 3e. core.fs Bootstrap — IN PROGRESS
 
-- [ ] File loading: INCLUDE or EVALUATE from a buffer
+- [x] Comments: `(` and `\` (asm, IMMEDIATE)
+- [x] EVALUATE ( c-addr u -- ) — interpret a string as Forth
+- [x] File I/O: platform_open_file, platform_fstat, platform_mmap_file, platform_munmap, platform_close_file
+- [x] INCLUDED ( c-addr u -- ) — load Forth file via mmap, line-by-line
+- [x] Startup auto-load of core.fs (silent skip if not found)
+- [x] core.fs initial words: CR, SPACE, BL, TRUE, FALSE, MOD, /, CELL+, CELLS, <>, 0<>
+- [x] Line-by-line error reporting: filename:line: ? token
 - [ ] Derived stack words: 2OVER, 2SWAP, PICK
-- [ ] Derived arithmetic: CELL+, CELLS, MOD, */
+- [ ] Derived arithmetic: */
 - [ ] String words: TYPE, COUNT, S", ."
-- [ ] Formatting: CR, SPACE, SPACES, U., .R
-- [ ] Comments: `(` and `\`
+- [ ] Formatting: SPACES, U., .R
 
 ---
 

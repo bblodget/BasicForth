@@ -296,58 +296,45 @@ ADR X19, data_stack_top           lea data_stack_top(%rip), %r15
 
 On an empty stack, DSP equals `sp0` and no items exist in memory.
 
-## Future Primitives
+## Additional Primitives (since initial documentation)
 
-Words to be added as BasicForth grows. All will have identical stack effects
-on both architectures.
+The following primitives have been added to core.s on both architectures.
+See [Forth_Core_Words.md](Forth_Core_Words.md) for the full vocabulary.
 
-### Stack
+### Stack (all in asm)
 
-| Word  | Stack effect         | Notes                             |
-|-------|----------------------|-----------------------------------|
-| >R    | ( a -- ) (R: -- a )  | Move to return stack              |
-| R>    | ( -- a ) (R: a -- )  | Move from return stack            |
-| R@    | ( -- a ) (R: a -- a) | Copy from return stack            |
+ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP, >R, R>, R@
 
-### Arithmetic
+### Arithmetic (all in asm)
 
-| Word  | Stack effect         | Notes                             |
-|-------|----------------------|-----------------------------------|
-| *     | ( a b -- a*b )       | Multiply                          |
-| /MOD  | ( a b -- rem quot )  | Divide with remainder             |
+\*, /MOD (divide-by-zero safe), 1+, 1-, ABS, MIN, MAX
 
-### Logic
+### Logic and Comparison (all in asm)
 
-| Word    | Stack effect         | Notes                           |
-|---------|----------------------|---------------------------------|
-| AND     | ( a b -- a&b )       | Bitwise AND                     |
-| OR      | ( a b -- a\|b )      | Bitwise OR                      |
-| XOR     | ( a b -- a^b )       | Bitwise XOR                     |
-| INVERT  | ( a -- ~a )          | Bitwise NOT                     |
+AND, OR, XOR, INVERT, =, <, >, 0=, 0<
 
-### Comparison
+### Interpreter and Compiler
 
-| Word | Stack effect         | Notes                            |
-|------|----------------------|----------------------------------|
-| 0=   | ( a -- flag )        | True if a == 0                   |
-| 0<   | ( a -- flag )        | True if a < 0                    |
+| Word              | Stack effect          | Notes                              |
+|-------------------|-----------------------|------------------------------------|
+| LIT               | ( -- x )              | Push inline literal (hidden)       |
+| EXECUTE           | ( xt -- )             | Call execution token               |
+| :                 | ( "name" -- )         | Begin colon definition             |
+| ;                 | ( -- )                | End definition (IMMEDIATE)         |
+| IMMEDIATE         | ( -- )                | Mark word as immediate             |
+| '                 | ( "name" -- xt )      | Find xt (IMMEDIATE)                |
+| (                 | ( "ccc)" -- )         | Paren comment (IMMEDIATE)          |
+| \                 | ( "ccc" -- )          | Line comment (IMMEDIATE)           |
+| EVALUATE          | ( c-addr u -- )       | Interpret string as Forth          |
+| INCLUDED          | ( c-addr u -- )       | Load and interpret a source file   |
+| INTERPRET-LINE    | ( -- )                | Internal: interpret current source |
 
-### Memory
-
-| Word | Stack effect         | Notes                            |
-|------|----------------------|----------------------------------|
-| @    | ( addr -- x )        | Fetch cell from memory           |
-| !    | ( x addr -- )        | Store cell to memory             |
-| C@   | ( addr -- byte )     | Fetch byte from memory           |
-| C!   | ( byte addr -- )     | Store byte to memory             |
-
-### Compiler
+### Future Primitives
 
 | Word      | Stack effect          | Notes                           |
 |-----------|-----------------------|---------------------------------|
-| LIT       | ( -- x )              | Push inline literal             |
-| ,         | ( x -- )              | Compile cell to dictionary      |
-| EXECUTE   | ( xt -- )             | Call execution token            |
 | BRANCH    | ( -- )                | Unconditional branch            |
 | 0BRANCH   | ( flag -- )           | Branch if false                 |
-| EXIT      | ( -- )                | Return from word                |
+| EXIT      | ( -- )                | Return from word (RET)          |
+| ,         | ( x -- )              | Compile cell to dictionary      |
+| HERE      | ( -- addr )           | Push HERE register              |

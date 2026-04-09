@@ -51,16 +51,16 @@ Status: ( ) = not yet implemented, (x) = implemented
 | DROP  | ( x -- )                                      | asm   | (x)    |                         |
 | SWAP  | ( x1 x2 -- x2 x1 )                           | asm   | (x)    |                         |
 | OVER  | ( x1 x2 -- x1 x2 x1 )                        | asm   | (x)    |                         |
-| ROT   | ( x1 x2 x3 -- x2 x3 x1 )                     | forth | ( )    | >R SWAP R> SWAP         |
-| ?DUP  | ( x -- 0 \| x x )                             | forth | ( )    | DUP IF DUP THEN         |
-| 2DUP  | ( x1 x2 -- x1 x2 x1 x2 )                     | forth | ( )    | OVER OVER               |
-| 2DROP | ( x1 x2 -- )                                  | forth | ( )    | DROP DROP               |
+| ROT   | ( x1 x2 x3 -- x2 x3 x1 )                     | asm   | (x)    |                         |
+| ?DUP  | ( x -- 0 \| x x )                             | asm   | (x)    |                         |
+| 2DUP  | ( x1 x2 -- x1 x2 x1 x2 )                     | asm   | (x)    |                         |
+| 2DROP | ( x1 x2 -- )                                  | asm   | (x)    |                         |
 | 2SWAP | ( x1 x2 x3 x4 -- x3 x4 x1 x2 )              | forth | ( )    |                         |
 | 2OVER | ( x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2 )        | forth | ( )    |                         |
-| >R    | ( x -- ) (R: -- x )                            | asm   | ( )    |                         |
-| R>    | ( -- x ) (R: x -- )                            | asm   | ( )    |                         |
-| R@    | ( -- x ) (R: x -- x )                          | asm   | ( )    |                         |
-| DEPTH | ( -- +n )                                      | forth | ( )    |                         |
+| >R    | ( x -- ) (R: -- x )                            | asm   | (x)    | compile-only            |
+| R>    | ( -- x ) (R: x -- )                            | asm   | (x)    | compile-only            |
+| R@    | ( -- x ) (R: x -- x )                          | asm   | (x)    | compile-only            |
+| DEPTH | ( -- +n )                                      | asm   | (x)    |                         |
 
 ### Arithmetic
 
@@ -69,20 +69,20 @@ Status: ( ) = not yet implemented, (x) = implemented
 | +      | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 | -      | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 | NEGATE | ( n -- -n )                                   | asm   | (x)    |                         |
-| *      | ( n1 n2 -- n3 )                               | asm   | ( )    |                         |
-| /      | ( n1 n2 -- n3 )                               | forth | ( )    | /MOD NIP                |
-| MOD    | ( n1 n2 -- rem )                              | forth | ( )    | /MOD DROP               |
-| /MOD   | ( n1 n2 -- rem quot )                         | asm   | ( )    |                         |
+| *      | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
+| /      | ( n1 n2 -- n3 )                               | forth | (x)    | /MOD NIP (in core.fs)   |
+| MOD    | ( n1 n2 -- rem )                              | forth | (x)    | /MOD DROP (in core.fs)  |
+| /MOD   | ( n1 n2 -- rem quot )                         | asm   | (x)    | div-by-zero safe        |
 | */     | ( n1 n2 n3 -- n4 )                            | forth | ( )    | >R M* R> FM/MOD NIP     |
 | */MOD  | ( n1 n2 n3 -- n4 n5 )                         | forth | ( )    | >R M* R> FM/MOD         |
-| 1+     | ( n -- n+1 )                                  | forth | ( )    | 1 +                     |
-| 1-     | ( n -- n-1 )                                  | forth | ( )    | 1 -                     |
-| ABS    | ( n -- u )                                    | forth | ( )    | DUP 0< IF NEGATE THEN   |
+| 1+     | ( n -- n+1 )                                  | asm   | (x)    |                         |
+| 1-     | ( n -- n-1 )                                  | asm   | (x)    |                         |
+| ABS    | ( n -- u )                                    | asm   | (x)    |                         |
 | 2*     | ( x -- x*2 )                                  | forth | ( )    | 1 LSHIFT                |
 | 2/     | ( x -- x/2 )                                  | forth | ( )    | 1 RSHIFT                |
 | +!     | ( n a-addr -- )                               | forth | ( )    | DUP @ ROT + SWAP !      |
-| CELL+  | ( a-addr -- a-addr+8 )                        | forth | ( )    | 8 +                     |
-| CELLS  | ( n -- n*8 )                                  | forth | ( )    | 3 LSHIFT                |
+| CELL+  | ( a-addr -- a-addr+8 )                        | forth | (x)    | 8 + (in core.fs)        |
+| CELLS  | ( n -- n*8 )                                  | forth | (x)    | 8 * (in core.fs)        |
 | CHAR+  | ( c-addr -- c-addr+1 )                        | forth | ( )    | 1 +                     |
 | CHARS  | ( n -- n )                                    | forth | ( )    | no-op on byte-addressed |
 
@@ -101,29 +101,29 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word   | Stack effect                                  | Layer | Status | Notes                   |
 |--------|-----------------------------------------------|-------|--------|-------------------------|
-| AND    | ( x1 x2 -- x3 )                              | asm   | ( )    |                         |
-| OR     | ( x1 x2 -- x3 )                              | asm   | ( )    |                         |
-| XOR    | ( x1 x2 -- x3 )                              | asm   | ( )    |                         |
-| INVERT | ( x -- ~x )                                   | asm   | ( )    |                         |
+| AND    | ( x1 x2 -- x3 )                              | asm   | (x)    |                         |
+| OR     | ( x1 x2 -- x3 )                              | asm   | (x)    |                         |
+| XOR    | ( x1 x2 -- x3 )                              | asm   | (x)    |                         |
+| INVERT | ( x -- ~x )                                   | asm   | (x)    |                         |
 | LSHIFT | ( x u -- x<<u )                               | asm   | ( )    |                         |
 | RSHIFT | ( x u -- x>>u )                               | asm   | ( )    |                         |
-| 0=     | ( x -- flag )                                 | asm   | ( )    |                         |
-| 0<     | ( n -- flag )                                 | asm   | ( )    |                         |
-| =      | ( x1 x2 -- flag )                             | forth | ( )    | - 0=                    |
-| <      | ( n1 n2 -- flag )                             | forth | ( )    | - 0<                    |
-| >      | ( n1 n2 -- flag )                             | forth | ( )    | SWAP <                  |
+| 0=     | ( x -- flag )                                 | asm   | (x)    |                         |
+| 0<     | ( n -- flag )                                 | asm   | (x)    |                         |
+| =      | ( x1 x2 -- flag )                             | asm   | (x)    |                         |
+| <      | ( n1 n2 -- flag )                             | asm   | (x)    |                         |
+| >      | ( n1 n2 -- flag )                             | asm   | (x)    |                         |
 | U<     | ( u1 u2 -- flag )                             | asm   | ( )    |                         |
-| MIN    | ( n1 n2 -- n3 )                               | forth | ( )    | 2DUP > IF SWAP THEN DROP |
-| MAX    | ( n1 n2 -- n3 )                               | forth | ( )    | 2DUP < IF SWAP THEN DROP |
+| MIN    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
+| MAX    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 
 ### Memory
 
 | Word    | Stack effect                                  | Layer | Status | Notes                   |
 |---------|-----------------------------------------------|-------|--------|-------------------------|
-| @       | ( a-addr -- x )                               | asm   | ( )    | Fetch cell              |
-| !       | ( x a-addr -- )                               | asm   | ( )    | Store cell              |
-| C@      | ( c-addr -- char )                            | asm   | ( )    | Fetch byte              |
-| C!      | ( char c-addr -- )                            | asm   | ( )    | Store byte              |
+| @       | ( a-addr -- x )                               | asm   | (x)    | Fetch cell              |
+| !       | ( x a-addr -- )                               | asm   | (x)    | Store cell              |
+| C@      | ( c-addr -- char )                            | asm   | (x)    | Fetch byte              |
+| C!      | ( char c-addr -- )                            | asm   | (x)    | Store byte              |
 | 2@      | ( a-addr -- x1 x2 )                          | forth | ( )    |                         |
 | 2!      | ( x1 x2 a-addr -- )                          | forth | ( )    |                         |
 | FILL    | ( c-addr u char -- )                          | forth | ( )    |                         |
@@ -142,14 +142,14 @@ Status: ( ) = not yet implemented, (x) = implemented
 | EMIT    | ( char -- )                                   | both  | (x)    | asm pops stack, calls platform |
 | KEY     | ( -- char )                                   | both  | (x)    | asm calls platform, pushes stack |
 | TYPE    | ( c-addr u -- )                               | forth | ( )    | Loop: C@ EMIT           |
-| ACCEPT  | ( c-addr +n1 -- +n2 )                        | forth | ( )    | Line input with editing  |
-| CR      | ( -- )                                        | forth | ( )    | 10 EMIT                 |
-| SPACE   | ( -- )                                        | forth | ( )    | 32 EMIT                 |
+| ACCEPT  | ( c-addr +n1 -- +n2 )                        | asm   | (x)    | Line input with editing  |
+| CR      | ( -- )                                        | forth | (x)    | 10 EMIT (in core.fs)    |
+| SPACE   | ( -- )                                        | forth | (x)    | 32 EMIT (in core.fs)    |
 | SPACES  | ( n -- )                                      | forth | ( )    | Loop: SPACE              |
-| .       | ( n -- )                                      | forth | ( )    | Print signed number      |
+| .       | ( n -- )                                      | asm   | (x)    | Print signed number      |
 | U.      | ( u -- )                                      | forth | ( )    | Print unsigned number    |
 | ."      | ( "ccc" -- )                                  | forth | ( )    | Compile string + TYPE    |
-| BL      | ( -- char )                                   | forth | ( )    | 32 (space character)     |
+| BL      | ( -- char )                                   | forth | (x)    | 32 (in core.fs)         |
 | CHAR    | ( "name" -- char )                            | forth | ( )    | First char of next word  |
 
 ### Number Formatting
@@ -168,15 +168,15 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word      | Stack effect                                  | Layer | Status | Notes                   |
 |-----------|-----------------------------------------------|-------|--------|-------------------------|
-| :         | ( "name" -- )                                 | asm   | ( )    | Begin compilation        |
-| ;         | ( -- )                                        | asm   | ( )    | End compilation          |
+| :         | ( "name" -- )                                 | asm   | (x)    | Begin compilation        |
+| ;         | ( -- )                                        | asm   | (x)    | End compilation (IMMEDIATE) |
 | CREATE    | ( "name" -- )                                 | forth | ( )    | Create dictionary entry  |
 | DOES>     | ( -- a-addr )                                 | asm   | ( )    | Define runtime behavior  |
 | VARIABLE  | ( "name" -- )                                 | forth | ( )    | CREATE 1 CELLS ALLOT     |
 | CONSTANT  | ( x "name" -- )                               | forth | ( )    | CREATE , DOES> @         |
-| IMMEDIATE | ( -- )                                        | asm   | ( )    | Mark word as immediate   |
-| '         | ( "name" -- xt )                              | asm   | ( )    | Find xt; in compile mode compiles xt as literal |
-| EXECUTE   | ( xt -- )                                     | asm   | ( )    | Call execution token     |
+| IMMEDIATE | ( -- )                                        | asm   | (x)    | Mark word as immediate   |
+| '         | ( "name" -- xt )                              | asm   | (x)    | Find xt (IMMEDIATE)      |
+| EXECUTE   | ( xt -- )                                     | asm   | (x)    | Call execution token     |
 | LITERAL   | ( x -- )                                      | forth | ( )    | Compile inline literal   |
 | POSTPONE  | ( "name" -- )                                 | forth | ( )    | Compile compilation      |
 | RECURSE   | ( -- )                                        | forth | ( )    | Compile self-reference   |
@@ -184,14 +184,14 @@ Status: ( ) = not yet implemented, (x) = implemented
 | [         | ( -- )                                        | forth | ( )    | Switch to interpret      |
 | ]         | ( -- )                                        | forth | ( )    | Switch to compile        |
 | [CHAR]    | ( "name" -- )                                 | forth | ( )    | Compile char literal     |
-| FIND      | ( c-addr -- c-addr 0 \| xt 1 \| xt -1 )      | forth | ( )    | Dictionary lookup        |
+| FIND      | ( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )  | asm   | (x)    | Dictionary lookup        |
 | >BODY     | ( xt -- a-addr )                              | forth | ( )    | xt to data field         |
 | DECIMAL   | ( -- )                                        | forth | ( )    | Set BASE to 10           |
 | WORD      | ( char -- c-addr )                            | forth | ( )    | Parse delimited word     |
 | >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | ( )    | Convert string to number |
 | >IN       | ( -- a-addr )                                 | forth | ( )    | Input parse position     |
 | SOURCE    | ( -- c-addr u )                               | forth | ( )    | Current input buffer     |
-| EVALUATE  | ( c-addr u -- )                               | forth | ( )    | Interpret string         |
+| EVALUATE  | ( c-addr u -- )                               | asm   | (x)    | Interpret string         |
 
 ### Control Flow
 
@@ -213,6 +213,13 @@ Status: ( ) = not yet implemented, (x) = implemented
 | UNLOOP | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Discard loop params     |
 | EXIT   | ( -- )                                         | asm   | ( )    | Return from word (RET)  |
 
+### Comments
+
+| Word | Stack effect                                    | Layer | Status | Notes                   |
+|------|-------------------------------------------------|-------|--------|-------------------------|
+| (    | ( "ccc)" -- )                                   | asm   | (x)    | IMMEDIATE, skip to )    |
+| \    | ( "ccc" -- )                                    | asm   | (x)    | IMMEDIATE, skip to EOL  |
+
 ### System
 
 | Word          | Stack effect                                  | Layer | Status | Notes                   |
@@ -230,10 +237,10 @@ commonly useful ones:
 
 | Word       | Stack effect                                  | Notes                        |
 |------------|-----------------------------------------------|------------------------------|
-| NIP        | ( x1 x2 -- x2 )                              | SWAP DROP                    |
-| TUCK       | ( x1 x2 -- x2 x1 x2 )                       | SWAP OVER                    |
-| <>         | ( x1 x2 -- flag )                            | = INVERT                     |
-| 0<>        | ( x -- flag )                                 | 0= INVERT                   |
+| NIP        | ( x1 x2 -- x2 )                              | asm (x)                      |
+| TUCK       | ( x1 x2 -- x2 x1 x2 )                       | asm (x)                      |
+| <>         | ( x1 x2 -- flag )                            | forth (x) = INVERT (core.fs) |
+| 0<>        | ( x -- flag )                                 | forth (x) 0= INVERT (core.fs) |
 | 0>         | ( n -- flag )                                 | 0 >                         |
 | AGAIN      | ( -- )                                        | Unconditional loop back      |
 | HEX        | ( -- )                                        | Set BASE to 16               |
@@ -283,10 +290,13 @@ implement as separate libraries:
 
 Words not in the standard, specific to BasicForth's goals:
 
-| Word    | Stack effect      | Notes                                     |
-|---------|-------------------|-------------------------------------------|
-| BYE     | ( -- )            | Restore terminal, exit (platform_bye)     |
-| .S      | ( -- )            | Print stack (in Programming-Tools, but we want it early) |
+| Word     | Stack effect      | Layer | Status | Notes                                  |
+|----------|-------------------|-------|--------|----------------------------------------|
+| BYE      | ( -- )            | asm   | (x)    | Print "Goodbye!", restore terminal, exit |
+| .S       | ( -- )            | asm   | (x)    | Print stack non-destructively          |
+| INCLUDED | ( c-addr u -- )   | asm   | (x)    | Load and interpret a Forth source file |
+| TRUE     | ( -- -1 )         | forth | (x)    | -1 (in core.fs)                        |
+| FALSE    | ( -- 0 )          | forth | (x)    | 0 (in core.fs)                         |
 
 *This section will grow as we add game, graphics, and robotics words.*
 

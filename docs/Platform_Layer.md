@@ -142,6 +142,62 @@ See [Error_Handling.md](Error_Handling.md) for details.
 | **Output**   | none (fatal on failure) | none (fatal on failure) |
 | **Syscall**  | mprotect, rt_sigaction | mprotect, rt_sigaction |
 
+### platform_open_file
+
+Open a file for reading. Copies path to a scratch buffer, null-terminates
+it, and calls openat with O_RDONLY.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = path, X1 = length            | RSI = path, RDX = length           |
+| **Output**   | X0 = fd (or negative errno)        | RAX = fd (or negative errno)       |
+| **Syscall**  | openat(AT_FDCWD, path, 0, 0) #56  | openat(AT_FDCWD, path, 0, 0) #257 |
+
+Returns -2 (ENOENT) if file not found. Used by `forth_included`.
+
+### platform_fstat
+
+Get file size via fstat.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = fd                            | RDI = fd                           |
+| **Output**   | X0 = file size                     | RAX = file size                    |
+| **Syscall**  | fstat(fd, &stat_buf) #80           | fstat(fd, &stat_buf) #5           |
+
+Extracts st_size from offset 48 in the stat structure.
+
+### platform_mmap_file
+
+Memory-map a file with PROT_READ, MAP_PRIVATE.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = fd, X1 = size                | RDI = fd, RSI = size               |
+| **Output**   | X0 = mapped address               | RAX = mapped address               |
+| **Syscall**  | mmap(0, size, 1, 2, fd, 0) #222   | mmap(0, size, 1, 2, fd, 0) #9    |
+
+Returns -1 (MAP_FAILED) on error. Used by `forth_included` to load
+source files without a fixed buffer size.
+
+### platform_munmap
+
+Unmap a previously mapped file region.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = addr, X1 = size              | RDI = addr, RSI = size             |
+| **Syscall**  | munmap(addr, size) #215            | munmap(addr, size) #11            |
+
+### platform_close_file
+
+Close a file descriptor.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = fd                            | RDI = fd                           |
+| **Syscall**  | close(fd) #57                      | close(fd) #3                      |
+
 ### platform_flush_icache (ARM64 only)
 
 Flush the instruction cache for a range of addresses after writing
@@ -247,12 +303,19 @@ VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 
 ## Syscall Reference
 
-| Syscall | ARM64 # | x86-64 # | Signature        |
-|---------|---------|----------|------------------|
-| read    |      63 |        0 | (fd, buf, count) |
-| write   |      64 |        1 | (fd, buf, count) |
-| ioctl   |      29 |       16 | (fd, cmd, arg)   |
-| exit    |      93 |       60 | (status)         |
+| Syscall       | ARM64 # | x86-64 # | Signature                            |
+|---------------|---------|----------|--------------------------------------|
+| read          |      63 |        0 | (fd, buf, count)                     |
+| write         |      64 |        1 | (fd, buf, count)                     |
+| close         |      57 |        3 | (fd)                                 |
+| fstat         |      80 |        5 | (fd, &stat_buf)                      |
+| mmap          |     222 |        9 | (addr, len, prot, flags, fd, offset) |
+| mprotect      |     226 |       10 | (addr, len, prot)                    |
+| munmap        |     215 |       11 | (addr, len)                          |
+| rt_sigaction  |     134 |       13 | (sig, &act, &oldact, sigsetsize)     |
+| ioctl         |      29 |       16 | (fd, cmd, arg)                       |
+| openat        |      56 |      257 | (dirfd, path, flags, mode)           |
+| exit          |      93 |       60 | (status)                             |
 
 ### Syscall ABI
 
@@ -271,11 +334,8 @@ Functions to be added as BasicForth grows:
 | Function            | Purpose                                       | Phase |
 |---------------------|-----------------------------------------------|-------|
 | platform_key_ready  | Non-blocking input check via FIONREAD ioctl   |     2 |
-| platform_mmap       | Memory allocation via mmap (anonymous)        |     3 |
-| platform_open       | Open a file                                   |     4 |
 | platform_read_file  | Read from file descriptor                     |     4 |
 | platform_write_file | Write to file descriptor                      |     4 |
-| platform_close      | Close file descriptor                         |     4 |
 | platform_lseek      | Seek within file                              |     4 |
 | platform_fork_exec  | Fork and exec external process (for $EDITOR)  |     4 |
 | platform_fb_open    | Open framebuffer or DRM device                |     5 |

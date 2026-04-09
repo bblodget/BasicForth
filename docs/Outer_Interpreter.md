@@ -10,37 +10,56 @@ depending on the current STATE.
 ```
 _start
   ├── Initialize engine registers (DSP, HERE, LATEST, sp0)
-  ├── Enter raw terminal mode
+  ├── Set up guard pages and raw terminal mode
+  ├── Print startup banner
+  ├── Load core.fs via INCLUDED (silent skip if not found)
   │
   └── repl_loop:
+        ├── Save rp0, saved_latest, saved_here (for error recovery)
         ├── Print "> " prompt
         ├── ACCEPT a line into input buffer
-        ├── Empty line? → print "Goodbye!", exit
+        ├── Empty line? → re-prompt
         ├── Set source_addr, source_len, to_in
         ├── DROP the count
         │
-        └── interpret_loop:
-              ├── PARSE-WORD → ( c-addr u )
-              ├── u == 0? → end of line, print " ok", goto repl_loop
-              │
-              ├── FIND → ( xt flag | c-addr u 0 )
-              │   ├── flag == 0?  → not found, fall through to NUMBER
-              │   ├── STATE == 0? → DROP flag, EXECUTE xt, loop
-              │   ├── flag == 1?  → IMMEDIATE: DROP flag, EXECUTE xt, loop
-              │   └── flag == -1? → normal: DROP flag, compile_call xt, loop
-              │
-              ├── DROP 0 flag
-              ├── NUMBER → ( n true | c-addr u false )
-              │   ├── false?     → not a number, fall through to error
-              │   ├── STATE == 0? → DROP flag, leave n on stack, loop
-              │   └── STATE != 0? → DROP flag, compile_literal n, loop
-              │
-              └── Error: DROP false
-                  Print "? " + token + newline
-                  DROP c-addr and u
-                  If STATE != 0: reset STATE, restore LATEST, restore HERE
-                  goto repl_loop (abort rest of line)
+        ├── call forth_interpret_line
+        │   ├── returns 0? → print " ok\n", goto repl_loop
+        │   └── returns 1? → print "? " + err_token + "\n", goto repl_loop
 ```
+
+## forth_interpret_line
+
+The interpret loop is a callable subroutine in core.s (not main.s), so
+EVALUATE and INCLUDED can reuse it. It assumes the caller has set
+`source_addr`, `source_len`, and `to_in`.
+
+```
+forth_interpret_line:
+  loop:
+    ├── PARSE-WORD → ( c-addr u )
+    ├── u == 0? → drop 0 0, return 0 (success)
+    │
+    ├── FIND → ( xt flag | c-addr u 0 )
+    │   ├── flag == 0?  → not found, fall through to NUMBER
+    │   ├── STATE == 0? → check compile-only, EXECUTE xt, loop
+    │   ├── flag == 1?  → IMMEDIATE: EXECUTE xt, loop
+    │   └── flag == -1? → normal: compile_call xt, loop
+    │
+    ├── DROP 0 flag
+    ├── NUMBER → ( n true | c-addr u false )
+    │   ├── false?     → not a number, fall through to error
+    │   ├── STATE == 0? → DROP flag, leave n on stack, loop
+    │   └── STATE != 0? → DROP flag, compile_literal n, loop
+    │
+    └── Error:
+        Save token in err_token_addr/err_token_len
+        If STATE != 0: reset STATE, restore LATEST, restore HERE
+        return 1 (error)
+```
+
+Returns: 0 = success, 1 = error. On error, the offending token is stored
+in `err_token_addr` and `err_token_len` for the caller to format its own
+error message.
 
 ## Data Flow
 
@@ -83,6 +102,10 @@ Three global variables in `core.s` manage the input source:
 These are set by the REPL after each ACCEPT and read by PARSE-WORD.
 Multiple calls to PARSE-WORD within one line advance `to_in` to extract
 successive tokens.
+
+EVALUATE and INCLUDED save and restore these variables so nested input
+sources work correctly. EVALUATE saves them in callee-saved registers;
+INCLUDED sets them per-line as it processes the file.
 
 ## Words Used by the Interpreter
 
