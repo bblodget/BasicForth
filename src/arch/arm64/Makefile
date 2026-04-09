@@ -15,6 +15,12 @@ AS      = $(CROSS)as
 LD      = $(CROSS)ld
 CC      = $(CROSS)gcc
 
+ifeq ($(ARCH),aarch64)
+    QEMU :=
+else
+    QEMU := qemu-aarch64-static
+endif
+
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
 OBJS    = $(SRCS:.s=.o)
@@ -40,10 +46,10 @@ $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_arm64.
 		$(TEST_DIR)/test_helper_arm64.s core.o -static
 
 run: $(BIN)
-	./$(BIN)
+	$(QEMU) ./$(BIN)
 
 run-tests: $(TEST_BIN)
-	./$(TEST_BIN)
+	$(QEMU) ./$(TEST_BIN)
 
 clean:
 	rm -f $(OBJS) $(BIN) $(TEST_BIN)
@@ -54,8 +60,8 @@ help:
 	@echo "  make                  Build basicforth binary"
 	@echo "  make tests            Build unit tests (C harness)"
 	@echo "  make all              Build basicforth and unit tests"
-	@echo "  make run              Run basicforth interactively"
-	@echo "  make run-tests        Run unit tests (C harness)"
+	@echo "  make run              Run basicforth (native or via QEMU)"
+	@echo "  make run-tests        Run unit tests (native or via QEMU)"
 	@echo "  make clean            Remove build artifacts"
 	@echo "  make help             Show this help"
 	@echo ""
