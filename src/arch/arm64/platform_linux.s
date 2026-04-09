@@ -410,3 +410,104 @@ raw_termios:
 .align 3
 sigact:
     .space 144
+
+// File I/O scratch buffers
+.align 3
+path_scratch:
+    .space 256
+stat_buf:
+    .space 144
+
+// ---------- File I/O ----------
+// Internal platform routines for INCLUDED.
+
+.equ SYS_close,   57
+.equ SYS_openat,  56
+.equ SYS_fstat,   80
+.equ SYS_mmap,    222
+.equ SYS_munmap,  215
+
+.equ AT_FDCWD,    -100
+.equ O_RDONLY,    0
+.equ PROT_READ_V, 1
+.equ MAP_PRIVATE_V, 2
+
+// st_size is at offset 48 in struct stat (ARM64)
+.equ STAT_ST_SIZE, 48
+
+.text
+
+// platform_open_file ( X0=path X1=len -- X0=fd )
+// Copies path to scratch buffer, null-terminates, opens with O_RDONLY.
+// Returns fd (>=0) or negative errno on failure.
+.global platform_open_file
+platform_open_file:
+    STP X29, X30, [SP, #-16]!
+
+    // Copy path to scratch buffer and null-terminate
+    ADR X2, path_scratch
+    MOV X3, X1                      // X3 = len
+    CMP X3, #255                    // clamp to buffer size - 1
+    B.LE .Lopen_copy
+    MOV X3, #255
+.Lopen_copy:
+    CBZ X3, .Lopen_null
+    LDRB W4, [X0], #1
+    STRB W4, [X2], #1
+    SUB X3, X3, #1
+    B .Lopen_copy
+.Lopen_null:
+    STRB WZR, [X2]                  // null terminate
+
+    // openat(AT_FDCWD, path, O_RDONLY, 0)
+    MOV X0, #AT_FDCWD
+    ADR X1, path_scratch
+    MOV X2, #O_RDONLY
+    MOV X3, #0
+    MOV X8, #SYS_openat
+    SVC #0
+
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_fstat ( X0=fd -- X0=size )
+// Returns file size via fstat.
+.global platform_fstat
+platform_fstat:
+    // fstat(fd, &stat_buf)
+    MOV X1, X0                      // save fd... wait, X0=fd already
+    ADR X1, stat_buf
+    MOV X8, #SYS_fstat
+    SVC #0
+    // Extract st_size
+    ADR X9, stat_buf
+    LDR X0, [X9, #STAT_ST_SIZE]
+    RET
+
+// platform_mmap_file ( X0=fd X1=size -- X0=addr )
+// Maps file with PROT_READ, MAP_PRIVATE.
+.global platform_mmap_file
+platform_mmap_file:
+    MOV X5, #0                      // offset = 0
+    MOV X4, X0                      // fd
+    MOV X3, #MAP_PRIVATE_V          // flags
+    MOV X2, #PROT_READ_V            // prot
+    // X1 already = size (length)
+    MOV X0, #0                      // addr = NULL
+    MOV X8, #SYS_mmap
+    SVC #0
+    RET
+
+// platform_munmap ( X0=addr X1=size -- )
+.global platform_munmap
+platform_munmap:
+    MOV X8, #SYS_munmap
+    SVC #0
+    RET
+
+// platform_close_file ( X0=fd -- )
+.global platform_close_file
+platform_close_file:
+    MOV X8, #SYS_close
+    SVC #0
+    RET

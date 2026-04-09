@@ -367,3 +367,100 @@ raw_termios:
 .align 8
 sigact:
     .space 152
+
+# File I/O scratch buffers
+.align 8
+path_scratch:
+    .space 256
+stat_buf:
+    .space 144
+
+# ---------- File I/O ----------
+# Internal platform routines for INCLUDED.
+
+.equ SYS_close,   3
+.equ SYS_fstat,   5
+.equ SYS_mmap,    9
+.equ SYS_munmap,  11
+.equ SYS_openat,  257
+
+.equ AT_FDCWD,    -100
+.equ O_RDONLY,    0
+.equ PROT_READ,   1
+.equ MAP_PRIVATE, 2
+
+# st_size is at offset 48 in struct stat (x86-64)
+.equ STAT_ST_SIZE, 48
+
+.text
+
+# platform_open_file ( RSI=path RDX=len -- RAX=fd )
+# Copies path to scratch buffer, null-terminates, opens with O_RDONLY.
+# Returns fd (>=0) or negative errno on failure.
+.global platform_open_file
+platform_open_file:
+    push %rbx
+
+    # Copy path to scratch buffer and null-terminate
+    lea path_scratch(%rip), %rdi
+    mov %rdx, %rcx              # count = len
+    cmp $255, %rcx              # clamp to buffer size - 1
+    jbe .Lopen_copy
+    mov $255, %rcx
+.Lopen_copy:
+    cld
+    rep movsb
+    movb $0, (%rdi)             # null terminate
+
+    # openat(AT_FDCWD, path, O_RDONLY, 0)
+    mov $SYS_openat, %rax
+    mov $AT_FDCWD, %rdi
+    lea path_scratch(%rip), %rsi
+    xor %edx, %edx              # O_RDONLY = 0
+    xor %r10d, %r10d            # mode = 0
+    syscall
+
+    pop %rbx
+    ret
+
+# platform_fstat ( RDI=fd -- RAX=size )
+# Returns file size via fstat.
+.global platform_fstat
+platform_fstat:
+    mov %rdi, %rbx              # save fd (not needed but clear)
+    mov $SYS_fstat, %rax
+    # RDI already = fd
+    lea stat_buf(%rip), %rsi
+    syscall
+    # Extract st_size
+    mov stat_buf+STAT_ST_SIZE(%rip), %rax
+    ret
+
+# platform_mmap_file ( RDI=fd RSI=size -- RAX=addr )
+# Maps file with PROT_READ, MAP_PRIVATE.
+.global platform_mmap_file
+platform_mmap_file:
+    mov %rsi, %rbx              # save size
+    mov $SYS_mmap, %rax
+    mov %rdi, %r8               # arg5 = fd
+    xor %edi, %edi              # arg1 = addr = NULL
+    mov %rbx, %rsi              # arg2 = length = size
+    mov $PROT_READ, %edx        # arg3 = prot
+    mov $MAP_PRIVATE, %r10d     # arg4 = flags
+    xor %r9d, %r9d              # arg6 = offset = 0
+    syscall
+    ret
+
+# platform_munmap ( RDI=addr RSI=size -- )
+.global platform_munmap
+platform_munmap:
+    mov $SYS_munmap, %rax
+    syscall
+    ret
+
+# platform_close_file ( RDI=fd -- )
+.global platform_close_file
+platform_close_file:
+    mov $SYS_close, %rax
+    syscall
+    ret

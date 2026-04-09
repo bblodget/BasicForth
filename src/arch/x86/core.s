@@ -1431,6 +1431,244 @@ forth_backslash:
     mov %rax, to_in(%rip)
     ret
 
+# ---------- EVALUATE ----------
+# ( c-addr u -- )
+# Interpret a string as Forth source. Saves and restores source context
+# so nested EVALUATE and INCLUDED work correctly.
+# Returns: RAX = 0 on success, 1 on error.
+.global forth_evaluate
+forth_evaluate:
+    push %rbx
+    push %rbp
+    push %r14
+
+    # Pop c-addr and u from data stack
+    mov (%r15), %rcx                # RCX = u (top)
+    mov CELL(%r15), %rsi            # RSI = c-addr (second)
+    add $2*CELL, %r15
+
+    # Save current source context in callee-saved regs
+    mov source_addr(%rip), %rbx     # save old source_addr
+    mov source_len(%rip), %rbp      # save old source_len
+    mov to_in(%rip), %r14           # save old to_in
+
+    # Set new source context
+    mov %rsi, source_addr(%rip)
+    mov %rcx, source_len(%rip)
+    movq $0, to_in(%rip)
+
+    # Interpret the string
+    call forth_interpret_line
+    push %rax                       # save result
+
+    # Restore source context
+    mov %rbx, source_addr(%rip)
+    mov %rbp, source_len(%rip)
+    mov %r14, to_in(%rip)
+
+    pop %rax                        # restore result
+    pop %r14
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- INCLUDED ----------
+# ( c-addr u -- )
+# Load and interpret a Forth source file. Opens the file, mmaps it,
+# processes line-by-line, then munmaps. Aborts on first error with
+# filename:line: ? token  error format.
+# Returns: RAX = 0 on success, 1 on error.
+# Special: returns 0 silently if file not found (ENOENT = -2).
+.global forth_included
+forth_included:
+    push %rbx
+    push %rbp
+    push %r14
+    push %r8                        # for line_start scratch
+
+    # Pop c-addr and u from data stack
+    mov (%r15), %rdx                # RDX = u (filename length)
+    mov CELL(%r15), %rsi            # RSI = c-addr (filename)
+    add $2*CELL, %r15
+
+    # Save filename for error reporting
+    mov %rsi, file_name_addr(%rip)
+    mov %rdx, file_name_len(%rip)
+
+    # Open file
+    call platform_open_file         # RSI=path, RDX=len → RAX=fd
+    test %rax, %rax
+    js .Lincl_open_err
+
+    mov %rax, %rbx                  # RBX = fd
+
+    # Get file size
+    mov %rbx, %rdi
+    call platform_fstat             # RDI=fd → RAX=size
+    mov %rax, %rbp                  # RBP = file size
+
+    # mmap the file
+    mov %rbx, %rdi                  # fd
+    mov %rbp, %rsi                  # size
+    call platform_mmap_file         # → RAX=addr
+    cmp $-1, %rax
+    je .Lincl_mmap_err
+
+    push %rax                       # save mmap addr
+
+    # Close fd (no longer needed)
+    mov %rbx, %rdi
+    call platform_close_file
+
+    pop %rbx                        # RBX = mmap base address
+
+    # Process file line by line
+    # RBX = mmap base, RBP = file size, R14 = line_start offset
+    xor %r14d, %r14d                # line_start = 0
+    movq $1, file_line_num(%rip)    # line counter = 1
+
+.Lincl_line_loop:
+    cmp %rbp, %r14
+    jge .Lincl_done                 # past end of file
+
+    # Scan for newline starting at RBX + R14
+    mov %r14, %rax                  # scan position
+.Lincl_scan_nl:
+    cmp %rbp, %rax
+    jge .Lincl_eol                  # end of file = end of line
+    cmpb $'\n', (%rbx,%rax)
+    je .Lincl_eol
+    inc %rax
+    jmp .Lincl_scan_nl
+
+.Lincl_eol:
+    # Line goes from RBX+R14 to RBX+RAX (exclusive)
+    # Save next line start (RAX+1 or end of file)
+    lea 1(%rax), %r8                # next line start
+    mov %rax, %rcx
+    sub %r14, %rcx                  # RCX = line length
+
+    # Skip empty lines
+    test %rcx, %rcx
+    jz .Lincl_next_line
+
+    # Set source vars for this line
+    lea (%rbx,%r14), %rax
+    mov %rax, source_addr(%rip)
+    mov %rcx, source_len(%rip)
+    movq $0, to_in(%rip)
+
+    # Save registers across call (RBX, RBP already callee-saved)
+    push %r8                        # save next_line_start
+    call forth_interpret_line
+    pop %r8                         # restore next_line_start
+
+    test %rax, %rax
+    jnz .Lincl_error
+
+.Lincl_next_line:
+    mov %r8, %r14                   # advance to next line
+    incq file_line_num(%rip)
+    jmp .Lincl_line_loop
+
+.Lincl_done:
+    # Unmap file
+    mov %rbx, %rdi
+    mov %rbp, %rsi
+    call platform_munmap
+
+    xor %eax, %eax                  # return 0 = success
+    pop %r8
+    pop %r14
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lincl_error:
+    # Print "filename:line: ? token\n"
+    # Print filename
+    mov file_name_addr(%rip), %rsi
+    mov file_name_len(%rip), %rdx
+    call platform_write
+    # Print ":"
+    mov $':', %rdi
+    call platform_emit
+    # Print line number
+    mov file_line_num(%rip), %rax
+    call .Lprint_signed
+    # Print ": ? "
+    lea incl_err_sep(%rip), %rsi
+    mov $incl_err_sep_len, %rdx
+    call platform_write
+    # Print offending token
+    mov err_token_addr(%rip), %rsi
+    mov err_token_len(%rip), %rdx
+    call platform_write
+    # Print newline
+    mov $'\n', %rdi
+    call platform_emit
+
+    # Unmap file
+    mov %rbx, %rdi
+    mov %rbp, %rsi
+    call platform_munmap
+
+    mov $1, %eax                    # return 1 = error
+    pop %r8
+    pop %r14
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lincl_open_err:
+    # Check for ENOENT (-2) — silent skip
+    cmp $-2, %rax
+    je .Lincl_open_skip
+
+    # Other open error — print message
+    lea incl_err_open(%rip), %rsi
+    mov $incl_err_open_len, %rdx
+    call platform_write
+    mov file_name_addr(%rip), %rsi
+    mov file_name_len(%rip), %rdx
+    call platform_write
+    mov $'\n', %rdi
+    call platform_emit
+
+.Lincl_open_skip:
+    xor %eax, %eax                  # return 0 (not an error for ENOENT)
+    pop %r8
+    pop %r14
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lincl_mmap_err:
+    # mmap failed — close fd and print error
+    mov %rbx, %rdi
+    call platform_close_file
+    lea incl_err_open(%rip), %rsi
+    mov $incl_err_open_len, %rdx
+    call platform_write
+    mov file_name_addr(%rip), %rsi
+    mov file_name_len(%rip), %rdx
+    call platform_write
+    mov $'\n', %rdi
+    call platform_emit
+    mov $1, %eax
+    pop %r8
+    pop %r14
+    pop %rbp
+    pop %rbx
+    ret
+
+.section .rodata
+incl_err_sep:    .ascii ": ? "
+.equ incl_err_sep_len, . - incl_err_sep
+incl_err_open:   .ascii "Error: cannot open "
+.equ incl_err_open_len, . - incl_err_open
+.text
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1487,7 +1725,9 @@ DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE
 DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
 DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
 DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
-.global dict_backslash
+DEFWORD dict_evaluate,   "evaluate",   forth_evaluate,    dict_backslash
+DEFWORD dict_included,   "included",   forth_included,    dict_evaluate
+.global dict_included
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -1558,4 +1798,13 @@ err_token_addr:                     # Address of last error token (set by interp
     .quad 0
 .global err_token_len
 err_token_len:                      # Length of last error token
+    .quad 0
+.global file_name_addr
+file_name_addr:                     # Filename for INCLUDED error reporting
+    .quad 0
+.global file_name_len
+file_name_len:
+    .quad 0
+.global file_line_num
+file_line_num:                      # Line number for INCLUDED error reporting
     .quad 0

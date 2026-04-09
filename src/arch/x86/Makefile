@@ -41,17 +41,21 @@ $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_x86.s core.o
 
+FORTH_DIR = ../../forth
+
 run: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	./$(BIN)
 
 run-test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 run-integration: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	$(TEST_DIR)/test_integration.sh ./$(BIN)
 
 clean:
-	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc
+	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc core.fs
 
 help:
 	@echo "BasicForth x86-64 Build"

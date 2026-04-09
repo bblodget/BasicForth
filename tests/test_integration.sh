@@ -227,6 +227,24 @@ assert_output "backslash in def"     ': inc 1+ ; \ simple increment
 5 inc .'                                                               "6"
 
 # =========================================================================
+section "core.fs Words"
+# =========================================================================
+
+assert_output "CR defined"           "1 2 + ."                        "3"
+assert_output "SPACE defined"        ": test space 42 . ; test"       "42"
+assert_output "BL defined"           "bl ."                           "32"
+assert_output "TRUE"                 "true ."                         "-1"
+assert_output "FALSE"                "false ."                        "0"
+assert_output "MOD"                  "17 5 mod ."                     "2"
+assert_output "/"                    "20 4 / ."                       "5"
+assert_output "CELL+"               "0 cell+ ."                      "8"
+assert_output "CELLS"               "3 cells ."                      "24"
+assert_output "<>"                   "3 4 <> ."                       "-1"
+assert_output "<> false"             "5 5 <> ."                       "0"
+assert_output "0<>"                  "42 0<> ."                       "-1"
+assert_output "0<> false"            "0 0<> ."                        "0"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

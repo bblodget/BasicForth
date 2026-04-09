@@ -22,7 +22,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_backslash(%rip), %r12  # LATEST
+    lea dict_included(%rip), %r12   # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -35,6 +35,14 @@ _start:
     lea version_str(%rip), %rsi
     mov $version_len, %rdx
     call platform_write
+
+    # Try to load core.fs (silent skip if not found)
+    lea core_fs_name(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movq $core_fs_len, (%r15)       # push length
+    call forth_included
 
 .global repl_loop
 repl_loop:
@@ -139,6 +147,8 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
+core_fs_name:   .ascii "core.fs"
+.equ core_fs_len, . - core_fs_name
 
 .bss
 .align 8

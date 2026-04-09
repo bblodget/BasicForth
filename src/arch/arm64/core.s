@@ -1448,6 +1448,262 @@ forth_backslash:
     STR X10, [X9]
     RET
 
+// ---------- EVALUATE ----------
+// ( c-addr u -- )
+// Interpret a string as Forth source. Saves and restores source context
+// so nested EVALUATE and INCLUDED work correctly.
+// Returns: X0 = 0 on success, 1 on error.
+.global forth_evaluate
+forth_evaluate:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    // Pop c-addr and u from data stack
+    LDR X9, [X19]                   // X9 = u (top)
+    LDR X10, [X19, #CELL]           // X10 = c-addr (second)
+    ADD X19, X19, #2*CELL
+
+    // Save current source context in callee-saved regs
+    ADR X11, source_addr
+    LDR X23, [X11]                  // save old source_addr
+    ADR X12, source_len
+    LDR X24, [X12]                  // save old source_len
+    ADR X13, to_in
+    LDR X25, [X13]                  // save old to_in
+
+    // Set new source context
+    STR X10, [X11]                  // source_addr = c-addr
+    STR X9, [X12]                   // source_len = u
+    STR XZR, [X13]                  // to_in = 0
+
+    // Interpret the string
+    BL forth_interpret_line
+    MOV X26, X0                     // save result
+
+    // Restore source context
+    ADR X9, source_addr
+    STR X23, [X9]
+    ADR X9, source_len
+    STR X24, [X9]
+    ADR X9, to_in
+    STR X25, [X9]
+
+    MOV X0, X26                     // restore result
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- INCLUDED ----------
+// ( c-addr u -- )
+// Load and interpret a Forth source file. Opens the file, mmaps it,
+// processes line-by-line, then munmaps. Aborts on first error with
+// filename:line: ? token  error format.
+// Returns: X0 = 0 on success, 1 on error.
+// Special: returns 0 silently if file not found (ENOENT = -2).
+.global forth_included
+forth_included:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
+
+    // Pop c-addr and u from data stack
+    LDR X1, [X19]                   // X1 = u (filename length)
+    LDR X0, [X19, #CELL]            // X0 = c-addr (filename)
+    ADD X19, X19, #2*CELL
+
+    // Save filename for error reporting
+    ADR X9, file_name_addr
+    STR X0, [X9]
+    ADR X9, file_name_len
+    STR X1, [X9]
+
+    // Open file (X0=path, X1=len)
+    BL platform_open_file           // -> X0=fd
+    CMP X0, #0
+    B.LT .Lincl_open_err
+
+    MOV X23, X0                     // X23 = fd
+
+    // Get file size
+    MOV X0, X23
+    BL platform_fstat               // -> X0=size
+    MOV X24, X0                     // X24 = file size
+
+    // mmap the file
+    MOV X0, X23                     // fd
+    MOV X1, X24                     // size
+    BL platform_mmap_file           // -> X0=addr
+    CMN X0, #1                      // check for MAP_FAILED (-1)
+    B.EQ .Lincl_mmap_err
+
+    MOV X25, X0                     // X25 = mmap base address
+
+    // Close fd (no longer needed)
+    MOV X0, X23
+    BL platform_close_file
+
+    // Process file line by line
+    // X25 = mmap base, X24 = file size, X26 = line_start offset
+    MOV X26, #0                     // line_start = 0
+    MOV X9, #1
+    ADR X10, file_line_num
+    STR X9, [X10]                   // line counter = 1
+
+.Lincl_line_loop:
+    CMP X26, X24
+    B.GE .Lincl_done                // past end of file
+
+    // Scan for newline starting at X25 + X26
+    MOV X27, X26                    // scan position
+.Lincl_scan_nl:
+    CMP X27, X24
+    B.GE .Lincl_eol                 // end of file = end of line
+    LDRB W9, [X25, X27]
+    CMP W9, #'\n'
+    B.EQ .Lincl_eol
+    ADD X27, X27, #1
+    B .Lincl_scan_nl
+
+.Lincl_eol:
+    // Line goes from X25+X26 to X25+X27 (exclusive)
+    // X28 = next line start
+    ADD X28, X27, #1               // next line start
+    SUB X9, X27, X26               // X9 = line length
+
+    // Skip empty lines
+    CBZ X9, .Lincl_next_line
+
+    // Set source vars for this line
+    ADD X10, X25, X26
+    ADR X11, source_addr
+    STR X10, [X11]
+    ADR X11, source_len
+    STR X9, [X11]
+    ADR X11, to_in
+    STR XZR, [X11]
+
+    BL forth_interpret_line
+
+    CBNZ X0, .Lincl_error
+
+.Lincl_next_line:
+    MOV X26, X28                    // advance to next line
+    ADR X9, file_line_num
+    LDR X10, [X9]
+    ADD X10, X10, #1
+    STR X10, [X9]
+    B .Lincl_line_loop
+
+.Lincl_done:
+    // Unmap file
+    MOV X0, X25
+    MOV X1, X24
+    BL platform_munmap
+
+    MOV X0, #0                      // return 0 = success
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lincl_error:
+    // Print "filename:line: ? token\n"
+    // Print filename
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+    BL platform_write
+    // Print ":"
+    MOV X0, #':'
+    BL platform_emit
+    // Print line number
+    ADR X9, file_line_num
+    LDR X0, [X9]
+    BL .Lprint_signed
+    // Print ": ? "
+    ADR X0, incl_err_sep
+    MOV X1, #incl_err_sep_len
+    BL platform_write
+    // Print offending token
+    ADR X9, err_token_addr
+    LDR X0, [X9]
+    ADR X9, err_token_len
+    LDR X1, [X9]
+    BL platform_write
+    // Print newline
+    MOV X0, #'\n'
+    BL platform_emit
+
+    // Unmap file
+    MOV X0, X25
+    MOV X1, X24
+    BL platform_munmap
+
+    MOV X0, #1                      // return 1 = error
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lincl_open_err:
+    // Check for ENOENT (-2) — silent skip
+    CMN X0, #2
+    B.EQ .Lincl_open_skip
+
+    // Other open error — print message
+    ADR X0, incl_err_open
+    MOV X1, #incl_err_open_len
+    BL platform_write
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+    BL platform_write
+    MOV X0, #'\n'
+    BL platform_emit
+
+.Lincl_open_skip:
+    MOV X0, #0                      // return 0 (not an error for ENOENT)
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lincl_mmap_err:
+    // mmap failed — close fd and print error
+    MOV X0, X23
+    BL platform_close_file
+    ADR X0, incl_err_open
+    MOV X1, #incl_err_open_len
+    BL platform_write
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+    BL platform_write
+    MOV X0, #'\n'
+    BL platform_emit
+    MOV X0, #1
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.section .rodata
+incl_err_sep:    .ascii ": ? "
+.equ incl_err_sep_len, . - incl_err_sep
+incl_err_open:   .ascii "Error: cannot open "
+.equ incl_err_open_len, . - incl_err_open
+.text
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1504,7 +1760,9 @@ DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE
 DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
 DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
 DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
-.global dict_backslash
+DEFWORD dict_evaluate,   "evaluate",   forth_evaluate,    dict_backslash
+DEFWORD dict_included,   "included",   forth_included,    dict_evaluate
+.global dict_included
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -1573,4 +1831,13 @@ err_token_addr:                     // Address of last error token (set by inter
     .quad 0
 .global err_token_len
 err_token_len:                      // Length of last error token
+    .quad 0
+.global file_name_addr
+file_name_addr:                     // Filename for INCLUDED error reporting
+    .quad 0
+.global file_name_len
+file_name_len:
+    .quad 0
+.global file_line_num
+file_line_num:                      // Line number for INCLUDED error reporting
     .quad 0

@@ -56,17 +56,21 @@ $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_arm64.
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_arm64.s core.o -static
 
+FORTH_DIR = ../../forth
+
 run: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	$(QEMU) ./$(BIN)
 
 run-test: $(TEST_BIN)
 	$(QEMU) ./$(TEST_BIN)
 
 run-integration: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	$(TEST_DIR)/test_integration.sh $(QEMU) ./$(BIN)
 
 clean:
-	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc
+	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc core.fs
 
 help:
 	@echo "BasicForth ARM64 Build"

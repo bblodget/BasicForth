@@ -23,7 +23,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_backslash         // LATEST
+    ADR X22, dict_included          // LATEST
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -38,6 +38,13 @@ _start:
     ADR X0, version_str
     MOV X1, #version_len
     BL platform_write
+
+    // Try to load core.fs (silent skip if not found)
+    ADR X9, core_fs_name
+    STR X9, [X19, #-CELL]!         // push c-addr
+    MOV X9, #core_fs_len
+    STR X9, [X19, #-CELL]!         // push length
+    BL forth_included
 
 .global repl_loop
 repl_loop:
@@ -154,6 +161,8 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
+core_fs_name:   .ascii "core.fs"
+.equ core_fs_len, . - core_fs_name
 
 .bss
 .align 4

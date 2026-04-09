@@ -71,6 +71,7 @@ extern void forth_r_from(void);
 extern void forth_r_fetch(void);
 extern void forth_paren(void);
 extern void forth_backslash(void);
+extern void forth_evaluate(void);
 
 /* Return stack test wrappers (defined in test_helper) */
 extern void test_to_r_r_from(void);
@@ -82,7 +83,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_backslash;
+extern char dict_included;
 extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
@@ -1338,6 +1339,74 @@ static void test_backslash(void)
              "depth=%d to_in=%ld (expected 12)", stack_depth(dsp_out), to_in);
 }
 
+/* --- EVALUATE tests --- */
+
+static void test_evaluate_number(void)
+{
+    int64_t *dsp_in, *dsp_out;
+    const char *src = "42";
+
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
+
+    /* Push c-addr and u for "42" */
+    dsp_in = setup_2((int64_t)src, (int64_t)strlen(src));
+    call_primitive(forth_evaluate, dsp_in, &dsp_out);
+
+    /* After EVALUATE: 42 should be on the stack */
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 42)
+        pass("EVALUATE: number");
+    else
+        fail("EVALUATE: number",
+             "depth=%d [0]=%ld", stack_depth(dsp_out),
+             stack_depth(dsp_out) >= 1 ? dsp_out[0] : -1);
+}
+
+static void test_evaluate_expression(void)
+{
+    int64_t *dsp_in, *dsp_out;
+    const char *src = "3 4 +";
+
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
+
+    dsp_in = setup_2((int64_t)src, (int64_t)strlen(src));
+    call_primitive(forth_evaluate, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 7)
+        pass("EVALUATE: expression");
+    else
+        fail("EVALUATE: expression",
+             "depth=%d [0]=%ld", stack_depth(dsp_out),
+             stack_depth(dsp_out) >= 1 ? dsp_out[0] : -1);
+}
+
+static void test_evaluate_preserves_source(void)
+{
+    int64_t *dsp_in, *dsp_out;
+    const char *src = "99";
+
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
+
+    /* Set up outer source context */
+    setup_source("outer context here");
+    to_in = 6;  /* pretend we've parsed "outer " */
+    int64_t saved_addr = source_addr;
+    int64_t saved_len = source_len;
+    int64_t saved_in = to_in;
+
+    /* EVALUATE should save/restore source vars */
+    dsp_in = setup_2((int64_t)src, (int64_t)strlen(src));
+    call_primitive(forth_evaluate, dsp_in, &dsp_out);
+
+    if (source_addr == saved_addr && source_len == saved_len
+        && to_in == saved_in && stack_depth(dsp_out) == 1 && dsp_out[0] == 99)
+        pass("EVALUATE: preserves source context");
+    else
+        fail("EVALUATE: preserves source context",
+             "addr=%d len=%d to_in=%d depth=%d",
+             source_addr == saved_addr, source_len == saved_len,
+             to_in == saved_in, stack_depth(dsp_out));
+}
+
 /* --- EXECUTE tests --- */
 
 static void test_execute(void)
@@ -1407,7 +1476,7 @@ static void test_lit(void)
     int64_t *dsp_in, *dsp_out;
 
     /* Build a tiny function in dict_space that pushes literal 42 */
-    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1449,7 +1518,7 @@ static void test_lit_negative(void)
 {
     int64_t *dsp_in, *dsp_out;
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1644,7 +1713,7 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_included);
     test_find();
 
     section("Parse Word");
@@ -1656,6 +1725,11 @@ int main(void)
     test_paren();
     test_paren_no_close();
     test_backslash();
+
+    section("Evaluate");
+    test_evaluate_number();
+    test_evaluate_expression();
+    test_evaluate_preserves_source();
 
     section("Execute");
     test_execute();

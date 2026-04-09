@@ -67,6 +67,29 @@ platform_write:
 platform_bye:
     RET
 
+.global platform_open_file
+platform_open_file:
+    MOV X0, #-2                     // return -ENOENT
+    RET
+
+.global platform_fstat
+platform_fstat:
+    MOV X0, #0
+    RET
+
+.global platform_mmap_file
+platform_mmap_file:
+    MOV X0, #-1                     // return MAP_FAILED
+    RET
+
+.global platform_munmap
+platform_munmap:
+    RET
+
+.global platform_close_file
+platform_close_file:
+    RET
+
 // I-cache flush for compiled code (same as platform_linux.s).
 // Needed by compiler tests that execute code written to dict_space.
 // Reads CTR_EL0 to determine cache line sizes (varies by CPU).

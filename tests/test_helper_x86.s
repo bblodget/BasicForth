@@ -73,6 +73,29 @@ platform_write:
 platform_bye:
     ret
 
+.global platform_open_file
+platform_open_file:
+    mov $-2, %rax               # return -ENOENT
+    ret
+
+.global platform_fstat
+platform_fstat:
+    xor %eax, %eax
+    ret
+
+.global platform_mmap_file
+platform_mmap_file:
+    mov $-1, %rax               # return MAP_FAILED
+    ret
+
+.global platform_munmap
+platform_munmap:
+    ret
+
+.global platform_close_file
+platform_close_file:
+    ret
+
 # --- Return stack test wrappers ---
 # These call >R / R> / R@ within a single stack frame so the return
 # stack context is correct. Called via call_primitive like any other word.
