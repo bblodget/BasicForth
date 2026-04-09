@@ -8,26 +8,32 @@ Threaded Code (STC) with 64-bit cells.
 
 ## Status
 
-**v0.3.0** — Interactive REPL with compiler, 26+ primitives, colon
-definitions, guard page stack protection, and 113 unit tests.
+**v0.2.0** — Interactive REPL with compiler, control flow, file loading,
+and core.fs bootstrap. 119 unit tests + 113 integration tests.
 
 What works today:
 
 - Interactive REPL with line editing (backspace, Ctrl+C)
 - Colon definitions (`: square dup * ;`)
+- Control flow: `IF ELSE THEN`, `BEGIN UNTIL AGAIN`, `BEGIN WHILE REPEAT`
+- Recursion: `RECURSE`
+- Comments: `( paren )` and `\ line`
+- File loading: `EVALUATE`, `INCLUDED`, auto-load `core.fs` at startup
 - Integer literals (decimal, `$hex`, `%binary`, `#decimal`)
-- Arithmetic: `+ - * /MOD ABS MIN MAX NEGATE 1+ 1-`
-- Comparisons: `= < > 0= 0<`
+- Arithmetic: `+ - * /MOD / MOD ABS MIN MAX NEGATE 1+ 1-`
+- Comparisons: `= < > 0= 0< <> 0<>`
 - Logic: `AND OR XOR INVERT`
 - Stack: `DUP DROP SWAP OVER ROT NIP TUCK 2DUP 2DROP DEPTH ?DUP`
 - Return stack: `>R R> R@` (compile-only)
 - Memory: `@ ! C@ C!`
-- I/O: `EMIT KEY . .S`
+- I/O: `EMIT KEY . .S CR SPACE BL`
 - Dictionary: `FIND WORDS IMMEDIATE '`
+- Constants: `TRUE FALSE CELL+ CELLS`
 - Guard pages catch stack overflow/underflow with clean recovery
+- Control-flow safety: tag mismatch and balance checking
 
-What's next: control flow (IF/ELSE/THEN, loops), defining words
-(CONSTANT, VARIABLE), core.fs bootstrap file.
+What's next: DO/LOOP counted loops, defining words (CONSTANT, VARIABLE,
+CREATE/DOES>).
 
 ## Building
 
@@ -86,7 +92,18 @@ For deploying to a remote ARM64 board, see
  ok
 > 9 square .
 81  ok
-> : factorial 1 swap 1+ 1 do i * loop ;   \ coming soon!
+> : abs dup 0< if negate then ;
+ ok
+> -5 abs .
+5  ok
+> : fact dup 1 > if dup 1- recurse * then ;
+ ok
+> 6 fact .
+720  ok
+> : countdown 5 begin dup . 1- dup 0= until drop ;
+ ok
+> countdown
+5 4 3 2 1  ok
 ```
 
 ## Architecture
@@ -136,9 +153,11 @@ BasicForth/
         core.s              Assembly primitives + dictionary
         platform_linux.s    Linux syscalls, guard pages
         Makefile
-    forth/                  (future) Shared Forth source (core.fs)
+    forth/
+      core.fs               Forth-defined words (loaded at startup)
   tests/
-    test_basicforth.c       Unit test harness (113 tests)
+    test_basicforth.c       Unit test harness (119 tests)
+    test_integration.sh     Integration tests (113 tests, piped I/O)
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge
   docs/                     Design documentation

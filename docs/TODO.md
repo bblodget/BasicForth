@@ -30,7 +30,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] DOT, DOT-S, BYE
 - [x] Outer interpreter REPL (PARSE-WORD → FIND → EXECUTE → NUMBER → error)
 - [x] Multi-architecture (ARM64 + x86-64) for all of the above
-- [x] C unit test harness (69 tests, both architectures)
+- [x] C unit test harness (both architectures)
 - [x] Documentation (Manual, Dictionary, Outer Interpreter, Testing Framework)
 
 ---
@@ -50,7 +50,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Update outer interpreter to check STATE (compile vs interpret)
 - [x] IMMEDIATE — mark most recent word as immediate
 - [x] `'` (TICK) — parse next word, push its xt
-- [x] Unit tests for LIT (69 tests total)
+- [x] Unit tests for LIT
 - [x] Error recovery: errors during compilation reset STATE, restore LATEST/HERE
 - [x] Linker flag `ld -N` for RWX segments (dict_space must be executable)
 - [x] CHECK_DICT macro — software bounds check before dictionary writes
@@ -61,17 +61,23 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] DROP dummy load to trigger guard page on empty stack
 - [x] Error handling documentation (docs/Error_Handling.md)
 
-### 3b. Control Flow
+### 3b. Control Flow — MOSTLY COMPLETE
 
-- [ ] BRANCH — unconditional relative jump (compiled)
-- [ ] 0BRANCH — conditional relative jump (compiled)
-- [ ] IF / ELSE / THEN — conditional compilation
-- [ ] BEGIN / UNTIL — post-test loop
-- [ ] BEGIN / AGAIN — infinite loop
-- [ ] BEGIN / WHILE / REPEAT — pre-test loop
+- [x] Inline branch compilation (not BRANCH/0BRANCH primitives — true STC)
+- [x] compile_0branch, compile_branch, patch_forward (internal helpers)
+- [x] IF / ELSE / THEN — conditional compilation
+- [x] BEGIN / UNTIL — post-test loop
+- [x] BEGIN / AGAIN — infinite loop
+- [x] BEGIN / WHILE / REPEAT — pre-test loop
+- [x] RECURSE — compile call to current definition
+- [x] Control-flow stack tags (CF_ORIG/CF_DEST) for mismatch detection
+- [x] Balance check in `;` for unresolved forward references
+- [x] Nest-safe longjmp recovery for errors inside EVALUATE/INCLUDED
+- [x] FIND flag=2 for IMMEDIATE+COMPILE_ONLY words
+- [x] Integration tests for control flow (20 tests)
+- [x] Documentation (docs/Conditionals.md)
 - [ ] DO / LOOP / +LOOP / I / J — counted loops
-- [ ] RECURSE — compile call to current definition
-- [ ] Unit tests for control flow
+- [ ] LEAVE — exit DO loop early
 
 ### 3c. More ASM Primitives — COMPLETE
 
@@ -84,7 +90,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Stack: ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP
 - [x] Return stack: `>R`, `R>`, `R@` (F_COMPILE_ONLY)
 - [x] Dictionary entries for all new primitives
-- [x] Unit tests for all new primitives (113 total)
+- [x] Unit tests for all new primitives
 - [x] ARM64 I-cache flush (platform_flush_icache, CTR_EL0 cache line detection)
 
 ### 3d. Defining Words
@@ -128,7 +134,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] EOF handling in platform_key (clean exit on piped input)
 - [x] Empty line re-prompts (instead of exiting)
 - [x] BYE prints "Goodbye!" before exit
-- [x] Integration test suite (75 tests, shell-based piped I/O)
+- [x] Integration test suite (shell-based piped I/O)
 - [x] Native build and test on Pumpkin board (clone from GitHub)
 
 ---

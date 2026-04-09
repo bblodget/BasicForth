@@ -13,9 +13,11 @@ Reference docs live in docs/. Each covers one topic and is kept up to date
 as the code evolves:
 
 - Planning.md — vision, phases, design decisions
-- Platform_Layer.md — platform API, termios, syscall reference
+- Platform_Layer.md — platform API, termios, syscall reference, file I/O
 - Core_Primitives.md — ASM primitives, data stack, pure memory stack design
 - Forth_Core_Words.md — Forth 2012 standard core vocabulary
+- Conditionals.md — control flow compilation, branch encoding, error handling
+- Outer_Interpreter.md — REPL loop, forth_interpret_line, EVALUATE/INCLUDED
 - ARM64_Quick_Reference.md — ARM64 instruction and register reference
 - x86_Quick_Reference.md — x86-64 AT&T syntax reference
 

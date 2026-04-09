@@ -280,26 +280,25 @@ keep the path open.
 - Verified on Genio 510 (native) and QEMU aarch64 (cross-compile)
 - Build system: Makefile with `as` + `ld`, auto-detects native vs cross
 
-### Phase 2: REPL Foundation — IN PROGRESS
-- Terminal raw mode (ioctl TCGETS/TCSETS) — done for both architectures
-- Data stack with basic primitives (DUP, DROP, SWAP, OVER, +, -, NEGATE) — done
-- KEY and EMIT — done
-- Multi-architecture build system (ARM64 + x86-64) — done
-- Line input with backspace and echo
-- Number parsing (decimal, hex)
-- Outer interpreter loop
+### Phase 2: REPL Foundation — COMPLETE
+- Terminal raw mode (ioctl TCGETS/TCSETS)
+- Data stack with 50+ primitives (arithmetic, stack, logic, comparison, memory)
+- KEY, EMIT, ACCEPT (line input with backspace and echo)
+- Number parsing (decimal, hex, binary, negative)
+- Outer interpreter loop (PARSE-WORD, FIND, EXECUTE, NUMBER)
+- Multi-architecture build system (ARM64 + x86-64)
 
-### Phase 3: Dictionary and Compiler
-- Dictionary structure
-- Word lookup (case-insensitive)
-- `:` and `;` — compile call sequences (STC)
-- `CONSTANT`, `VARIABLE`, `CREATE`
-- Control flow: IF/ELSE/THEN, BEGIN/UNTIL, DO/LOOP
-- core.fs — derived words in Forth
+### Phase 3: Dictionary and Compiler — IN PROGRESS
+- Dictionary structure with case-insensitive lookup — done
+- `:` and `;` — compile call sequences (STC) — done
+- Control flow: IF/ELSE/THEN, BEGIN/UNTIL/AGAIN, WHILE/REPEAT, RECURSE — done
+- EVALUATE, INCLUDED, core.fs bootstrap — done
+- Comments: `(` and `\` — done
+- Remaining: `CONSTANT`, `VARIABLE`, `CREATE/DOES>`, DO/LOOP
 
 ### Phase 4: File System and Storage
-- Block storage (file-backed) or file-based source loading
-- LOAD, LIST, THRU (or INCLUDE for file-based)
+- File-based source loading (INCLUDED) — done
+- Remaining: SAVE / persistence of user definitions
 
 ### Phase 5: Graphics and Sound
 - Linux framebuffer (/dev/fb0), DRM/KMS, or SDL2

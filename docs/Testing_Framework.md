@@ -44,21 +44,24 @@ functions (`platform_emit`, `platform_key`) are stubbed or linked as needed.
 4. Read DSP and stack contents to verify the result
 5. Report pass/fail
 
-### 2. Integration Tests — Full Binary (Future, Phase 2-3)
+### 2. Integration Tests — Full Binary
 
 **What:** Launch the full BasicForth binary, send input via stdin, verify
 output. Tests the complete stack: platform layer + core primitives +
 interactive behavior.
 
-**How:** A script or program that starts the BasicForth process, pipes
-commands, and checks output against expected patterns.
+**How:** `tests/test_integration.sh` pipes Forth commands to the binary
+with a 2-second timeout and checks output via substring matching.
 
 **Tests things like:**
-- Terminal setup and teardown
-- Line input with backspace editing
-- Number parsing and display in the interactive prompt
-- Error messages for invalid input
-- Clean exit on empty line
+- Arithmetic, stack operations, comparisons, logic
+- Colon definitions and redefinition
+- Control flow (IF/ELSE/THEN, BEGIN/UNTIL, BEGIN/WHILE/REPEAT, RECURSE)
+- core.fs words (CR, SPACE, MOD, /, TRUE, FALSE, etc.)
+- Number parsing (decimal, hex, binary, negative)
+- Error handling (unknown words, compile-only, unresolved/mismatched control flow)
+- Return stack operations, case insensitivity
+- BYE exit behavior
 
 ### 3. Forth Tests — Self-Hosted (Future, Phase 3+)
 
@@ -78,8 +81,8 @@ inside the system it's testing.
 
 ## Summary
 
-| Layer              | Approach          | Phase   | Status  |
-|--------------------|-------------------|---------|---------|
-| `core.s`           | C harness (unit)  | Phase 2 | Planned |
-| `platform_linux.s` | Integration tests | Phase 3 | Future  |
-| `core.fs`          | Forth testbench   | Phase 3 | Future  |
+| Layer              | Approach           | Status                          |
+|--------------------|--------------------|---------------------------------|
+| `core.s`           | C harness (unit)   | 119 tests, both arches          |
+| Full binary        | Shell integration   | 113 tests, both arches          |
+| `core.fs`          | Forth testbench    | Future                          |
