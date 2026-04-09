@@ -109,6 +109,25 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Infrastructure — COMPLETE
+
+- [x] GitHub repository (private, github.com/bblodget/BasicForth)
+- [x] README.md, LICENSE (GPL-2.0-only)
+- [x] Copyright headers (SPDX) on all source files
+- [x] Makefile: native arch auto-detection, run/test/clean/help targets
+- [x] Makefile: QEMU auto-detection for cross-arch run targets
+- [x] deploy_template.sh for remote board deployment
+- [x] Startup banner with version from `git describe --tags --dirty`
+- [x] Versioning with git tags (see docs/Versioning.md)
+- [x] CHANGELOG.md
+- [x] EOF handling in platform_key (clean exit on piped input)
+- [x] Empty line re-prompts (instead of exiting)
+- [x] BYE prints "Goodbye!" before exit
+- [x] Integration test suite (75 tests, shell-based piped I/O)
+- [x] Native build and test on Pumpkin board (clone from GitHub)
+
+---
+
 ## Phase 4: File System and Storage
 
 - [ ] Block storage (file-backed) or file-based source loading
