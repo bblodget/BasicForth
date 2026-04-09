@@ -130,10 +130,10 @@ Status: ( ) = not yet implemented, (x) = implemented
 | MOVE    | ( addr1 addr2 u -- )                          | forth | ( )    |                         |
 | ALIGN   | ( -- )                                        | forth | ( )    | Align HERE              |
 | ALIGNED | ( addr -- a-addr )                            | forth | ( )    |                         |
-| ALLOT   | ( n -- )                                      | forth | ( )    | HERE + to HERE          |
-| HERE    | ( -- addr )                                   | asm   | ( )    | Push HERE register      |
-| ,       | ( x -- )                                      | forth | ( )    | Store x at HERE, advance |
-| C,      | ( char -- )                                   | forth | ( )    | Store byte at HERE      |
+| ALLOT   | ( n -- )                                      | asm   | (x)    | Bounds-checked both directions |
+| HERE    | ( -- addr )                                   | asm   | (x)    | Push HERE register      |
+| ,       | ( x -- )                                      | asm   | (x)    | Store x at HERE, advance |
+| C,      | ( char -- )                                   | asm   | (x)    | Store byte at HERE      |
 
 ### I/O
 
@@ -170,10 +170,10 @@ Status: ( ) = not yet implemented, (x) = implemented
 |-----------|-----------------------------------------------|-------|--------|-------------------------|
 | :         | ( "name" -- )                                 | asm   | (x)    | Begin compilation        |
 | ;         | ( -- )                                        | asm   | (x)    | End compilation (IMMEDIATE) |
-| CREATE    | ( "name" -- )                                 | forth | ( )    | Create dictionary entry  |
+| CREATE    | ( "name" -- )                                 | asm   | (x)    | Compiles push-data-addr  |
 | DOES>     | ( -- a-addr )                                 | asm   | ( )    | Define runtime behavior  |
-| VARIABLE  | ( "name" -- )                                 | forth | ( )    | CREATE 1 CELLS ALLOT     |
-| CONSTANT  | ( x "name" -- )                               | forth | ( )    | CREATE , DOES> @         |
+| VARIABLE  | ( "name" -- )                                 | forth | (x)    | CREATE 1 CELLS ALLOT (core.fs) |
+| CONSTANT  | ( x "name" -- )                               | asm   | (x)    | Compiles push-value code |
 | IMMEDIATE | ( -- )                                        | asm   | (x)    | Mark word as immediate   |
 | '         | ( "name" -- xt )                              | asm   | (x)    | Find xt (IMMEDIATE)      |
 | EXECUTE   | ( xt -- )                                     | asm   | (x)    | Call execution token     |

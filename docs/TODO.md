@@ -93,16 +93,17 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Unit tests for all new primitives
 - [x] ARM64 I-cache flush (platform_flush_icache, CTR_EL0 cache line detection)
 
-### 3d. Defining Words
+### 3d. Defining Words — MOSTLY COMPLETE
 
-- [ ] CONSTANT ( n -- ) — `10 CONSTANT TEN`
-- [ ] VARIABLE ( -- ) — `VARIABLE FOO`
-- [ ] CREATE — create a header with no behavior
-- [ ] DOES> — attach runtime behavior to CREATE'd words
-- [ ] ALLOT ( n -- ) — reserve n bytes in dict space
-- [ ] `,` (COMMA) — compile a cell into dict space
-- [ ] `C,` — compile a byte into dict space
-- [ ] HERE as a Forth word (push current HERE value)
+- [x] HERE ( -- addr ) — push dictionary free-space pointer
+- [x] ALLOT ( n -- ) — reserve n bytes (bounds-checked both directions)
+- [x] `,` (COMMA) — compile a cell into dict space
+- [x] `C,` — compile a byte into dict space
+- [x] CREATE ( "name" -- ) — compile push-data-address code, aligned data field
+- [x] CONSTANT ( x "name" -- ) — compile push-value code
+- [x] VARIABLE ( "name" -- ) — defined in core.fs as CREATE 1 CELLS ALLOT
+- [x] build_header refactor — shared by :, CREATE, CONSTANT
+- [ ] DOES> — attach runtime behavior to CREATE'd words (deferred)
 
 ### 3e. core.fs Bootstrap — IN PROGRESS
 

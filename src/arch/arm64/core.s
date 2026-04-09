@@ -2112,22 +2112,33 @@ forth_create:
     BL build_header
     CBNZ X0, .Lcreate_done         // error → bail
 
-    // ARM64: compile prolog (4) + literal (12) + ret (8) = 24
-    ADD X0, X21, #24               // data field address
-    BL compile_prolog               // STP X29, X30
-    BL compile_literal              // BL forth_lit + data_addr
-    BL compile_ret                  // LDP + RET
+    // Compile code with placeholder data address (0), then patch after aligning
+    MOV X0, #0                      // placeholder
+    BL compile_prolog               // STP X29, X30 (4 bytes)
+    BL compile_literal              // BL forth_lit + 0 (12 bytes)
+    SUB X23, X21, #CELL             // X23 = address of inline value (to patch)
+    BL compile_ret                  // LDP + RET (8 bytes)
+
+    // Save code end before alignment
+    MOV X24, X21                    // X24 = HERE before alignment
+
+    // Align HERE to CELL for data field
+    ADD X21, X21, #7
+    AND X21, X21, #~7
+
+    // Patch the literal with the actual aligned data field address
+    STR X21, [X23]                  // write real data_addr into the literal
 
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                   // X9 = code_len field address
     ADD X10, X9, #4                // code start
-    SUB X11, X21, X10              // code length
+    SUB X11, X24, X10              // code length (up to code end, before padding)
     STR W11, [X9]
 
     // Flush I-cache for compiled code
     ADD X0, X9, #4                 // start = code start
-    MOV X1, X21                    // end = HERE
+    MOV X1, X24                    // end = code end
     BL platform_flush_icache
 
     // Clear HIDDEN flag

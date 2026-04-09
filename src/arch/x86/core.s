@@ -2043,15 +2043,25 @@ forth_create:
     call build_header
     jc .Lcreate_done                # error → bail
 
-    # Calculate data field address: HERE + 13 (literal) + 1 (ret) = HERE + 14
-    lea 14(%r13), %rax
-    call compile_literal            # emit CALL forth_lit + data_addr
+    # Compile code with placeholder data address (0), then patch after aligning
+    xor %eax, %eax                  # placeholder = 0
+    call compile_literal            # emit CALL forth_lit + 0
+    lea -8(%r13), %rbx              # RBX = address of inline value (to patch)
     call compile_ret                # emit RET
 
-    # Fill code_len
+    # Align HERE to CELL for data field
+    add $7, %r13
+    and $~7, %r13
+
+    # Patch the literal with the actual aligned data field address
+    mov %r13, (%rbx)                # write real data_addr into the literal
+
+    # Fill code_len (code = from code_start to just before alignment padding)
     mov colon_code_len_addr(%rip), %rax
     lea 4(%rax), %rcx              # code start
-    mov %r13, %rdx
+    mov %rbx, %rdx                 # end of code = literal value addr
+    add $8, %rdx                   # + 8 bytes for the value itself
+    add $1, %rdx                   # + 1 byte for RET
     sub %rcx, %rdx
     mov %edx, (%rax)               # write code_len
 
