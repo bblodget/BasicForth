@@ -10,6 +10,8 @@
 //
 // X20 is free (no longer used for TOS).
 
+.include "version.inc"
+
 .global _start
 
 .equ CELL, 8
@@ -31,6 +33,11 @@ _start:
 
     BL platform_init_guard_pages
     BL platform_raw_mode
+
+    // Print startup banner
+    ADR X0, version_str
+    MOV X1, #version_len
+    BL platform_write
 
 .global repl_loop
 repl_loop:

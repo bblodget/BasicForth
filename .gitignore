@@ -1,5 +1,6 @@
 # Build artifacts
 *.o
+version.inc
 src/arch/arm64/basicforth
 src/arch/x86/basicforth
 src/arch/arm64/test_basicforth

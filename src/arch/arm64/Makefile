@@ -21,6 +21,8 @@ else
     QEMU := qemu-aarch64-static
 endif
 
+VERSION := $(shell git -C $(CURDIR)/../../.. describe --tags --dirty 2>/dev/null || echo "unknown")
+
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
 OBJS    = $(SRCS:.s=.o)
@@ -28,14 +30,23 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test run run-test run-integration clean help
+.PHONY: all test run run-test run-integration clean help FORCE
 
 # Default: build binary only
 $(BIN): $(OBJS)
 	$(LD) -N -o $@ $(OBJS)
 
+main.o: main.s version.inc
+
 %.o: %.s
 	$(AS) -o $@ $<
+
+# Generate version include file (rebuilt every time, only updates if changed)
+version.inc: FORCE
+	@printf '.section .rodata\nversion_str: .ascii "*** BasicForth %s (Linux/ARM64) ***\\n"\n.equ version_len, . - version_str\n.text\n' "$(VERSION)" > $@.tmp
+	@cmp -s $@.tmp $@ 2>/dev/null || mv $@.tmp $@
+	@rm -f $@.tmp
+FORCE:
 
 all: $(BIN) $(TEST_BIN)
 
@@ -55,7 +66,7 @@ run-integration: $(BIN)
 	$(TEST_DIR)/test_integration.sh $(QEMU) ./$(BIN)
 
 clean:
-	rm -f $(OBJS) $(BIN) $(TEST_BIN)
+	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc
 
 help:
 	@echo "BasicForth ARM64 Build"
