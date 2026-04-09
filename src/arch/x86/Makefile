@@ -13,7 +13,7 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test run run-test clean help
+.PHONY: all test run run-test run-integration clean help
 
 # Default: build binary only
 $(BIN): $(OBJS)
@@ -36,6 +36,9 @@ run: $(BIN)
 run-test: $(TEST_BIN)
 	./$(TEST_BIN)
 
+run-integration: $(BIN)
+	$(TEST_DIR)/test_integration.sh ./$(BIN)
+
 clean:
 	rm -f $(OBJS) $(BIN) $(TEST_BIN)
 
@@ -47,5 +50,6 @@ help:
 	@echo "  make all             Build basicforth and unit test"
 	@echo "  make run             Run basicforth interactively"
 	@echo "  make run-test        Run unit test (C harness)"
+	@echo "  make run-integration Run integration tests"
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make help            Show this help"
