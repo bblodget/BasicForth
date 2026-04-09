@@ -1,37 +1,16 @@
 # BasicForth — Top-level Build
-# Dispatches to architecture-specific Makefiles
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Dispatches to architecture-specific Makefiles.
 
 ARCH_DIRS = src/arch/arm64 src/arch/x86
 
-.PHONY: all clean arm64 x86 test-arm64 test-x86 unit-test-arm64 unit-test-x86 deploy deploy-test deploy-all help
+.PHONY: all arm64 x86 tests-arm64 tests-x86 run-x86 run-arm64 \
+        run-tests-x86 run-tests-arm64 clean help
 
-# Default: build all architectures
+# Default: build both architectures
 all: arm64 x86
-
-help:
-	@echo "BasicForth Build System"
-	@echo ""
-	@echo "Build:"
-	@echo "  make              Build all architectures"
-	@echo "  make x86          Build x86-64 binary"
-	@echo "  make arm64        Build ARM64 binary (cross-compile or native)"
-	@echo ""
-	@echo "Run:"
-	@echo "  make test-x86     Run x86-64 binary"
-	@echo "  make test-arm64   Run ARM64 binary (via QEMU or native)"
-	@echo ""
-	@echo "Unit Tests:"
-	@echo "  make unit-test-x86    Run x86-64 unit tests"
-	@echo "  make unit-test-arm64  Run ARM64 unit tests (requires gcc-aarch64-linux-gnu)"
-	@echo ""
-	@echo "Deploy:"
-	@echo "  make deploy       Deploy ARM64 binary to Pumpkin board via SSH"
-	@echo "  make deploy-test  Deploy ARM64 test binary to Pumpkin board via SSH"
-	@echo "  make deploy-all   Deploy both ARM64 binaries to Pumpkin board via SSH"
-	@echo ""
-	@echo "Other:"
-	@echo "  make clean        Remove build artifacts for all architectures"
-	@echo "  make help         Show this help"
 
 arm64:
 	$(MAKE) -C src/arch/arm64
@@ -39,26 +18,43 @@ arm64:
 x86:
 	$(MAKE) -C src/arch/x86
 
-test-arm64:
-	$(MAKE) -C src/arch/arm64 test
+tests-x86:
+	$(MAKE) -C src/arch/x86 tests
 
-test-x86:
-	$(MAKE) -C src/arch/x86 test
+tests-arm64:
+	$(MAKE) -C src/arch/arm64 tests
 
-unit-test-x86:
-	$(MAKE) -C src/arch/x86 unit-test
+run-x86:
+	$(MAKE) -C src/arch/x86 run
 
-unit-test-arm64:
-	$(MAKE) -C src/arch/arm64 unit-test
+run-arm64:
+	$(MAKE) -C src/arch/arm64 run
 
-deploy:
-	$(MAKE) -C src/arch/arm64 deploy
+run-tests-x86:
+	$(MAKE) -C src/arch/x86 run-tests
 
-deploy-test:
-	$(MAKE) -C src/arch/arm64 deploy-test
-
-deploy-all:
-	$(MAKE) -C src/arch/arm64 deploy-all
+run-tests-arm64:
+	$(MAKE) -C src/arch/arm64 run-tests
 
 clean:
 	@for dir in $(ARCH_DIRS); do $(MAKE) -C $$dir clean; done
+
+help:
+	@echo "BasicForth Build System"
+	@echo ""
+	@echo "Build:"
+	@echo "  make                  Build all architectures"
+	@echo "  make x86              Build x86-64 binary"
+	@echo "  make arm64            Build ARM64 binary (cross-compile or native)"
+	@echo "  make tests-x86        Build x86-64 unit tests"
+	@echo "  make tests-arm64      Build ARM64 unit tests"
+	@echo ""
+	@echo "Run:"
+	@echo "  make run-x86          Run x86-64 binary interactively"
+	@echo "  make run-arm64        Run ARM64 binary interactively"
+	@echo "  make run-tests-x86    Run x86-64 unit tests"
+	@echo "  make run-tests-arm64  Run ARM64 unit tests"
+	@echo ""
+	@echo "Other:"
+	@echo "  make clean            Remove build artifacts for all architectures"
+	@echo "  make help             Show this help"

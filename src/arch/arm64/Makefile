@@ -1,5 +1,9 @@
 # BasicForth — ARM64 Build
-# Builds natively on ARM64 or cross-compiles from x86
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Builds natively on ARM64 or cross-compiles from x86.
+
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),aarch64)
     CROSS :=
@@ -11,46 +15,35 @@ AS      = $(CROSS)as
 LD      = $(CROSS)ld
 CC      = $(CROSS)gcc
 
-
 BIN     = basicforth
 SRCS    = main.s core.s platform_linux.s
 OBJS    = $(SRCS:.s=.o)
 
-QEMU    = qemu-aarch64-static
-BOARD   = p510
-BOARD_DIR = ~/Dev/BasicForth/src/arch/arm64
-
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test unit-test deploy deploy-test deploy-all clean help
+.PHONY: all tests run run-tests clean help
 
-all: $(BIN)
+# Default: build binary only
+$(BIN): $(OBJS)
+	$(LD) -N -o $@ $(OBJS)
 
 %.o: %.s
 	$(AS) -o $@ $<
 
-$(BIN): $(OBJS)
-	$(LD) -N -o $@ $(OBJS)
+all: $(BIN) $(TEST_BIN)
 
-test: $(BIN)
-	$(QEMU) $(BIN)
-
-unit-test: $(TEST_BIN)
-	$(QEMU) ./$(TEST_BIN)
+tests: $(TEST_BIN)
 
 $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_arm64.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_arm64.s core.o -static
 
-deploy: $(BIN)
-	scp $(BIN) $(BOARD):$(BOARD_DIR)/
+run: $(BIN)
+	./$(BIN)
 
-deploy-test: $(TEST_BIN)
-	scp $(TEST_BIN) $(BOARD):$(BOARD_DIR)/
-
-deploy-all: $(BIN) $(TEST_BIN)
-	scp $(BIN) $(TEST_BIN) $(BOARD):$(BOARD_DIR)/
+run-tests: $(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -f $(OBJS) $(BIN) $(TEST_BIN)
@@ -58,11 +51,12 @@ clean:
 help:
 	@echo "BasicForth ARM64 Build"
 	@echo ""
-	@echo "  make              Build basicforth binary"
-	@echo "  make test         Run basicforth (via QEMU or native)"
-	@echo "  make unit-test    Run unit tests (C harness)"
-	@echo "  make deploy       Deploy basicforth to Pumpkin board via SSH"
-	@echo "  make deploy-test  Deploy test binary to Pumpkin board via SSH"
-	@echo "  make deploy-all   Deploy both binaries to Pumpkin board via SSH"
-	@echo "  make clean        Remove build artifacts"
-	@echo "  make help         Show this help"
+	@echo "  make                  Build basicforth binary"
+	@echo "  make tests            Build unit tests (C harness)"
+	@echo "  make all              Build basicforth and unit tests"
+	@echo "  make run              Run basicforth interactively"
+	@echo "  make run-tests        Run unit tests (C harness)"
+	@echo "  make clean            Remove build artifacts"
+	@echo "  make help             Show this help"
+	@echo ""
+	@echo "See deploy_template.sh for deploying to a remote board."

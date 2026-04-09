@@ -1,4 +1,7 @@
 # BasicForth — x86-64 Build
+# Copyright (C) 2026 Brandon Blodget
+# SPDX-License-Identifier: GPL-2.0-only
+
 AS      = as
 LD      = ld
 CC      = gcc
@@ -10,24 +13,27 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test unit-test clean help
+.PHONY: all tests run run-tests clean help
 
-all: $(BIN)
+# Default: build binary only
+$(BIN): $(OBJS)
+	$(LD) -N -o $@ $(OBJS)
 
 %.o: %.s
 	$(AS) -o $@ $<
 
-$(BIN): $(OBJS)
-	$(LD) -N -o $@ $(OBJS)
+all: $(BIN) $(TEST_BIN)
 
-test: $(BIN)
-	./$(BIN)
+tests: $(TEST_BIN)
 
 $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 	$(CC) -o $(TEST_BIN) $(TEST_DIR)/test_basicforth.c \
 		$(TEST_DIR)/test_helper_x86.s core.o
 
-unit-test: $(TEST_BIN)
+run: $(BIN)
+	./$(BIN)
+
+run-tests: $(TEST_BIN)
 	./$(TEST_BIN)
 
 clean:
@@ -36,8 +42,10 @@ clean:
 help:
 	@echo "BasicForth x86-64 Build"
 	@echo ""
-	@echo "  make              Build basicforth binary"
-	@echo "  make test         Run basicforth interactively"
-	@echo "  make unit-test    Run unit tests (C harness)"
-	@echo "  make clean        Remove build artifacts"
-	@echo "  make help         Show this help"
+	@echo "  make                  Build basicforth binary"
+	@echo "  make tests            Build unit tests (C harness)"
+	@echo "  make all              Build basicforth and unit tests"
+	@echo "  make run              Run basicforth interactively"
+	@echo "  make run-tests        Run unit tests (C harness)"
+	@echo "  make clean            Remove build artifacts"
+	@echo "  make help             Show this help"

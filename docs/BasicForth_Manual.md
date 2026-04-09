@@ -42,18 +42,17 @@ make x86
 
 ```
 make arm64
-make test-arm64
+make run-arm64
 ```
 
-### ARM64 (deploy to Pumpkin board)
+### ARM64 (deploy to a remote board)
 
-```
-make deploy
-```
+See `src/arch/arm64/deploy_template.sh` — copy it to `deploy.sh` and
+customize with your board's SSH hostname.
 
 ### How QEMU User-Mode Works
 
-When you run `make test-arm64` on an x86-64 host, the Makefile invokes
+When you run `make run-arm64` on an x86-64 host, the Makefile invokes
 `qemu-aarch64-static` to run the ARM64 binary. This is QEMU **user-mode
 emulation** — it translates ARM64 instructions to x86-64 on the fly
 (dynamic binary translation), while Linux syscalls pass straight through
@@ -73,8 +72,8 @@ that access framebuffers, GPIO, or device-specific ioctls need real hardware.
 ### Unit Tests
 
 ```
-make unit-test-x86
-make unit-test-arm64
+make run-tests-x86
+make run-tests-arm64
 ```
 
 ## The Prompt

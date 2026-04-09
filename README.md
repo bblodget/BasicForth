@@ -57,8 +57,8 @@ make clean        # Remove build artifacts
 ### Running
 
 ```sh
-make test-x86     # Run x86-64 binary
-make test-arm64   # Run ARM64 binary via QEMU
+make run-x86      # Run x86-64 binary
+make run-arm64    # Run ARM64 binary (native or via QEMU)
 
 # Or directly:
 src/arch/x86/basicforth
@@ -67,17 +67,14 @@ src/arch/x86/basicforth
 ### Unit Tests
 
 ```sh
-make unit-test-x86     # Run x86-64 tests
-make unit-test-arm64   # Run ARM64 tests (via QEMU)
+make run-tests-x86     # Run x86-64 tests
+make run-tests-arm64   # Run ARM64 tests
 ```
 
 ### Deploy to ARM64 Board
 
-```sh
-make deploy       # Deploy binary to Pumpkin board via SSH
-make deploy-test  # Deploy test binary
-make deploy-all   # Deploy both
-```
+For deploying to a remote ARM64 board, see
+`src/arch/arm64/deploy_template.sh`.
 
 ## Example Session
 
