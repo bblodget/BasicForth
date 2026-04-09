@@ -1206,54 +1206,50 @@ compile_branch_back:
     add $5, %r13                   # advance HERE
     ret
 
-# ---------- COLON (Forth-level) ----------
-# ( -- )
-# Parse the next word, create a dictionary header at HERE, and enter
-# compile mode.  The new entry is marked HIDDEN until ; completes it.
+# ---------- build_header (internal helper) ----------
+# Parse the next word and create a dictionary header at HERE.
+# Saves LATEST/HERE for error recovery, updates LATEST to new entry.
+# Entry is marked HIDDEN — caller must clear it when done.
+# On return: HERE points to code area, R12 = new entry (LATEST).
+# Uses RBX, RBP internally (caller must save if needed).
+# Returns: CF=0 on success, CF=1 on error (empty name or dict full).
 #
-# Dictionary entry layout built here:
-#   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [pad to 4]
+# Dictionary entry layout:
+#   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
 #   Then HERE points to where compiled code will go.
-#
-.global forth_colon
-forth_colon:
-    # Save LATEST and HERE for error recovery before modifying anything
+build_header:
+    # Save LATEST and HERE for error recovery
     mov %r12, saved_latest(%rip)
     mov %r13, saved_here(%rip)
 
-    push %rbx
-    push %rbp
-
     # Parse name
     call forth_parse_word           # ( -- c-addr u )
-    # Pop c-addr and u from stack
     mov (%r15), %rcx                # RCX = u (name length, on top)
     mov CELL(%r15), %rsi            # RSI = c-addr (second)
     add $2*CELL, %r15
 
     test %rcx, %rcx
-    jz .Lcolon_err                  # empty name — bail
+    jz .Lbh_err                     # empty name — bail
 
     # Check dictionary space (need ~128 bytes for header)
     lea dict_space+DICT_SPACE_SIZE(%rip), %rax
     lea 128(%r13), %rdx
     cmp %rax, %rdx
-    ja .Lcolon_dict_full
+    ja .Lbh_dict_full
 
     # Clamp name length to F_LENMASK (31) max
     cmp $F_LENMASK, %rcx
-    jbe .Lcolon_len_ok
+    jbe .Lbh_len_ok
     mov $F_LENMASK, %rcx
-.Lcolon_len_ok:
+.Lbh_len_ok:
 
-    # R13 = HERE, R12 = LATEST
     # Align HERE to 8 before starting new entry
     add $7, %r13
     and $~7, %r13
 
     # Write link pointer (8 bytes) — points to old LATEST
     mov %r12, (%r13)
-    mov %r13, %rbx                  # RBX = new entry address (for LATEST)
+    mov %r13, %rbx                  # RBX = new entry address
     add $CELL, %r13
 
     # Write flags+len byte (HIDDEN | length)
@@ -1263,25 +1259,24 @@ forth_colon:
     inc %r13
 
     # Write name (lowercase)
-    mov %rcx, %rbp                  # RBP = name length (loop counter)
-.Lcolon_name:
+    mov %rcx, %rbp
+.Lbh_name:
     test %rbp, %rbp
-    jz .Lcolon_name_done
+    jz .Lbh_name_done
     movzbl (%rsi), %eax
-    # Lowercase: if 'A'-'Z', add 0x20
     cmp $'A', %al
-    jb .Lcolon_store
+    jb .Lbh_store
     cmp $'Z', %al
-    ja .Lcolon_store
+    ja .Lbh_store
     add $0x20, %al
-.Lcolon_store:
+.Lbh_store:
     movb %al, (%r13)
     inc %r13
     inc %rsi
     dec %rbp
-    jmp .Lcolon_name
+    jmp .Lbh_name
 
-.Lcolon_name_done:
+.Lbh_name_done:
     # Align HERE to 8
     add $7, %r13
     and $~7, %r13
@@ -1291,29 +1286,43 @@ forth_colon:
     mov %rax, (%r13)
     add $CELL, %r13                 # past CodePtr
 
-    # Write code_len placeholder (0), save its address for ;
+    # Write code_len placeholder (0), save its address
     mov %r13, colon_code_len_addr(%rip)
     movl $0, (%r13)
-    add $4, %r13                    # past CodeLen
+    add $4, %r13                    # past CodeLen — HERE now at code area
+
+    # Update LATEST
+    mov %rbx, %r12                  # LATEST = new entry (still HIDDEN)
+
+    clc                             # success
+    ret
+
+.Lbh_dict_full:
+    jmp dict_full
+
+.Lbh_err:
+    stc                             # error
+    ret
+
+# ---------- COLON (Forth-level) ----------
+# ( -- )
+# Parse the next word, create a dictionary header at HERE, and enter
+# compile mode.  The new entry is marked HIDDEN until ; completes it.
+.global forth_colon
+forth_colon:
+    push %rbx
+    push %rbp
+
+    call build_header
+    jc .Lcolon_done                 # error → bail
 
     # Save data stack depth for control-flow balance check in ;
     mov %r15, colon_dsp(%rip)
 
-    # Update LATEST and STATE
-    mov %rbx, %r12                  # LATEST = new entry
-    movq $1, state(%rip)            # STATE = compiling
+    # Enter compile mode
+    movq $1, state(%rip)
 
-    pop %rbp
-    pop %rbx
-    ret
-
-.Lcolon_dict_full:
-    pop %rbp
-    pop %rbx
-    jmp dict_full
-
-.Lcolon_err:
-    # No name given — just return without doing anything
+.Lcolon_done:
     pop %rbp
     pop %rbx
     ret
@@ -1972,6 +1981,132 @@ forth_recurse:
     call compile_call
     ret
 
+# ---------- HERE, ALLOT, COMMA, C-COMMA ----------
+
+# HERE ( -- addr )
+# Push the current dictionary free-space pointer.
+.global forth_here
+forth_here:
+    sub $CELL, %r15
+    mov %r13, (%r15)                # push HERE (R13)
+    ret
+
+# ALLOT ( n -- )
+# Reserve n bytes in dictionary space.
+.global forth_allot
+forth_allot:
+    mov (%r15), %rax
+    add $CELL, %r15                 # pop n
+    # Bounds check: dict_space <= HERE + n <= dict_space + SIZE
+    lea (%r13,%rax), %rcx           # RCX = HERE + n
+    lea dict_space(%rip), %rdx
+    cmp %rdx, %rcx
+    jb dict_full                    # below dict_space start
+    lea dict_space+DICT_SPACE_SIZE(%rip), %rdx
+    cmp %rdx, %rcx
+    ja dict_full                    # above dict_space end
+    add %rax, %r13                  # HERE += n
+    ret
+
+# , ( x -- )
+# Store x at HERE and advance HERE by one cell.
+.global forth_comma
+forth_comma:
+    CHECK_DICT 8
+    mov (%r15), %rax
+    add $CELL, %r15                 # pop x
+    mov %rax, (%r13)                # store at HERE
+    add $CELL, %r13                 # advance HERE
+    ret
+
+# C, ( c -- )
+# Store byte at HERE and advance HERE by one byte.
+.global forth_c_comma
+forth_c_comma:
+    CHECK_DICT 1
+    mov (%r15), %rax
+    add $CELL, %r15                 # pop c
+    movb %al, (%r13)                # store byte at HERE
+    inc %r13                        # advance HERE
+    ret
+
+# ---------- CREATE ----------
+
+# CREATE ( "name" -- )
+# Parse name, build dictionary header, compile code that pushes the
+# data field address. Does not enter compile mode.
+.global forth_create
+forth_create:
+    push %rbx
+    push %rbp
+
+    call build_header
+    jc .Lcreate_done                # error → bail
+
+    # Calculate data field address: HERE + 13 (literal) + 1 (ret) = HERE + 14
+    lea 14(%r13), %rax
+    call compile_literal            # emit CALL forth_lit + data_addr
+    call compile_ret                # emit RET
+
+    # Fill code_len
+    mov colon_code_len_addr(%rip), %rax
+    lea 4(%rax), %rcx              # code start
+    mov %r13, %rdx
+    sub %rcx, %rdx
+    mov %edx, (%rax)               # write code_len
+
+    # Clear HIDDEN flag — word is now visible
+    andb $~F_HIDDEN, 8(%r12)
+
+.Lcreate_done:
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- CONSTANT ----------
+
+# CONSTANT ( x "name" -- )
+# Parse name, build dictionary header, compile code that pushes x.
+.global forth_constant
+forth_constant:
+    push %rbx
+    push %rbp
+
+    # Pop value from data stack BEFORE build_header (which parses name)
+    mov (%r15), %rax
+    add $CELL, %r15
+    push %rax                       # save value on return stack (build_header clobbers RBX)
+
+    call build_header
+    jc .Lconst_err                  # error → bail
+
+    # Compile code that pushes the constant value
+    pop %rax                        # restore value
+    call compile_literal            # emit CALL forth_lit + value
+    call compile_ret                # emit RET
+
+    # Fill code_len
+    mov colon_code_len_addr(%rip), %rax
+    lea 4(%rax), %rcx
+    mov %r13, %rdx
+    sub %rcx, %rdx
+    mov %edx, (%rax)
+
+    # Clear HIDDEN flag
+    andb $~F_HIDDEN, 8(%r12)
+
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lconst_err:
+    pop %rax                        # restore saved value
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push it back onto data stack
+    pop %rbp
+    pop %rbx
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -2039,7 +2174,13 @@ DEFWORD dict_again,      "again",      forth_again,       dict_until,     F_IMME
 DEFWORD dict_while,      "while",      forth_while,       dict_again,     F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_repeat,     "repeat",     forth_repeat,      dict_while,     F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_recurse,    "recurse",    forth_recurse,     dict_repeat,    F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_recurse
+DEFWORD dict_here,       "here",       forth_here,        dict_recurse
+DEFWORD dict_allot,      "allot",      forth_allot,       dict_here
+DEFWORD dict_comma,      ",",          forth_comma,       dict_allot
+DEFWORD dict_c_comma,    "c,",         forth_c_comma,     dict_comma
+DEFWORD dict_create,     "create",     forth_create,      dict_c_comma
+DEFWORD dict_constant,   "constant",   forth_constant,    dict_create
+.global dict_constant
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

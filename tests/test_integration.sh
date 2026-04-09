@@ -265,6 +265,18 @@ assert_output "factorial"    ": fact dup 1 > if dup 1- recurse * then ; 5 fact .
 assert_output "factorial 6"  ": fact dup 1 > if dup 1- recurse * then ; 6 fact ."  "720"
 
 # =========================================================================
+section "Defining Words"
+# =========================================================================
+
+assert_output "constant"           "42 constant answer answer ."              "42"
+assert_output "constant arith"     "42 constant x x x + ."                   "84"
+assert_output "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
+assert_output "here"               "here 0 <> ."                             "-1"
+assert_output "comma"              "here 42 , here swap - ."                 "8"
+assert_output "variable"           "variable x 99 x ! x @ ."                "99"
+assert_output "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
+
+# =========================================================================
 section "core.fs Words"
 # =========================================================================
 

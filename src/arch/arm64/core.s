@@ -1201,55 +1201,51 @@ compile_branch_back:
     ADD X21, X21, #4
     RET
 
-// ---------- COLON (Forth-level) ----------
-// ( -- )
-// Parse the next word, create a dictionary header at HERE, and enter
-// compile mode.  The new entry is marked HIDDEN until ; completes it.
+// ---------- build_header (internal helper) ----------
+// Parse the next word and create a dictionary header at HERE.
+// Saves LATEST/HERE for error recovery, updates LATEST to new entry.
+// Entry is marked HIDDEN — caller must clear it when done.
+// On return: HERE points to code area, X22 = new entry (LATEST).
+// Uses X23-X26 internally (caller must save if needed).
+// Returns: X0=0 on success, X0=1 on error (empty name or dict full).
 //
-// Dictionary entry layout built here:
-//   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [pad to 4]
-//   Then HERE points to where compiled code will go.
-//
-.global forth_colon
-forth_colon:
-    // Save LATEST and HERE for error recovery before modifying anything
+// Dictionary entry layout:
+//   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
+build_header:
+    STP X29, X30, [SP, #-16]!
+
+    // Save LATEST and HERE for error recovery
     ADR X9, saved_latest
     STR X22, [X9]
     ADR X9, saved_here
     STR X21, [X9]
 
-    STP X29, X30, [SP, #-16]!
-    STP X23, X24, [SP, #-16]!
-    STP X25, X26, [SP, #-16]!
-
     // Parse name
     BL forth_parse_word             // ( -- c-addr u )
-    // Pop c-addr and u from stack
-    LDR X24, [X19], #CELL          // X24 = u (name length, on top)
-    LDR X23, [X19], #CELL          // X23 = c-addr (second)
+    LDR X24, [X19], #CELL          // X24 = u (name length)
+    LDR X23, [X19], #CELL          // X23 = c-addr
 
-    CBZ X24, .Lcolon_err            // empty name — bail
+    CBZ X24, .Lbh_err
 
-    // Check dictionary space (need ~128 bytes for header)
+    // Check dictionary space
     ADR X9, dict_space_end
     ADD X10, X21, #128
     CMP X10, X9
-    B.HI .Lcolon_dict_full
+    B.HI .Lbh_dict_full
 
-    // Clamp name length to F_LENMASK (31) max
+    // Clamp name length
     CMP X24, #F_LENMASK
-    B.LS .Lcolon_len_ok
+    B.LS .Lbh_len_ok
     MOV X24, #F_LENMASK
-.Lcolon_len_ok:
+.Lbh_len_ok:
 
-    // X21 = HERE, X22 = LATEST
-    // Align HERE to 8 before starting new entry
+    // Align HERE to 8
     ADD X21, X21, #7
     AND X21, X21, #~7
 
-    // Write link pointer (8 bytes) — points to old LATEST
+    // Write link pointer
     STR X22, [X21]
-    MOV X25, X21                    // X25 = new entry address (for LATEST)
+    MOV X25, X21                    // X25 = new entry address
     ADD X21, X21, #CELL
 
     // Write flags+len byte (HIDDEN | length)
@@ -1259,63 +1255,78 @@ forth_colon:
     ADD X21, X21, #1
 
     // Write name (lowercase)
-    MOV X26, X24                    // X26 = name length (loop counter)
-.Lcolon_name:
-    CBZ X26, .Lcolon_name_done
+    MOV X26, X24
+.Lbh_name:
+    CBZ X26, .Lbh_name_done
     LDRB W9, [X23], #1
-    // Lowercase: if 'A'-'Z', add 0x20
     CMP W9, #'A'
-    B.LO .Lcolon_store
+    B.LO .Lbh_store
     CMP W9, #'Z'
-    B.HI .Lcolon_store
+    B.HI .Lbh_store
     ADD W9, W9, #0x20
-.Lcolon_store:
+.Lbh_store:
     STRB W9, [X21], #1
     SUB X26, X26, #1
-    B .Lcolon_name
+    B .Lbh_name
 
-.Lcolon_name_done:
+.Lbh_name_done:
     // Align HERE to 8
     ADD X21, X21, #7
     AND X21, X21, #~7
 
-    // Write code pointer — will point just past code_len field
-    ADD X9, X21, #12                // code starts after CodePtr(8)+CodeLen(4)
+    // Write code pointer
+    ADD X9, X21, #12               // code starts after CodePtr(8)+CodeLen(4)
     STR X9, [X21]
-    ADD X21, X21, #CELL             // past CodePtr
+    ADD X21, X21, #CELL
 
-    // Write code_len placeholder (0), save its address for ;
+    // Write code_len placeholder (0), save its address
     ADR X9, colon_code_len_addr
     STR X21, [X9]
     STR WZR, [X21]
-    ADD X21, X21, #4                // past CodeLen
+    ADD X21, X21, #4               // HERE now at code area
 
-    // Compile prolog (STP X29, X30, [SP, #-16]!) as first instruction
+    // Update LATEST
+    MOV X22, X25                   // LATEST = new entry (still HIDDEN)
+
+    MOV X0, #0                     // success
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lbh_dict_full:
+    LDP X29, X30, [SP], #16
+    B dict_full
+
+.Lbh_err:
+    MOV X0, #1                     // error
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- COLON (Forth-level) ----------
+// ( -- )
+// Parse the next word, create a dictionary header at HERE, and enter
+// compile mode.  The new entry is marked HIDDEN until ; completes it.
+.global forth_colon
+forth_colon:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    BL build_header
+    CBNZ X0, .Lcolon_done          // error → bail
+
+    // Compile prolog (STP X29, X30, [SP, #-16]!)
     BL compile_prolog
 
     // Save data stack depth for control-flow balance check in ;
     ADR X9, colon_dsp
     STR X19, [X9]
 
-    // Update LATEST and STATE
-    MOV X22, X25                    // LATEST = new entry
+    // Enter compile mode
     ADR X9, state
     MOV X10, #1
-    STR X10, [X9]                   // STATE = compiling
+    STR X10, [X9]
 
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
-
-.Lcolon_dict_full:
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    B dict_full
-
-.Lcolon_err:
-    // No name given — just return without doing anything
+.Lcolon_done:
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
@@ -2046,6 +2057,143 @@ forth_recurse:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- HERE, ALLOT, COMMA, C-COMMA ----------
+
+// HERE ( -- addr )
+.global forth_here
+forth_here:
+    STR X21, [X19, #-CELL]!        // push HERE (X21)
+    RET
+
+// ALLOT ( n -- )
+.global forth_allot
+forth_allot:
+    LDR X9, [X19], #CELL           // pop n
+    // Bounds check: dict_space <= HERE + n <= dict_space + SIZE
+    ADD X10, X21, X9
+    ADR X11, dict_space
+    CMP X10, X11
+    B.LO dict_full                  // below dict_space start
+    ADR X11, dict_space_end
+    CMP X10, X11
+    B.HI dict_full                  // above dict_space end
+    ADD X21, X21, X9                // HERE += n
+    RET
+
+// , ( x -- )
+.global forth_comma
+forth_comma:
+    CHECK_DICT 8
+    LDR X9, [X19], #CELL           // pop x
+    STR X9, [X21]                   // store at HERE
+    ADD X21, X21, #CELL             // advance HERE
+    RET
+
+// C, ( c -- )
+.global forth_c_comma
+forth_c_comma:
+    CHECK_DICT 1
+    LDR X9, [X19], #CELL           // pop c
+    STRB W9, [X21]                  // store byte at HERE
+    ADD X21, X21, #1                // advance HERE
+    RET
+
+// ---------- CREATE ----------
+
+// CREATE ( "name" -- )
+// Parse name, build dictionary header, compile code that pushes the
+// data field address. Does not enter compile mode.
+.global forth_create
+forth_create:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    BL build_header
+    CBNZ X0, .Lcreate_done         // error → bail
+
+    // ARM64: compile prolog (4) + literal (12) + ret (8) = 24
+    ADD X0, X21, #24               // data field address
+    BL compile_prolog               // STP X29, X30
+    BL compile_literal              // BL forth_lit + data_addr
+    BL compile_ret                  // LDP + RET
+
+    // Fill code_len
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]                   // X9 = code_len field address
+    ADD X10, X9, #4                // code start
+    SUB X11, X21, X10              // code length
+    STR W11, [X9]
+
+    // Flush I-cache for compiled code
+    ADD X0, X9, #4                 // start = code start
+    MOV X1, X21                    // end = HERE
+    BL platform_flush_icache
+
+    // Clear HIDDEN flag
+    LDRB W9, [X22, #8]
+    AND W9, W9, #~F_HIDDEN
+    STRB W9, [X22, #8]
+
+.Lcreate_done:
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- CONSTANT ----------
+
+// CONSTANT ( x "name" -- )
+// Parse name, build dictionary header, compile code that pushes x.
+.global forth_constant
+forth_constant:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    // Pop value from data stack, save on return stack (build_header clobbers X23-X26)
+    LDR X9, [X19], #CELL
+    STP X9, XZR, [SP, #-16]!       // save value (+ padding for alignment)
+
+    BL build_header
+    CBNZ X0, .Lconst_err           // error → bail
+
+    // Compile code that pushes the constant value
+    LDP X0, X9, [SP], #16          // restore value
+    BL compile_prolog
+    BL compile_literal
+    BL compile_ret
+
+    // Fill code_len
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]
+    ADD X10, X9, #4
+    SUB X11, X21, X10
+    STR W11, [X9]
+
+    // Flush I-cache
+    ADD X0, X9, #4
+    MOV X1, X21
+    BL platform_flush_icache
+
+    // Clear HIDDEN flag
+    LDRB W9, [X22, #8]
+    AND W9, W9, #~F_HIDDEN
+    STRB W9, [X22, #8]
+
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lconst_err:
+    LDP X9, X10, [SP], #16         // restore saved value
+    STR X9, [X19, #-CELL]!         // push it back onto data stack
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -2113,7 +2261,13 @@ DEFWORD dict_again,      "again",      forth_again,       dict_until,     F_IMME
 DEFWORD dict_while,      "while",      forth_while,       dict_again,     F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_repeat,     "repeat",     forth_repeat,      dict_while,     F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_recurse,    "recurse",    forth_recurse,     dict_repeat,    F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_recurse
+DEFWORD dict_here,       "here",       forth_here,        dict_recurse
+DEFWORD dict_allot,      "allot",      forth_allot,       dict_here
+DEFWORD dict_comma,      ",",          forth_comma,       dict_allot
+DEFWORD dict_c_comma,    "c,",         forth_c_comma,     dict_comma
+DEFWORD dict_create,     "create",     forth_create,      dict_c_comma
+DEFWORD dict_constant,   "constant",   forth_constant,    dict_create
+.global dict_constant
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

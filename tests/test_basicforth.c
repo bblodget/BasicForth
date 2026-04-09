@@ -83,7 +83,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_recurse;
+extern char dict_constant;
 extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
@@ -1346,7 +1346,7 @@ static void test_evaluate_number(void)
     int64_t *dsp_in, *dsp_out;
     const char *src = "42";
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
 
     /* Push c-addr and u for "42" */
     dsp_in = setup_2((int64_t)src, (int64_t)strlen(src));
@@ -1366,7 +1366,7 @@ static void test_evaluate_expression(void)
     int64_t *dsp_in, *dsp_out;
     const char *src = "3 4 +";
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
 
     dsp_in = setup_2((int64_t)src, (int64_t)strlen(src));
     call_primitive(forth_evaluate, dsp_in, &dsp_out);
@@ -1384,7 +1384,7 @@ static void test_evaluate_preserves_source(void)
     int64_t *dsp_in, *dsp_out;
     const char *src = "99";
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
 
     /* Set up outer source context */
     setup_source("outer context here");
@@ -1476,7 +1476,7 @@ static void test_lit(void)
     int64_t *dsp_in, *dsp_out;
 
     /* Build a tiny function in dict_space that pushes literal 42 */
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1518,7 +1518,7 @@ static void test_lit_negative(void)
 {
     int64_t *dsp_in, *dsp_out;
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1713,7 +1713,7 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_recurse);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_constant);
     test_find();
 
     section("Parse Word");

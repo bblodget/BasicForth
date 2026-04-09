@@ -25,3 +25,6 @@
 \ Comparison
 : <>    = invert ;
 : 0<>   0= invert ;
+
+\ Defining words
+: VARIABLE  create 1 cells allot ;
