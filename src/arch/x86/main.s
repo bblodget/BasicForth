@@ -51,10 +51,10 @@ repl_loop:
     movq $INPUT_BUF_SIZE, (%r15)    # push max
     call forth_accept               # ( c-addr max -- count )
 
-    # Empty line → exit (count == 0)
+    # Empty line → re-prompt (count == 0)
     mov (%r15), %rax
     test %rax, %rax
-    jz repl_bye
+    jz repl_empty
 
     # Set up source variables for PARSE-WORD
     mov (%r15), %rax                # count
@@ -172,14 +172,13 @@ interpret_done:
 
     jmp repl_loop
 
+repl_empty:
+    add $CELL, %r15                 # drop 0 count
+    jmp repl_loop
+
 repl_bye:
     add $CELL, %r15                 # drop 0 count
-
-    lea bye_msg(%rip), %rsi
-    mov $bye_len, %rdx
-    call platform_write
-
-    call platform_bye
+    jmp forth_bye
 
 compile_only_error:
     # Compile-only word used in interpret mode
@@ -221,8 +220,6 @@ ok_msg:     .ascii " ok\n"
 .equ ok_len, . - ok_msg
 err_msg:    .ascii "? "
 .equ err_len, . - err_msg
-bye_msg:    .ascii "Goodbye!\n"
-.equ bye_len, . - bye_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 msg_compile_only: .ascii "compile only\n"

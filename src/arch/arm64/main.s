@@ -57,9 +57,9 @@ repl_loop:
     STR X9, [X19, #-CELL]!         // push max
     BL forth_accept                 // ( c-addr max -- count )
 
-    // Empty line → exit (count == 0)
+    // Empty line → re-prompt (count == 0)
     LDR X9, [X19]
-    CBZ X9, repl_bye
+    CBZ X9, repl_empty
 
     // Set up source variables for PARSE-WORD
     LDR X9, [X19]                   // count
@@ -183,14 +183,13 @@ interpret_done:
 
     B repl_loop
 
+repl_empty:
+    ADD X19, X19, #CELL             // drop 0 count
+    B repl_loop
+
 repl_bye:
     ADD X19, X19, #CELL             // drop 0 count
-
-    ADR X0, bye_msg
-    MOV X1, #bye_len
-    BL platform_write
-
-    BL platform_bye
+    B forth_bye
 
 compile_only_error:
     // Compile-only word used in interpret mode
@@ -238,8 +237,6 @@ ok_msg:     .ascii " ok\n"
 .equ ok_len, . - ok_msg
 err_msg:    .ascii "? "
 .equ err_len, . - err_msg
-bye_msg:    .ascii "Goodbye!\n"
-.equ bye_len, . - bye_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 msg_compile_only: .ascii "compile only\n"

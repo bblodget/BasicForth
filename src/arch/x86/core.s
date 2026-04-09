@@ -1028,7 +1028,15 @@ forth_dot_s:
 # Restore terminal and exit.
 .global forth_bye
 forth_bye:
+    lea bye_msg(%rip), %rsi
+    mov $bye_len, %rdx
+    call platform_write
     jmp platform_bye
+
+.section .rodata
+bye_msg:    .ascii "Goodbye!\n"
+.equ bye_len, . - bye_msg
+.text
 
 # ---------- LIT (runtime) ----------
 # Pushes the inline 8-byte value that follows the CALL to forth_lit.

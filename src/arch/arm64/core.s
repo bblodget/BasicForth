@@ -983,7 +983,15 @@ forth_dot_s:
 // Restore terminal and exit.
 .global forth_bye
 forth_bye:
+    ADR X0, bye_msg
+    MOV X1, #bye_len
+    BL platform_write
     B platform_bye
+
+.section .rodata
+bye_msg:    .ascii "Goodbye!\n"
+.equ bye_len, . - bye_msg
+.text
 
 // ---------- LIT (runtime) ----------
 // Pushes the inline 8-byte value that follows the BL to forth_lit.

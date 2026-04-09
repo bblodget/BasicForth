@@ -112,6 +112,7 @@ platform_restore_term:
 # ---------- KEY ----------
 # Read one character from stdin.
 # Returns: RDI = character read (for forth_key to push)
+# On EOF (read returns 0), exits silently via platform_bye.
 .global platform_key
 platform_key:
     sub $16, %rsp               # allocate buffer on stack
@@ -120,9 +121,14 @@ platform_key:
     lea 8(%rsp), %rsi          # buffer
     mov $1, %rdx               # count = 1
     syscall
+    test %rax, %rax             # EOF? (read returned 0)
+    jle .Lkey_eof
     movzbl 8(%rsp), %edi       # return char in RDI
     add $16, %rsp
     ret
+.Lkey_eof:
+    add $16, %rsp
+    jmp platform_bye            # silent exit on EOF
 
 # ---------- EMIT ----------
 # Write one character to stdout.

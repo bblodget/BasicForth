@@ -116,6 +116,7 @@ platform_restore_term:
 // ---------- KEY ----------
 // Read one character from stdin.
 // Returns: X0 = character read
+// On EOF (read returns 0), exits silently via platform_bye.
 .global platform_key
 platform_key:
     STR X30, [SP, #-16]!
@@ -125,9 +126,14 @@ platform_key:
     MOV X2, #1                 // count = 1
     MOV X8, #SYS_read
     SVC #0
+    CMP X0, #0                 // EOF? (read returned 0)
+    B.LE .Lkey_eof
     LDRB W0, [SP, #8]          // return the character in X0
     LDR X30, [SP], #16
     RET
+.Lkey_eof:
+    LDR X30, [SP], #16
+    B platform_bye              // silent exit on EOF
 
 // ---------- EMIT ----------
 // Write one character to stdout.
