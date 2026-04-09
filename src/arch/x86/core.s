@@ -1036,6 +1036,8 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+msg_compile_only: .ascii "compile only\n"
+.equ msg_compile_only_len, . - msg_compile_only
 .text
 
 # ---------- LIT (runtime) ----------
@@ -1281,6 +1283,154 @@ forth_tick:
     movq $0, (%r15)                 # push 0 (invalid xt)
     ret
 
+# ---------- INTERPRET-LINE ----------
+# ( -- ) Returns status in RAX: 0=success, 1=error
+# Caller must set source_addr, source_len, to_in before calling.
+# On error: saves offending token in err_token_addr/err_token_len,
+#           resets STATE and restores LATEST/HERE if compiling.
+# On success: cleans up stack, returns 0.
+.global forth_interpret_line
+forth_interpret_line:
+    push %rbx                       # preserve for nested calls
+
+.Lil_loop:
+    call forth_parse_word           # ( -- c-addr u )
+
+    # End of line? (u == 0)
+    mov (%r15), %rax                # u is on top
+    test %rax, %rax
+    jz .Lil_done
+
+    # FIND ( c-addr u -- xt flag | c-addr u 0 )
+    call forth_find
+
+    # Found? (flag != 0)
+    mov (%r15), %rax                # flag is on top
+    test %rax, %rax
+    jz .Lil_try_number
+
+    # Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
+    # If interpreting (STATE==0), always execute.
+    # If compiling: IMMEDIATE words execute, normal words get compiled.
+    cmpq $0, state(%rip)
+    je .Lil_found_interpret         # interpreting → check compile-only
+
+    # Compiling — check IMMEDIATE flag
+    cmpq $1, (%r15)                 # flag == 1?
+    je .Lil_found_execute           # IMMEDIATE → execute even in compile mode
+
+    # Normal word in compile mode — compile a CALL to it
+    add $CELL, %r15                 # drop flag
+    mov (%r15), %rax                # RAX = xt
+    add $CELL, %r15                 # drop xt
+    call compile_call               # emit CALL xt at HERE
+    jmp .Lil_loop
+
+.Lil_found_interpret:
+    # Interpreting — reject compile-only words (flag == -2)
+    cmpq $-2, (%r15)
+    je .Lil_compile_only
+    # Fall through to execute
+
+.Lil_found_execute:
+    add $CELL, %r15                 # drop flag
+    call forth_execute              # pops xt and jumps
+    jmp .Lil_loop
+
+.Lil_try_number:
+    # Not in dictionary — drop 0 flag, try NUMBER
+    add $CELL, %r15                 # drop 0 flag ( c-addr u )
+
+    # NUMBER ( c-addr u -- n true | c-addr u false )
+    call forth_number
+
+    mov (%r15), %rax                # top = true/false flag
+    test %rax, %rax
+    jz .Lil_not_found
+
+    # Parsed — drop true flag, number is on stack
+    add $CELL, %r15                 # drop true flag
+
+    # If compiling, compile the number as a literal
+    cmpq $0, state(%rip)
+    je .Lil_loop                    # interpreting → leave n on stack
+
+    # Compiling — compile literal
+    mov (%r15), %rax                # RAX = number
+    add $CELL, %r15                 # pop number
+    call compile_literal            # emit CALL LIT + value at HERE
+    jmp .Lil_loop
+
+.Lil_not_found:
+    # Neither word nor number — error
+    add $CELL, %r15                 # drop false flag ( c-addr u )
+
+    # Save offending token info for caller to report
+    mov (%r15), %rax                # u (top)
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax            # c-addr (second)
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15               # clean up c-addr and u
+
+    # If we were compiling, abort the definition
+    cmpq $0, state(%rip)
+    je .Lil_err_return
+    movq $0, state(%rip)            # reset to interpret mode
+    mov saved_latest(%rip), %r12    # restore LATEST
+    mov saved_here(%rip), %r13      # restore HERE
+
+.Lil_err_return:
+    mov $1, %eax                    # return 1 = error
+    pop %rbx
+    ret
+
+.Lil_done:
+    # End of line — drop 0 0 from PARSE-WORD
+    add $2*CELL, %r15
+    xor %eax, %eax                  # return 0 = success
+    pop %rbx
+    ret
+
+.Lil_compile_only:
+    # Compile-only word used in interpret mode — non-fatal, continue parsing
+    add $2*CELL, %r15               # drop xt, flag
+    lea msg_compile_only(%rip), %rsi
+    mov $msg_compile_only_len, %rdx
+    call platform_write
+    jmp .Lil_loop
+
+# ---------- PAREN (comment word, IMMEDIATE) ----------
+# ( "ccc)" -- )
+# Skip input until closing ')' or end of line.
+.global forth_paren
+forth_paren:
+    mov source_addr(%rip), %rsi     # RSI = buffer base
+    mov source_len(%rip), %rcx      # RCX = total length
+    mov to_in(%rip), %rdx           # RDX = current offset
+
+.Lparen_scan:
+    cmp %rcx, %rdx
+    jge .Lparen_done                # end of input
+    cmpb $')', (%rsi,%rdx)
+    je .Lparen_found
+    inc %rdx
+    jmp .Lparen_scan
+
+.Lparen_found:
+    inc %rdx                        # skip past ')'
+.Lparen_done:
+    mov %rdx, to_in(%rip)
+    ret
+
+# ---------- BACKSLASH (line comment, IMMEDIATE) ----------
+# ( -- )
+# Skip rest of current input line.
+.global forth_backslash
+forth_backslash:
+    mov source_len(%rip), %rax
+    mov %rax, to_in(%rip)
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1335,7 +1485,9 @@ DEFWORD dict_to_r,       ">r",         forth_to_r,        dict_question_dup, F_C
 DEFWORD dict_r_from,     "r>",         forth_r_from,      dict_to_r, F_COMPILE_ONLY
 DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE_ONLY
 DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
-.global dict_tick
+DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
+DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
+.global dict_backslash
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -1400,4 +1552,10 @@ saved_here:                         # HERE before current : for error recovery
     .quad 0
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry
+    .quad 0
+.global err_token_addr
+err_token_addr:                     # Address of last error token (set by interpret_line)
+    .quad 0
+.global err_token_len
+err_token_len:                      # Length of last error token
     .quad 0

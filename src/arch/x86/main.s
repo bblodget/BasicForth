@@ -22,7 +22,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_tick(%rip), %r12       # LATEST
+    lea dict_backslash(%rip), %r12  # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -73,110 +73,29 @@ repl_loop:
     # Drop count
     add $CELL, %r15
 
-interpret_loop:
-    call forth_parse_word           # ( -- c-addr u )
-
-    # End of line? (u == 0)
-    mov (%r15), %rax                # u is on top
+    # Interpret the line
+    call forth_interpret_line
     test %rax, %rax
-    jz interpret_done
+    jnz repl_error
 
-    # FIND ( c-addr u -- xt flag | c-addr u 0 )
-    call forth_find
+    # Success — print " ok\n"
+    lea ok_msg(%rip), %rsi
+    mov $ok_len, %rdx
+    call platform_write
+    jmp repl_loop
 
-    # Found? (flag != 0)
-    mov (%r15), %rax                # flag is on top
-    test %rax, %rax
-    jz try_number
-
-    # Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
-    # If interpreting (STATE==0), always execute.
-    # If compiling: IMMEDIATE words execute, normal words get compiled.
-    cmpq $0, state(%rip)
-    je found_interpret              # interpreting → check compile-only
-
-    # Compiling — check IMMEDIATE flag
-    cmpq $1, (%r15)                 # flag == 1?
-    je found_execute                # IMMEDIATE → execute even in compile mode
-
-    # Normal word in compile mode — compile a CALL to it
-    add $CELL, %r15                 # drop flag
-    mov (%r15), %rax                # RAX = xt
-    add $CELL, %r15                 # drop xt
-    call compile_call               # emit CALL xt at HERE
-    jmp interpret_loop
-
-found_interpret:
-    # Interpreting — reject compile-only words (flag == -2)
-    cmpq $-2, (%r15)
-    je compile_only_error
-    # Fall through to execute
-
-found_execute:
-    add $CELL, %r15                 # drop flag
-    call forth_execute              # pops xt and jumps
-    jmp interpret_loop
-
-try_number:
-    # Not in dictionary — drop 0 flag, try NUMBER
-    add $CELL, %r15                 # drop 0 flag ( c-addr u )
-
-    # NUMBER ( c-addr u -- n true | c-addr u false )
-    call forth_number
-
-    mov (%r15), %rax                # top = true/false flag
-    test %rax, %rax
-    jz not_found
-
-    # Parsed — drop true flag, number is on stack
-    add $CELL, %r15                 # drop true flag
-
-    # If compiling, compile the number as a literal
-    cmpq $0, state(%rip)
-    je interpret_loop               # interpreting → leave n on stack
-
-    # Compiling — compile literal
-    mov (%r15), %rax                # RAX = number
-    add $CELL, %r15                 # pop number
-    call compile_literal            # emit CALL LIT + value at HERE
-    jmp interpret_loop
-
-not_found:
-    # Neither word nor number — error
-    add $CELL, %r15                 # drop false flag ( c-addr u )
-
+repl_error:
     # Print "? " + token + newline
     lea err_msg(%rip), %rsi
     mov $err_len, %rdx
     call platform_write
 
-    mov (%r15), %rdx                # length = u (top)
-    mov CELL(%r15), %rsi            # buf = c-addr (second)
+    mov err_token_len(%rip), %rdx
+    mov err_token_addr(%rip), %rsi
     call platform_write
 
     mov $'\n', %rdi
     call platform_emit
-
-    # Clean up c-addr and u
-    add $2*CELL, %r15
-
-    # If we were compiling, abort the definition
-    cmpq $0, state(%rip)
-    je repl_loop
-    movq $0, state(%rip)            # reset to interpret mode
-    mov saved_latest(%rip), %r12    # restore LATEST
-    mov saved_here(%rip), %r13      # restore HERE
-    jmp repl_loop
-
-interpret_done:
-    # End of line — drop 0 0 from PARSE-WORD
-    add $2*CELL, %r15
-
-    # Print " ok"
-    lea ok_msg(%rip), %rsi
-    mov $ok_len, %rdx
-    call platform_write
-
     jmp repl_loop
 
 repl_empty:
@@ -186,15 +105,6 @@ repl_empty:
 repl_bye:
     add $CELL, %r15                 # drop 0 count
     jmp forth_bye
-
-compile_only_error:
-    # Compile-only word used in interpret mode
-    # Stack: ( xt flag ) — drop both
-    add $2*CELL, %r15
-    lea msg_compile_only(%rip), %rsi
-    mov $msg_compile_only_len, %rdx
-    call platform_write
-    jmp interpret_loop
 
 # ---------- Error Handlers ----------
 # Stack underflow/overflow are caught by guard pages (SIGSEGV handler
@@ -229,8 +139,6 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
 
 .bss
 .align 8

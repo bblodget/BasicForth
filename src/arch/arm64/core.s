@@ -991,6 +991,8 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
+msg_compile_only: .ascii "compile only\n"
+.equ msg_compile_only_len, . - msg_compile_only
 .text
 
 // ---------- LIT (runtime) ----------
@@ -1287,6 +1289,165 @@ forth_tick:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- INTERPRET-LINE ----------
+// ( -- ) Returns status in X0: 0=success, 1=error
+// Caller must set source_addr, source_len, to_in before calling.
+// On error: saves offending token in err_token_addr/err_token_len,
+//           resets STATE and restores LATEST/HERE if compiling.
+// On success: cleans up stack, returns 0.
+.global forth_interpret_line
+forth_interpret_line:
+    STP X29, X30, [SP, #-16]!
+
+.Lil_loop:
+    BL forth_parse_word             // ( -- c-addr u )
+
+    // End of line? (u == 0)
+    LDR X9, [X19]                   // u is on top
+    CBZ X9, .Lil_done
+
+    // FIND ( c-addr u -- xt flag | c-addr u 0 )
+    BL forth_find
+
+    // Found? (flag != 0)
+    LDR X9, [X19]                   // flag is on top
+    CBZ X9, .Lil_try_number
+
+    // Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
+    // If interpreting (STATE==0), always execute.
+    // If compiling: IMMEDIATE words execute, normal words get compiled.
+    ADR X10, state
+    LDR X10, [X10]
+    CBZ X10, .Lil_found_interpret   // interpreting → check compile-only
+
+    // Compiling — check IMMEDIATE flag
+    LDR X9, [X19]
+    CMP X9, #1
+    B.EQ .Lil_found_execute         // IMMEDIATE → execute even in compile mode
+
+    // Normal word in compile mode — compile a BL to it
+    ADD X19, X19, #CELL             // drop flag
+    LDR X0, [X19], #CELL            // pop xt into X0
+    BL compile_call                 // emit BL xt at HERE
+    B .Lil_loop
+
+.Lil_found_interpret:
+    // Interpreting — reject compile-only words (flag == -2)
+    LDR X9, [X19]
+    CMN X9, #2                      // compare with -2
+    B.EQ .Lil_compile_only
+    // Fall through to execute
+
+.Lil_found_execute:
+    ADD X19, X19, #CELL             // drop flag
+    BL forth_execute                // pops xt and jumps
+    B .Lil_loop
+
+.Lil_try_number:
+    // Not in dictionary — drop 0 flag, try NUMBER
+    ADD X19, X19, #CELL             // drop 0 flag ( c-addr u )
+
+    // NUMBER ( c-addr u -- n true | c-addr u false )
+    BL forth_number
+
+    LDR X9, [X19]                   // top = true/false flag
+    CBZ X9, .Lil_not_found
+
+    // Parsed — drop true flag, number is on stack
+    ADD X19, X19, #CELL             // drop true flag
+
+    // If compiling, compile the number as a literal
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, .Lil_loop               // interpreting → leave n on stack
+
+    // Compiling — compile literal
+    LDR X0, [X19], #CELL            // pop number into X0
+    BL compile_literal              // emit BL LIT + value at HERE
+    B .Lil_loop
+
+.Lil_not_found:
+    // Neither word nor number — error
+    ADD X19, X19, #CELL             // drop false flag ( c-addr u )
+
+    // Save offending token info for caller to report
+    LDR X9, [X19]                   // u (top)
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]            // c-addr (second)
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #2*CELL           // clean up c-addr and u
+
+    // If we were compiling, abort the definition
+    ADR X9, state
+    LDR X10, [X9]
+    CBZ X10, .Lil_err_return
+    STR XZR, [X9]                   // reset to interpret mode
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
+
+.Lil_err_return:
+    MOV X0, #1                      // return 1 = error
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lil_done:
+    // End of line — drop 0 0 from PARSE-WORD
+    ADD X19, X19, #2*CELL
+    MOV X0, XZR                     // return 0 = success
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lil_compile_only:
+    // Compile-only word used in interpret mode — non-fatal, continue parsing
+    ADD X19, X19, #2*CELL           // drop xt, flag
+    ADR X0, msg_compile_only
+    MOV X1, #msg_compile_only_len
+    BL platform_write
+    B .Lil_loop
+
+// ---------- PAREN (comment word, IMMEDIATE) ----------
+// ( "ccc)" -- )
+// Skip input until closing ')' or end of line.
+.global forth_paren
+forth_paren:
+    ADR X9, source_addr
+    LDR X10, [X9]                   // X10 = buffer base
+    ADR X9, source_len
+    LDR X11, [X9]                   // X11 = total length
+    ADR X9, to_in
+    LDR X12, [X9]                   // X12 = current offset
+
+.Lparen_scan:
+    CMP X12, X11
+    B.GE .Lparen_done               // end of input
+    LDRB W13, [X10, X12]
+    CMP W13, #')'
+    B.EQ .Lparen_found
+    ADD X12, X12, #1
+    B .Lparen_scan
+
+.Lparen_found:
+    ADD X12, X12, #1                // skip past ')'
+.Lparen_done:
+    ADR X9, to_in
+    STR X12, [X9]
+    RET
+
+// ---------- BACKSLASH (line comment, IMMEDIATE) ----------
+// ( -- )
+// Skip rest of current input line.
+.global forth_backslash
+forth_backslash:
+    ADR X9, source_len
+    LDR X10, [X9]
+    ADR X9, to_in
+    STR X10, [X9]
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1341,7 +1502,9 @@ DEFWORD dict_to_r,       ">r",         forth_to_r,        dict_question_dup, F_C
 DEFWORD dict_r_from,     "r>",         forth_r_from,      dict_to_r, F_COMPILE_ONLY
 DEFWORD dict_r_fetch,    "r@",         forth_r_fetch,     dict_r_from, F_COMPILE_ONLY
 DEFWORD dict_tick,       "'",          forth_tick,        dict_r_fetch, F_IMMEDIATE
-.global dict_tick
+DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
+DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
+.global dict_backslash
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -1404,4 +1567,10 @@ saved_here:                         // HERE before current : for error recovery
     .quad 0
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
+    .quad 0
+.global err_token_addr
+err_token_addr:                     // Address of last error token (set by interpret_line)
+    .quad 0
+.global err_token_len
+err_token_len:                      // Length of last error token
     .quad 0

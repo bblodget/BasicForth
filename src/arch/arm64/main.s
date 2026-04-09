@@ -23,7 +23,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_tick              // LATEST
+    ADR X22, dict_backslash         // LATEST
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -81,113 +81,30 @@ repl_loop:
     // Drop count
     ADD X19, X19, #CELL
 
-interpret_loop:
-    BL forth_parse_word             // ( -- c-addr u )
+    // Interpret the line
+    BL forth_interpret_line
+    CBNZ X0, repl_error
 
-    // End of line? (u == 0)
-    LDR X9, [X19]                   // u is on top
-    CBZ X9, interpret_done
+    // Success — print " ok\n"
+    ADR X0, ok_msg
+    MOV X1, #ok_len
+    BL platform_write
+    B repl_loop
 
-    // FIND ( c-addr u -- xt flag | c-addr u 0 )
-    BL forth_find
-
-    // Found? (flag != 0)
-    LDR X9, [X19]                   // flag is on top
-    CBZ X9, try_number
-
-    // Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
-    // If interpreting (STATE==0), always execute.
-    // If compiling: IMMEDIATE words execute, normal words get compiled.
-    ADR X10, state
-    LDR X10, [X10]
-    CBZ X10, found_interpret         // interpreting → check compile-only
-
-    // Compiling — check IMMEDIATE flag
-    LDR X9, [X19]
-    CMP X9, #1
-    B.EQ found_execute              // IMMEDIATE → execute even in compile mode
-
-    // Normal word in compile mode — compile a BL to it
-    ADD X19, X19, #CELL             // drop flag
-    LDR X0, [X19], #CELL            // pop xt into X0
-    BL compile_call                 // emit BL xt at HERE
-    B interpret_loop
-
-found_interpret:
-    // Interpreting — reject compile-only words (flag == -2)
-    LDR X9, [X19]
-    CMN X9, #2                      // compare with -2
-    B.EQ compile_only_error
-    // Fall through to execute
-
-found_execute:
-    ADD X19, X19, #CELL             // drop flag
-    BL forth_execute                // pops xt and jumps
-    B interpret_loop
-
-try_number:
-    // Not in dictionary — drop 0 flag, try NUMBER
-    ADD X19, X19, #CELL             // drop 0 flag ( c-addr u )
-
-    // NUMBER ( c-addr u -- n true | c-addr u false )
-    BL forth_number
-
-    LDR X9, [X19]                   // top = true/false flag
-    CBZ X9, not_found
-
-    // Parsed — drop true flag, number is on stack
-    ADD X19, X19, #CELL             // drop true flag
-
-    // If compiling, compile the number as a literal
-    ADR X9, state
-    LDR X9, [X9]
-    CBZ X9, interpret_loop          // interpreting → leave n on stack
-
-    // Compiling — compile literal
-    LDR X0, [X19], #CELL            // pop number into X0
-    BL compile_literal              // emit BL LIT + value at HERE
-    B interpret_loop
-
-not_found:
-    // Neither word nor number — error
-    ADD X19, X19, #CELL             // drop false flag ( c-addr u )
-
+repl_error:
     // Print "? " + token + newline
     ADR X0, err_msg
     MOV X1, #err_len
     BL platform_write
 
-    LDR X1, [X19]                   // length = u (top)
-    LDR X0, [X19, #CELL]            // buf = c-addr (second)
+    ADR X9, err_token_len
+    LDR X1, [X9]
+    ADR X9, err_token_addr
+    LDR X0, [X9]
     BL platform_write
 
     MOV X0, #'\n'
     BL platform_emit
-
-    // Clean up c-addr and u
-    ADD X19, X19, #2*CELL
-
-    // If we were compiling, abort the definition
-    ADR X9, state
-    LDR X10, [X9]
-    CBZ X10, repl_loop
-    STR XZR, [X9]                   // reset to interpret mode
-    ADR X9, saved_latest
-    LDR X22, [X9]                   // restore LATEST
-    ADR X9, saved_here
-    LDR X21, [X9]                   // restore HERE
-
-    B repl_loop
-
-interpret_done:
-    // End of line — drop 0 0 from PARSE-WORD
-    ADD X19, X19, #2*CELL
-
-    // Print " ok"
-    ADR X0, ok_msg
-    MOV X1, #ok_len
-    BL platform_write
-
     B repl_loop
 
 repl_empty:
@@ -197,15 +114,6 @@ repl_empty:
 repl_bye:
     ADD X19, X19, #CELL             // drop 0 count
     B forth_bye
-
-compile_only_error:
-    // Compile-only word used in interpret mode
-    // Stack: ( xt flag ) — drop both
-    ADD X19, X19, #2*CELL
-    ADR X0, msg_compile_only
-    MOV X1, #msg_compile_only_len
-    BL platform_write
-    B interpret_loop
 
 // ---------- Error Handlers ----------
 // Stack underflow/overflow are caught by guard pages (SIGSEGV handler
@@ -246,8 +154,6 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
 
 .bss
 .align 4

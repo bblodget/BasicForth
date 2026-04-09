@@ -216,6 +216,17 @@ assert_error  "unknown word"       "foobar"              "? foobar"
 assert_error  "compile-only >r"    ">r"                  "compile only"
 
 # =========================================================================
+section "Comments"
+# =========================================================================
+
+assert_output "paren comment"        "1 ( this is a comment ) 2 + ."  "3"
+assert_output "paren in definition"  ': double ( n -- n*2 ) dup + ; 5 double .'  "10"
+assert_output "paren no close"       "1 2 + ( no closing paren"       "ok"
+assert_output "backslash comment"    '1 2 + . \ this is ignored'      "3"
+assert_output "backslash in def"     ': inc 1+ ; \ simple increment
+5 inc .'                                                               "6"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

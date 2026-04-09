@@ -69,6 +69,8 @@ extern void forth_question_dup(void);
 extern void forth_to_r(void);
 extern void forth_r_from(void);
 extern void forth_r_fetch(void);
+extern void forth_paren(void);
+extern void forth_backslash(void);
 
 /* Return stack test wrappers (defined in test_helper) */
 extern void test_to_r_r_from(void);
@@ -80,7 +82,7 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 /* Data stack and dictionary (defined in core.s) */
 extern char data_stack_top;
 extern char dict_space;
-extern char dict_tick;
+extern char dict_backslash;
 extern int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
@@ -1283,6 +1285,59 @@ static void test_parse_word_empty(void)
              stack_depth(dsp_out));
 }
 
+/* --- Comment word tests --- */
+
+static void test_paren(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* "( comment ) 42" — paren should skip to ), leaving to_in past it */
+    setup_source("comment ) 42");
+    dsp_in = setup_0();
+    call_primitive(forth_paren, dsp_in, &dsp_out);
+
+    /* Stack should be unchanged (no items pushed) */
+    /* "comment ) 42" — ')' is at index 8, to_in should be 9 (past ')') */
+    if (stack_depth(dsp_out) == 0 && to_in == 9)
+        pass("( skips to closing paren");
+    else
+        fail("( skips to closing paren",
+             "depth=%d to_in=%ld (expected 9)", stack_depth(dsp_out), to_in);
+}
+
+static void test_paren_no_close(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* No closing paren — should consume to end of input */
+    setup_source("no close here");
+    dsp_in = setup_0();
+    call_primitive(forth_paren, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 0 && to_in == 13)
+        pass("( without close consumes rest");
+    else
+        fail("( without close consumes rest",
+             "depth=%d to_in=%ld (expected 13)", stack_depth(dsp_out), to_in);
+}
+
+static void test_backslash(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* Backslash should set to_in = source_len */
+    setup_source("rest of line");
+    to_in = 5;  /* pretend we've parsed "rest " already */
+    dsp_in = setup_0();
+    call_primitive(forth_backslash, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 0 && to_in == 12)
+        pass("\\ skips rest of line");
+    else
+        fail("\\ skips rest of line",
+             "depth=%d to_in=%ld (expected 12)", stack_depth(dsp_out), to_in);
+}
+
 /* --- EXECUTE tests --- */
 
 static void test_execute(void)
@@ -1352,7 +1407,7 @@ static void test_lit(void)
     int64_t *dsp_in, *dsp_out;
 
     /* Build a tiny function in dict_space that pushes literal 42 */
-    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1394,7 +1449,7 @@ static void test_lit_negative(void)
 {
     int64_t *dsp_in, *dsp_out;
 
-    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
 
     uint8_t *code = (uint8_t *)&dict_space;
 
@@ -1589,13 +1644,18 @@ int main(void)
     test_cstore();
 
     section("Dictionary Lookup");
-    init_engine((int64_t)&dict_space, (int64_t)&dict_tick);
+    init_engine((int64_t)&dict_space, (int64_t)&dict_backslash);
     test_find();
 
     section("Parse Word");
     test_parse_word_single();
     test_parse_word_spaces();
     test_parse_word_empty();
+
+    section("Comment Words");
+    test_paren();
+    test_paren_no_close();
+    test_backslash();
 
     section("Execute");
     test_execute();
