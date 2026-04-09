@@ -803,20 +803,33 @@ forth_find:
     sub $CELL, %r15
     mov %rax, (%r15)            # push xt
     # Check flags: IMMEDIATE, COMPILE_ONLY, or normal
+    # Flag encoding:  1 = IMMEDIATE
+    #                -1 = normal
+    #                -2 = COMPILE_ONLY (non-immediate)
+    #                 2 = IMMEDIATE + COMPILE_ONLY
+    mov %ebp, %edx
+    and $(F_IMMEDIATE | F_COMPILE_ONLY), %edx
+    cmp $(F_IMMEDIATE | F_COMPILE_ONLY), %edx
+    je .Lfind_imm_co
     test $F_IMMEDIATE, %ebp
-    jz .Lfind_not_imm
+    jnz .Lfind_imm
+    test $F_COMPILE_ONLY, %ebp
+    jnz .Lfind_co
+    # Normal word
+    sub $CELL, %r15
+    movq $-1, (%r15)            # push -1 (normal)
+    jmp .Lfind_done
+.Lfind_imm:
     sub $CELL, %r15
     movq $1, (%r15)             # push 1 (immediate)
     jmp .Lfind_done
-.Lfind_not_imm:
-    test $F_COMPILE_ONLY, %ebp
-    jz .Lfind_normal
+.Lfind_co:
     sub $CELL, %r15
     movq $-2, (%r15)            # push -2 (compile-only)
     jmp .Lfind_done
-.Lfind_normal:
+.Lfind_imm_co:
     sub $CELL, %r15
-    movq $-1, (%r15)            # push -1 (normal)
+    movq $2, (%r15)             # push 2 (immediate + compile-only)
     jmp .Lfind_done
 
 .Lfind_next:
@@ -1038,6 +1051,12 @@ bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
 msg_compile_only: .ascii "compile only\n"
 .equ msg_compile_only_len, . - msg_compile_only
+msg_unbalanced: .ascii "unresolved control flow\n"
+.equ msg_unbalanced_len, . - msg_unbalanced
+msg_cf_mismatch: .ascii "mismatched control flow\n"
+.equ msg_cf_mismatch_len, . - msg_cf_mismatch
+cf_mismatch_name: .ascii "mismatched-control-flow"
+.equ cf_mismatch_name_len, . - cf_mismatch_name
 .text
 
 # ---------- LIT (runtime) ----------
@@ -1096,6 +1115,95 @@ compile_literal:
     pop %rax
     mov %rax, (%r13)               # emit inline 8-byte value
     add $CELL, %r13                # advance HERE past value
+    ret
+
+# ---------- Branch Compile Helpers ----------
+# Internal routines for control flow words. Not exposed as Forth words.
+#
+# 0branch emits 16 bytes:
+#   49 8B 07           mov (%r15), %rax     (3)
+#   49 83 C7 08        add $8, %r15         (4)
+#   48 85 C0           test %rax, %rax      (3)
+#   0F 84 [offset32]   jz rel32             (6)
+#
+# branch emits 5 bytes:
+#   E9 [offset32]      jmp rel32            (5)
+#
+# Offset formula for both: target - (offset_field_addr + 4)
+
+# compile_0branch — emit forward conditional branch with placeholder offset.
+# Returns: RAX = address of the 4-byte offset field (for patching).
+compile_0branch:
+    CHECK_DICT 16
+    movb $0x49, (%r13)             # mov (%r15), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x07, 2(%r13)
+    movb $0x49, 3(%r13)            # add $8, %r15
+    movb $0x83, 4(%r13)
+    movb $0xC7, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x48, 7(%r13)            # test %rax, %rax
+    movb $0x85, 8(%r13)
+    movb $0xC0, 9(%r13)
+    movb $0x0F, 10(%r13)           # jz rel32
+    movb $0x84, 11(%r13)
+    movl $0, 12(%r13)              # placeholder offset
+    lea 12(%r13), %rax             # RAX = address of offset field
+    add $16, %r13                  # advance HERE
+    ret
+
+# compile_branch — emit forward unconditional branch with placeholder offset.
+# Returns: RAX = address of the 4-byte offset field (for patching).
+compile_branch:
+    CHECK_DICT 5
+    movb $0xE9, (%r13)             # jmp rel32
+    movl $0, 1(%r13)               # placeholder offset
+    lea 1(%r13), %rax              # RAX = address of offset field
+    add $5, %r13                   # advance HERE
+    ret
+
+# patch_forward — patch a forward branch to jump to current HERE.
+# Input: RAX = address of the 4-byte offset field.
+patch_forward:
+    mov %r13, %rcx                 # RCX = HERE (target)
+    sub %rax, %rcx                 # RCX = HERE - offset_addr
+    sub $4, %rcx                   # RCX = HERE - (offset_addr + 4)
+    mov %ecx, (%rax)               # write 32-bit offset
+    ret
+
+# compile_0branch_back — emit conditional backward branch to known target.
+# Input: RAX = target address.
+compile_0branch_back:
+    CHECK_DICT 16
+    push %rax                      # save target
+    movb $0x49, (%r13)             # mov (%r15), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x07, 2(%r13)
+    movb $0x49, 3(%r13)            # add $8, %r15
+    movb $0x83, 4(%r13)
+    movb $0xC7, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x48, 7(%r13)            # test %rax, %rax
+    movb $0x85, 8(%r13)
+    movb $0xC0, 9(%r13)
+    movb $0x0F, 10(%r13)           # jz rel32
+    movb $0x84, 11(%r13)
+    pop %rax                       # RAX = target
+    lea 16(%r13), %rcx             # RCX = HERE after emission
+    sub %rcx, %rax                 # RAX = target - (HERE + 16)
+    mov %eax, 12(%r13)             # write offset
+    add $16, %r13                  # advance HERE
+    ret
+
+# compile_branch_back — emit unconditional backward branch to known target.
+# Input: RAX = target address.
+compile_branch_back:
+    CHECK_DICT 5
+    movb $0xE9, (%r13)             # jmp rel32
+    lea 5(%r13), %rcx              # RCX = address after instruction
+    sub %rcx, %rax                 # RAX = target - (HERE + 5)
+    mov %eax, 1(%r13)              # write offset
+    add $5, %r13                   # advance HERE
     ret
 
 # ---------- COLON (Forth-level) ----------
@@ -1188,6 +1296,9 @@ forth_colon:
     movl $0, (%r13)
     add $4, %r13                    # past CodeLen
 
+    # Save data stack depth for control-flow balance check in ;
+    mov %r15, colon_dsp(%rip)
+
     # Update LATEST and STATE
     mov %rbx, %r12                  # LATEST = new entry
     movq $1, state(%rip)            # STATE = compiling
@@ -1218,6 +1329,11 @@ forth_semicolon:
     cmpq $0, state(%rip)
     je .Lsemi_err
 
+    # Check control-flow stack balance: DSP must match what : saved
+    mov colon_dsp(%rip), %rax
+    cmp %rax, %r15
+    jne .Lsemi_unbalanced
+
     # Compile RET
     call compile_ret
 
@@ -1232,6 +1348,19 @@ forth_semicolon:
     andb $~F_HIDDEN, 8(%r12)
 
     # Return to interpret mode
+    movq $0, state(%rip)
+    ret
+
+.Lsemi_unbalanced:
+    # Unresolved control flow — roll back the definition
+    lea msg_unbalanced(%rip), %rsi
+    mov $msg_unbalanced_len, %rdx
+    call platform_write
+
+    # Restore stack, LATEST, HERE, STATE
+    mov colon_dsp(%rip), %r15
+    mov saved_latest(%rip), %r12
+    mov saved_here(%rip), %r13
     movq $0, state(%rip)
     ret
 
@@ -1291,7 +1420,12 @@ forth_tick:
 # On success: cleans up stack, returns 0.
 .global forth_interpret_line
 forth_interpret_line:
-    push %rbx                       # preserve for nested calls
+    push %rbx                       # preserve callee-saved registers
+    push %rbp
+    push %r14
+    pushq il_rsp(%rip)              # save previous il_rsp (for nesting)
+    sub $8, %rsp                    # 16-byte alignment (5 pushes + ret addr = 48)
+    mov %rsp, il_rsp(%rip)          # save RSP for cf_check_tag recovery
 
 .Lil_loop:
     call forth_parse_word           # ( -- c-addr u )
@@ -1309,15 +1443,18 @@ forth_interpret_line:
     test %rax, %rax
     jz .Lil_try_number
 
-    # Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
-    # If interpreting (STATE==0), always execute.
-    # If compiling: IMMEDIATE words execute, normal words get compiled.
+    # Found — top = flag, second = xt
+    # Flags: 1=IMMEDIATE, -1=normal, -2=COMPILE_ONLY, 2=IMMEDIATE+COMPILE_ONLY
+    # If interpreting (STATE==0): execute, but reject compile-only (flag==-2 or 2)
+    # If compiling: IMMEDIATE (flag==1 or 2) → execute, else compile
     cmpq $0, state(%rip)
     je .Lil_found_interpret         # interpreting → check compile-only
 
-    # Compiling — check IMMEDIATE flag
-    cmpq $1, (%r15)                 # flag == 1?
-    je .Lil_found_execute           # IMMEDIATE → execute even in compile mode
+    # Compiling — check IMMEDIATE flag (flag==1 or flag==2)
+    cmpq $1, (%r15)
+    je .Lil_found_execute           # IMMEDIATE → execute
+    cmpq $2, (%r15)
+    je .Lil_found_execute           # IMMEDIATE+COMPILE_ONLY → execute
 
     # Normal word in compile mode — compile a CALL to it
     add $CELL, %r15                 # drop flag
@@ -1327,8 +1464,10 @@ forth_interpret_line:
     jmp .Lil_loop
 
 .Lil_found_interpret:
-    # Interpreting — reject compile-only words (flag == -2)
+    # Interpreting — reject compile-only words (flag == -2 or flag == 2)
     cmpq $-2, (%r15)
+    je .Lil_compile_only
+    cmpq $2, (%r15)
     je .Lil_compile_only
     # Fall through to execute
 
@@ -1381,6 +1520,10 @@ forth_interpret_line:
 
 .Lil_err_return:
     mov $1, %eax                    # return 1 = error
+    add $8, %rsp                    # drop alignment padding
+    popq il_rsp(%rip)               # restore previous il_rsp
+    pop %r14
+    pop %rbp
     pop %rbx
     ret
 
@@ -1388,6 +1531,10 @@ forth_interpret_line:
     # End of line — drop 0 0 from PARSE-WORD
     add $2*CELL, %r15
     xor %eax, %eax                  # return 0 = success
+    add $8, %rsp                    # drop alignment padding
+    popq il_rsp(%rip)               # restore previous il_rsp
+    pop %r14
+    pop %rbp
     pop %rbx
     ret
 
@@ -1669,6 +1816,162 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ incl_err_open_len, . - incl_err_open
 .text
 
+# ---------- Control Flow Tag Constants ----------
+# Pushed alongside addresses on the compile-time stack to detect
+# mis-paired control structures (e.g. BEGIN ... THEN).
+.equ CF_ORIG, 1                     # forward reference (IF, ELSE, WHILE)
+.equ CF_DEST, 2                     # backward target (BEGIN)
+
+# cf_check_tag — verify top of stack matches expected tag.
+# Input: RAX = expected tag.  On mismatch, aborts compilation and
+# jumps directly to repl_loop (does not return to caller).
+cf_check_tag:
+    cmp (%r15), %rax
+    jne .Lcf_mismatch
+    ret
+.Lcf_mismatch:
+    # Restore state first (before platform_write which may clobber things)
+    mov colon_dsp(%rip), %r15       # restore DSP
+    mov saved_latest(%rip), %r12    # restore LATEST
+    mov saved_here(%rip), %r13      # restore HERE
+    movq $0, state(%rip)            # interpret mode
+    # Set error token for caller to report
+    lea cf_mismatch_name(%rip), %rax
+    mov %rax, err_token_addr(%rip)
+    movq $cf_mismatch_name_len, err_token_len(%rip)
+    # Longjmp back to forth_interpret_line's error return
+    mov il_rsp(%rip), %rsp          # unwind to interpret_line's frame
+    mov $1, %eax                    # return error
+    add $8, %rsp                    # drop alignment padding
+    popq il_rsp(%rip)               # restore previous il_rsp (nesting)
+    pop %r14                        # restore callee-saved registers
+    pop %rbp
+    pop %rbx
+    ret                             # return from interpret_line
+
+# ---------- IF / ELSE / THEN ----------
+
+# IF ( C: -- orig )  IMMEDIATE, COMPILE_ONLY
+# Compile conditional forward branch. Push (patch-addr CF_ORIG).
+.global forth_if
+forth_if:
+    call compile_0branch            # RAX = patch addr
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)            # push patch address
+    movq $CF_ORIG, (%r15)           # push tag
+    ret
+
+# THEN ( C: orig -- )  IMMEDIATE, COMPILE_ONLY
+# Patch a forward branch (from IF or ELSE) to land here.
+.global forth_then
+forth_then:
+    mov $CF_ORIG, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # pop patch address
+    add $CELL, %r15
+    call patch_forward
+    ret
+
+# ELSE ( C: orig1 -- orig2 )  IMMEDIATE, COMPILE_ONLY
+# Compile unconditional forward branch (for skip-over), patch IF's branch.
+.global forth_else
+forth_else:
+    mov $CF_ORIG, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rbx                # pop if-patch
+    add $CELL, %r15
+    push %rbx                       # save if-patch
+    call compile_branch             # RAX = else-patch
+    pop %rbx                        # restore if-patch
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)            # push else-patch
+    movq $CF_ORIG, (%r15)           # push tag
+    mov %rbx, %rax
+    call patch_forward              # patch IF's JZ to HERE
+    ret
+
+# ---------- BEGIN / UNTIL / AGAIN / WHILE / REPEAT ----------
+
+# BEGIN ( C: -- dest )  IMMEDIATE, COMPILE_ONLY
+# Mark loop start by pushing (HERE CF_DEST).
+.global forth_begin
+forth_begin:
+    sub $2*CELL, %r15
+    mov %r13, CELL(%r15)            # push HERE
+    movq $CF_DEST, (%r15)           # push tag
+    ret
+
+# UNTIL ( C: dest -- )  IMMEDIATE, COMPILE_ONLY
+# Compile conditional backward branch to BEGIN.
+.global forth_until
+forth_until:
+    mov $CF_DEST, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # pop begin-addr
+    add $CELL, %r15
+    call compile_0branch_back
+    ret
+
+# AGAIN ( C: dest -- )  IMMEDIATE, COMPILE_ONLY
+# Compile unconditional backward branch to BEGIN.
+.global forth_again
+forth_again:
+    mov $CF_DEST, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # pop begin-addr
+    add $CELL, %r15
+    call compile_branch_back
+    ret
+
+# WHILE ( C: dest -- dest orig )  IMMEDIATE, COMPILE_ONLY
+# Compile conditional forward branch (exit test). Like IF inside a loop.
+.global forth_while
+forth_while:
+    # Verify BEGIN's tag is below (peek, don't consume)
+    mov $CF_DEST, %rax
+    cmp (%r15), %rax
+    jne .Lcf_mismatch
+    call compile_0branch            # RAX = while-patch
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)            # push while-patch
+    movq $CF_ORIG, (%r15)           # push tag
+    ret
+
+# REPEAT ( C: dest orig -- )  IMMEDIATE, COMPILE_ONLY
+# Compile backward branch to BEGIN, patch WHILE's forward branch.
+.global forth_repeat
+forth_repeat:
+    mov $CF_ORIG, %rax              # check WHILE's tag
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rbx                # pop while-patch
+    add $CELL, %r15
+    mov $CF_DEST, %rax              # check BEGIN's tag
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # pop begin-addr
+    add $CELL, %r15
+    push %rbx                       # save while-patch
+    call compile_branch_back        # JMP back to begin
+    pop %rax                        # RAX = while-patch
+    call patch_forward              # patch WHILE's JZ to HERE
+    ret
+
+# ---------- RECURSE ----------
+
+# RECURSE ( -- )  IMMEDIATE, COMPILE_ONLY
+# Compile a call to the current definition being compiled.
+.global forth_recurse
+forth_recurse:
+    mov colon_code_len_addr(%rip), %rax
+    mov -8(%rax), %rax              # RAX = code entry point (CodePtr field)
+    call compile_call
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1727,7 +2030,16 @@ DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
 DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
 DEFWORD dict_evaluate,   "evaluate",   forth_evaluate,    dict_backslash
 DEFWORD dict_included,   "included",   forth_included,    dict_evaluate
-.global dict_included
+DEFWORD dict_if,         "if",         forth_if,          dict_included,  F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_then,       "then",       forth_then,        dict_if,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_else,       "else",       forth_else,        dict_then,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_begin,      "begin",      forth_begin,       dict_else,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_until,      "until",      forth_until,       dict_begin,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_again,      "again",      forth_again,       dict_until,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_while,      "while",      forth_while,       dict_again,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_repeat,     "repeat",     forth_repeat,      dict_while,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_recurse,    "recurse",    forth_recurse,     dict_repeat,    F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_recurse
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -1784,6 +2096,9 @@ state:                              # Compiler state (0=interpret, non-zero=comp
 .global colon_code_len_addr
 colon_code_len_addr:                # Saved code_len field address for ; to fill
     .quad 0
+.global colon_dsp
+colon_dsp:                          # DSP at start of : for control-flow balance check
+    .quad 0
 .global saved_latest
 saved_latest:                       # LATEST before current : for error recovery
     .quad 0
@@ -1792,6 +2107,9 @@ saved_here:                         # HERE before current : for error recovery
     .quad 0
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry
+    .quad 0
+.global il_rsp
+il_rsp:                             # RSP at interpret_line entry (for cf longjmp)
     .quad 0
 .global err_token_addr
 err_token_addr:                     # Address of last error token (set by interpret_line)

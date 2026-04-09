@@ -227,6 +227,44 @@ assert_output "backslash in def"     ': inc 1+ ; \ simple increment
 5 inc .'                                                               "6"
 
 # =========================================================================
+section "IF / ELSE / THEN"
+# =========================================================================
+
+assert_output "if true exec"       ": test 1 if 42 . then ; test"             "42"
+assert_output "if false skip"      ": test 0 if 42 . then ; test"             "ok"
+assert_output "if else true"       ": test 1 if 42 else 99 then ; test ."     "42"
+assert_output "if else false"      ": test 0 if 42 else 99 then ; test ."     "99"
+assert_output "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
+assert_output "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
+assert_output "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
+assert_error  "if without then"  ": test if ;"                               "unresolved control flow"
+assert_error  "begin without until" ": test begin ;"                         "unresolved control flow"
+assert_error  "begin then mismatch" ": test begin then ;"                   "? mismatched-control-flow"
+assert_error  "if until mismatch"  ": test if until ;"                      "? mismatched-control-flow"
+assert_error  "if outside def"   "if"                                       "compile only"
+assert_error  "then outside def" "then"                                     "compile only"
+assert_error  "begin outside def" "begin"                                   "compile only"
+
+# =========================================================================
+section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"
+# =========================================================================
+
+assert_output "begin until"   ": test 5 begin 1- dup 0= until ; test ."      "0"
+assert_output "begin while repeat" \
+    ": test 3 begin dup while 1- repeat ; test ."                             "0"
+assert_output "countdown" \
+    ': countdown 3 begin dup 0 > while dup . 1- repeat drop ; countdown'      "3 2 1"
+assert_output "begin again (via while)" \
+    ": test 5 begin dup while dup . 1- repeat drop ; test"                    "5 4 3 2 1"
+
+# =========================================================================
+section "RECURSE"
+# =========================================================================
+
+assert_output "factorial"    ": fact dup 1 > if dup 1- recurse * then ; 5 fact ."  "120"
+assert_output "factorial 6"  ": fact dup 1 > if dup 1- recurse * then ; 6 fact ."  "720"
+
+# =========================================================================
 section "core.fs Words"
 # =========================================================================
 

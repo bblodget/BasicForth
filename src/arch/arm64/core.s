@@ -696,6 +696,7 @@ forth_find:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
 
     // Pop args: top = u (length), second = c-addr
     LDR X24, [X19], #CELL      // X24 = search length (top)
@@ -757,6 +758,14 @@ forth_find:
     LDR X9, [X25, X9]           // X9 = xt
     STR X9, [X19, #-CELL]!      // push xt
     // Check flags: IMMEDIATE, COMPILE_ONLY, or normal
+    // Flag encoding:  1 = IMMEDIATE
+    //                -1 = normal
+    //                -2 = COMPILE_ONLY (non-immediate)
+    //                 2 = IMMEDIATE + COMPILE_ONLY
+    MOV W27, #(F_IMMEDIATE | F_COMPILE_ONLY)
+    AND W28, W26, W27
+    CMP W28, W27
+    B.EQ .Lfind_imm_co
     TST W26, #F_IMMEDIATE
     B.NE .Lfind_immediate
     TST W26, #F_COMPILE_ONLY
@@ -772,6 +781,10 @@ forth_find:
     MOV X9, #-2
     STR X9, [X19, #-CELL]!      // push -2 (compile-only)
     B .Lfind_done
+.Lfind_imm_co:
+    MOV X9, #2
+    STR X9, [X19, #-CELL]!      // push 2 (immediate + compile-only)
+    B .Lfind_done
 
 .Lfind_next:
     LDR X25, [X25]              // follow link
@@ -784,6 +797,7 @@ forth_find:
     STR XZR, [X19, #-CELL]!     // push 0
 
 .Lfind_done:
+    LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
@@ -993,6 +1007,12 @@ bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
 msg_compile_only: .ascii "compile only\n"
 .equ msg_compile_only_len, . - msg_compile_only
+msg_unbalanced: .ascii "unresolved control flow\n"
+.equ msg_unbalanced_len, . - msg_unbalanced
+msg_cf_mismatch: .ascii "mismatched control flow\n"
+.equ msg_cf_mismatch_len, . - msg_cf_mismatch
+cf_mismatch_name: .ascii "mismatched-control-flow"
+.equ cf_mismatch_name_len, . - cf_mismatch_name
 .text
 
 // ---------- LIT (runtime) ----------
@@ -1079,6 +1099,106 @@ compile_literal:
     ADD X21, X21, #CELL            // advance HERE past value
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
+    RET
+
+// ---------- Branch Compile Helpers ----------
+// Internal routines for control flow words. Not exposed as Forth words.
+//
+// 0branch emits 8 bytes:
+//   LDR X9, [X19], #8    pop flag     (0xF8408669)
+//   CBZ X9, +0            branch if 0  (0xB4000009)
+//
+// branch emits 4 bytes:
+//   B +0                  unconditional (0x14000000)
+//
+// ARM64 offset encoding:
+//   B:   26-bit signed word offset in bits [25:0]
+//   CBZ: 19-bit signed word offset in bits [23:5]
+
+.equ INSN_LDR_X9_X19_POST8, 0xF8408669
+.equ INSN_CBZ_X9,            0xB4000009
+.equ INSN_B,                 0x14000000
+
+// compile_0branch — emit forward conditional branch with placeholder.
+// Returns: X0 = address of the CBZ instruction (for patching).
+compile_0branch:
+    CHECK_DICT 8
+    MOV W9, #0x8669
+    MOVK W9, #0xF840, LSL #16     // LDR X9, [X19], #8
+    STR W9, [X21]
+    ADD X21, X21, #4
+    MOV W9, #0x0009
+    MOVK W9, #0xB400, LSL #16     // CBZ X9, +0 (placeholder)
+    MOV X0, X21                    // X0 = address of CBZ instruction
+    STR W9, [X21]
+    ADD X21, X21, #4
+    RET
+
+// compile_branch — emit forward unconditional branch with placeholder.
+// Returns: X0 = address of the B instruction (for patching).
+compile_branch:
+    CHECK_DICT 4
+    MOV W9, #0x0000
+    MOVK W9, #0x1400, LSL #16     // B +0 (placeholder)
+    MOV X0, X21                    // X0 = address of B instruction
+    STR W9, [X21]
+    ADD X21, X21, #4
+    RET
+
+// patch_forward — patch a forward branch to jump to current HERE.
+// Input: X0 = address of the branch instruction to patch.
+// Detects B vs CBZ by checking bit 31.
+patch_forward:
+    LDR W9, [X0]                   // read instruction
+    SUB X10, X21, X0               // byte offset = HERE - instr_addr
+    ASR X10, X10, #2               // word offset = byte_offset / 4
+    TBZ W9, #31, .Lpf_b            // bit 31 clear → B instruction
+    // CBZ: 19-bit offset in bits [23:5]
+    AND X10, X10, #0x7FFFF         // mask to 19 bits
+    BIC W9, W9, #(0x7FFFF << 5)    // clear old offset bits
+    ORR W9, W9, W10, LSL #5        // insert new offset
+    STR W9, [X0]
+    RET
+.Lpf_b:
+    // B: 26-bit offset in bits [25:0]
+    AND W10, W10, #0x3FFFFFF        // mask to 26 bits
+    BIC W9, W9, #0x3FFFFFF          // clear old offset
+    ORR W9, W9, W10                 // insert new offset
+    STR W9, [X0]
+    RET
+
+// compile_0branch_back — emit conditional backward branch to known target.
+// Input: X0 = target address.
+compile_0branch_back:
+    CHECK_DICT 8
+    MOV X10, X0                    // X10 = target
+    MOV W9, #0x8669
+    MOVK W9, #0xF840, LSL #16     // LDR X9, [X19], #8
+    STR W9, [X21]
+    ADD X21, X21, #4
+    // Calculate offset: (target - cbz_addr) / 4
+    SUB X10, X10, X21              // byte offset = target - cbz_addr
+    ASR X10, X10, #2               // word offset
+    AND X10, X10, #0x7FFFF         // mask to 19 bits
+    MOV W9, #0x0009
+    MOVK W9, #0xB400, LSL #16     // CBZ X9 base
+    ORR W9, W9, W10, LSL #5        // insert offset
+    STR W9, [X21]
+    ADD X21, X21, #4
+    RET
+
+// compile_branch_back — emit unconditional backward branch to known target.
+// Input: X0 = target address.
+compile_branch_back:
+    CHECK_DICT 4
+    SUB X10, X0, X21               // byte offset = target - b_addr
+    ASR X10, X10, #2               // word offset
+    AND W10, W10, #0x3FFFFFF        // mask to 26 bits
+    MOV W9, #0x0000
+    MOVK W9, #0x1400, LSL #16     // B base
+    ORR W9, W9, W10                 // insert offset
+    STR W9, [X21]
+    ADD X21, X21, #4
     RET
 
 // ---------- COLON (Forth-level) ----------
@@ -1173,6 +1293,10 @@ forth_colon:
     // Compile prolog (STP X29, X30, [SP, #-16]!) as first instruction
     BL compile_prolog
 
+    // Save data stack depth for control-flow balance check in ;
+    ADR X9, colon_dsp
+    STR X19, [X9]
+
     // Update LATEST and STATE
     MOV X22, X25                    // LATEST = new entry
     ADR X9, state
@@ -1209,6 +1333,12 @@ forth_semicolon:
     LDR X9, [X9]
     CBZ X9, .Lsemi_err
 
+    // Check control-flow stack balance: DSP must match what : saved
+    ADR X9, colon_dsp
+    LDR X9, [X9]
+    CMP X19, X9
+    B.NE .Lsemi_unbalanced
+
     STP X29, X30, [SP, #-16]!
 
     // Compile RET
@@ -1235,6 +1365,24 @@ forth_semicolon:
     ADR X9, state
     STR XZR, [X9]
 
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lsemi_unbalanced:
+    // Unresolved control flow — roll back the definition
+    STP X29, X30, [SP, #-16]!
+    ADR X0, msg_unbalanced
+    MOV X1, #msg_unbalanced_len
+    BL platform_write
+    // Restore stack, LATEST, HERE, STATE
+    ADR X9, colon_dsp
+    LDR X19, [X9]
+    ADR X9, saved_latest
+    LDR X22, [X9]
+    ADR X9, saved_here
+    LDR X21, [X9]
+    ADR X9, state
+    STR XZR, [X9]
     LDP X29, X30, [SP], #16
     RET
 
@@ -1298,6 +1446,15 @@ forth_tick:
 .global forth_interpret_line
 forth_interpret_line:
     STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
+    // Save previous il_sp for nesting (EVALUATE inside INCLUDED etc.)
+    ADR X9, il_sp
+    LDR X10, [X9]                   // X10 = old il_sp
+    STP X10, XZR, [SP, #-16]!      // push old il_sp (+ padding for alignment)
+    MOV X10, SP
+    STR X10, [X9]                   // il_sp = current SP
 
 .Lil_loop:
     BL forth_parse_word             // ( -- c-addr u )
@@ -1313,17 +1470,20 @@ forth_interpret_line:
     LDR X9, [X19]                   // flag is on top
     CBZ X9, .Lil_try_number
 
-    // Found — top = flag (1=IMMEDIATE, -1=normal), second = xt
-    // If interpreting (STATE==0), always execute.
-    // If compiling: IMMEDIATE words execute, normal words get compiled.
+    // Found — top = flag, second = xt
+    // Flags: 1=IMMEDIATE, -1=normal, -2=COMPILE_ONLY, 2=IMMEDIATE+COMPILE_ONLY
+    // If interpreting (STATE==0): execute, but reject compile-only (flag==-2 or 2)
+    // If compiling: IMMEDIATE (flag==1 or 2) → execute, else compile
     ADR X10, state
     LDR X10, [X10]
     CBZ X10, .Lil_found_interpret   // interpreting → check compile-only
 
-    // Compiling — check IMMEDIATE flag
+    // Compiling — check IMMEDIATE flag (flag==1 or flag==2)
     LDR X9, [X19]
     CMP X9, #1
-    B.EQ .Lil_found_execute         // IMMEDIATE → execute even in compile mode
+    B.EQ .Lil_found_execute         // IMMEDIATE → execute
+    CMP X9, #2
+    B.EQ .Lil_found_execute         // IMMEDIATE+COMPILE_ONLY → execute
 
     // Normal word in compile mode — compile a BL to it
     ADD X19, X19, #CELL             // drop flag
@@ -1332,9 +1492,11 @@ forth_interpret_line:
     B .Lil_loop
 
 .Lil_found_interpret:
-    // Interpreting — reject compile-only words (flag == -2)
+    // Interpreting — reject compile-only words (flag == -2 or flag == 2)
     LDR X9, [X19]
     CMN X9, #2                      // compare with -2
+    B.EQ .Lil_compile_only
+    CMP X9, #2
     B.EQ .Lil_compile_only
     // Fall through to execute
 
@@ -1391,6 +1553,12 @@ forth_interpret_line:
 
 .Lil_err_return:
     MOV X0, #1                      // return 1 = error
+    LDP X10, X9, [SP], #16          // pop saved il_sp (+ discard padding)
+    ADR X9, il_sp
+    STR X10, [X9]                   // restore previous il_sp
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
 
@@ -1398,6 +1566,12 @@ forth_interpret_line:
     // End of line — drop 0 0 from PARSE-WORD
     ADD X19, X19, #2*CELL
     MOV X0, XZR                     // return 0 = success
+    LDP X10, X9, [SP], #16          // pop saved il_sp (+ discard padding)
+    ADR X9, il_sp
+    STR X10, [X9]                   // restore previous il_sp
+    LDP X27, X28, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
 
@@ -1704,6 +1878,174 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ incl_err_open_len, . - incl_err_open
 .text
 
+// ---------- Control Flow Tag Constants ----------
+.equ CF_ORIG, 1                     // forward reference (IF, ELSE, WHILE)
+.equ CF_DEST, 2                     // backward target (BEGIN)
+
+// cf_check_tag — verify top of stack matches expected tag.
+// Input: X0 = expected tag.  On mismatch, aborts compilation and
+// jumps directly to repl_loop (does not return to caller).
+cf_check_tag:
+    LDR X9, [X19]
+    CMP X9, X0
+    B.NE .Lcf_mismatch
+    RET
+.Lcf_mismatch:
+    // Restore compilation state
+    ADR X9, colon_dsp
+    LDR X19, [X9]                   // restore DSP
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
+    ADR X9, state
+    STR XZR, [X9]                   // interpret mode
+    // Set error token for caller to report
+    ADR X9, err_token_addr
+    ADR X10, cf_mismatch_name
+    STR X10, [X9]
+    ADR X9, err_token_len
+    MOV X10, #cf_mismatch_name_len
+    STR X10, [X9]
+    // Longjmp back to forth_interpret_line's error return
+    ADR X9, il_sp
+    LDR X10, [X9]
+    MOV SP, X10                     // unwind to interpret_line's frame
+    MOV X0, #1                      // return error
+    LDP X10, X11, [SP], #16         // pop saved il_sp (+ discard padding)
+    STR X10, [X9]                   // restore previous il_sp (nesting)
+    LDP X27, X28, [SP], #16         // restore all callee-saved registers
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET                             // return from interpret_line
+
+// ---------- IF / ELSE / THEN ----------
+
+// IF ( C: -- orig )  IMMEDIATE, COMPILE_ONLY
+.global forth_if
+forth_if:
+    STP X29, X30, [SP, #-16]!
+    BL compile_0branch              // X0 = patch addr
+    STR X0, [X19, #-CELL]!         // push patch address
+    MOV X9, #CF_ORIG
+    STR X9, [X19, #-CELL]!         // push tag
+    LDP X29, X30, [SP], #16
+    RET
+
+// THEN ( C: orig -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_then
+forth_then:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, #CF_ORIG
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X0, [X19], #CELL           // pop patch address
+    BL patch_forward
+    LDP X29, X30, [SP], #16
+    RET
+
+// ELSE ( C: orig1 -- orig2 )  IMMEDIATE, COMPILE_ONLY
+.global forth_else
+forth_else:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X0, #CF_ORIG
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X23, [X19], #CELL          // pop if-patch
+    BL compile_branch               // X0 = else-patch
+    STR X0, [X19, #-CELL]!         // push else-patch
+    MOV X9, #CF_ORIG
+    STR X9, [X19, #-CELL]!         // push tag
+    MOV X0, X23
+    BL patch_forward                // patch IF's CBZ to HERE
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- BEGIN / UNTIL / AGAIN / WHILE / REPEAT ----------
+
+// BEGIN ( C: -- dest )  IMMEDIATE, COMPILE_ONLY
+.global forth_begin
+forth_begin:
+    STR X21, [X19, #-CELL]!        // push HERE
+    MOV X9, #CF_DEST
+    STR X9, [X19, #-CELL]!         // push tag
+    RET
+
+// UNTIL ( C: dest -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_until
+forth_until:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, #CF_DEST
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X0, [X19], #CELL           // pop begin-addr
+    BL compile_0branch_back
+    LDP X29, X30, [SP], #16
+    RET
+
+// AGAIN ( C: dest -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_again
+forth_again:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, #CF_DEST
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X0, [X19], #CELL           // pop begin-addr
+    BL compile_branch_back
+    LDP X29, X30, [SP], #16
+    RET
+
+// WHILE ( C: dest -- dest orig )  IMMEDIATE, COMPILE_ONLY
+.global forth_while
+forth_while:
+    STP X29, X30, [SP, #-16]!
+    // Verify BEGIN's tag is below (peek, don't consume)
+    LDR X9, [X19]
+    CMP X9, #CF_DEST
+    B.NE .Lcf_mismatch
+    BL compile_0branch              // X0 = while-patch
+    STR X0, [X19, #-CELL]!         // push while-patch
+    MOV X9, #CF_ORIG
+    STR X9, [X19, #-CELL]!         // push tag
+    LDP X29, X30, [SP], #16
+    RET
+
+// REPEAT ( C: dest orig -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_repeat
+forth_repeat:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X0, #CF_ORIG                // check WHILE's tag
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X23, [X19], #CELL          // pop while-patch
+    MOV X0, #CF_DEST                // check BEGIN's tag
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X0, [X19], #CELL           // pop begin-addr
+    BL compile_branch_back          // B back to begin
+    MOV X0, X23                     // X0 = while-patch
+    BL patch_forward                // patch WHILE's CBZ to HERE
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- RECURSE ----------
+
+// RECURSE ( -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_recurse
+forth_recurse:
+    STP X29, X30, [SP, #-16]!
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]                    // X9 = address of code_len field
+    LDR X0, [X9, #-8]              // X0 = code entry point (CodePtr field)
+    BL compile_call
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -1762,7 +2104,16 @@ DEFWORD dict_paren,      "(",          forth_paren,       dict_tick, F_IMMEDIATE
 DEFWORD dict_backslash,  "\\",         forth_backslash,   dict_paren, F_IMMEDIATE
 DEFWORD dict_evaluate,   "evaluate",   forth_evaluate,    dict_backslash
 DEFWORD dict_included,   "included",   forth_included,    dict_evaluate
-.global dict_included
+DEFWORD dict_if,         "if",         forth_if,          dict_included,  F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_then,       "then",       forth_then,        dict_if,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_else,       "else",       forth_else,        dict_then,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_begin,      "begin",      forth_begin,       dict_else,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_until,      "until",      forth_until,       dict_begin,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_again,      "again",      forth_again,       dict_until,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_while,      "while",      forth_while,       dict_again,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_repeat,     "repeat",     forth_repeat,      dict_while,     F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_recurse,    "recurse",    forth_recurse,     dict_repeat,    F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_recurse
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -1817,6 +2168,9 @@ state:                              // Compiler state (0=interpret, non-zero=com
 .global colon_code_len_addr
 colon_code_len_addr:                // Saved code_len field address for ; to fill
     .quad 0
+.global colon_dsp
+colon_dsp:                          // DSP at start of : for control-flow balance check
+    .quad 0
 .global saved_latest
 saved_latest:                       // LATEST before current : for error recovery
     .quad 0
@@ -1825,6 +2179,9 @@ saved_here:                         // HERE before current : for error recovery
     .quad 0
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
+    .quad 0
+.global il_sp
+il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0
 .global err_token_addr
 err_token_addr:                     // Address of last error token (set by interpret_line)
