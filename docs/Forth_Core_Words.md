@@ -55,8 +55,8 @@ Status: ( ) = not yet implemented, (x) = implemented
 | ?DUP  | ( x -- 0 \| x x )                             | asm   | (x)    |                         |
 | 2DUP  | ( x1 x2 -- x1 x2 x1 x2 )                     | asm   | (x)    |                         |
 | 2DROP | ( x1 x2 -- )                                  | asm   | (x)    |                         |
-| 2SWAP | ( x1 x2 x3 x4 -- x3 x4 x1 x2 )              | forth | ( )    |                         |
-| 2OVER | ( x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2 )        | forth | ( )    |                         |
+| 2SWAP | ( x1 x2 x3 x4 -- x3 x4 x1 x2 )              | forth | (x)    | core.fs                 |
+| 2OVER | ( x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2 )        | forth | (x)    | core.fs                 |
 | >R    | ( x -- ) (R: -- x )                            | asm   | (x)    | compile-only            |
 | R>    | ( -- x ) (R: x -- )                            | asm   | (x)    | compile-only            |
 | R@    | ( -- x ) (R: x -- x )                          | asm   | (x)    | compile-only            |
@@ -73,7 +73,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | /      | ( n1 n2 -- n3 )                               | forth | (x)    | /MOD NIP (in core.fs)   |
 | MOD    | ( n1 n2 -- rem )                              | forth | (x)    | /MOD DROP (in core.fs)  |
 | /MOD   | ( n1 n2 -- rem quot )                         | asm   | (x)    | div-by-zero safe        |
-| */     | ( n1 n2 n3 -- n4 )                            | forth | ( )    | >R M* R> FM/MOD NIP     |
+| */     | ( n1 n2 n3 -- n4 )                            | forth | (x)    | core.fs: >R * R> /      |
 | */MOD  | ( n1 n2 n3 -- n4 n5 )                         | forth | ( )    | >R M* R> FM/MOD         |
 | 1+     | ( n -- n+1 )                                  | asm   | (x)    |                         |
 | 1-     | ( n -- n-1 )                                  | asm   | (x)    |                         |
@@ -141,14 +141,14 @@ Status: ( ) = not yet implemented, (x) = implemented
 |---------|-----------------------------------------------|-------|--------|-------------------------|
 | EMIT    | ( char -- )                                   | both  | (x)    | asm pops stack, calls platform |
 | KEY     | ( -- char )                                   | both  | (x)    | asm calls platform, pushes stack |
-| TYPE    | ( c-addr u -- )                               | forth | ( )    | Loop: C@ EMIT           |
+| TYPE    | ( c-addr u -- )                               | asm   | (x)    | Write string to stdout   |
 | ACCEPT  | ( c-addr +n1 -- +n2 )                        | asm   | (x)    | Line input with editing  |
 | CR      | ( -- )                                        | forth | (x)    | 10 EMIT (in core.fs)    |
 | SPACE   | ( -- )                                        | forth | (x)    | 32 EMIT (in core.fs)    |
-| SPACES  | ( n -- )                                      | forth | ( )    | Loop: SPACE              |
+| SPACES  | ( n -- )                                      | forth | (x)    | core.fs                  |
 | .       | ( n -- )                                      | asm   | (x)    | Print signed number      |
 | U.      | ( u -- )                                      | forth | ( )    | Print unsigned number    |
-| ."      | ( "ccc" -- )                                  | forth | ( )    | Compile string + TYPE    |
+| ."      | ( "ccc" -- )                                  | asm   | (x)    | Compile string + TYPE    |
 | BL      | ( -- char )                                   | forth | (x)    | 32 (in core.fs)         |
 | CHAR    | ( "name" -- char )                            | forth | ( )    | First char of next word  |
 
@@ -229,7 +229,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | ABORT"        | ( flag "ccc" -- )                             | forth | ( )    | Conditional abort + msg |
 | QUIT          | ( -- )                                        | forth | ( )    | Main interpreter loop   |
 | ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | ( )    | Query environment       |
-| S"            | ( "ccc" -- c-addr u )                         | forth | ( )    | String literal          |
+| S"            | ( "ccc" -- c-addr u )                         | asm   | (x)    | Inline string literal   |
 
 ## Core Extension Words (6.2)
 
@@ -257,7 +257,7 @@ commonly useful ones:
 | TO         | ( x "name" -- )                               | Assign to VALUE              |
 | PARSE      | ( char -- c-addr u )                          | Parse with delimiter         |
 | PARSE-NAME | ( -- c-addr u )                               | Parse whitespace-delimited   |
-| PICK       | ( xu...x0 u -- xu...x0 xu )                  | Copy nth item                |
+| PICK       | ( xu...x0 u -- xu...x0 xu )                  | Copy nth item (asm) (x)      |
 | PAD        | ( -- c-addr )                                 | Scratch buffer               |
 | ERASE      | ( addr u -- )                                 | Fill with zeros              |
 | REFILL     | ( -- flag )                                   | Refill input buffer          |

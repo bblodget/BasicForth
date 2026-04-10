@@ -22,7 +22,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_does(%rip), %r12       # LATEST
+    lea dict_dot_quote(%rip), %r12  # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)

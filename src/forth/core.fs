@@ -26,5 +26,18 @@
 : <>    = invert ;
 : 0<>   0= invert ;
 
+\ Derived stack words
+: 2OVER   3 pick 3 pick ;
+: 2SWAP   rot >r rot r> ;
+
+\ Derived arithmetic
+: */      >r * r> / ;
+
+\ Output helpers
+: SPACES  0 do space loop ;
+
+\ String helpers
+: COUNT   dup 1+ swap c@ ;
+
 \ Defining words
 : VARIABLE  create 1 cells allot ;

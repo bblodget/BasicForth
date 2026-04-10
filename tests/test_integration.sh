@@ -347,6 +347,22 @@ assert_output "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 
 assert_output "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
 
 # =========================================================================
+section "String Words"
+# =========================================================================
+
+assert_output "type"              ': test s" Hello" type ; test'                "Hello"
+assert_output "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
+assert_output "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
+assert_output "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
+
+# =========================================================================
+section "PICK"
+# =========================================================================
+
+assert_output "0 pick"            "1 2 3 0 pick ."                              "3"
+assert_output "2 pick"            "1 2 3 2 pick ."                              "1"
+
+# =========================================================================
 section "core.fs Words"
 # =========================================================================
 
@@ -363,6 +379,11 @@ assert_output "<>"                   "3 4 <> ."                       "-1"
 assert_output "<> false"             "5 5 <> ."                       "0"
 assert_output "0<>"                  "42 0<> ."                       "-1"
 assert_output "0<> false"            "0 0<> ."                        "0"
+assert_output "2OVER"                "1 2 3 4 2over . . . . . ."     "2 1 4 3 2 1"
+assert_output "2SWAP"                "1 2 3 4 2swap . . . ."         "2 1 4 3"
+assert_output "*/"                   "3 7 2 */ ."                     "10"
+assert_output "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
+assert_output "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
 
 # =========================================================================
 section "BYE"

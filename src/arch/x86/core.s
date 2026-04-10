@@ -2170,6 +2170,136 @@ forth_does:
     # ; will close it with RET.
     ret
 
+# ---------- TYPE ----------
+
+# TYPE ( c-addr u -- ) — write string to stdout
+.global forth_type
+forth_type:
+    mov (%r15), %rdx            # u (length)
+    mov CELL(%r15), %rsi        # c-addr
+    add $2*CELL, %r15           # pop both
+    call platform_write
+    ret
+
+# ---------- PICK ----------
+
+# PICK ( xu ... x1 x0 u -- xu ... x1 x0 xu )
+# Copy the u-th item (0-indexed: 0 pick = dup).
+.global forth_pick
+forth_pick:
+    mov (%r15), %rax            # u
+    mov CELL(%r15,%rax,CELL), %rax  # DSP[(u+1)*8]
+    mov %rax, (%r15)            # overwrite u with result
+    ret
+
+# ---------- S" and ." ----------
+
+# forth_s_quote_runtime — runtime helper for inline strings.
+# Called via CALL. Reads 8-byte length + string after return address.
+# Pushes ( c-addr u ) to data stack. Adjusts return address to skip string.
+.global forth_s_quote_runtime
+forth_s_quote_runtime:
+    pop %rax                    # return address
+    mov (%rax), %rcx            # length (8 bytes)
+    lea 8(%rax), %rdx           # c-addr = retaddr + 8
+    lea 8(%rax,%rcx), %rax      # new retaddr = past string
+    push %rax                   # push adjusted return address
+    sub $2*CELL, %r15
+    mov %rdx, CELL(%r15)        # push c-addr (second)
+    mov %rcx, (%r15)            # push u (top)
+    ret
+
+# S" compile helper — shared by S" and ."
+# Parses input for closing ", compiles CALL s_quote_runtime + length + string.
+# Returns with HERE past the string.
+compile_s_quote:
+    push %rbx
+    push %rbp
+    # Skip leading space after S" / ."
+    mov source_addr(%rip), %rsi
+    mov to_in(%rip), %rbx       # current parse position
+    mov source_len(%rip), %rcx
+    # Skip one space if present
+    cmp %rcx, %rbx
+    jge .Lsq_empty              # to_in >= source_len → no input
+    cmpb $32, (%rsi,%rbx)
+    jne .Lsq_scan
+    inc %rbx
+.Lsq_scan:
+    # Find closing "
+    mov %rbx, %rbp              # RBP = string start in input
+.Lsq_scan_loop:
+    cmp %rcx, %rbx
+    jge .Lsq_no_close           # to_in >= source_len → no closing "
+    cmpb $'"', (%rsi,%rbx)
+    je .Lsq_found
+    inc %rbx
+    jmp .Lsq_scan_loop
+.Lsq_found:
+    # RBP = start of string, RBX = position of closing "
+    mov %rbx, %rax
+    sub %rbp, %rax              # RAX = string length
+    lea 1(%rbx), %rbx
+    mov %rbx, to_in(%rip)      # advance to_in past closing "
+    # Bounds check: need CALL(5) + CELL(8) + string bytes in dict_space
+    lea dict_space+DICT_SPACE_SIZE(%rip), %rcx
+    lea (5+CELL)(%r13,%rax), %rdx  # HERE + 5 + CELL + string_length
+    cmp %rcx, %rdx
+    ja dict_full
+    # Compile CALL forth_s_quote_runtime
+    push %rax                   # save length
+    push %rbp                   # save string start offset
+    lea forth_s_quote_runtime(%rip), %rax
+    call compile_call
+    pop %rbp                    # restore string start offset
+    pop %rax                    # restore length
+    # Compile .quad length
+    mov %rax, (%r13)
+    add $CELL, %r13
+    # Copy string bytes to HERE
+    push %rax                   # save length
+    mov source_addr(%rip), %rsi
+    add %rbp, %rsi              # RSI = source string addr
+    mov %r13, %rdi              # RDI = HERE (destination)
+    mov %rax, %rcx              # RCX = length
+    rep movsb                   # copy
+    pop %rax
+    add %rax, %r13              # advance HERE past string
+    pop %rbp
+    pop %rbx
+    ret
+.Lsq_empty:
+.Lsq_no_close:
+    # Empty string or no closing quote — compile empty string
+    xor %eax, %eax
+    push %rax
+    push %rax
+    lea forth_s_quote_runtime(%rip), %rax
+    call compile_call
+    pop %rax
+    pop %rax
+    movq $0, (%r13)             # length = 0
+    add $CELL, %r13
+    mov %rbx, to_in(%rip)
+    pop %rbp
+    pop %rbx
+    ret
+
+# S" ( -- c-addr u )  IMMEDIATE, COMPILE_ONLY
+.global forth_s_quote
+forth_s_quote:
+    call compile_s_quote
+    ret
+
+# ." ( -- )  IMMEDIATE, COMPILE_ONLY
+# Like S" but also compiles CALL forth_type after the string.
+.global forth_dot_quote
+forth_dot_quote:
+    call compile_s_quote
+    lea forth_type(%rip), %rax
+    call compile_call
+    ret
+
 # ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
 # All IMMEDIATE + COMPILE_ONLY. Compile inline machine code that
 # manipulates the return stack for counted loops.
@@ -2537,7 +2667,11 @@ DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMME
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_does,       "does>",      forth_does,        dict_leave,     F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_does
+DEFWORD dict_type,       "type",       forth_type,        dict_does
+DEFWORD dict_pick,       "pick",       forth_pick,        dict_type
+DEFWORD dict_s_quote,    "s\"",        forth_s_quote,     dict_pick,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_dot_quote,  ".\"",        forth_dot_quote,   dict_s_quote,   F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_dot_quote
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

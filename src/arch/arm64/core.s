@@ -2276,6 +2276,152 @@ forth_does:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- TYPE ----------
+
+// TYPE ( c-addr u -- ) — write string to stdout
+.global forth_type
+forth_type:
+    STP X29, X30, [SP, #-16]!
+    LDR X1, [X19]               // u (length)
+    LDR X0, [X19, #CELL]        // c-addr
+    ADD X19, X19, #2*CELL       // pop both
+    BL platform_write
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- PICK ----------
+
+// PICK ( xu ... x1 x0 u -- xu ... x1 x0 xu )
+// Copy the u-th item (0-indexed: 0 pick = dup).
+.global forth_pick
+forth_pick:
+    LDR X9, [X19]               // u
+    ADD X9, X9, #1              // u+1
+    LDR X9, [X19, X9, LSL #3]  // DSP[(u+1)*CELL]
+    STR X9, [X19]               // overwrite u with result
+    RET
+
+// ---------- S" and ." ----------
+
+// forth_s_quote_runtime — runtime helper for inline strings.
+// Called via BL. Reads 8-byte length + string after return address (X30).
+// Pushes ( c-addr u ) to data stack. Returns past the string.
+// Must align return address to 4 bytes for ARM64 instruction alignment.
+.global forth_s_quote_runtime
+forth_s_quote_runtime:
+    LDR X9, [X30]               // length (8 bytes at return addr)
+    ADD X10, X30, #8            // c-addr = retaddr + 8
+    ADD X30, X30, #8            // skip length
+    ADD X30, X30, X9            // skip string bytes
+    ADD X30, X30, #3            // align up to 4-byte boundary
+    AND X30, X30, #~3
+    SUB X19, X19, #2*CELL
+    STR X10, [X19, #CELL]       // push c-addr (second)
+    STR X9, [X19]               // push u (top)
+    RET                          // returns to adjusted address
+
+// compile_s_quote — shared helper for S" and ."
+// Parses input for closing ", compiles BL s_quote_runtime + length + string.
+// Pads string to 4-byte alignment. Returns with HERE past the string.
+compile_s_quote:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    // Load input state
+    ADR X9, source_addr
+    LDR X23, [X9]               // X23 = source_addr
+    ADR X9, to_in
+    LDR X24, [X9]               // X24 = to_in (current position)
+    ADR X9, source_len
+    LDR X25, [X9]               // X25 = source_len
+    // Skip one leading space if present
+    CMP X24, X25
+    B.GE .Lsq_empty
+    LDRB W9, [X23, X24]
+    CMP W9, #32
+    B.NE .Lsq_scan
+    ADD X24, X24, #1
+.Lsq_scan:
+    // Find closing " — X26 = string start
+    MOV X26, X24
+.Lsq_scan_loop:
+    CMP X24, X25
+    B.GE .Lsq_no_close
+    LDRB W9, [X23, X24]
+    CMP W9, #'"'
+    B.EQ .Lsq_found
+    ADD X24, X24, #1
+    B .Lsq_scan_loop
+.Lsq_found:
+    // X26 = string start, X24 = position of closing "
+    SUB X25, X24, X26           // X25 = string length
+    ADD X24, X24, #1            // advance past closing "
+    ADR X9, to_in
+    STR X24, [X9]               // update to_in
+    // Bounds check: need BL(4) + CELL(8) + string bytes + 3 (alignment)
+    ADD X9, X21, #4+CELL+3      // HERE + BL + CELL + alignment
+    ADD X9, X9, X25             // + string length
+    ADR X10, dict_space_end
+    CMP X9, X10
+    B.HI dict_full
+    // Compile BL forth_s_quote_runtime
+    ADR X0, forth_s_quote_runtime
+    BL compile_call
+    // Compile .quad length
+    STR X25, [X21]
+    ADD X21, X21, #CELL
+    // Copy string bytes to HERE
+    ADD X9, X23, X26            // source = source_addr + start
+    MOV X10, X21                // dest = HERE
+    MOV X11, X25                // count = length
+    CBZ X11, .Lsq_copy_done
+.Lsq_copy_loop:
+    LDRB W12, [X9], #1
+    STRB W12, [X10], #1
+    SUBS X11, X11, #1
+    B.NE .Lsq_copy_loop
+.Lsq_copy_done:
+    ADD X21, X21, X25           // advance HERE past string
+    // Align HERE to 4-byte boundary (ARM64 instruction alignment)
+    ADD X21, X21, #3
+    AND X21, X21, #~3
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lsq_empty:
+.Lsq_no_close:
+    // Empty string or no closing quote
+    ADR X9, to_in
+    STR X24, [X9]
+    ADR X0, forth_s_quote_runtime
+    BL compile_call
+    STR XZR, [X21]              // length = 0
+    ADD X21, X21, #CELL
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// S" ( -- c-addr u )  IMMEDIATE, COMPILE_ONLY
+.global forth_s_quote
+forth_s_quote:
+    STP X29, X30, [SP, #-16]!
+    BL compile_s_quote
+    LDP X29, X30, [SP], #16
+    RET
+
+// ." ( -- )  IMMEDIATE, COMPILE_ONLY
+// Like S" but also compiles BL forth_type after the string.
+.global forth_dot_quote
+forth_dot_quote:
+    STP X29, X30, [SP, #-16]!
+    BL compile_s_quote
+    ADR X0, forth_type
+    BL compile_call
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
 // All IMMEDIATE + COMPILE_ONLY. Compile inline machine code that
 // manipulates the return stack for counted loops.
@@ -2669,7 +2815,11 @@ DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMME
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_does,       "does>",      forth_does,        dict_leave,     F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_does
+DEFWORD dict_type,       "type",       forth_type,        dict_does
+DEFWORD dict_pick,       "pick",       forth_pick,        dict_type
+DEFWORD dict_s_quote,    "s\"",        forth_s_quote,     dict_pick,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_dot_quote,  ".\"",        forth_dot_quote,   dict_s_quote,   F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_dot_quote
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

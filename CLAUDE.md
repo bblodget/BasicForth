@@ -18,6 +18,7 @@ as the code evolves:
 - Forth_Core_Words.md — Forth 2012 standard core vocabulary
 - Conditionals.md — control flow compilation, branch encoding, error handling
 - Defining_Words.md — CREATE, CONSTANT, VARIABLE, DOES>, dictionary layout
+- String_Words.md — TYPE, S", .", COUNT, inline string compilation
 - Outer_Interpreter.md — REPL loop, forth_interpret_line, EVALUATE/INCLUDED
 - ARM64_Quick_Reference.md — ARM64 instruction and register reference
 - x86_Quick_Reference.md — x86-64 AT&T syntax reference

@@ -115,10 +115,11 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Startup auto-load of core.fs (silent skip if not found)
 - [x] core.fs initial words: CR, SPACE, BL, TRUE, FALSE, MOD, /, CELL+, CELLS, <>, 0<>
 - [x] Line-by-line error reporting: filename:line: ? token
-- [ ] Derived stack words: 2OVER, 2SWAP, PICK
-- [ ] Derived arithmetic: */
-- [ ] String words: TYPE, COUNT, S", ."
-- [ ] Formatting: SPACES, U., .R
+- [x] Derived stack words: 2OVER, 2SWAP, PICK
+- [x] Derived arithmetic: */
+- [x] String words: TYPE, COUNT, S", ."
+- [x] SPACES
+- [ ] Formatting: U., .R (deferred — needs pictured numeric output)
 
 ---
 

@@ -12,8 +12,8 @@ Each dictionary entry has a fixed header with variable-length name:
 Offset    Size    Field
 ------    ----    -----
 0         8       Link        Pointer to previous entry (0 = end of list)
-8         1       Flags+Len   Bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
-9         N       Name        Word name (N = length from Flags+Len, max 63 chars)
+8         1       Flags+Len   Flags (bits 7-5) + name length (bits 4-0)
+9         N       Name        Word name (N = length from Flags+Len, max 31 chars)
 9+N       pad     Padding     .balign 8 (zero bytes to next 8-byte boundary)
 aligned   8       CodePtr     Execution token — address of the code to run
 aligned+8 4       CodeLen     Length of code in bytes (0 for ASM primitives)
@@ -31,10 +31,15 @@ CodePtr field to an 8-byte boundary. This ensures:
 ### Flags Byte
 
 ```
-Bit 7 (0x80)  IMMEDIATE   Word executes during compilation instead of being compiled
-Bit 6 (0x40)  HIDDEN      Word is invisible to FIND (used during definition)
-Bits 0-5      Length       Name length (0-63 characters)
+Bit 7 (0x80)  IMMEDIATE      Word executes during compilation instead of being compiled
+Bit 6 (0x40)  HIDDEN         Word is invisible to FIND (used during definition)
+Bit 5 (0x20)  COMPILE_ONLY   Word can only be used inside a definition (: ... ;)
+Bits 0-4      Length          Name length (0-31 characters)
 ```
+
+Words can combine flags. For example, IF is both IMMEDIATE and
+COMPILE_ONLY — it executes at compile time (not compiled as a call)
+and is rejected if used outside a definition.
 
 ## Engine Registers
 
@@ -88,26 +93,24 @@ This creates three entries: `dict_swap` → `dict_drop` → `dict_dup` → 0.
 
 ## Built-in Words
 
-The static dictionary includes entries for all assembly primitives:
+The static dictionary includes entries for all assembly primitives,
+chained newest-first via DEFWORD macros in core.s. The chain starts
+at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
+(head, pointed to by LATEST). Categories include:
 
-| Entry         | Name     | Code Address   |
-|---------------|----------|----------------|
-| `dict_dup`    | `dup`    | `forth_dup`    |
-| `dict_drop`   | `drop`   | `forth_drop`   |
-| `dict_swap`   | `swap`   | `forth_swap`   |
-| `dict_over`   | `over`   | `forth_over`   |
-| `dict_add`    | `+`      | `forth_add`    |
-| `dict_sub`    | `-`      | `forth_sub`    |
-| `dict_negate` | `negate` | `forth_negate` |
-| `dict_fetch`  | `@`      | `forth_fetch`  |
-| `dict_store`  | `!`      | `forth_store`  |
-| `dict_cfetch` | `c@`     | `forth_cfetch` |
-| `dict_cstore` | `c!`     | `forth_cstore` |
-| `dict_emit`   | `emit`   | `forth_emit`   |
-| `dict_key`    | `key`    | `forth_key`    |
-| `dict_accept` | `accept` | `forth_accept` |
-| `dict_number` | `number` | `forth_number` |
-| `dict_find`   | `find`   | `forth_find`   |
+- **Stack**: dup, drop, swap, over, rot, nip, tuck, 2dup, 2drop, depth, ?dup, pick
+- **Arithmetic**: +, -, negate, *, /mod, 1+, 1-, abs, min, max
+- **Comparison**: =, <, >, 0=, 0<
+- **Logic**: and, or, xor, invert
+- **Memory**: @, !, c@, c!
+- **I/O**: emit, key, accept, type, .", s"
+- **Return stack**: >r, r>, r@ (COMPILE_ONLY)
+- **Compiler**: :, ;, immediate, ', evaluate, included
+- **Control flow**: if, then, else, begin, until, again, while, repeat, recurse, do, loop, +loop, i, j, unloop, leave (IMMEDIATE+COMPILE_ONLY)
+- **Defining**: here, allot, , (comma), c,, create, constant, does>
+- **Other**: find, parse-word, execute, ., .s, bye, number, lit (HIDDEN)
+
+See docs/Forth_Core_Words.md for the complete vocabulary with stack effects.
 
 ## FIND
 
@@ -116,25 +119,28 @@ The static dictionary includes entries for all assembly primitives:
 ### Stack Effect
 
 ```
-( c-addr u -- xt 1 | xt -1 | c-addr u 0 )
+( c-addr u -- xt flag | c-addr u 0 )
 ```
 
-| Result                 | Stack after        | Meaning               |
-|------------------------|--------------------|-----------------------|
-| Found, immediate word  | `xt 1`             | Execute even in compile mode |
-| Found, normal word     | `xt -1`            | Compile or execute    |
-| Not found              | `c-addr u 0`       | Original string preserved |
+| Flag | Meaning                          | Outer interpreter action          |
+|------|----------------------------------|-----------------------------------|
+|  1   | IMMEDIATE                        | Execute in both modes             |
+| -1   | Normal word                      | Execute (interpret) or compile    |
+|  2   | IMMEDIATE + COMPILE_ONLY         | Execute in compile mode, reject in interpret mode |
+| -2   | COMPILE_ONLY (non-immediate)     | Compile only, reject in interpret mode |
+|  0   | Not found                        | Try NUMBER, then error            |
 
 ### Algorithm
 
 1. Start at LATEST (head of linked list)
 2. For each entry:
    - Skip if HIDDEN flag is set
-   - Compare name lengths (masked with 0x3F)
+   - Compare name lengths (masked with 0x1F)
    - If lengths match, compare names character by character,
      converting both to lowercase (case-insensitive)
 3. On match: compute CodePtr offset as `align8(9 + name_len)` from entry
-   start, load the execution token, and return it with the IMMEDIATE flag
+   start, load the execution token, and return it with the appropriate flag
+   (checks both IMMEDIATE and COMPILE_ONLY bits to determine flag value)
 4. On miss: follow the link pointer to the previous entry
 5. If link is 0: return 0 with original `c-addr u` preserved
 
