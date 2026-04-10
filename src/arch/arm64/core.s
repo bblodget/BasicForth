@@ -262,8 +262,244 @@ forth_divmod:
     STR XZR, [X19]             // quot = 0
     RET
 
-// 1+ ( a -- a+1 )
-.global forth_one_plus
+// ---------- Double-Cell Arithmetic ----------
+
+// S>D ( n -- d )  Sign-extend single to double.
+// Double-cell: high word on top, low word below.
+.global forth_s_to_d
+forth_s_to_d:
+    LDR X9, [X19]               // n
+    ASR X10, X9, #63            // high = sign extension
+    SUB X19, X19, #CELL         // make room
+    STR X9, [X19, #CELL]        // low word (second)
+    STR X10, [X19]              // high word (top)
+    RET
+
+// UM* ( u1 u2 -- ud )  Unsigned multiply, 128-bit result.
+// Double-cell result: high word on top, low word below.
+.global forth_um_star
+forth_um_star:
+    LDR X9, [X19]               // u2
+    LDR X10, [X19, #CELL]       // u1
+    MUL X11, X10, X9            // low 64 bits
+    UMULH X12, X10, X9          // high 64 bits (unsigned)
+    STR X11, [X19, #CELL]       // low word (second)
+    STR X12, [X19]              // high word (top)
+    RET
+
+// M* ( n1 n2 -- d )  Signed multiply, 128-bit result.
+// Double-cell result: high word on top, low word below.
+.global forth_m_star
+forth_m_star:
+    LDR X9, [X19]               // n2
+    LDR X10, [X19, #CELL]       // n1
+    MUL X11, X10, X9            // low 64 bits
+    SMULH X12, X10, X9          // high 64 bits (signed)
+    STR X11, [X19, #CELL]       // low word (second)
+    STR X12, [X19]              // high word (top)
+    RET
+
+// UM/MOD ( ud u1 -- u2 u3 )  Unsigned double / single → remainder quotient.
+// u2 = remainder, u3 = quotient.
+// Division by zero returns 0 0.
+// ARM64 has no 128/64 divide — use software binary long division.
+.global forth_um_divmod
+forth_um_divmod:
+    LDR X11, [X19]              // divisor
+    CBZ X11, .Lum_divmod_zero
+    LDR X10, [X19, #CELL]       // ud-high (on top after divisor)
+    LDR X9, [X19, #2*CELL]      // ud-low (deepest)
+    // Fast path: if high word is 0, use hardware UDIV
+    CBNZ X10, .Lum_divmod_full
+    UDIV X12, X9, X11           // quotient = low / divisor
+    MSUB X13, X12, X11, X9     // remainder = low - quot*divisor
+    ADD X19, X19, #CELL         // drop one (3 in, 2 out)
+    STR X13, [X19, #CELL]       // remainder (second)
+    STR X12, [X19]              // quotient (top)
+    RET
+.Lum_divmod_full:
+    // Full 128/64 binary long division
+    // X9 = ud-low, X10 = ud-high, X11 = divisor
+    // Algorithm: process 64 bits of ud-low through remainder
+    // Start with remainder = ud-high (the partial remainder from high word)
+    MOV X13, #0                 // remainder = 0
+    MOV X12, #0                 // quotient = 0
+    // First process the high word: 64 iterations
+    MOV X14, #64                // counter
+.Lum_div_hi_loop:
+    // Shift remainder left by 1, pull top bit from ud-high
+    LSL X13, X13, #1
+    TST X10, #(1 << 63)
+    B.EQ .Lum_div_hi_nobit
+    ORR X13, X13, #1
+.Lum_div_hi_nobit:
+    LSL X10, X10, #1
+    LSL X12, X12, #1
+    CMP X13, X11
+    B.LO .Lum_div_hi_skip
+    SUB X13, X13, X11
+    ORR X12, X12, #1
+.Lum_div_hi_skip:
+    SUBS X14, X14, #1
+    B.NE .Lum_div_hi_loop
+    // Now process the low word: 64 more iterations
+    // X12 has partial quotient from high word (should be 0 if result fits in 64 bits)
+    // Reset quotient for low word processing, keeping remainder
+    MOV X12, #0
+    MOV X14, #64
+.Lum_div_lo_loop:
+    LSL X13, X13, #1
+    TST X9, #(1 << 63)
+    B.EQ .Lum_div_lo_nobit
+    ORR X13, X13, #1
+.Lum_div_lo_nobit:
+    LSL X9, X9, #1
+    LSL X12, X12, #1
+    CMP X13, X11
+    B.LO .Lum_div_lo_skip
+    SUB X13, X13, X11
+    ORR X12, X12, #1
+.Lum_div_lo_skip:
+    SUBS X14, X14, #1
+    B.NE .Lum_div_lo_loop
+    // X12 = quotient, X13 = remainder
+    ADD X19, X19, #CELL
+    STR X13, [X19, #CELL]       // remainder (second)
+    STR X12, [X19]              // quotient (top)
+    RET
+.Lum_divmod_zero:
+    ADD X19, X19, #CELL
+    STR XZR, [X19, #CELL]
+    STR XZR, [X19]
+    RET
+
+// SM/REM ( d n1 -- n2 n3 )  Symmetric (truncating) signed divide.
+// Implemented via UM/MOD with sign handling.
+.global forth_sm_rem
+forth_sm_rem:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    LDR X23, [X19]              // divisor (n1)
+    CBZ X23, .Lsm_rem_zero
+    LDR X24, [X19, #CELL]       // d-high
+    LDR X25, [X19, #2*CELL]     // d-low
+    // Save signs: X26 = sign of dividend (d-high), X23 sign already in X23
+    MOV X26, X24                // save d-high for sign
+    // Make dividend positive
+    TST X24, X24
+    B.GE .Lsm_rem_pos_d
+    // Negate 128-bit: ~(hi:lo) + 1
+    MVN X25, X25
+    MVN X24, X24
+    ADDS X25, X25, #1
+    ADC X24, X24, XZR
+.Lsm_rem_pos_d:
+    // Make divisor positive
+    MOV X9, X23
+    CMP X23, #0
+    B.GE .Lsm_rem_pos_n
+    NEG X9, X23
+.Lsm_rem_pos_n:
+    // Do unsigned divide: (X25:X24) / X9
+    STR X25, [X19, #2*CELL]     // ud-low
+    STR X24, [X19, #CELL]       // ud-high
+    STR X9, [X19]               // divisor (positive)
+    BL forth_um_divmod           // ( rem quot )
+    LDR X9, [X19]               // quotient
+    LDR X10, [X19, #CELL]       // remainder
+    // Fix signs: remainder has sign of dividend, quotient negative if signs differ
+    // If dividend was negative, negate remainder
+    TST X26, X26
+    B.GE .Lsm_rem_rem_ok
+    NEG X10, X10
+.Lsm_rem_rem_ok:
+    // If signs of dividend and divisor differ, negate quotient
+    EOR X11, X26, X23
+    TST X11, X11
+    B.GE .Lsm_rem_quot_ok
+    NEG X9, X9
+.Lsm_rem_quot_ok:
+    STR X10, [X19, #CELL]       // remainder
+    STR X9, [X19]               // quotient
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lsm_rem_zero:
+    ADD X19, X19, #CELL
+    STR XZR, [X19, #CELL]
+    STR XZR, [X19]
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// FM/MOD ( d n1 -- n2 n3 )  Floored signed divide.
+// Like SM/REM but adjusts when remainder and divisor have different signs.
+.global forth_fm_mod
+forth_fm_mod:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    LDR X23, [X19]              // divisor (n1)
+    CBZ X23, .Lfm_mod_zero
+    LDR X24, [X19, #CELL]       // d-high
+    LDR X25, [X19, #2*CELL]     // d-low
+    MOV X26, X24                // save d-high for sign
+    // Make dividend positive
+    TST X24, X24
+    B.GE .Lfm_pos_d
+    MVN X25, X25
+    MVN X24, X24
+    ADDS X25, X25, #1
+    ADC X24, X24, XZR
+.Lfm_pos_d:
+    // Make divisor positive
+    MOV X9, X23
+    CMP X23, #0
+    B.GE .Lfm_pos_n
+    NEG X9, X23
+.Lfm_pos_n:
+    // Unsigned divide: (X25:X24) / X9
+    STR X25, [X19, #2*CELL]
+    STR X24, [X19, #CELL]
+    STR X9, [X19]
+    BL forth_um_divmod
+    LDR X9, [X19]               // quotient
+    LDR X10, [X19, #CELL]       // remainder
+    // Fix signs (same as SM/REM first)
+    TST X26, X26
+    B.GE .Lfm_rem_ok
+    NEG X10, X10
+.Lfm_rem_ok:
+    EOR X11, X26, X23
+    TST X11, X11
+    B.GE .Lfm_quot_ok
+    NEG X9, X9
+.Lfm_quot_ok:
+    // Floor adjustment: if remainder != 0 and signs of remainder and divisor differ
+    CBZ X10, .Lfm_done
+    EOR X11, X10, X23           // sign bits of remainder vs divisor
+    TST X11, X11
+    B.GE .Lfm_done              // same sign → no adjustment
+    ADD X10, X10, X23           // remainder += divisor
+    SUB X9, X9, #1              // quotient -= 1
+.Lfm_done:
+    STR X10, [X19, #CELL]
+    STR X9, [X19]
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lfm_mod_zero:
+    ADD X19, X19, #CELL
+    STR XZR, [X19, #CELL]
+    STR XZR, [X19]
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
 forth_one_plus:
 
     LDR X9, [X19]
@@ -2281,6 +2517,29 @@ forth_does:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- BASE / PAD ----------
+
+// BASE ( -- a-addr )  Push address of BASE variable.
+.global forth_base
+forth_base:
+    ADR X9, base
+    STR X9, [X19, #-CELL]!
+    RET
+
+// PAD ( -- c-addr )  Push address of PAD scratch buffer.
+.global forth_pad
+forth_pad:
+    ADR X9, pad
+    STR X9, [X19, #-CELL]!
+    RET
+
+// HLD ( -- a-addr )  Push address of HLD variable (for pictured output).
+.global forth_hld
+forth_hld:
+    ADR X9, hld
+    STR X9, [X19, #-CELL]!
+    RET
+
 // ---------- TYPE ----------
 
 // TYPE ( c-addr u -- ) — write string to stdout
@@ -2824,7 +3083,16 @@ DEFWORD dict_type,       "type",       forth_type,        dict_does
 DEFWORD dict_pick,       "pick",       forth_pick,        dict_type
 DEFWORD dict_s_quote,    "s\"",        forth_s_quote,     dict_pick,      F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_dot_quote,  ".\"",        forth_dot_quote,   dict_s_quote,   F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_dot_quote
+DEFWORD dict_s_to_d,     "s>d",        forth_s_to_d,      dict_dot_quote
+DEFWORD dict_um_star,    "um*",        forth_um_star,     dict_s_to_d
+DEFWORD dict_m_star,     "m*",         forth_m_star,      dict_um_star
+DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
+DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
+DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
+DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
+.global dict_hld
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -2918,3 +3186,10 @@ leave_count:                        // Number of pending LEAVE patch addresses
 .global leave_stack
 leave_stack:                        // Patch addresses for pending LEAVEs
     .space MAX_LEAVES * 8
+.global hld
+hld:                                // Current HOLD pointer for pictured numeric output
+    .quad 0
+.equ PAD_SIZE, 68                   // 64 binary digits + sign + padding
+.global pad
+pad:
+    .space PAD_SIZE
