@@ -283,6 +283,139 @@ forth_divmod:
     mov %rax, (%r15)
     ret
 
+# ---------- Double-Cell Arithmetic ----------
+
+# S>D ( n -- d )  Sign-extend single to double.
+# Double-cell: high word on top, low word below.
+.global forth_s_to_d
+forth_s_to_d:
+    mov (%r15), %rax
+    cqo                         # RDX = sign extension of RAX
+    sub $CELL, %r15
+    mov %rax, CELL(%r15)        # low word (second)
+    mov %rdx, (%r15)            # high word on top
+    ret
+
+# UM* ( u1 u2 -- ud )  Unsigned multiply, 128-bit result.
+# Double-cell result: high word on top, low word below.
+.global forth_um_star
+forth_um_star:
+    mov (%r15), %rax            # u2
+    mulq CELL(%r15)             # RDX:RAX = RAX * u1 (unsigned)
+    mov %rax, CELL(%r15)        # low word (second)
+    mov %rdx, (%r15)            # high word (top)
+    ret
+
+# M* ( n1 n2 -- d )  Signed multiply, 128-bit result.
+# Double-cell result: high word on top, low word below.
+.global forth_m_star
+forth_m_star:
+    mov (%r15), %rax            # n2
+    imulq CELL(%r15)            # RDX:RAX = RAX * n1 (signed)
+    mov %rax, CELL(%r15)        # low word (second)
+    mov %rdx, (%r15)            # high word (top)
+    ret
+
+# UM/MOD ( ud u1 -- u2 u3 )  Unsigned double / single → remainder quotient.
+# u2 = remainder, u3 = quotient.
+# Division by zero returns 0 0.
+.global forth_um_divmod
+forth_um_divmod:
+    mov (%r15), %rcx            # divisor
+    test %rcx, %rcx
+    jz .Lum_divmod_zero
+    mov 2*CELL(%r15), %rax      # ud-low (deepest)
+    mov CELL(%r15), %rdx        # ud-high (second)
+    div %rcx                    # RAX = quotient, RDX = remainder
+    add $CELL, %r15             # drop one (3 in, 2 out)
+    mov %rdx, CELL(%r15)        # remainder (second)
+    mov %rax, (%r15)            # quotient (top)
+    ret
+.Lum_divmod_zero:
+    add $CELL, %r15
+    movq $0, CELL(%r15)
+    movq $0, (%r15)
+    ret
+
+# SM/REM ( d n1 -- n2 n3 )  Symmetric (truncating) signed divide.
+# n2 = remainder, n3 = quotient.
+# Division by zero returns 0 0.
+.global forth_sm_rem
+forth_sm_rem:
+    mov (%r15), %rcx            # divisor
+    test %rcx, %rcx
+    jz .Lsm_rem_zero
+    mov 2*CELL(%r15), %rax      # d-low (deepest)
+    mov CELL(%r15), %rdx        # d-high (second)
+    # Check for overflow: INT64_MIN / -1
+    cmp $-1, %rcx
+    jne .Lsm_rem_ok
+    test %rdx, %rdx
+    jnz .Lsm_rem_ok
+    movabs $0x8000000000000000, %rsi
+    cmp %rsi, %rax
+    je .Lsm_rem_overflow
+.Lsm_rem_ok:
+    idiv %rcx                   # RAX = quotient, RDX = remainder (truncating)
+    add $CELL, %r15
+    mov %rdx, CELL(%r15)        # remainder
+    mov %rax, (%r15)            # quotient
+    ret
+.Lsm_rem_zero:
+    add $CELL, %r15
+    movq $0, CELL(%r15)
+    movq $0, (%r15)
+    ret
+.Lsm_rem_overflow:
+    add $CELL, %r15
+    movq $0, CELL(%r15)         # remainder = 0
+    mov %rsi, (%r15)            # quotient = INT64_MIN
+    ret
+
+# FM/MOD ( d n1 -- n2 n3 )  Floored signed divide.
+# Like SM/REM but adjusts when remainder and divisor have different signs.
+# Division by zero returns 0 0.
+.global forth_fm_mod
+forth_fm_mod:
+    mov (%r15), %rcx            # divisor
+    test %rcx, %rcx
+    jz .Lfm_mod_zero
+    mov 2*CELL(%r15), %rax      # d-low (deepest)
+    mov CELL(%r15), %rdx        # d-high (second)
+    # Check for overflow: INT64_MIN / -1
+    cmp $-1, %rcx
+    jne .Lfm_mod_ok
+    test %rdx, %rdx
+    jnz .Lfm_mod_ok
+    movabs $0x8000000000000000, %rsi
+    cmp %rsi, %rax
+    je .Lfm_mod_overflow
+.Lfm_mod_ok:
+    idiv %rcx                   # RAX = quotient, RDX = remainder (truncating)
+    # Floor adjustment: if remainder != 0 and signs of remainder and divisor differ
+    test %rdx, %rdx
+    jz .Lfm_mod_done            # remainder == 0 → no adjustment
+    mov %rdx, %rsi
+    xor %rcx, %rsi              # sign bits differ?
+    jns .Lfm_mod_done           # same sign → no adjustment
+    add %rcx, %rdx              # remainder += divisor
+    dec %rax                    # quotient -= 1
+.Lfm_mod_done:
+    add $CELL, %r15
+    mov %rdx, CELL(%r15)        # remainder
+    mov %rax, (%r15)            # quotient
+    ret
+.Lfm_mod_zero:
+    add $CELL, %r15
+    movq $0, CELL(%r15)
+    movq $0, (%r15)
+    ret
+.Lfm_mod_overflow:
+    add $CELL, %r15
+    movq $0, CELL(%r15)
+    mov %rsi, (%r15)
+    ret
+
 # 1+ ( a -- a+1 )
 .global forth_one_plus
 forth_one_plus:
@@ -2175,6 +2308,32 @@ forth_does:
     # ; will close it with RET.
     ret
 
+# ---------- BASE / PAD ----------
+
+# BASE ( -- a-addr )  Push address of BASE variable.
+.global forth_base
+forth_base:
+    sub $CELL, %r15
+    lea base(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# PAD ( -- c-addr )  Push address of PAD scratch buffer.
+.global forth_pad
+forth_pad:
+    sub $CELL, %r15
+    lea pad(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# HLD ( -- a-addr )  Push address of HLD variable (for pictured output).
+.global forth_hld
+forth_hld:
+    sub $CELL, %r15
+    lea hld(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
 # ---------- TYPE ----------
 
 # TYPE ( c-addr u -- ) — write string to stdout
@@ -2669,7 +2828,16 @@ DEFWORD dict_type,       "type",       forth_type,        dict_does
 DEFWORD dict_pick,       "pick",       forth_pick,        dict_type
 DEFWORD dict_s_quote,    "s\"",        forth_s_quote,     dict_pick,      F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_dot_quote,  ".\"",        forth_dot_quote,   dict_s_quote,   F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_dot_quote
+DEFWORD dict_s_to_d,     "s>d",        forth_s_to_d,      dict_dot_quote
+DEFWORD dict_um_star,    "um*",        forth_um_star,     dict_s_to_d
+DEFWORD dict_m_star,     "m*",         forth_m_star,      dict_um_star
+DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
+DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
+DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
+DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
+.global dict_hld
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -2765,3 +2933,10 @@ leave_count:                        # Number of pending LEAVE patch addresses
 .global leave_stack
 leave_stack:                        # Patch addresses for pending LEAVEs
     .space MAX_LEAVES * 8
+.global hld
+hld:                                # Current HOLD pointer for pictured numeric output
+    .quad 0
+.equ PAD_SIZE, 68                   # 64 binary digits + sign + padding
+.global pad
+pad:
+    .space PAD_SIZE
