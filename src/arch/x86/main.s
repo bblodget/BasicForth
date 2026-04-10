@@ -15,14 +15,14 @@
 .global _start
 
 .equ CELL, 8
-.equ INPUT_BUF_SIZE, 80
+.equ INPUT_BUF_SIZE, 256
 
 _start:
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_constant(%rip), %r12   # LATEST
+    lea dict_unloop(%rip), %r12     # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)

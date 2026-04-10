@@ -265,6 +265,17 @@ assert_output "factorial"    ": fact dup 1 > if dup 1- recurse * then ; 5 fact .
 assert_output "factorial 6"  ": fact dup 1 > if dup 1- recurse * then ; 6 fact ."  "720"
 
 # =========================================================================
+section "DO / LOOP"
+# =========================================================================
+
+assert_output "do loop i"         ": test 5 0 do i . loop ; test"                "0 1 2 3 4"
+assert_output "+loop"             ": test 10 0 do i . 2 +loop ; test"            "0 2 4 6 8"
+assert_output "+loop non-exact"  ": test 10 0 do i . 3 +loop ; test"            "0 3 6 9"
+assert_output "do skip equal"     ": test 0 0 do 42 . loop ; test"               "ok"
+assert_output "nested do j"       ": test 2 0 do 2 0 do j . i . 32 emit loop loop ; test"  "0 0"
+assert_output "do loop sum"       ": sum 0 5 0 do i + loop ; sum ."              "10"
+
+# =========================================================================
 section "Defining Words"
 # =========================================================================
 

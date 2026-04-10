@@ -76,7 +76,8 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] FIND flag=2 for IMMEDIATE+COMPILE_ONLY words
 - [x] Integration tests for control flow (20 tests)
 - [x] Documentation (docs/Conditionals.md)
-- [ ] DO / LOOP / +LOOP / I / J — counted loops
+- [x] DO / LOOP / +LOOP / I / J / UNLOOP — counted loops
+- [x] +LOOP boundary-crossing detection (handles non-exact increments)
 - [ ] LEAVE — exit DO loop early
 
 ### 3c. More ASM Primitives — COMPLETE

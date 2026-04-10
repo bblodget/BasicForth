@@ -179,7 +179,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | EXECUTE   | ( xt -- )                                     | asm   | (x)    | Call execution token     |
 | LITERAL   | ( x -- )                                      | forth | ( )    | Compile inline literal   |
 | POSTPONE  | ( "name" -- )                                 | forth | ( )    | Compile compilation      |
-| RECURSE   | ( -- )                                        | forth | ( )    | Compile self-reference   |
+| RECURSE   | ( -- )                                        | asm   | (x)    | Compile call to self (IMMEDIATE) |
 | STATE     | ( -- a-addr )                                 | forth | ( )    | Compile/interpret flag   |
 | [         | ( -- )                                        | forth | ( )    | Switch to interpret      |
 | ]         | ( -- )                                        | forth | ( )    | Switch to compile        |
@@ -197,21 +197,22 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word   | Stack effect                                   | Layer | Status | Notes                   |
 |--------|------------------------------------------------|-------|--------|-------------------------|
-| IF     | ( flag -- )                                    | forth | ( )    | Compile 0BRANCH         |
-| ELSE   | ( -- )                                         | forth | ( )    | Compile BRANCH, patch IF |
-| THEN   | ( -- )                                         | forth | ( )    | Patch forward reference  |
-| BEGIN  | ( -- )                                         | forth | ( )    | Mark loop start          |
-| UNTIL  | ( flag -- )                                    | forth | ( )    | Compile 0BRANCH back    |
-| WHILE  | ( flag -- )                                    | forth | ( )    | Compile 0BRANCH         |
-| REPEAT | ( -- )                                         | forth | ( )    | Compile BRANCH, patch   |
-| DO     | ( limit index -- ) (R: -- loop-sys )           | forth | ( )    | Set up loop             |
-| LOOP   | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Increment and test      |
-| +LOOP  | ( n -- ) (R: loop-sys -- )                     | forth | ( )    | Add n and test          |
-| I      | ( -- n ) (R: loop-sys -- loop-sys )             | asm   | ( )    | Current loop index      |
-| J      | ( -- n )                                       | asm   | ( )    | Outer loop index        |
-| LEAVE  | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Exit loop               |
-| UNLOOP | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Discard loop params     |
-| EXIT   | ( -- )                                         | asm   | ( )    | Return from word (RET)  |
+| IF     | ( flag -- )                                    | asm   | (x)    | Inline conditional branch |
+| ELSE   | ( -- )                                         | asm   | (x)    | Inline branch, patch IF |
+| THEN   | ( -- )                                         | asm   | (x)    | Patch forward reference  |
+| BEGIN  | ( -- )                                         | asm   | (x)    | Mark loop start          |
+| UNTIL  | ( flag -- )                                    | asm   | (x)    | Inline conditional back  |
+| WHILE  | ( flag -- )                                    | asm   | (x)    | Inline conditional fwd   |
+| REPEAT | ( -- )                                         | asm   | (x)    | Inline branch, patch     |
+| DO     | ( limit index -- ) (R: -- limit index )        | asm   | (x)    | Inline loop setup        |
+| LOOP   | ( -- ) (R: limit index -- )                    | asm   | (x)    | Increment and test       |
+| +LOOP  | ( n -- ) (R: limit index -- )                  | asm   | (x)    | Boundary-crossing test   |
+| I      | ( -- n ) (R: limit index -- limit index )       | asm   | (x)    | Current loop index       |
+| J      | ( -- n )                                       | asm   | (x)    | Outer loop index         |
+| LEAVE  | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Exit loop (deferred)     |
+| UNLOOP | ( -- ) (R: limit index -- )                    | asm   | (x)    | Discard loop params      |
+| RECURSE| ( -- )                                         | asm   | (x)    | Compile call to self     |
+| EXIT   | ( -- )                                         | asm   | ( )    | Return from word (RET)   |
 
 ### Comments
 

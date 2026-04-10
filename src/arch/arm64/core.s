@@ -1147,23 +1147,27 @@ compile_branch:
 
 // patch_forward — patch a forward branch to jump to current HERE.
 // Input: X0 = address of the branch instruction to patch.
-// Detects B vs CBZ by checking bit 31.
+// Detects instruction type:
+//   B (unconditional): bits [31:29] = 000 → 26-bit offset in [25:0]
+//   CBZ / B.cond:      everything else    → 19-bit offset in [23:5]
 patch_forward:
     LDR W9, [X0]                   // read instruction
     SUB X10, X21, X0               // byte offset = HERE - instr_addr
     ASR X10, X10, #2               // word offset = byte_offset / 4
-    TBZ W9, #31, .Lpf_b            // bit 31 clear → B instruction
-    // CBZ: 19-bit offset in bits [23:5]
-    AND X10, X10, #0x7FFFF         // mask to 19 bits
-    BIC W9, W9, #(0x7FFFF << 5)    // clear old offset bits
-    ORR W9, W9, W10, LSL #5        // insert new offset
-    STR W9, [X0]
-    RET
-.Lpf_b:
+    // Check for B (unconditional): bits [31:29] = 000
+    LSR W11, W9, #29               // W11 = top 3 bits
+    CBNZ W11, .Lpf_19bit           // non-zero → B.cond or CBZ
     // B: 26-bit offset in bits [25:0]
     AND W10, W10, #0x3FFFFFF        // mask to 26 bits
     BIC W9, W9, #0x3FFFFFF          // clear old offset
     ORR W9, W9, W10                 // insert new offset
+    STR W9, [X0]
+    RET
+.Lpf_19bit:
+    // CBZ or B.cond: 19-bit offset in bits [23:5]
+    AND X10, X10, #0x7FFFF         // mask to 19 bits
+    BIC W9, W9, #(0x7FFFF << 5)    // clear old offset bits
+    ORR W9, W9, W10, LSL #5        // insert new offset
     STR W9, [X0]
     RET
 
@@ -2205,6 +2209,235 @@ forth_constant:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
+// All IMMEDIATE + COMPILE_ONLY. Compile inline machine code that
+// manipulates the return stack for counted loops.
+// Return stack layout during loop: [SP]=index, [SP+8]=limit (STP pair)
+
+// Instruction constants for DO/LOOP inline code
+.equ INSN_LDR_X9_X19,         0xF9400269   // LDR X9, [X19]
+.equ INSN_LDR_X10_X19_8,      0xF940066A   // LDR X10, [X19, #8]
+.equ INSN_ADD_X19_X19_16,     0x91004273   // ADD X19, X19, #16
+.equ INSN_CMP_X9_X10,         0xEB0A013F   // CMP X9, X10
+.equ INSN_BEQ_0,              0x54000000   // B.EQ +0 (placeholder)
+.equ INSN_STP_X9_X10_SP_PRE,  0xA9BF2BE9   // STP X9, X10, [SP, #-16]!
+.equ INSN_LDP_X9_X10_SP_POST, 0xA8C12BE9   // LDP X9, X10, [SP], #16
+.equ INSN_ADD_X9_1,           0x91000529   // ADD X9, X9, #1
+.equ INSN_ADD_X9_X11,         0x8B0B0129   // ADD X9, X9, X11
+.equ INSN_LDR_X11_X19_POST8,  0xF840866B   // LDR X11, [X19], #8
+// Loop params are on top of SP (DO pushes above prolog frame).
+// I reads [SP] for index. J reads [SP+16] to skip inner pair.
+.equ INSN_LDR_X9_SP,          0xF94003E9   // LDR X9, [SP]
+.equ INSN_LDR_X9_SP_16,       0xF9400BE9   // LDR X9, [SP, #16]
+.equ INSN_STR_X9_X19_PRE,     0xF81F8E69   // STR X9, [X19, #-8]!
+.equ INSN_ADD_SP_16,           0x910043FF   // ADD SP, SP, #16
+
+// compile_do_inline — emit DO's inline code (24 bytes, 6 instructions).
+// Returns: X0 = address of B.EQ instruction (for LOOP to patch).
+compile_do_inline:
+    CHECK_DICT 24
+    MOV W9, #(INSN_LDR_X9_X19 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X9_X19 >> 16), LSL #16
+    STR W9, [X21], #4
+    MOV W9, #(INSN_LDR_X10_X19_8 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X10_X19_8 >> 16), LSL #16
+    STR W9, [X21], #4
+    MOV W9, #(INSN_ADD_X19_X19_16 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_X19_X19_16 >> 16), LSL #16
+    STR W9, [X21], #4
+    MOV W9, #(INSN_CMP_X9_X10 & 0xFFFF)
+    MOVK W9, #(INSN_CMP_X9_X10 >> 16), LSL #16
+    STR W9, [X21], #4
+    // B.EQ placeholder
+    MOV W9, #(INSN_BEQ_0 & 0xFFFF)
+    MOVK W9, #(INSN_BEQ_0 >> 16), LSL #16
+    MOV X0, X21                     // X0 = address of B.EQ (for patching)
+    STR W9, [X21], #4
+    // STP X9, X10, [SP, #-16]!
+    MOV W9, #(INSN_STP_X9_X10_SP_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STP_X9_X10_SP_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    RET
+
+// compile_loop_inline — emit LOOP's inline code (24 bytes, 6 instructions).
+// Input: X0 = loop body address (backward target).
+// Loop params are on top of SP (pushed by DO above the prolog frame).
+// LDP pops them. If loop continues, STP pushes them back.
+// When done (B.EQ taken), the LDP has already removed them.
+compile_loop_inline:
+    CHECK_DICT 24
+    STP X29, X30, [SP, #-16]!
+    MOV X23, X0
+    // LDP X9, X10, [SP], #16  (pop index + limit)
+    MOV W9, #(INSN_LDP_X9_X10_SP_POST & 0xFFFF)
+    MOVK W9, #(INSN_LDP_X9_X10_SP_POST >> 16), LSL #16
+    STR W9, [X21], #4
+    // ADD X9, X9, #1
+    MOV W9, #(INSN_ADD_X9_1 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_X9_1 >> 16), LSL #16
+    STR W9, [X21], #4
+    // CMP X9, X10
+    MOV W9, #(INSN_CMP_X9_X10 & 0xFFFF)
+    MOVK W9, #(INSN_CMP_X9_X10 >> 16), LSL #16
+    STR W9, [X21], #4
+    // B.EQ +3 (skip STP + B = done, loop params already popped)
+    MOV W9, #0x0060
+    MOVK W9, #0x5400, LSL #16
+    STR W9, [X21], #4
+    // STP X9, X10, [SP, #-16]! (push back)
+    MOV W9, #(INSN_STP_X9_X10_SP_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STP_X9_X10_SP_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    // B loop_body (backward)
+    MOV X0, X23
+    BL compile_branch_back
+    LDP X29, X30, [SP], #16
+    RET
+
+// compile_plus_loop_inline — emit +LOOP's inline code (36 bytes, 9 instructions).
+// Input: X0 = loop body address (backward target).
+// Uses boundary-crossing detection: exit when (old-limit) XOR (new-limit)
+// has the sign bit set (index crossed the limit in either direction).
+// Uses X16, X17 as scratch (intra-procedure-call registers, caller-saved).
+.equ INSN_SUB_X16_X9_X10,  0xCB0A0130   // SUB X16, X9, X10
+.equ INSN_SUB_X17_X9_X10,  0xCB0A0131   // SUB X17, X9, X10
+.equ INSN_EOR_X16_X16_X17, 0xCA110210   // EOR X16, X16, X17
+.equ INSN_TBNZ_X16_63_2,   0xB7F80050   // TBNZ X16, #63, +2 (skip STP+B)
+compile_plus_loop_inline:
+    CHECK_DICT 36
+    STP X29, X30, [SP, #-16]!
+    MOV X23, X0
+    // LDP X9, X10, [SP], #16  (pop old index + limit)
+    MOV W9, #(INSN_LDP_X9_X10_SP_POST & 0xFFFF)
+    MOVK W9, #(INSN_LDP_X9_X10_SP_POST >> 16), LSL #16
+    STR W9, [X21], #4
+    // LDR X11, [X19], #8  (pop increment from data stack)
+    MOV W9, #(INSN_LDR_X11_X19_POST8 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X11_X19_POST8 >> 16), LSL #16
+    STR W9, [X21], #4
+    // SUB X16, X9, X10  (old - limit, before adding increment)
+    MOV W9, #(INSN_SUB_X16_X9_X10 & 0xFFFF)
+    MOVK W9, #(INSN_SUB_X16_X9_X10 >> 16), LSL #16
+    STR W9, [X21], #4
+    // ADD X9, X9, X11  (new index = old + increment)
+    MOV W9, #(INSN_ADD_X9_X11 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_X9_X11 >> 16), LSL #16
+    STR W9, [X21], #4
+    // SUB X17, X9, X10  (new - limit)
+    MOV W9, #(INSN_SUB_X17_X9_X10 & 0xFFFF)
+    MOVK W9, #(INSN_SUB_X17_X9_X10 >> 16), LSL #16
+    STR W9, [X21], #4
+    // EOR X16, X16, X17  (boundary cross check)
+    MOV W9, #(INSN_EOR_X16_X16_X17 & 0xFFFF)
+    MOVK W9, #(INSN_EOR_X16_X16_X17 >> 16), LSL #16
+    STR W9, [X21], #4
+    // TBNZ X16, #63, +2  (sign bit set → crossed → skip STP+B)
+    MOV W9, #(INSN_TBNZ_X16_63_2 & 0xFFFF)
+    MOVK W9, #(INSN_TBNZ_X16_63_2 >> 16), LSL #16
+    STR W9, [X21], #4
+    // STP X9, X10, [SP, #-16]! (push back new index + limit)
+    MOV W9, #(INSN_STP_X9_X10_SP_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STP_X9_X10_SP_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    // B loop_body
+    MOV X0, X23
+    BL compile_branch_back
+    LDP X29, X30, [SP], #16
+    RET
+
+// DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
+.global forth_do
+forth_do:
+    STP X29, X30, [SP, #-16]!
+    BL compile_do_inline            // X0 = B.EQ patch address
+    // Push (skip-patch CF_ORIG) then (body-addr CF_DEST)
+    SUB X19, X19, #4*CELL
+    STR X0, [X19, #3*CELL]         // skip-patch address
+    MOV X9, #CF_ORIG
+    STR X9, [X19, #2*CELL]         // tag
+    STR X21, [X19, #CELL]          // body address = HERE
+    MOV X9, #CF_DEST
+    STR X9, [X19]                   // tag
+    LDP X29, X30, [SP], #16
+    RET
+
+// LOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_loop
+forth_loop:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X0, #CF_DEST
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X23, [X19], #CELL          // body address
+    MOV X0, #CF_ORIG
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X24, [X19], #CELL          // skip-patch address
+    MOV X0, X23                     // body address
+    BL compile_loop_inline
+    MOV X0, X24                     // skip-patch address
+    BL patch_forward
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// +LOOP ( n -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_plus_loop
+forth_plus_loop:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X0, #CF_DEST
+    BL cf_check_tag
+    ADD X19, X19, #CELL
+    LDR X23, [X19], #CELL
+    MOV X0, #CF_ORIG
+    BL cf_check_tag
+    ADD X19, X19, #CELL
+    LDR X24, [X19], #CELL
+    MOV X0, X23
+    BL compile_plus_loop_inline
+    MOV X0, X24
+    BL patch_forward
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// I ( -- index )  IMMEDIATE, COMPILE_ONLY
+.global forth_i
+forth_i:
+    CHECK_DICT 8
+    MOV W9, #(INSN_LDR_X9_SP & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X9_SP >> 16), LSL #16
+    STR W9, [X21], #4
+    MOV W9, #(INSN_STR_X9_X19_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STR_X9_X19_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    RET
+
+// J ( -- index )  IMMEDIATE, COMPILE_ONLY
+.global forth_j
+forth_j:
+    CHECK_DICT 8
+    MOV W9, #(INSN_LDR_X9_SP_16 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X9_SP_16 >> 16), LSL #16
+    STR W9, [X21], #4
+    MOV W9, #(INSN_STR_X9_X19_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STR_X9_X19_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    RET
+
+// UNLOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+// Loop params are on top of SP (above prolog frame).
+// Just drop them with ADD SP, SP, #16.
+.global forth_unloop
+forth_unloop:
+    CHECK_DICT 4
+    MOV W9, #(INSN_ADD_SP_16 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_SP_16 >> 16), LSL #16
+    STR W9, [X21], #4
+    RET
+
 // ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -2278,7 +2511,13 @@ DEFWORD dict_comma,      ",",          forth_comma,       dict_allot
 DEFWORD dict_c_comma,    "c,",         forth_c_comma,     dict_comma
 DEFWORD dict_create,     "create",     forth_create,      dict_c_comma
 DEFWORD dict_constant,   "constant",   forth_constant,    dict_create
-.global dict_constant
+DEFWORD dict_do,         "do",         forth_do,          dict_constant,  F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_loop,       "loop",       forth_loop,        dict_do,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_plus_loop,  "+loop",      forth_plus_loop,   dict_loop,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_unloop
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

@@ -2117,6 +2117,204 @@ forth_constant:
     pop %rbx
     ret
 
+# ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
+# All IMMEDIATE + COMPILE_ONLY. Compile inline machine code that
+# manipulates the return stack for counted loops.
+# Return stack layout during loop: [RSP]=index, [RSP+8]=limit
+
+# compile_do_inline — emit DO's inline code (22 bytes).
+# Returns: RAX = address of JE offset field (for LOOP to patch).
+compile_do_inline:
+    CHECK_DICT 22
+    movb $0x49, 0(%r13)            # mov (%r15), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x07, 2(%r13)
+    movb $0x49, 3(%r13)            # mov 8(%r15), %rdx
+    movb $0x8B, 4(%r13)
+    movb $0x57, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x49, 7(%r13)            # add $16, %r15
+    movb $0x83, 8(%r13)
+    movb $0xC7, 9(%r13)
+    movb $0x10, 10(%r13)
+    movb $0x48, 11(%r13)           # cmp %rax, %rdx
+    movb $0x39, 12(%r13)
+    movb $0xC2, 13(%r13)
+    movb $0x0F, 14(%r13)           # je rel32
+    movb $0x84, 15(%r13)
+    movl $0, 16(%r13)              # placeholder offset
+    movb $0x52, 20(%r13)           # push %rdx (limit)
+    movb $0x50, 21(%r13)           # push %rax (index)
+    lea 16(%r13), %rax             # RAX = JE offset field address
+    add $22, %r13
+    ret
+
+# compile_loop_inline — emit LOOP's inline code (17 bytes).
+# Input: RAX = loop body address (backward target).
+compile_loop_inline:
+    CHECK_DICT 17
+    movb $0x58, 0(%r13)            # pop %rax (index)
+    movb $0x5A, 1(%r13)            # pop %rdx (limit)
+    movb $0x48, 2(%r13)            # inc %rax
+    movb $0xFF, 3(%r13)
+    movb $0xC0, 4(%r13)
+    movb $0x48, 5(%r13)            # cmp %rdx, %rax
+    movb $0x39, 6(%r13)
+    movb $0xC2, 7(%r13)
+    movb $0x74, 8(%r13)            # je +7 (skip push+push+jmp)
+    movb $0x07, 9(%r13)
+    movb $0x52, 10(%r13)           # push %rdx (limit)
+    movb $0x50, 11(%r13)           # push %rax (index)
+    movb $0xE9, 12(%r13)           # jmp rel32
+    lea 17(%r13), %rcx             # address after jmp
+    sub %rcx, %rax                 # offset = target - after
+    mov %eax, 13(%r13)
+    add $17, %r13
+    ret
+
+# compile_plus_loop_inline — emit +LOOP's inline code (36 bytes).
+# Input: RAX = loop body address (backward target).
+# Uses boundary-crossing detection: exit when (old-limit) XOR (new-limit)
+# has the sign bit set (index crossed the limit in either direction).
+compile_plus_loop_inline:
+    CHECK_DICT 36
+    movb $0x58, 0(%r13)            # pop %rax (old index)
+    movb $0x5A, 1(%r13)            # pop %rdx (limit)
+    movb $0x49, 2(%r13)            # mov (%r15), %rcx  (increment)
+    movb $0x8B, 3(%r13)
+    movb $0x0F, 4(%r13)
+    movb $0x49, 5(%r13)            # add $8, %r15  (pop increment)
+    movb $0x83, 6(%r13)
+    movb $0xC7, 7(%r13)
+    movb $0x08, 8(%r13)
+    movb $0x48, 9(%r13)            # mov %rax, %rsi  (save old index)
+    movb $0x89, 10(%r13)
+    movb $0xC6, 11(%r13)
+    movb $0x48, 12(%r13)           # sub %rdx, %rsi  (old - limit)
+    movb $0x29, 13(%r13)
+    movb $0xD6, 14(%r13)
+    movb $0x48, 15(%r13)           # add %rcx, %rax  (new index)
+    movb $0x01, 16(%r13)
+    movb $0xC8, 17(%r13)
+    movb $0x48, 18(%r13)           # mov %rax, %rdi  (new index copy)
+    movb $0x89, 19(%r13)
+    movb $0xC7, 20(%r13)
+    movb $0x48, 21(%r13)           # sub %rdx, %rdi  (new - limit)
+    movb $0x29, 22(%r13)
+    movb $0xD7, 23(%r13)
+    movb $0x48, 24(%r13)           # xor %rdi, %rsi  (cross check)
+    movb $0x31, 25(%r13)
+    movb $0xFE, 26(%r13)
+    movb $0x78, 27(%r13)           # js +7  (sign set → boundary crossed)
+    movb $0x07, 28(%r13)
+    movb $0x52, 29(%r13)           # push %rdx (limit)
+    movb $0x50, 30(%r13)           # push %rax (new index)
+    movb $0xE9, 31(%r13)           # jmp rel32
+    lea 36(%r13), %rcx
+    sub %rcx, %rax
+    mov %eax, 32(%r13)
+    add $36, %r13
+    ret
+
+# DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
+.global forth_do
+forth_do:
+    call compile_do_inline          # RAX = skip-patch address
+    sub $4*CELL, %r15
+    mov %rax, 3*CELL(%r15)         # skip-patch address
+    movq $CF_ORIG, 2*CELL(%r15)    # tag
+    mov %r13, CELL(%r15)           # body address = HERE
+    movq $CF_DEST, (%r15)          # tag
+    ret
+
+# LOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_loop
+forth_loop:
+    mov $CF_DEST, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # body address
+    add $CELL, %r15
+    push %rax                       # save body address
+    mov $CF_ORIG, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rbx                # skip-patch address
+    add $CELL, %r15
+    pop %rax                        # restore body address
+    call compile_loop_inline
+    mov %rbx, %rax
+    call patch_forward              # patch DO's JE to HERE
+    ret
+
+# +LOOP ( n -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_plus_loop
+forth_plus_loop:
+    mov $CF_DEST, %rax
+    call cf_check_tag
+    add $CELL, %r15
+    mov (%r15), %rax
+    add $CELL, %r15
+    push %rax
+    mov $CF_ORIG, %rax
+    call cf_check_tag
+    add $CELL, %r15
+    mov (%r15), %rbx
+    add $CELL, %r15
+    pop %rax
+    call compile_plus_loop_inline
+    mov %rbx, %rax
+    call patch_forward
+    ret
+
+# I ( -- index )  IMMEDIATE, COMPILE_ONLY
+.global forth_i
+forth_i:
+    CHECK_DICT 11
+    movb $0x48, 0(%r13)            # mov (%rsp), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x04, 2(%r13)
+    movb $0x24, 3(%r13)
+    movb $0x49, 4(%r13)            # sub $8, %r15
+    movb $0x83, 5(%r13)
+    movb $0xEF, 6(%r13)
+    movb $0x08, 7(%r13)
+    movb $0x49, 8(%r13)            # mov %rax, (%r15)
+    movb $0x89, 9(%r13)
+    movb $0x07, 10(%r13)
+    add $11, %r13
+    ret
+
+# J ( -- index )  IMMEDIATE, COMPILE_ONLY
+.global forth_j
+forth_j:
+    CHECK_DICT 12
+    movb $0x48, 0(%r13)            # mov 16(%rsp), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x44, 2(%r13)
+    movb $0x24, 3(%r13)
+    movb $0x10, 4(%r13)
+    movb $0x49, 5(%r13)            # sub $8, %r15
+    movb $0x83, 6(%r13)
+    movb $0xEF, 7(%r13)
+    movb $0x08, 8(%r13)
+    movb $0x49, 9(%r13)            # mov %rax, (%r15)
+    movb $0x89, 10(%r13)
+    movb $0x07, 11(%r13)
+    add $12, %r13
+    ret
+
+# UNLOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+.global forth_unloop
+forth_unloop:
+    CHECK_DICT 4
+    movb $0x48, 0(%r13)            # add $16, %rsp
+    movb $0x83, 1(%r13)
+    movb $0xC4, 2(%r13)
+    movb $0x10, 3(%r13)
+    add $4, %r13
+    ret
+
 # ---------- Static Dictionary ----------
 
 DEFWORD dict_dup,     "dup",     forth_dup,     0
@@ -2190,7 +2388,13 @@ DEFWORD dict_comma,      ",",          forth_comma,       dict_allot
 DEFWORD dict_c_comma,    "c,",         forth_c_comma,     dict_comma
 DEFWORD dict_create,     "create",     forth_create,      dict_c_comma
 DEFWORD dict_constant,   "constant",   forth_constant,    dict_create
-.global dict_constant
+DEFWORD dict_do,         "do",         forth_do,          dict_constant,  F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_loop,       "loop",       forth_loop,        dict_do,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_plus_loop,  "+loop",      forth_plus_loop,   dict_loop,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_unloop
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

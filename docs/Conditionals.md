@@ -172,6 +172,59 @@ Runtime: always loop back to BEGIN.
 Compile: emit a CALL/BL to the current definition's code entry point.
 Runtime: call self recursively.
 
+### DO ( limit index -- ) (R: -- limit index)
+Compile: emit inline code to pop limit and index from data stack,
+compare, skip loop body if equal, push to return stack.
+Pushes two items to the compile-time stack for LOOP to consume.
+Runtime: set up counted loop. If limit == index, skip the body entirely.
+
+### LOOP ( -- ) (R: limit index -- | limit index' )
+Compile: emit inline code to pop loop params from return stack,
+increment index by 1, compare with limit. If equal, loop is done
+(params stay popped). If not, push back and branch to loop body.
+Patches DO's skip-if-equal forward branch to land after LOOP.
+Runtime: increment and test counted loop.
+
+### +LOOP ( n -- ) (R: limit index -- | limit index' )
+Compile: like LOOP but pops increment from data stack instead of
+using 1. Uses boundary-crossing detection: the loop terminates when
+the index crosses the limit boundary, computed as
+`(old_index - limit) XOR (new_index - limit)` having the sign bit set.
+This correctly handles non-unit increments that don't land exactly on
+the limit (e.g., `10 0 DO ... 3 +LOOP` exits after 0, 3, 6, 9).
+
+### I ( -- index )
+Compile: emit inline code to read the loop index from the return stack
+and push it to the data stack.
+Runtime: push current loop index. On x86-64 reads from `[RSP]`. On
+ARM64 reads from `[SP]` (loop params are above the prolog frame).
+
+### J ( -- index )
+Compile: emit inline code to read the outer loop's index from the
+return stack (past the inner loop's params).
+Runtime: push outer loop index. Reads from `[RSP+16]` (x86-64) or
+`[SP+16]` (ARM64).
+
+### UNLOOP ( -- ) (R: limit index -- )
+Compile: emit inline code to drop loop parameters from the return stack.
+Runtime: remove loop params without testing. Required before returning
+early from a word containing a DO loop, to clean up the return stack.
+
+## Return Stack Layout (DO/LOOP)
+
+DO pushes limit and index onto the return stack as a pair:
+
+```
+x86-64:                  ARM64:
+[RSP+0]  = index        [SP+0]  = index    ← I reads here
+[RSP+8]  = limit        [SP+8]  = limit
+[RSP+16] = ...           [SP+16] = ...      ← J reads here (outer loop)
+```
+
+On ARM64, DO uses `STP` to push both values as a 16-byte aligned pair.
+The colon definition's prolog frame (X29/X30) sits below the loop params
+since DO pushes above it.
+
 ## Examples
 
 ```forth
@@ -190,4 +243,22 @@ Runtime: call self recursively.
 
 \ Factorial using RECURSE
 : fact  dup 1 > if dup 1- recurse * then ;
+
+\ DO/LOOP basics
+: stars  0 do 42 emit loop ;
+5 stars    \ prints *****
+
+\ I and J in nested loops
+: table  3 0 do  3 0 do  j . i . 32 emit  loop cr loop ;
+
+\ +LOOP with non-unit increment
+: evens  10 0 do i . 2 +loop ;   \ prints 0 2 4 6 8
+
+\ Factorial with DO/LOOP
+: fact  1 swap 1+ 1 do i * loop ;
+6 fact .   \ prints 720
+
+\ Sum of 0..N-1
+: sum  0 swap 0 do i + loop ;
+10 sum .   \ prints 45
 ```
