@@ -339,6 +339,14 @@ assert_output "variable"           "variable x 99 x ! x @ ."                "99"
 assert_output "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
 
 # =========================================================================
+section "DOES>"
+# =========================================================================
+
+assert_output "does> constant"    ": myconst create , does> @ ; 42 myconst answer answer ."  "42"
+assert_output "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 myconst y x y + ."  "30"
+assert_output "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
+
+# =========================================================================
 section "core.fs Words"
 # =========================================================================
 

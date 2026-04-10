@@ -104,7 +104,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] CONSTANT ( x "name" -- ) — compile push-value code
 - [x] VARIABLE ( "name" -- ) — defined in core.fs as CREATE 1 CELLS ALLOT
 - [x] build_header refactor — shared by :, CREATE, CONSTANT
-- [ ] DOES> — attach runtime behavior to CREATE'd words (deferred)
+- [x] DOES> — attach runtime behavior to CREATE'd words
 
 ### 3e. core.fs Bootstrap — IN PROGRESS
 

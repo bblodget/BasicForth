@@ -2057,6 +2057,12 @@ forth_create:
     call compile_literal            # emit CALL forth_lit + 0
     lea -8(%r13), %rbx              # RBX = address of inline value (to patch)
     call compile_ret                # emit RET
+    # Reserve 4 NOP bytes for DOES> to overwrite (RET + 4 NOPs = 5 bytes for JMP rel32)
+    movb $0x90, 0(%r13)
+    movb $0x90, 1(%r13)
+    movb $0x90, 2(%r13)
+    movb $0x90, 3(%r13)
+    add $4, %r13
 
     # Align HERE to CELL for data field
     add $7, %r13
@@ -2070,7 +2076,7 @@ forth_create:
     lea 4(%rax), %rcx              # code start
     mov %rbx, %rdx                 # end of code = literal value addr
     add $8, %rdx                   # + 8 bytes for the value itself
-    add $1, %rdx                   # + 1 byte for RET
+    add $5, %rdx                   # + 5 bytes for RET + 4 NOPs
     sub %rcx, %rdx
     mov %edx, (%rax)               # write code_len
 
@@ -2124,6 +2130,44 @@ forth_constant:
     mov %rax, (%r15)                # push it back onto data stack
     pop %rbp
     pop %rbx
+    ret
+
+# ---------- DOES> ----------
+
+# (DOES>) runtime helper — called during defining word execution.
+# Patches the most recently CREATE'd word (via colon_code_len_addr)
+# to JMP to the does-body instead of RETurning.
+# does_body = our return address + 1 (skip the RET byte after CALL us).
+.global forth_does_runtime
+forth_does_runtime:
+    push %rbx
+    # Get does_body address from our return address
+    mov 8(%rsp), %rax              # return addr (8 = 1 pushed reg)
+    lea 1(%rax), %rbx              # RBX = does_body (skip the 1-byte RET)
+    # Get CREATE'd word's code start from colon_code_len_addr
+    mov colon_code_len_addr(%rip), %rax
+    lea 4(%rax), %rdi              # RDI = code_start
+    # Patch offset 13 (RET + NOPs) with JMP rel32 to does_body
+    movb $0xE9, 13(%rdi)          # JMP opcode
+    lea 18(%rdi), %rcx            # address after JMP (offset 13 + 5 = 18)
+    mov %rbx, %rax
+    sub %rcx, %rax                # offset = does_body - after_jmp
+    mov %eax, 14(%rdi)            # write rel32
+    pop %rbx
+    ret
+
+# DOES> ( -- )  IMMEDIATE, COMPILE_ONLY
+# Compile-time: emit CALL (does>) + RET, then continue compiling
+# the does-body. ; will close the does-body with its own RET.
+.global forth_does
+forth_does:
+    # Compile CALL forth_does_runtime
+    lea forth_does_runtime(%rip), %rax
+    call compile_call
+    # Compile RET (ends defining word's normal path)
+    call compile_ret
+    # Does-body starts at HERE now. Subsequent words compile into it.
+    # ; will close it with RET.
     ret
 
 # ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
@@ -2492,7 +2536,8 @@ DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMME
 DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_leave
+DEFWORD dict_does,       "does>",      forth_does,        dict_leave,     F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_does
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

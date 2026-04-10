@@ -171,7 +171,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | :         | ( "name" -- )                                 | asm   | (x)    | Begin compilation        |
 | ;         | ( -- )                                        | asm   | (x)    | End compilation (IMMEDIATE) |
 | CREATE    | ( "name" -- )                                 | asm   | (x)    | Compiles push-data-addr  |
-| DOES>     | ( -- a-addr )                                 | asm   | ( )    | Define runtime behavior  |
+| DOES>     | ( -- a-addr )                                 | asm   | (x)    | Attach runtime to CREATE'd word |
 | VARIABLE  | ( "name" -- )                                 | forth | (x)    | CREATE 1 CELLS ALLOT (core.fs) |
 | CONSTANT  | ( x "name" -- )                               | asm   | (x)    | Compiles push-value code |
 | IMMEDIATE | ( -- )                                        | asm   | (x)    | Mark word as immediate   |

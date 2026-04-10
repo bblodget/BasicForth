@@ -2225,6 +2225,57 @@ forth_constant:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- DOES> ----------
+
+// (DOES>) runtime helper — called during defining word execution.
+// Patches the most recently CREATE'd word (via colon_code_len_addr)
+// to B (branch) to the does-body instead of RETurning.
+// does_body = X30 + 8 (skip LDP + RET compiled after BL to us).
+.global forth_does_runtime
+forth_does_runtime:
+    ADD X9, X30, #8                 // X9 = does_body (skip LDP 4 + RET 4)
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X23, X9                     // X23 = does_body (callee-saved)
+    // Get CREATE'd word's code start from colon_code_len_addr
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]                    // X9 = code_len field address
+    ADD X24, X9, #4                 // X24 = code_start
+    // Patch: replace RET at offset 20 with B does_body
+    ADD X10, X24, #20              // X10 = address of RET instruction
+    SUB X11, X23, X10              // byte offset = does_body - patch_addr
+    ASR X11, X11, #2               // word offset (B uses word offset)
+    AND W11, W11, #0x3FFFFFF       // mask to 26 bits
+    MOV W12, #0x0000
+    MOVK W12, #0x1400, LSL #16    // B opcode base (0x14000000)
+    ORR W12, W12, W11             // B does_body
+    STR W12, [X10]                 // write patched instruction
+    // Flush I-cache for the patched instruction
+    MOV X0, X10
+    ADD X1, X10, #4
+    BL platform_flush_icache
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// DOES> ( -- )  IMMEDIATE, COMPILE_ONLY
+// Compile-time: emit BL (does>) + epilog, then compile prolog for
+// the does-body. ; will close the does-body with its own epilog+RET.
+.global forth_does
+forth_does:
+    STP X29, X30, [SP, #-16]!
+    // Compile BL forth_does_runtime
+    ADR X0, forth_does_runtime
+    BL compile_call
+    // Compile epilog+RET (ends defining word's normal path)
+    BL compile_ret
+    // Compile prolog for does-body (needs its own frame for BL calls)
+    BL compile_prolog
+    // Does-body starts here. Subsequent words compile into it.
+    // ; will close it with epilog+RET.
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- DO / LOOP / +LOOP / I / J / UNLOOP ----------
 // All IMMEDIATE + COMPILE_ONLY. Compile inline machine code that
 // manipulates the return stack for counted loops.
@@ -2617,7 +2668,8 @@ DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMME
 DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_leave
+DEFWORD dict_does,       "does>",      forth_does,        dict_leave,     F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_does
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
