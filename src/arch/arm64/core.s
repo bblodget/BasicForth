@@ -1013,6 +1013,8 @@ msg_cf_mismatch: .ascii "mismatched control flow\n"
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
+sq_unterminated_name: .ascii "unterminated string"
+.equ sq_unterminated_name_len, . - sq_unterminated_name
 .text
 
 // ---------- LIT (runtime) ----------
@@ -1918,7 +1920,17 @@ cf_check_tag:
     B.NE .Lcf_mismatch
     RET
 .Lcf_mismatch:
-    // Restore compilation state
+    // Set error token for control-flow mismatch
+    ADR X9, err_token_addr
+    ADR X10, cf_mismatch_name
+    STR X10, [X9]
+    ADR X9, err_token_len
+    MOV X10, #cf_mismatch_name_len
+    STR X10, [X9]
+    // Fall through to abort
+.Lcf_abort:
+    // Abort compilation — restore state and longjmp.
+    // Caller must set err_token_addr/len before jumping here.
     ADR X9, colon_dsp
     LDR X19, [X9]                   // restore DSP
     ADR X9, saved_latest
@@ -1931,13 +1943,6 @@ cf_check_tag:
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count
     STR XZR, [X9]                   // reset leave chain
-    // Set error token for caller to report
-    ADR X9, err_token_addr
-    ADR X10, cf_mismatch_name
-    STR X10, [X9]
-    ADR X9, err_token_len
-    MOV X10, #cf_mismatch_name_len
-    STR X10, [X9]
     // Longjmp back to forth_interpret_line's error return
     ADR X9, il_sp
     LDR X10, [X9]
@@ -2391,17 +2396,17 @@ compile_s_quote:
     RET
 .Lsq_empty:
 .Lsq_no_close:
-    // Empty string or no closing quote
-    ADR X9, to_in
-    STR X24, [X9]
-    ADR X0, forth_s_quote_runtime
-    BL compile_call
-    STR XZR, [X21]              // length = 0
-    ADD X21, X21, #CELL
+    // No closing quote — abort compilation
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
-    RET
+    ADR X9, err_token_addr
+    ADR X10, sq_unterminated_name
+    STR X10, [X9]
+    ADR X9, err_token_len
+    MOV X10, #sq_unterminated_name_len
+    STR X10, [X9]
+    B .Lcf_abort
 
 // S" ( -- c-addr u )  IMMEDIATE, COMPILE_ONLY
 .global forth_s_quote

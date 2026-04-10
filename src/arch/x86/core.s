@@ -1057,6 +1057,8 @@ msg_cf_mismatch: .ascii "mismatched control flow\n"
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
+sq_unterminated_name: .ascii "unterminated string"
+.equ sq_unterminated_name_len, . - sq_unterminated_name
 .text
 
 # ---------- LIT (runtime) ----------
@@ -1846,17 +1848,20 @@ cf_check_tag:
     jne .Lcf_mismatch
     ret
 .Lcf_mismatch:
-    # Restore state first (before platform_write which may clobber things)
+    # Set error token for control-flow mismatch
+    lea cf_mismatch_name(%rip), %rax
+    mov %rax, err_token_addr(%rip)
+    movq $cf_mismatch_name_len, err_token_len(%rip)
+    # Fall through to abort
+.Lcf_abort:
+    # Abort compilation — restore state and longjmp.
+    # Caller must set err_token_addr/len before jumping here.
     mov colon_dsp(%rip), %r15       # restore DSP
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
     movq $0, state(%rip)            # interpret mode
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
-    # Set error token for caller to report
-    lea cf_mismatch_name(%rip), %rax
-    mov %rax, err_token_addr(%rip)
-    movq $cf_mismatch_name_len, err_token_len(%rip)
     # Longjmp back to forth_interpret_line's error return
     mov il_rsp(%rip), %rsp          # unwind to interpret_line's frame
     mov $1, %eax                    # return error
@@ -2270,20 +2275,13 @@ compile_s_quote:
     ret
 .Lsq_empty:
 .Lsq_no_close:
-    # Empty string or no closing quote — compile empty string
-    xor %eax, %eax
-    push %rax
-    push %rax
-    lea forth_s_quote_runtime(%rip), %rax
-    call compile_call
-    pop %rax
-    pop %rax
-    movq $0, (%r13)             # length = 0
-    add $CELL, %r13
-    mov %rbx, to_in(%rip)
+    # No closing quote — abort compilation
     pop %rbp
     pop %rbx
-    ret
+    lea sq_unterminated_name(%rip), %rax
+    mov %rax, err_token_addr(%rip)
+    movq $sq_unterminated_name_len, err_token_len(%rip)
+    jmp .Lcf_abort
 
 # S" ( -- c-addr u )  IMMEDIATE, COMPILE_ONLY
 .global forth_s_quote

@@ -354,6 +354,8 @@ assert_output "type"              ': test s" Hello" type ; test'                
 assert_output "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
 assert_output "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
 assert_output "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
+assert_error  "s-quote no close" ': test s" no closing quote ;'                "unterminated string"
+assert_error  "dot-quote no close" ': test ." no closing quote ;'              "unterminated string"
 
 # =========================================================================
 section "PICK"
