@@ -1398,6 +1398,10 @@ forth_semicolon:
     LDR X21, [X9]
     ADR X9, state
     STR XZR, [X9]
+    ADR X9, do_depth
+    STR XZR, [X9]
+    ADR X9, leave_count
+    STR XZR, [X9]
     LDP X29, X30, [SP], #16
     RET
 
@@ -1561,10 +1565,16 @@ forth_interpret_line:
     LDR X10, [X9]
     CBZ X10, .Lil_err_return
     STR XZR, [X9]                   // reset to interpret mode
+    ADR X9, colon_dsp
+    LDR X19, [X9]                   // restore DSP (drop compile-time stack)
     ADR X9, saved_latest
     LDR X22, [X9]                   // restore LATEST
     ADR X9, saved_here
     LDR X21, [X9]                   // restore HERE
+    ADR X9, do_depth
+    STR XZR, [X9]                   // reset DO nesting
+    ADR X9, leave_count
+    STR XZR, [X9]                   // reset leave chain
 
 .Lil_err_return:
     MOV X0, #1                      // return 1 = error
@@ -1896,6 +1906,8 @@ incl_err_open:   .ascii "Error: cannot open "
 // ---------- Control Flow Tag Constants ----------
 .equ CF_ORIG, 1                     // forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     // backward target (BEGIN)
+.equ CF_LEAVE, 3                    // saved leave count (DO)
+.equ MAX_LEAVES, 8                  // max LEAVE per nesting
 
 // cf_check_tag — verify top of stack matches expected tag.
 // Input: X0 = expected tag.  On mismatch, aborts compilation and
@@ -1915,6 +1927,10 @@ cf_check_tag:
     LDR X21, [X9]                   // restore HERE
     ADR X9, state
     STR XZR, [X9]                   // interpret mode
+    ADR X9, do_depth
+    STR XZR, [X9]                   // reset DO nesting
+    ADR X9, leave_count
+    STR XZR, [X9]                   // reset leave chain
     // Set error token for caller to report
     ADR X9, err_token_addr
     ADR X10, cf_mismatch_name
@@ -2350,10 +2366,20 @@ compile_plus_loop_inline:
 forth_do:
     STP X29, X30, [SP, #-16]!
     BL compile_do_inline            // X0 = B.EQ patch address
-    // Push (skip-patch CF_ORIG) then (body-addr CF_DEST)
-    SUB X19, X19, #4*CELL
-    STR X0, [X19, #3*CELL]         // skip-patch address
+    // Track nesting for LEAVE validation
+    ADR X9, do_depth
+    LDR X10, [X9]
+    ADD X10, X10, #1
+    STR X10, [X9]
+    // Push (skip-patch CF_ORIG) (saved-leave CF_LEAVE) (body-addr CF_DEST)
+    SUB X19, X19, #6*CELL
+    STR X0, [X19, #5*CELL]         // skip-patch address
     MOV X9, #CF_ORIG
+    STR X9, [X19, #4*CELL]         // tag
+    ADR X9, leave_count
+    LDR X10, [X9]                   // save current leave count
+    STR X10, [X19, #3*CELL]
+    MOV X9, #CF_LEAVE
     STR X9, [X19, #2*CELL]         // tag
     STR X21, [X19, #CELL]          // body address = HERE
     MOV X9, #CF_DEST
@@ -2366,10 +2392,15 @@ forth_do:
 forth_loop:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
     MOV X0, #CF_DEST
     BL cf_check_tag
     ADD X19, X19, #CELL             // drop tag
     LDR X23, [X19], #CELL          // body address
+    MOV X0, #CF_LEAVE
+    BL cf_check_tag
+    ADD X19, X19, #CELL             // drop tag
+    LDR X25, [X19], #CELL          // saved leave count
     MOV X0, #CF_ORIG
     BL cf_check_tag
     ADD X19, X19, #CELL             // drop tag
@@ -2378,6 +2409,25 @@ forth_loop:
     BL compile_loop_inline
     MOV X0, X24                     // skip-patch address
     BL patch_forward
+    // Patch all LEAVEs for this loop
+    ADR X26, leave_count
+    LDR X23, [X26]                  // current count
+    CMP X25, X23
+    B.EQ .Lloop_leave_done
+    ADR X24, leave_stack
+.Lloop_leave_patch:
+    SUB X23, X23, #1
+    LDR X0, [X24, X23, LSL #3]     // leave_stack[i]
+    BL patch_forward
+    CMP X25, X23
+    B.NE .Lloop_leave_patch
+.Lloop_leave_done:
+    STR X25, [X26]                  // restore leave_count
+    ADR X9, do_depth
+    LDR X10, [X9]
+    SUB X10, X10, #1
+    STR X10, [X9]
+    LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -2387,18 +2437,42 @@ forth_loop:
 forth_plus_loop:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
     MOV X0, #CF_DEST
     BL cf_check_tag
     ADD X19, X19, #CELL
-    LDR X23, [X19], #CELL
+    LDR X23, [X19], #CELL          // body address
+    MOV X0, #CF_LEAVE
+    BL cf_check_tag
+    ADD X19, X19, #CELL
+    LDR X25, [X19], #CELL          // saved leave count
     MOV X0, #CF_ORIG
     BL cf_check_tag
     ADD X19, X19, #CELL
-    LDR X24, [X19], #CELL
+    LDR X24, [X19], #CELL          // skip-patch address
     MOV X0, X23
     BL compile_plus_loop_inline
     MOV X0, X24
     BL patch_forward
+    // Patch all LEAVEs for this loop
+    ADR X26, leave_count
+    LDR X23, [X26]                  // current count
+    CMP X25, X23
+    B.EQ .Lploop_leave_done
+    ADR X24, leave_stack
+.Lploop_leave_patch:
+    SUB X23, X23, #1
+    LDR X0, [X24, X23, LSL #3]
+    BL patch_forward
+    CMP X25, X23
+    B.NE .Lploop_leave_patch
+.Lploop_leave_done:
+    STR X25, [X26]                  // restore leave_count
+    ADR X9, do_depth
+    LDR X10, [X9]
+    SUB X10, X10, #1
+    STR X10, [X9]
+    LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -2425,6 +2499,31 @@ forth_j:
     MOV W9, #(INSN_STR_X9_X19_PRE & 0xFFFF)
     MOVK W9, #(INSN_STR_X9_X19_PRE >> 16), LSL #16
     STR W9, [X21], #4
+    RET
+
+// LEAVE ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+// Emit UNLOOP + forward B. Store patch address in leave_stack.
+.global forth_leave
+forth_leave:
+    ADR X9, do_depth
+    LDR X10, [X9]
+    CBZ X10, .Lcf_mismatch         // not inside a DO loop
+    STP X29, X30, [SP, #-16]!
+    CHECK_DICT 4                    // UNLOOP = 4 bytes (compile_branch does its own)
+    // Emit UNLOOP: ADD SP, SP, #16
+    MOV W9, #(INSN_ADD_SP_16 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_SP_16 >> 16), LSL #16
+    STR W9, [X21], #4
+    // Emit forward B
+    BL compile_branch               // X0 = patch address
+    // Store in leave array
+    ADR X9, leave_count
+    LDR X10, [X9]                   // count
+    ADR X11, leave_stack
+    STR X0, [X11, X10, LSL #3]     // leave_stack[count] = addr
+    ADD X10, X10, #1
+    STR X10, [X9]                   // leave_count++
+    LDP X29, X30, [SP], #16
     RET
 
 // UNLOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
@@ -2517,7 +2616,8 @@ DEFWORD dict_plus_loop,  "+loop",      forth_plus_loop,   dict_loop,      F_IMME
 DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_unloop
+DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_leave
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -2602,3 +2702,12 @@ file_name_len:
 .global file_line_num
 file_line_num:                      // Line number for INCLUDED error reporting
     .quad 0
+.global do_depth
+do_depth:                           // DO nesting depth (for LEAVE validation)
+    .quad 0
+.global leave_count
+leave_count:                        // Number of pending LEAVE patch addresses
+    .quad 0
+.global leave_stack
+leave_stack:                        // Patch addresses for pending LEAVEs
+    .space MAX_LEAVES * 8

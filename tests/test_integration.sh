@@ -314,6 +314,19 @@ assert_output "nested do j"       ": test 2 0 do 2 0 do j . i . 32 emit loop loo
 assert_output "do loop sum"       ": sum 0 5 0 do i + loop ; sum ."              "10"
 
 # =========================================================================
+section "LEAVE"
+# =========================================================================
+
+assert_output "leave basic"        ": test 10 0 do i 5 = if leave then i . loop ; test"   "0 1 2 3 4"
+assert_output "leave first iter"   ": test 10 0 do leave loop 99 . ; test"                "99"
+assert_output "leave nested inner" \
+    ": test 3 0 do 5 0 do i 2 = if leave then i . loop 32 emit loop ; test"  "0 1  0 1  0 1"
+assert_output "leave nested outer" \
+    ": test 3 0 do i 1 = if leave then 3 0 do i . loop 32 emit loop ; test"  "0 1 2"
+assert_output "leave +loop"        ": test 20 0 do i 10 > if leave then i . 3 +loop ; test"  "0 3 6 9"
+assert_error  "leave outside do"  ": test leave ;"                                         "? mismatched-control-flow"
+
+# =========================================================================
 section "Defining Words"
 # =========================================================================
 

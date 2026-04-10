@@ -1371,6 +1371,8 @@ forth_semicolon:
     mov saved_latest(%rip), %r12
     mov saved_here(%rip), %r13
     movq $0, state(%rip)
+    movq $0, do_depth(%rip)
+    movq $0, leave_count(%rip)
     ret
 
 .Lsemi_err:
@@ -1524,8 +1526,11 @@ forth_interpret_line:
     cmpq $0, state(%rip)
     je .Lil_err_return
     movq $0, state(%rip)            # reset to interpret mode
+    mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
+    movq $0, do_depth(%rip)         # reset DO nesting
+    movq $0, leave_count(%rip)      # reset leave chain
 
 .Lil_err_return:
     mov $1, %eax                    # return 1 = error
@@ -1830,6 +1835,8 @@ incl_err_open:   .ascii "Error: cannot open "
 # mis-paired control structures (e.g. BEGIN ... THEN).
 .equ CF_ORIG, 1                     # forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     # backward target (BEGIN)
+.equ CF_LEAVE, 3                    # saved leave count (DO)
+.equ MAX_LEAVES, 8                  # max LEAVE per nesting
 
 # cf_check_tag — verify top of stack matches expected tag.
 # Input: RAX = expected tag.  On mismatch, aborts compilation and
@@ -1844,6 +1851,8 @@ cf_check_tag:
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
     movq $0, state(%rip)            # interpret mode
+    movq $0, do_depth(%rip)         # reset DO nesting
+    movq $0, leave_count(%rip)      # reset leave chain
     # Set error token for caller to report
     lea cf_mismatch_name(%rip), %rax
     mov %rax, err_token_addr(%rip)
@@ -2220,9 +2229,13 @@ compile_plus_loop_inline:
 .global forth_do
 forth_do:
     call compile_do_inline          # RAX = skip-patch address
-    sub $4*CELL, %r15
-    mov %rax, 3*CELL(%r15)         # skip-patch address
-    movq $CF_ORIG, 2*CELL(%r15)    # tag
+    incq do_depth(%rip)             # track nesting for LEAVE
+    sub $6*CELL, %r15
+    mov %rax, 5*CELL(%r15)         # skip-patch address
+    movq $CF_ORIG, 4*CELL(%r15)    # tag
+    mov leave_count(%rip), %rax    # save current leave count
+    mov %rax, 3*CELL(%r15)
+    movq $CF_LEAVE, 2*CELL(%r15)   # tag
     mov %r13, CELL(%r15)           # body address = HERE
     movq $CF_DEST, (%r15)          # tag
     ret
@@ -2236,15 +2249,47 @@ forth_loop:
     mov (%r15), %rax                # body address
     add $CELL, %r15
     push %rax                       # save body address
+    mov $CF_LEAVE, %rax
+    call cf_check_tag
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # saved leave count
+    add $CELL, %r15
+    push %rax                       # save it
     mov $CF_ORIG, %rax
     call cf_check_tag
     add $CELL, %r15                 # drop tag
     mov (%r15), %rbx                # skip-patch address
     add $CELL, %r15
-    pop %rax                        # restore body address
+    pop %rcx                        # saved leave count
+    pop %rax                        # body address
+    push %rcx                       # re-save leave count
+    push %rbx                       # save skip-patch
     call compile_loop_inline
-    mov %rbx, %rax
+    pop %rax                        # skip-patch
     call patch_forward              # patch DO's JE to HERE
+    # Patch all LEAVEs for this loop
+    mov leave_count(%rip), %rbx     # current count
+    pop %rcx                        # saved leave count (from DO)
+    push %rcx                       # keep for restore
+    cmp %rcx, %rbx
+    je .Lloop_leave_done
+    lea leave_stack(%rip), %rdx
+.Lloop_leave_patch:
+    dec %rbx
+    mov (%rdx,%rbx,8), %rax
+    push %rbx
+    push %rcx
+    push %rdx
+    call patch_forward
+    pop %rdx
+    pop %rcx
+    pop %rbx
+    cmp %rcx, %rbx
+    jne .Lloop_leave_patch
+.Lloop_leave_done:
+    pop %rax                        # restore saved leave count
+    mov %rax, leave_count(%rip)
+    decq do_depth(%rip)
     ret
 
 # +LOOP ( n -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
@@ -2256,15 +2301,47 @@ forth_plus_loop:
     mov (%r15), %rax
     add $CELL, %r15
     push %rax
+    mov $CF_LEAVE, %rax
+    call cf_check_tag
+    add $CELL, %r15
+    mov (%r15), %rax                # saved leave count
+    add $CELL, %r15
+    push %rax
     mov $CF_ORIG, %rax
     call cf_check_tag
     add $CELL, %r15
     mov (%r15), %rbx
     add $CELL, %r15
-    pop %rax
+    pop %rcx                        # saved leave count
+    pop %rax                        # body address
+    push %rcx
+    push %rbx                       # skip-patch
     call compile_plus_loop_inline
-    mov %rbx, %rax
+    pop %rax                        # skip-patch
     call patch_forward
+    # Patch all LEAVEs for this loop
+    mov leave_count(%rip), %rbx
+    pop %rcx                        # saved leave count
+    push %rcx
+    cmp %rcx, %rbx
+    je .Lploop_leave_done
+    lea leave_stack(%rip), %rdx
+.Lploop_leave_patch:
+    dec %rbx
+    mov (%rdx,%rbx,8), %rax
+    push %rbx
+    push %rcx
+    push %rdx
+    call patch_forward
+    pop %rdx
+    pop %rcx
+    pop %rbx
+    cmp %rcx, %rbx
+    jne .Lploop_leave_patch
+.Lploop_leave_done:
+    pop %rax
+    mov %rax, leave_count(%rip)
+    decq do_depth(%rip)
     ret
 
 # I ( -- index )  IMMEDIATE, COMPILE_ONLY
@@ -2302,6 +2379,26 @@ forth_j:
     movb $0x89, 10(%r13)
     movb $0x07, 11(%r13)
     add $12, %r13
+    ret
+
+# LEAVE ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
+# Emit UNLOOP + forward JMP. Store patch address in leave_stack.
+.global forth_leave
+forth_leave:
+    cmpq $0, do_depth(%rip)         # inside a DO loop?
+    je .Lcf_mismatch                # no — trigger mismatch error
+    CHECK_DICT 4                    # UNLOOP = 4 bytes (compile_branch does its own CHECK_DICT)
+    movb $0x48, 0(%r13)            # add $16, %rsp  (UNLOOP inline)
+    movb $0x83, 1(%r13)
+    movb $0xC4, 2(%r13)
+    movb $0x10, 3(%r13)
+    add $4, %r13
+    call compile_branch             # RAX = patch address of forward JMP
+    mov leave_count(%rip), %rcx
+    lea leave_stack(%rip), %rdx
+    mov %rax, (%rdx,%rcx,8)        # leave_stack[count] = patch_addr
+    inc %rcx
+    mov %rcx, leave_count(%rip)
     ret
 
 # UNLOOP ( -- ) (R: limit index -- )  IMMEDIATE, COMPILE_ONLY
@@ -2394,7 +2491,8 @@ DEFWORD dict_plus_loop,  "+loop",      forth_plus_loop,   dict_loop,      F_IMME
 DEFWORD dict_i,          "i",          forth_i,           dict_plus_loop, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_j,          "j",          forth_j,           dict_i,         F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_unloop,     "unloop",     forth_unloop,      dict_j,         F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_unloop
+DEFWORD dict_leave,      "leave",      forth_leave,       dict_unloop,    F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_leave
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -2481,3 +2579,12 @@ file_name_len:
 .global file_line_num
 file_line_num:                      # Line number for INCLUDED error reporting
     .quad 0
+.global do_depth
+do_depth:                           # DO nesting depth (for LEAVE validation)
+    .quad 0
+.global leave_count
+leave_count:                        # Number of pending LEAVE patch addresses
+    .quad 0
+.global leave_stack
+leave_stack:                        # Patch addresses for pending LEAVEs
+    .space MAX_LEAVES * 8

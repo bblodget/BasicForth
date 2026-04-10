@@ -209,7 +209,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | +LOOP  | ( n -- ) (R: limit index -- )                  | asm   | (x)    | Boundary-crossing test   |
 | I      | ( -- n ) (R: limit index -- limit index )       | asm   | (x)    | Current loop index       |
 | J      | ( -- n )                                       | asm   | (x)    | Outer loop index         |
-| LEAVE  | ( -- ) (R: loop-sys -- )                       | forth | ( )    | Exit loop (deferred)     |
+| LEAVE  | ( -- ) (R: loop-sys -- )                       | asm   | (x)    | Exit DO loop early       |
 | UNLOOP | ( -- ) (R: limit index -- )                    | asm   | (x)    | Discard loop params      |
 | RECURSE| ( -- )                                         | asm   | (x)    | Compile call to self     |
 | EXIT   | ( -- )                                         | asm   | ( )    | Return from word (RET)   |

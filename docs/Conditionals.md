@@ -78,8 +78,9 @@ control flow word pushes a **tag** alongside its address:
 
 | Tag      | Value | Pushed by              | Expected by                    |
 |----------|-------|------------------------|--------------------------------|
-| CF_ORIG  | 1     | IF, ELSE, WHILE        | THEN, ELSE, REPEAT             |
-| CF_DEST  | 2     | BEGIN                  | UNTIL, AGAIN, WHILE, REPEAT    |
+| CF_ORIG  | 1     | IF, ELSE, WHILE, DO    | THEN, ELSE, REPEAT, LOOP       |
+| CF_DEST  | 2     | BEGIN, DO              | UNTIL, AGAIN, WHILE, REPEAT, LOOP |
+| CF_LEAVE | 3     | DO (saved leave count) | LOOP, +LOOP                    |
 
 The compile-time stack for `: test IF 42 THEN ;` looks like:
 
@@ -175,14 +176,16 @@ Runtime: call self recursively.
 ### DO ( limit index -- ) (R: -- limit index)
 Compile: emit inline code to pop limit and index from data stack,
 compare, skip loop body if equal, push to return stack.
-Pushes two items to the compile-time stack for LOOP to consume.
+Pushes three pairs to the compile-time stack: (skip-patch, CF_ORIG),
+(saved-leave-count, CF_LEAVE), (body-addr, CF_DEST).
 Runtime: set up counted loop. If limit == index, skip the body entirely.
 
 ### LOOP ( -- ) (R: limit index -- | limit index' )
 Compile: emit inline code to pop loop params from return stack,
 increment index by 1, compare with limit. If equal, loop is done
 (params stay popped). If not, push back and branch to loop body.
-Patches DO's skip-if-equal forward branch to land after LOOP.
+Patches DO's skip-if-equal forward branch and all LEAVE forward
+branches to land after LOOP. Restores the leave count for nesting.
 Runtime: increment and test counted loop.
 
 ### +LOOP ( n -- ) (R: limit index -- | limit index' )
@@ -204,6 +207,13 @@ Compile: emit inline code to read the outer loop's index from the
 return stack (past the inner loop's params).
 Runtime: push outer loop index. Reads from `[RSP+16]` (x86-64) or
 `[SP+16]` (ARM64).
+
+### LEAVE ( -- ) (R: limit index -- )
+Compile: emit UNLOOP (drop loop params from return stack) followed by an
+unconditional forward branch. The branch is patched by LOOP or +LOOP to
+land after the loop. Multiple LEAVEs per loop are supported; all are
+patched when LOOP/+LOOP compiles.
+Runtime: exit the innermost DO loop immediately, continuing after LOOP/+LOOP.
 
 ### UNLOOP ( -- ) (R: limit index -- )
 Compile: emit inline code to drop loop parameters from the return stack.
@@ -261,4 +271,8 @@ since DO pushes above it.
 \ Sum of 0..N-1
 : sum  0 swap 0 do i + loop ;
 10 sum .   \ prints 45
+
+\ LEAVE — exit loop early
+: find-first  10 0 do i 5 = if leave then i . loop ;
+find-first   \ prints 0 1 2 3 4 (exits before printing 5)
 ```

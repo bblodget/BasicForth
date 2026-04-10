@@ -78,7 +78,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Documentation (docs/Conditionals.md)
 - [x] DO / LOOP / +LOOP / I / J / UNLOOP — counted loops
 - [x] +LOOP boundary-crossing detection (handles non-exact increments)
-- [ ] LEAVE — exit DO loop early
+- [x] LEAVE — exit DO loop early
 
 ### 3c. More ASM Primitives — COMPLETE
 
