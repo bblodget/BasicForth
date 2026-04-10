@@ -20,9 +20,29 @@ NC="\033[0m"
 # Counters
 passed=0
 failed=0
+slowest_name=""
+slowest_ms=0
+
+# Threshold in ms — tests slower than this show timing inline
+SLOW_THRESHOLD_MS=100
 
 run_forth() {
     printf '%s\n' "$1" | timeout 2 $FORTH 2>&1
+}
+
+# elapsed_ms: compute milliseconds between two %s.%N timestamps
+elapsed_ms() {
+    local start="$1" end="$2"
+    awk "BEGIN { printf \"%d\", ($end - $start) * 1000 }"
+}
+
+# update_slowest: track the slowest test (call directly, not in subshell)
+update_slowest() {
+    local ms="$1" name="$2"
+    if [ "$ms" -gt "$slowest_ms" ]; then
+        slowest_ms="$ms"
+        slowest_name="$name"
+    fi
 }
 
 # assert_output: check that output contains a fixed substring
@@ -31,11 +51,20 @@ assert_output() {
     local input="$2"
     local expected="$3"
 
+    local t0 t1 ms
+    t0=$(date +%s.%N)
     local output
     output=$(run_forth "$input")
+    t1=$(date +%s.%N)
+    ms=$(elapsed_ms "$t0" "$t1")
+    update_slowest "$ms" "$name"
 
     if [[ "$output" == *"$expected"* ]]; then
-        printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        if [ "$ms" -ge "$SLOW_THRESHOLD_MS" ]; then
+            printf "  ${GREEN}PASS${NC}  %s ${YELLOW}(%d ms)${NC}\n" "$name" "$ms"
+        else
+            printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        fi
         ((passed++))
     else
         printf "  ${RED}FAIL${NC}  %s\n" "$name"
@@ -52,15 +81,24 @@ assert_error() {
     local input="$2"
     local expected="$3"
 
+    local t0 t1 ms
+    t0=$(date +%s.%N)
     local output
     output=$(run_forth "$input")
+    t1=$(date +%s.%N)
+    ms=$(elapsed_ms "$t0" "$t1")
+    update_slowest "$ms" "$name"
 
     local lower_output lower_expected
     lower_output=$(echo "$output" | tr '[:upper:]' '[:lower:]')
     lower_expected=$(echo "$expected" | tr '[:upper:]' '[:lower:]')
 
     if [[ "$lower_output" == *"$lower_expected"* ]]; then
-        printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        if [ "$ms" -ge "$SLOW_THRESHOLD_MS" ]; then
+            printf "  ${GREEN}PASS${NC}  %s ${YELLOW}(%d ms)${NC}\n" "$name" "$ms"
+        else
+            printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        fi
         ((passed++))
     else
         printf "  ${RED}FAIL${NC}  %s\n" "$name"
@@ -319,6 +357,9 @@ total=$((passed + failed))
 echo ""
 echo "======================="
 printf "%d passed, %d failed, %d total\n" "$passed" "$failed" "$total"
+if [ -n "$slowest_name" ]; then
+    printf "Slowest: %s (%d ms)\n" "$slowest_name" "$slowest_ms"
+fi
 
 if [ "$failed" -gt 0 ]; then
     exit 1

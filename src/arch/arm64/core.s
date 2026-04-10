@@ -2302,7 +2302,7 @@ compile_loop_inline:
 .equ INSN_SUB_X16_X9_X10,  0xCB0A0130   // SUB X16, X9, X10
 .equ INSN_SUB_X17_X9_X10,  0xCB0A0131   // SUB X17, X9, X10
 .equ INSN_EOR_X16_X16_X17, 0xCA110210   // EOR X16, X16, X17
-.equ INSN_TBNZ_X16_63_2,   0xB7F80050   // TBNZ X16, #63, +2 (skip STP+B)
+.equ INSN_TBNZ_X16_63_3,   0xB7F80070   // TBNZ X16, #63, +3 (skip STP+B)
 compile_plus_loop_inline:
     CHECK_DICT 36
     STP X29, X30, [SP, #-16]!
@@ -2331,9 +2331,9 @@ compile_plus_loop_inline:
     MOV W9, #(INSN_EOR_X16_X16_X17 & 0xFFFF)
     MOVK W9, #(INSN_EOR_X16_X16_X17 >> 16), LSL #16
     STR W9, [X21], #4
-    // TBNZ X16, #63, +2  (sign bit set → crossed → skip STP+B)
-    MOV W9, #(INSN_TBNZ_X16_63_2 & 0xFFFF)
-    MOVK W9, #(INSN_TBNZ_X16_63_2 >> 16), LSL #16
+    // TBNZ X16, #63, +3  (sign bit set → crossed → skip STP+B)
+    MOV W9, #(INSN_TBNZ_X16_63_3 & 0xFFFF)
+    MOVK W9, #(INSN_TBNZ_X16_63_3 >> 16), LSL #16
     STR W9, [X21], #4
     // STP X9, X10, [SP, #-16]! (push back new index + limit)
     MOV W9, #(INSN_STP_X9_X10_SP_PRE & 0xFFFF)
