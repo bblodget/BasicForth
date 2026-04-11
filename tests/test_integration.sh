@@ -388,6 +388,31 @@ assert_output "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
 assert_output "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
 
 # =========================================================================
+section "Double-Cell Arithmetic"
+# =========================================================================
+
+assert_output "s>d positive"       "10 s>d . ."                       "0 10"
+assert_output "s>d negative"       ": test -1 s>d . . ; test"         "-1 -1"
+assert_output "um*"                "3 4 um* . ."                      "0 12"
+assert_output "m*"                 ": test -3 4 m* . . ; test"        "-1 -12"
+assert_output "um/mod"             "42 0 10 um/mod . ."               "4 2"
+assert_output "fm/mod positive"    "7 s>d 2 fm/mod . ."               "3 1"
+assert_output "fm/mod negative"    ": test 7 s>d -2 fm/mod . . ; test"  "-4 -1"
+assert_output "sm/rem"             ": test 7 s>d -2 sm/rem . . ; test"  "-3 1"
+
+# =========================================================================
+section "Pictured Numeric Output"
+# =========================================================================
+
+assert_output "u. zero"            "0 u."                             "0"
+assert_output "u. simple"          "42 u."                            "42"
+assert_output "u. large"           "999999 u."                        "999999"
+assert_output ".r right-just"      "42 5 .r"                          "   42"
+assert_output ".r narrow"          "100 2 .r"                         "100"
+assert_output "*/mod"              "3 7 2 */mod . ."                  "10 1"
+assert_output "decimal"            ": test decimal 42 . ; test"       "42"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

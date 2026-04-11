@@ -119,7 +119,10 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Derived arithmetic: */
 - [x] String words: TYPE, COUNT, S", ."
 - [x] SPACES
-- [ ] Formatting: U., .R (deferred — needs pictured numeric output)
+- [x] Double-cell arithmetic: S>D, UM*, M*, UM/MOD, SM/REM, FM/MOD
+- [x] Pictured numeric output: <#, #, #S, #>, HOLD, SIGN, BASE, PAD, HLD
+- [x] Formatting: U., .R
+- [x] */MOD (redefined with M* FM/MOD), DECIMAL
 
 ---
 
