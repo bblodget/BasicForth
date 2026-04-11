@@ -537,6 +537,42 @@ assert_output ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; te
 assert_output "environment?"       's" test" environment? .'         "0"
 
 # =========================================================================
+section "Core Extension Words"
+# =========================================================================
+
+# 0>
+assert_output "0> positive"       '5 0> .'                            "-1"
+assert_output "0> zero"           '0 0> .'                            "0"
+assert_output "0> negative"       '-3 0> .'                           "0"
+
+# U>
+assert_output "u> true"           '10 3 u> .'                         "-1"
+assert_output "u> false"          '3 10 u> .'                         "0"
+
+# WITHIN
+assert_output "within true"       '5 3 10 within .'                   "-1"
+assert_output "within false"      '2 3 10 within .'                   "0"
+assert_output "within edge lo"    '3 3 10 within .'                   "-1"
+assert_output "within edge hi"    '10 3 10 within .'                  "0"
+
+# ERASE
+assert_output "erase"             'create buf 3 allot buf 3 65 fill buf 2 erase buf c@ .' "0"
+
+# U.R
+assert_output "u.r"               '42 5 u.r'                          "   42"
+
+# UNUSED
+assert_output "unused"            'unused 0 > .'                      "-1"
+
+# CASE/OF/ENDOF/ENDCASE
+assert_output "case 1"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 1 test .' "10"
+assert_output "case 2"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 2 test .' "20"
+assert_output "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 3 test .' "0"
+
+# .(
+assert_output "dot-paren"         '.( hello)'                         "hello"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

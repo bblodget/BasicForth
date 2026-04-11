@@ -2363,6 +2363,73 @@ forth_recurse:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- CASE / OF / ENDOF / ENDCASE ----------
+// All IMMEDIATE + COMPILE_ONLY.
+
+// CASE ( -- 0 )  Push sentinel on compile-time stack.
+.global forth_case
+forth_case:
+    STR XZR, [X19, #-CELL]!
+    RET
+
+// OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
+.global forth_of
+forth_of:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    // Compile OVER
+    ADR X0, forth_over
+    BL compile_call
+    // Compile =
+    ADR X0, forth_equal
+    BL compile_call
+    // Compile 0branch
+    BL compile_0branch             // X0 = patch address
+    MOV X23, X0                    // save
+    // Compile DROP
+    ADR X0, forth_drop
+    BL compile_call
+    // Push patch address
+    STR X23, [X19, #-CELL]!
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ENDOF ( -- )  Compile branch, patch OF's 0branch.
+.global forth_endof
+forth_endof:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    // Pop OF's patch address
+    LDR X23, [X19], #CELL
+    // Compile unconditional branch
+    BL compile_branch              // X0 = branch patch address
+    MOV X24, X0                    // save branch patch
+    // Patch OF's 0branch to HERE
+    MOV X0, X23
+    BL patch_forward
+    // Push branch's patch address for ENDCASE
+    STR X24, [X19, #-CELL]!
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ENDCASE ( x -- )  Compile DROP, patch all ENDOF branches.
+.global forth_endcase
+forth_endcase:
+    STP X29, X30, [SP, #-16]!
+    // Compile DROP
+    ADR X0, forth_drop
+    BL compile_call
+.Lendcase_loop:
+    LDR X0, [X19], #CELL          // pop address
+    CBZ X0, .Lendcase_done
+    BL patch_forward
+    B .Lendcase_loop
+.Lendcase_done:
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- HERE, ALLOT, COMMA, C-COMMA ----------
 
 // HERE ( -- addr )
@@ -2582,6 +2649,14 @@ forth_pad:
 .global forth_hld
 forth_hld:
     ADR X9, hld
+    STR X9, [X19, #-CELL]!
+    RET
+
+// UNUSED ( -- u )  Return number of free bytes in dictionary space.
+.global forth_unused
+forth_unused:
+    ADR X9, dict_space_end
+    SUB X9, X9, X21                // end - HERE
     STR X9, [X19, #-CELL]!
     RET
 
@@ -3336,7 +3411,12 @@ DEFWORD dict_to_in,      ">in",        forth_to_in,       dict_to_body
 DEFWORD dict_source,     "source",     forth_source,      dict_to_in
 DEFWORD dict_abort,      "abort",      forth_abort,       dict_source
 DEFWORD dict_quit,       "quit",       forth_quit,        dict_abort
-.global dict_quit
+DEFWORD dict_unused,     "unused",     forth_unused,      dict_quit
+DEFWORD dict_case,       "case",       forth_case,        dict_unused,    F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_of,         "of",         forth_of,          dict_case,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_endof,      "endof",      forth_endof,       dict_of,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_endcase,    "endcase",    forth_endcase,     dict_endof,     F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_endcase
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

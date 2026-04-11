@@ -2171,6 +2171,78 @@ forth_recurse:
     call compile_call
     ret
 
+# ---------- CASE / OF / ENDOF / ENDCASE ----------
+# All IMMEDIATE + COMPILE_ONLY.
+
+# CASE ( -- 0 )  Push sentinel on compile-time stack.
+.global forth_case
+forth_case:
+    sub $CELL, %r15
+    movq $0, (%r15)
+    ret
+
+# OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
+# Leaves forward reference on compile-time stack.
+.global forth_of
+forth_of:
+    push %rbx
+    # Compile OVER
+    lea forth_over(%rip), %rax
+    call compile_call
+    # Compile =
+    lea forth_equal(%rip), %rax
+    call compile_call
+    # Compile 0branch (conditional forward jump)
+    call compile_0branch            # RAX = patch address
+    mov %rax, %rbx                  # save patch address
+    # Compile DROP (remove test value on match)
+    lea forth_drop(%rip), %rax
+    call compile_call
+    # Push patch address for ENDOF
+    sub $CELL, %r15
+    mov %rbx, (%r15)
+    pop %rbx
+    ret
+
+# ENDOF ( -- )  Compile unconditional branch, patch OF's 0branch.
+.global forth_endof
+forth_endof:
+    push %rbx
+    # Pop OF's patch address
+    mov (%r15), %rbx                # save of-patch
+    add $CELL, %r15
+    # Compile branch (unconditional forward jump)
+    call compile_branch             # RAX = branch patch address
+    push %rax                       # save for pushing later
+    # Patch OF's 0branch to here
+    mov %rbx, %rax
+    call patch_forward
+    # Push branch's patch address for ENDCASE
+    pop %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    pop %rbx
+    ret
+
+# ENDCASE ( x -- )  Compile DROP, patch all ENDOF branches.
+.global forth_endcase
+forth_endcase:
+    # Compile DROP (discard the selector for default path)
+    push %rbx
+    lea forth_drop(%rip), %rax
+    call compile_call
+    # Patch all ENDOF branches until 0 sentinel
+.Lendcase_loop:
+    mov (%r15), %rax                # pop address
+    add $CELL, %r15
+    test %rax, %rax
+    jz .Lendcase_done
+    call patch_forward
+    jmp .Lendcase_loop
+.Lendcase_done:
+    pop %rbx
+    ret
+
 # ---------- HERE, ALLOT, COMMA, C-COMMA ----------
 
 # HERE ( -- addr )
@@ -2374,6 +2446,15 @@ forth_pad:
 forth_hld:
     sub $CELL, %r15
     lea hld(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# UNUSED ( -- u )  Return number of free bytes in dictionary space.
+.global forth_unused
+forth_unused:
+    sub $CELL, %r15
+    lea dict_space+DICT_SPACE_SIZE(%rip), %rax
+    sub %r13, %rax                  # end - HERE
     mov %rax, (%r15)
     ret
 
@@ -3066,7 +3147,12 @@ DEFWORD dict_to_in,      ">in",        forth_to_in,       dict_to_body
 DEFWORD dict_source,     "source",     forth_source,      dict_to_in
 DEFWORD dict_abort,      "abort",      forth_abort,       dict_source
 DEFWORD dict_quit,       "quit",       forth_quit,        dict_abort
-.global dict_quit
+DEFWORD dict_unused,     "unused",     forth_unused,      dict_quit
+DEFWORD dict_case,       "case",       forth_case,        dict_unused,    F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_of,         "of",         forth_of,          dict_case,      F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_endof,      "endof",      forth_endof,       dict_of,        F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_endcase,    "endcase",    forth_endcase,     dict_endof,     F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_endcase
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

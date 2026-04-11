@@ -159,5 +159,22 @@
     r> here 1+ + 0 swap c!         \ null-terminate (optional)
     here ;                          \ return counted string address
 
+\ Core extension words
+: 0>        0 > ;
+: U>        swap u< ;
+: WITHIN    over - >r - r> u< ;
+: ERASE     0 fill ;
+: U.R       >r 0 <# #S #> r> over - spaces type ;
+: HOLDS     begin dup 0 > while 1- 2dup + c@ hold repeat 2drop ;
+: .(        \ parse and print until closing paren
+            begin
+                source >in @ > if
+                    source drop >in @ + c@ dup 41 = if
+                        drop 1 >in +! exit
+                    then
+                    emit 1 >in +!
+                else exit then
+            again ; immediate
+
 \ Defining words
 : VARIABLE  create 1 cells allot ;
