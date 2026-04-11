@@ -74,7 +74,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | MOD    | ( n1 n2 -- rem )                              | forth | (x)    | /MOD DROP (in core.fs)  |
 | /MOD   | ( n1 n2 -- rem quot )                         | asm   | (x)    | div-by-zero safe        |
 | */     | ( n1 n2 n3 -- n4 )                            | forth | (x)    | core.fs: >R * R> /      |
-| */MOD  | ( n1 n2 n3 -- n4 n5 )                         | forth | ( )    | >R M* R> FM/MOD         |
+| */MOD  | ( n1 n2 n3 -- n4 n5 )                         | forth | (x)    | core.fs: >R M* R> FM/MOD |
 | 1+     | ( n -- n+1 )                                  | asm   | (x)    |                         |
 | 1-     | ( n -- n-1 )                                  | asm   | (x)    |                         |
 | ABS    | ( n -- u )                                    | asm   | (x)    |                         |
@@ -90,12 +90,12 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word   | Stack effect                                  | Layer | Status | Notes                   |
 |--------|-----------------------------------------------|-------|--------|-------------------------|
-| M*     | ( n1 n2 -- d )                                | asm   | ( )    | Signed multiply -> double |
-| UM*    | ( u1 u2 -- ud )                               | asm   | ( )    | Unsigned multiply -> double |
-| FM/MOD | ( d n -- rem quot )                           | asm   | ( )    | Floored divide          |
-| SM/REM | ( d n -- rem quot )                           | asm   | ( )    | Symmetric divide        |
-| UM/MOD | ( ud u -- rem quot )                          | asm   | ( )    | Unsigned double divide  |
-| S>D    | ( n -- d )                                    | forth | ( )    | DUP 0< IF -1 ELSE 0 THEN |
+| M*     | ( n1 n2 -- d )                                | asm   | (x)    | Signed multiply -> double |
+| UM*    | ( u1 u2 -- ud )                               | asm   | (x)    | Unsigned multiply -> double |
+| FM/MOD | ( d n -- rem quot )                           | asm   | (x)    | Floored divide          |
+| SM/REM | ( d n -- rem quot )                           | asm   | (x)    | Symmetric divide        |
+| UM/MOD | ( ud u -- rem quot )                          | asm   | (x)    | Unsigned double divide  |
+| S>D    | ( n -- d )                                    | asm   | (x)    | Sign-extend to double   |
 
 ### Logic and Comparison
 
@@ -147,7 +147,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | SPACE   | ( -- )                                        | forth | (x)    | 32 EMIT (in core.fs)    |
 | SPACES  | ( n -- )                                      | forth | (x)    | core.fs                  |
 | .       | ( n -- )                                      | asm   | (x)    | Print signed number      |
-| U.      | ( u -- )                                      | forth | ( )    | Print unsigned number    |
+| U.      | ( u -- )                                      | forth | (x)    | core.fs: 0 <# #S #> TYPE |
 | ."      | ( "ccc" -- )                                  | asm   | (x)    | Compile string + TYPE    |
 | BL      | ( -- char )                                   | forth | (x)    | 32 (in core.fs)         |
 | CHAR    | ( "name" -- char )                            | forth | ( )    | First char of next word  |
@@ -156,13 +156,13 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word | Stack effect                                    | Layer | Status | Notes                   |
 |------|-------------------------------------------------|-------|--------|-------------------------|
-| <#   | ( -- )                                          | forth | ( )    | Begin number conversion  |
-| #    | ( ud1 -- ud2 )                                  | forth | ( )    | Convert one digit        |
-| #S   | ( ud1 -- ud2 )                                  | forth | ( )    | Convert remaining digits |
-| #>   | ( xd -- c-addr u )                              | forth | ( )    | End number conversion    |
-| HOLD | ( char -- )                                     | forth | ( )    | Insert char in output    |
-| SIGN | ( n -- )                                        | forth | ( )    | Insert minus if negative |
-| BASE | ( -- a-addr )                                   | forth | ( )    | Number base variable     |
+| <#   | ( -- )                                          | forth | (x)    | Begin number conversion  |
+| #    | ( ud1 -- ud2 )                                  | forth | (x)    | Convert one digit        |
+| #S   | ( ud1 -- ud2 )                                  | forth | (x)    | Convert remaining digits |
+| #>   | ( xd -- c-addr u )                              | forth | (x)    | End number conversion    |
+| HOLD | ( char -- )                                     | forth | (x)    | Insert char in output    |
+| SIGN | ( n -- )                                        | forth | (x)    | Insert minus if negative |
+| BASE | ( -- a-addr )                                   | asm   | (x)    | Number base variable     |
 
 ### Dictionary and Compiler
 
@@ -186,7 +186,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | [CHAR]    | ( "name" -- )                                 | forth | ( )    | Compile char literal     |
 | FIND      | ( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )  | asm   | (x)    | Dictionary lookup        |
 | >BODY     | ( xt -- a-addr )                              | forth | ( )    | xt to data field         |
-| DECIMAL   | ( -- )                                        | forth | ( )    | Set BASE to 10           |
+| DECIMAL   | ( -- )                                        | forth | (x)    | core.fs: #10 BASE !     |
 | WORD      | ( char -- c-addr )                            | forth | ( )    | Parse delimited word     |
 | >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | ( )    | Convert string to number |
 | >IN       | ( -- a-addr )                                 | forth | ( )    | Input parse position     |
