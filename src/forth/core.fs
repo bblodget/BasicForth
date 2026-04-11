@@ -63,6 +63,7 @@
 
 \ Formatted output
 : U.        0 <# #S #> type space ;
+: .         dup >r abs s>d <# #S r> sign #> type space ;
 : .R        >r dup >r abs s>d <# #S r> sign #> r> over - spaces type ;
 
 \ Redefine */ using double-width intermediate
