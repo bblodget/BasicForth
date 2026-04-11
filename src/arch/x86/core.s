@@ -2377,6 +2377,128 @@ forth_hld:
     mov %rax, (%r15)
     ret
 
+# ---------- Compiler Words ----------
+
+# STATE ( -- a-addr )  Push address of STATE variable.
+.global forth_state
+forth_state:
+    sub $CELL, %r15
+    lea state(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# [ ( -- )  Switch to interpret mode.  IMMEDIATE.
+.global forth_left_bracket
+forth_left_bracket:
+    movq $0, state(%rip)
+    ret
+
+# ] ( -- )  Switch to compile mode.
+.global forth_right_bracket
+forth_right_bracket:
+    movq $-1, state(%rip)
+    ret
+
+# LITERAL ( x -- )  Compile a literal at compile time.  IMMEDIATE+COMPILE_ONLY.
+# Takes x from data stack and compiles CALL LIT + x into the current definition.
+.global forth_literal
+forth_literal:
+    mov (%r15), %rax
+    add $CELL, %r15
+    call compile_literal
+    ret
+
+# ['] ( "<spaces>name" -- )  Compile xt as literal.  IMMEDIATE+COMPILE_ONLY.
+# Same as ' but always compiles (compile-only).
+.global forth_bracket_tick
+forth_bracket_tick:
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
+    mov (%r15), %rax                # flag
+    test %rax, %rax
+    jz .Lbt_not_found
+    add $CELL, %r15                 # drop flag
+    mov (%r15), %rax                # xt
+    add $CELL, %r15                 # drop xt
+    call compile_literal            # compile xt as literal
+    ret
+.Lbt_not_found:
+    add $3*CELL, %r15               # drop flag, u, c-addr
+    sub $CELL, %r15
+    movq $0, (%r15)                 # push 0 (invalid xt)
+    ret
+
+# [CHAR] ( "<spaces>name" -- )  Compile char value as literal.  IMMEDIATE+COMPILE_ONLY.
+.global forth_bracket_char
+forth_bracket_char:
+    call forth_parse_word           # ( -- c-addr u )
+    mov CELL(%r15), %rax            # c-addr
+    movzbl (%rax), %eax             # first character
+    add $2*CELL, %r15               # drop c-addr and u
+    call compile_literal            # compile char as literal
+    ret
+
+# EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
+.global forth_exit
+forth_exit:
+    call compile_ret
+    ret
+
+# COMPILE, ( xt -- )  Compile a call to xt into the current definition.
+.global forth_compile_comma
+forth_compile_comma:
+    mov (%r15), %rax
+    add $CELL, %r15
+    jmp compile_call                # tail call
+
+# POSTPONE ( "<spaces>name" -- )  IMMEDIATE+COMPILE_ONLY.
+# If the word is IMMEDIATE: compile a CALL to it (so it runs at runtime).
+# If non-immediate: compile code that will compile a CALL at runtime.
+# This is: compile LITERAL(xt) + compile CALL(compile_call)
+.global forth_postpone
+forth_postpone:
+    push %rbx
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
+    mov (%r15), %rax                # flag
+    test %rax, %rax
+    jz .Lpostpone_not_found
+    mov %rax, %rbx                  # save flag
+    add $CELL, %r15                 # drop flag
+    mov (%r15), %rax                # xt
+    add $CELL, %r15                 # drop xt
+
+    # Is it IMMEDIATE? (flag == 1 or flag == 2)
+    cmpq $1, %rbx
+    je .Lpostpone_immediate
+    cmpq $2, %rbx
+    je .Lpostpone_immediate
+
+    # Non-immediate: compile LITERAL(xt) + CALL(forth_compile_comma)
+    call compile_literal            # compile xt as literal
+    lea forth_compile_comma(%rip), %rax
+    call compile_call               # compile call to forth_compile_comma
+    pop %rbx
+    ret
+
+.Lpostpone_immediate:
+    # IMMEDIATE: just compile a CALL to it
+    call compile_call
+    pop %rbx
+    ret
+
+.Lpostpone_not_found:
+    # Word not found — set error and abort
+    add $CELL, %r15                 # drop 0 flag
+    # c-addr and u are still on stack — set error token
+    mov (%r15), %rax                # u
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15               # drop c-addr and u
+    pop %rbx
+    jmp .Lcf_abort
+
 # ---------- TYPE ----------
 
 # TYPE ( c-addr u -- ) — write string to stdout
@@ -2884,7 +3006,16 @@ DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
 DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
 DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
-.global dict_u_less
+DEFWORD dict_state,      "state",      forth_state,       dict_u_less
+DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_state, F_IMMEDIATE
+DEFWORD dict_rbracket,   "]",          forth_right_bracket, dict_lbracket
+DEFWORD dict_literal,    "literal",    forth_literal,     dict_rbracket, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_bracket_tick, "[']",      forth_bracket_tick, dict_literal, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_bracket_char, "[char]",   forth_bracket_char, dict_bracket_tick, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_exit,       "exit",       forth_exit,        dict_bracket_char, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_compile_comma, "compile,", forth_compile_comma, dict_exit
+DEFWORD dict_postpone,   "postpone",   forth_postpone,    dict_compile_comma, F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_postpone
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

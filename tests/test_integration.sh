@@ -480,6 +480,35 @@ assert_output "char"              'char A .'                           "65"
 assert_output "char space"        'char X .'                           "88"
 
 # =========================================================================
+section "Compiler Words"
+# =========================================================================
+
+# STATE
+assert_output "state interpret"   'state @ .'                          "0"
+assert_output "state addr"        ': test state @ ; test .'            "0"
+
+# [ and ]
+assert_output "[ ] inline"        ': test [ 42 ] literal ; test .'    "42"
+
+# LITERAL
+assert_output "literal"           ': five [ 5 ] literal ; five .'     "5"
+
+# [']
+assert_output "['] execute"       ": test ['] dup execute ; 7 test . ." "7 7"
+
+# [CHAR]
+assert_output "[char]"            ': test [char] A ; test .'          "65"
+
+# EXIT
+assert_output "exit early"        ': test 1 . exit 2 . ; test'        "1"
+
+# POSTPONE immediate word
+assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-if 42 . then ; test' "42"
+
+# POSTPONE non-immediate word
+assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

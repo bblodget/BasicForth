@@ -2585,6 +2585,135 @@ forth_hld:
     STR X9, [X19, #-CELL]!
     RET
 
+// ---------- Compiler Words ----------
+
+// STATE ( -- a-addr )  Push address of STATE variable.
+.global forth_state
+forth_state:
+    ADR X9, state
+    STR X9, [X19, #-CELL]!
+    RET
+
+// [ ( -- )  Switch to interpret mode.  IMMEDIATE.
+.global forth_left_bracket
+forth_left_bracket:
+    ADR X9, state
+    STR XZR, [X9]
+    RET
+
+// ] ( -- )  Switch to compile mode.
+.global forth_right_bracket
+forth_right_bracket:
+    ADR X9, state
+    MOV X10, #-1
+    STR X10, [X9]
+    RET
+
+// LITERAL ( x -- )  Compile a literal at compile time.  IMMEDIATE+COMPILE_ONLY.
+.global forth_literal
+forth_literal:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19], #CELL           // pop value
+    BL compile_literal
+    LDP X29, X30, [SP], #16
+    RET
+
+// ['] ( "<spaces>name" -- )  Compile xt as literal.  IMMEDIATE+COMPILE_ONLY.
+.global forth_bracket_tick
+forth_bracket_tick:
+    STP X29, X30, [SP, #-16]!
+    BL forth_parse_word             // ( -- c-addr u )
+    BL forth_find                   // ( c-addr u -- xt flag | c-addr u 0 )
+    LDR X9, [X19]                   // flag
+    CBZ X9, .Lbt_not_found
+    ADD X19, X19, #CELL             // drop flag
+    LDR X0, [X19], #CELL           // pop xt
+    BL compile_literal
+    LDP X29, X30, [SP], #16
+    RET
+.Lbt_not_found:
+    ADD X19, X19, #(3*CELL)         // drop flag, u, c-addr
+    STR XZR, [X19, #-CELL]!        // push 0 (invalid xt)
+    LDP X29, X30, [SP], #16
+    RET
+
+// [CHAR] ( "<spaces>name" -- )  Compile char value as literal.  IMMEDIATE+COMPILE_ONLY.
+.global forth_bracket_char
+forth_bracket_char:
+    STP X29, X30, [SP, #-16]!
+    BL forth_parse_word             // ( -- c-addr u )
+    LDR X9, [X19, #CELL]           // c-addr (second item)
+    LDRB W0, [X9]                   // first character
+    ADD X19, X19, #(2*CELL)         // drop c-addr and u
+    BL compile_literal
+    LDP X29, X30, [SP], #16
+    RET
+
+// EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
+.global forth_exit
+forth_exit:
+    STP X29, X30, [SP, #-16]!
+    BL compile_ret
+    LDP X29, X30, [SP], #16
+    RET
+
+// COMPILE, ( xt -- )  Compile a call to xt into the current definition.
+.global forth_compile_comma
+forth_compile_comma:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19], #CELL           // pop xt
+    BL compile_call
+    LDP X29, X30, [SP], #16
+    RET
+
+// POSTPONE ( "<spaces>name" -- )  IMMEDIATE+COMPILE_ONLY.
+.global forth_postpone
+forth_postpone:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    BL forth_parse_word             // ( -- c-addr u )
+    BL forth_find                   // ( c-addr u -- xt flag | c-addr u 0 )
+    LDR X23, [X19]                  // flag
+    CBZ X23, .Lpostpone_not_found
+
+    ADD X19, X19, #CELL             // drop flag
+    LDR X0, [X19], #CELL           // pop xt
+
+    // Is it IMMEDIATE? (flag == 1 or flag == 2)
+    CMP X23, #1
+    B.EQ .Lpostpone_immediate
+    CMP X23, #2
+    B.EQ .Lpostpone_immediate
+
+    // Non-immediate: compile LITERAL(xt) + BL(forth_compile_comma)
+    BL compile_literal
+    ADR X0, forth_compile_comma
+    BL compile_call
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lpostpone_immediate:
+    // IMMEDIATE: just compile a BL to it
+    BL compile_call
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lpostpone_not_found:
+    // Word not found — set error and abort
+    ADD X19, X19, #CELL             // drop 0 flag
+    LDR X9, [X19]                   // u
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]           // c-addr
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #(2*CELL)         // drop c-addr and u
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    B .Lcf_abort
+
 // ---------- TYPE ----------
 
 // TYPE ( c-addr u -- ) — write string to stdout
@@ -3141,7 +3270,16 @@ DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
 DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
 DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
-.global dict_u_less
+DEFWORD dict_state,      "state",      forth_state,       dict_u_less
+DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_state, F_IMMEDIATE
+DEFWORD dict_rbracket,   "]",          forth_right_bracket, dict_lbracket
+DEFWORD dict_literal,    "literal",    forth_literal,     dict_rbracket, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_bracket_tick, "[']",      forth_bracket_tick, dict_literal, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_bracket_char, "[char]",   forth_bracket_char, dict_bracket_tick, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_exit,       "exit",       forth_exit,        dict_bracket_char, F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_compile_comma, "compile,", forth_compile_comma, dict_exit
+DEFWORD dict_postpone,   "postpone",   forth_postpone,    dict_compile_comma, F_IMMEDIATE+F_COMPILE_ONLY
+.global dict_postpone
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
