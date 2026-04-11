@@ -27,10 +27,12 @@
 : 0<>   0= invert ;
 
 \ Derived stack words
+: -ROT    rot rot ;
 : 2OVER   3 pick 3 pick ;
 : 2SWAP   rot >r rot r> ;
 
 \ Derived arithmetic
+: 2*      1 lshift ;
 : */      >r * r> / ;
 
 \ Output helpers
@@ -76,6 +78,37 @@
 \ Redefine */ using double-width intermediate
 : */MOD     >r m* r> fm/mod ;
 : */        */mod nip ;
+
+\ Memory operations
+: +!        dup @ rot + swap ! ;
+: 2!        swap over ! cell+ ! ;
+: 2@        dup cell+ @ swap @ ;
+: CHAR+     1+ ;
+: CHARS     ;
+: FILL      ( c-addr u char -- )
+            -rot begin dup 0 > while
+                >r 2dup c! 1+ r> 1-
+            repeat drop 2drop ;
+: MOVE      ( addr1 addr2 u -- )
+            dup 0 > if
+                >r 2dup u< if
+                    \ dest < src: copy forward
+                    r> 0 do over i + c@ over i + c! loop
+                else
+                    \ dest >= src: copy backward
+                    r> begin dup 0 > while
+                        1- >r
+                        over r@ + c@    ( src dest byte )
+                        over r@ + c!    ( src dest )
+                        r>
+                    repeat drop
+                then 2drop
+            else drop 2drop then ;
+: ALIGN     here 7 + -8 and here - allot ;
+: ALIGNED   7 + -8 and ;
+
+\ Character helpers
+: CHAR      parse-word drop c@ ;
 
 \ Defining words
 : VARIABLE  create 1 cells allot ;

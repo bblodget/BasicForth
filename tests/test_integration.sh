@@ -431,6 +431,55 @@ assert_output "# prefix hex"       'hex #255 . decimal'         "FF"
 assert_output "base restore"       'hex #42 . decimal 42 .'    "2A 42"
 
 # =========================================================================
+section "Batch 1: Simple Core Words"
+# =========================================================================
+
+# LSHIFT / RSHIFT
+assert_output "lshift"            '1 4 lshift .'                        "16"
+assert_output "lshift zero"       '42 0 lshift .'                       "42"
+assert_output "rshift"            '256 4 rshift .'                      "16"
+assert_output "rshift zero"       '42 0 rshift .'                       "42"
+
+# 2* / 2/
+assert_output "2*"                '21 2* .'                             "42"
+assert_output "2/ positive"       '42 2/ .'                             "21"
+assert_output "2/ negative"       '-7 2/ .'                             "-4"
+assert_output "2/ -1"             '-1 2/ .'                             "-1"
+
+# U<
+assert_output "u< true"           '3 10 u< .'                          "-1"
+assert_output "u< false"          '10 3 u< .'                          "0"
+assert_output "u< equal"          '5 5 u< .'                           "0"
+assert_output "u< unsigned"       '-1 1 u< .'                          "0"
+
+# +!
+assert_output "+!"                'variable x 10 x ! 5 x +! x @ .'    "15"
+
+# 2! / 2@
+assert_output "2! 2@"             'variable p 8 allot 10 20 p 2! p 2@ . .' "20 10"
+
+# CHAR+ / CHARS
+assert_output "char+"             '100 char+ .'                         "101"
+assert_output "chars"             '10 chars .'                          "10"
+
+# FILL
+assert_output "fill"              'create buf 5 allot buf 5 65 fill buf 5 type' "AAAAA"
+assert_output "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
+
+# MOVE
+assert_output "move non-overlap"  'create s 3 allot create d 3 allot s 3 65 fill s d 3 move d 3 type' "AAA"
+assert_output "move zero len"     '1 2 0 move 42 .' "42"
+
+# ALIGN / ALIGNED
+assert_output "aligned"           '1 aligned .'                        "8"
+assert_output "aligned 8"         '8 aligned .'                        "8"
+assert_output "aligned 9"         '9 aligned .'                        "16"
+
+# CHAR
+assert_output "char"              'char A .'                           "65"
+assert_output "char space"        'char X .'                           "88"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

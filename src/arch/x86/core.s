@@ -556,6 +556,49 @@ forth_invert:
     notq (%r15)
     ret
 
+# LSHIFT ( x1 u -- x2 )
+# Logical left shift
+.global forth_lshift
+forth_lshift:
+
+    mov (%r15), %rcx            # rcx = shift count
+    add $CELL, %r15             # pop count
+    shlq %cl, (%r15)            # top = x1 << u
+    ret
+
+# RSHIFT ( x1 u -- x2 )
+# Logical right shift
+.global forth_rshift
+forth_rshift:
+
+    mov (%r15), %rcx            # rcx = shift count
+    add $CELL, %r15             # pop count
+    shrq %cl, (%r15)            # top = x1 >> u (logical)
+    ret
+
+# 2/ ( x -- x/2 )
+# Arithmetic right shift by 1 (floor of x/2)
+.global forth_two_div
+forth_two_div:
+
+    sarq $1, (%r15)
+    ret
+
+# U< ( u1 u2 -- flag )
+# Unsigned less-than comparison
+.global forth_u_less
+forth_u_less:
+
+    mov (%r15), %rax            # rax = u2
+    add $CELL, %r15             # pop u2
+    cmp %rax, (%r15)            # compare u1 - u2 (unsigned)
+    mov $0, %rax
+    jnb .Lu_less_done
+    mov $-1, %rax
+.Lu_less_done:
+    mov %rax, (%r15)
+    ret
+
 # ---------- Memory ----------
 
 # @ (fetch) ( addr -- x )
@@ -2837,7 +2880,11 @@ DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
 DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
 DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
 DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
-.global dict_hld
+DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
+DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
+DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
+DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
+.global dict_u_less
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
