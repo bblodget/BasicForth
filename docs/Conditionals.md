@@ -275,4 +275,82 @@ since DO pushes above it.
 \ LEAVE — exit loop early
 : find-first  10 0 do i 5 = if leave then i . loop ;
 find-first   \ prints 0 1 2 3 4 (exits before printing 5)
+
+\ CASE/OF/ENDOF/ENDCASE — multi-way branching
+: describe  case
+    1 of ." one"   endof
+    2 of ." two"   endof
+    3 of ." three" endof
+    ." other"
+  endcase ;
+2 describe   \ prints "two"
+7 describe   \ prints "other"
+
+\ CASE with computed result (default uses SWAP to keep value, DROP by ENDCASE)
+: test  case
+    1 of 10 endof
+    2 of 20 endof
+    0 swap               \ default: push 0, swap selector to top for DROP
+  endcase ;
+1 test .   \ 10
+3 test .   \ 0
+```
+
+## CASE / OF / ENDOF / ENDCASE
+
+Multi-way branching, similar to C's `switch` statement. All four words
+are IMMEDIATE + COMPILE_ONLY.
+
+### Compile-Time Stack Protocol
+
+CASE/OF/ENDOF/ENDCASE use the data stack at compile time to track
+forward branch addresses, with a 0 sentinel:
+
+```
+CASE      pushes 0 (sentinel marker)
+OF        pushes 0branch-patch-address
+ENDOF     pops OF's patch, pushes branch-patch-address
+ENDCASE   pops and patches all addresses until 0 sentinel
+```
+
+### Compiled Code
+
+OF compiles four calls:
+1. `CALL forth_over` — duplicate the selector value
+2. `CALL forth_equal` — compare with the test value
+3. `0branch(forward)` — skip to after ENDOF if no match
+4. `CALL forth_drop` — on match, remove the selector
+
+ENDOF compiles a `branch(forward)` to skip past remaining cases, then
+patches the OF's 0branch to land here (after the branch).
+
+ENDCASE compiles `CALL forth_drop` (discard selector on the default
+path), then loops through the compile-time stack patching all ENDOF
+forward branches to jump to HERE.
+
+### Runtime Flow
+
+For `: test case 1 of 10 endof 2 of 20 endof 0 swap endcase ;`:
+
+```
+2 test
+  Stack: ( 2 )
+  OF 1:  OVER → ( 2 2 ), push 1 → ( 2 2 1 ), = → ( 2 0 )
+         0branch → taken (skip to after ENDOF 1)
+  OF 2:  OVER → ( 2 2 ), push 2 → ( 2 2 2 ), = → ( 2 -1 )
+         0branch → not taken, DROP → ( ), push 20 → ( 20 )
+         ENDOF branch → jump to after ENDCASE
+  ENDCASE: (arrived via ENDOF branch, skip DROP)
+  Result: 20
+```
+
+### Default Case
+
+Code between the last ENDOF and ENDCASE runs when no OF matched. The
+selector value is still on the stack. ENDCASE always compiles DROP to
+discard it. A common idiom for returning a default value:
+
+```forth
+0 swap     \ push default, move selector to top for DROP
+endcase    \ ENDCASE drops the selector, leaving the default
 ```

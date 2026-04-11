@@ -303,38 +303,80 @@ See [Forth_Core_Words.md](Forth_Core_Words.md) for the full vocabulary.
 
 ### Stack (all in asm)
 
-ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP, >R, R>, R@
+ROT, NIP, TUCK, 2DUP, 2DROP, DEPTH, ?DUP, >R, R>, R@, PICK
 
 ### Arithmetic (all in asm)
 
-\*, /MOD (divide-by-zero safe), 1+, 1-, ABS, MIN, MAX
+\*, /MOD (divide-by-zero safe), 1+, 1-, ABS, MIN, MAX, LSHIFT, RSHIFT, 2/
+
+### Double-Cell Arithmetic (all in asm)
+
+S>D, UM\*, M\*, UM/MOD, SM/REM, FM/MOD
 
 ### Logic and Comparison (all in asm)
 
-AND, OR, XOR, INVERT, =, <, >, 0=, 0<
+AND, OR, XOR, INVERT, =, <, >, 0=, 0<, U<
+
+### Memory and Dictionary
+
+| Word    | Stack effect                | Notes                           |
+|---------|-----------------------------|---------------------------------|
+| HERE    | ( -- addr )                 | Push HERE register              |
+| ALLOT   | ( n -- )                    | Bounds-checked both directions  |
+| ,       | ( x -- )                    | Store cell at HERE, advance     |
+| C,      | ( char -- )                 | Store byte at HERE, advance     |
+| CREATE  | ( "name" -- )               | Compile push-data-address code  |
+| CONSTANT| ( x "name" -- )             | Compile push-value code         |
+| DOES>   | ( -- a-addr )               | Attach runtime to CREATE'd word |
+| >BODY   | ( xt -- a-addr )            | xt to data field address        |
+| TYPE    | ( c-addr u -- )             | Write string to stdout          |
+| S"      | ( "ccc" -- c-addr u )       | Inline string literal (IMM+CO)  |
+| ."      | ( "ccc" -- )                | Compile string + TYPE (IMM+CO)  |
+
+### Variables (all in asm)
+
+| Word   | Stack effect    | Notes                              |
+|--------|-----------------|------------------------------------|
+| BASE   | ( -- a-addr )   | Number base variable               |
+| STATE  | ( -- a-addr )   | Compile/interpret flag variable    |
+| >IN    | ( -- a-addr )   | Input parse position variable      |
+| SOURCE | ( -- c-addr u ) | Current input buffer addr + length |
+| PAD    | ( -- c-addr )   | Scratch buffer address             |
+| HLD    | ( -- a-addr )   | Pictured output pointer variable   |
+| UNUSED | ( -- u )        | Free bytes in dictionary space     |
 
 ### Interpreter and Compiler
 
-| Word              | Stack effect          | Notes                              |
-|-------------------|-----------------------|------------------------------------|
-| LIT               | ( -- x )              | Push inline literal (hidden)       |
-| EXECUTE           | ( xt -- )             | Call execution token               |
-| :                 | ( "name" -- )         | Begin colon definition             |
-| ;                 | ( -- )                | End definition (IMMEDIATE)         |
-| IMMEDIATE         | ( -- )                | Mark word as immediate             |
-| '                 | ( "name" -- xt )      | Find xt (IMMEDIATE)                |
-| (                 | ( "ccc)" -- )         | Paren comment (IMMEDIATE)          |
-| \                 | ( "ccc" -- )          | Line comment (IMMEDIATE)           |
-| EVALUATE          | ( c-addr u -- )       | Interpret string as Forth          |
-| INCLUDED          | ( c-addr u -- )       | Load and interpret a source file   |
-| INTERPRET-LINE    | ( -- )                | Internal: interpret current source |
+| Word       | Stack effect          | Notes                              |
+|------------|-----------------------|------------------------------------|
+| LIT        | ( -- x )              | Push inline literal (hidden)       |
+| EXECUTE    | ( xt -- )             | Call execution token               |
+| :          | ( "name" -- )         | Begin colon definition             |
+| ;          | ( -- )                | End definition (IMMEDIATE)         |
+| IMMEDIATE  | ( -- )                | Mark word as immediate             |
+| '          | ( "name" -- xt )      | Find xt (IMMEDIATE)                |
+| (          | ( "ccc)" -- )         | Paren comment (IMMEDIATE)          |
+| \          | ( "ccc" -- )          | Line comment (IMMEDIATE)           |
+| EVALUATE   | ( c-addr u -- )       | Interpret string as Forth          |
+| INCLUDED   | ( c-addr u -- )       | Load and interpret a source file   |
+| LITERAL    | ( x -- )              | Compile inline literal (IMM+CO)    |
+| POSTPONE   | ( "name" -- )         | Compile compilation semantics (IMM+CO) |
+| [']        | ( "name" -- )         | Compile xt as literal (IMM+CO)     |
+| [CHAR]     | ( "name" -- )         | Compile char as literal (IMM+CO)   |
+| [          | ( -- )                | Switch to interpret mode (IMM)     |
+| ]          | ( -- )                | Switch to compile mode             |
+| EXIT       | ( -- )                | Compile RET (IMM+CO)              |
+| COMPILE,   | ( xt -- )             | Compile call to xt                 |
 
-### Future Primitives
+### Control Flow (all IMMEDIATE + COMPILE_ONLY, compile inline branches)
 
-| Word      | Stack effect          | Notes                           |
-|-----------|-----------------------|---------------------------------|
-| BRANCH    | ( -- )                | Unconditional branch            |
-| 0BRANCH   | ( flag -- )           | Branch if false                 |
-| EXIT      | ( -- )                | Return from word (RET)          |
-| ,         | ( x -- )              | Compile cell to dictionary      |
-| HERE      | ( -- addr )           | Push HERE register              |
+IF, ELSE, THEN, BEGIN, UNTIL, AGAIN, WHILE, REPEAT, RECURSE,
+DO, LOOP, +LOOP, I, J, UNLOOP, LEAVE,
+CASE, OF, ENDOF, ENDCASE
+
+### System
+
+| Word   | Stack effect          | Notes                            |
+|--------|-----------------------|----------------------------------|
+| ABORT  | ( i\*x -- )           | Clear stacks, reset to REPL      |
+| QUIT   | ( -- )                | Reset return stack, enter REPL   |
