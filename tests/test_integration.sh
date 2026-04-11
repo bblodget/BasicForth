@@ -409,6 +409,7 @@ assert_output "u. simple"          "42 u."                            "42"
 assert_output "u. large"           "999999 u."                        "999999"
 assert_output ".r right-just"      "42 5 .r"                          "   42"
 assert_output ".r narrow"          "100 2 .r"                         "100"
+assert_output ".r negative"       ': test -42 6 .r ; test'           "   -42"
 assert_output "*/mod"              "3 7 2 */mod . ."                  "10 1"
 assert_output "decimal"            ": test decimal 42 . ; test"       "42"
 
