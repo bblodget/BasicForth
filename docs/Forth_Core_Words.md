@@ -78,13 +78,13 @@ Status: ( ) = not yet implemented, (x) = implemented
 | 1+     | ( n -- n+1 )                                  | asm   | (x)    |                         |
 | 1-     | ( n -- n-1 )                                  | asm   | (x)    |                         |
 | ABS    | ( n -- u )                                    | asm   | (x)    |                         |
-| 2*     | ( x -- x*2 )                                  | forth | ( )    | 1 LSHIFT                |
-| 2/     | ( x -- x/2 )                                  | forth | ( )    | 1 RSHIFT                |
-| +!     | ( n a-addr -- )                               | forth | ( )    | DUP @ ROT + SWAP !      |
+| 2*     | ( x -- x*2 )                                  | forth | (x)    | 1 LSHIFT (core.fs)      |
+| 2/     | ( x -- x/2 )                                  | asm   | (x)    | Arithmetic shift right   |
+| +!     | ( n a-addr -- )                               | forth | (x)    | core.fs                  |
 | CELL+  | ( a-addr -- a-addr+8 )                        | forth | (x)    | 8 + (in core.fs)        |
 | CELLS  | ( n -- n*8 )                                  | forth | (x)    | 8 * (in core.fs)        |
-| CHAR+  | ( c-addr -- c-addr+1 )                        | forth | ( )    | 1 +                     |
-| CHARS  | ( n -- n )                                    | forth | ( )    | no-op on byte-addressed |
+| CHAR+  | ( c-addr -- c-addr+1 )                        | forth | (x)    | 1+ (in core.fs)         |
+| CHARS  | ( n -- n )                                    | forth | (x)    | no-op (byte-addressed)  |
 
 ### Double-Width Arithmetic
 
@@ -105,14 +105,14 @@ Status: ( ) = not yet implemented, (x) = implemented
 | OR     | ( x1 x2 -- x3 )                              | asm   | (x)    |                         |
 | XOR    | ( x1 x2 -- x3 )                              | asm   | (x)    |                         |
 | INVERT | ( x -- ~x )                                   | asm   | (x)    |                         |
-| LSHIFT | ( x u -- x<<u )                               | asm   | ( )    |                         |
-| RSHIFT | ( x u -- x>>u )                               | asm   | ( )    |                         |
+| LSHIFT | ( x u -- x<<u )                               | asm   | (x)    |                         |
+| RSHIFT | ( x u -- x>>u )                               | asm   | (x)    | Logical shift           |
 | 0=     | ( x -- flag )                                 | asm   | (x)    |                         |
 | 0<     | ( n -- flag )                                 | asm   | (x)    |                         |
 | =      | ( x1 x2 -- flag )                             | asm   | (x)    |                         |
 | <      | ( n1 n2 -- flag )                             | asm   | (x)    |                         |
 | >      | ( n1 n2 -- flag )                             | asm   | (x)    |                         |
-| U<     | ( u1 u2 -- flag )                             | asm   | ( )    |                         |
+| U<     | ( u1 u2 -- flag )                             | asm   | (x)    |                         |
 | MIN    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 | MAX    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 
@@ -124,12 +124,12 @@ Status: ( ) = not yet implemented, (x) = implemented
 | !       | ( x a-addr -- )                               | asm   | (x)    | Store cell              |
 | C@      | ( c-addr -- char )                            | asm   | (x)    | Fetch byte              |
 | C!      | ( char c-addr -- )                            | asm   | (x)    | Store byte              |
-| 2@      | ( a-addr -- x1 x2 )                          | forth | ( )    |                         |
-| 2!      | ( x1 x2 a-addr -- )                          | forth | ( )    |                         |
-| FILL    | ( c-addr u char -- )                          | forth | ( )    |                         |
-| MOVE    | ( addr1 addr2 u -- )                          | forth | ( )    |                         |
-| ALIGN   | ( -- )                                        | forth | ( )    | Align HERE              |
-| ALIGNED | ( addr -- a-addr )                            | forth | ( )    |                         |
+| 2@      | ( a-addr -- x1 x2 )                          | forth | (x)    | core.fs                 |
+| 2!      | ( x1 x2 a-addr -- )                          | forth | (x)    | core.fs                 |
+| FILL    | ( c-addr u char -- )                          | forth | (x)    | core.fs                 |
+| MOVE    | ( addr1 addr2 u -- )                          | forth | (x)    | core.fs, overlap-safe   |
+| ALIGN   | ( -- )                                        | forth | (x)    | core.fs                 |
+| ALIGNED | ( addr -- a-addr )                            | forth | (x)    | core.fs                 |
 | ALLOT   | ( n -- )                                      | asm   | (x)    | Bounds-checked both directions |
 | HERE    | ( -- addr )                                   | asm   | (x)    | Push HERE register      |
 | ,       | ( x -- )                                      | asm   | (x)    | Store x at HERE, advance |
@@ -150,7 +150,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | U.      | ( u -- )                                      | forth | (x)    | core.fs: 0 <# #S #> TYPE |
 | ."      | ( "ccc" -- )                                  | asm   | (x)    | Compile string + TYPE    |
 | BL      | ( -- char )                                   | forth | (x)    | 32 (in core.fs)         |
-| CHAR    | ( "name" -- char )                            | forth | ( )    | First char of next word  |
+| CHAR    | ( "name" -- char )                            | forth | (x)    | core.fs                  |
 
 ### Number Formatting
 
@@ -177,20 +177,20 @@ Status: ( ) = not yet implemented, (x) = implemented
 | IMMEDIATE | ( -- )                                        | asm   | (x)    | Mark word as immediate   |
 | '         | ( "name" -- xt )                              | asm   | (x)    | Find xt (IMMEDIATE)      |
 | EXECUTE   | ( xt -- )                                     | asm   | (x)    | Call execution token     |
-| LITERAL   | ( x -- )                                      | forth | ( )    | Compile inline literal   |
-| POSTPONE  | ( "name" -- )                                 | forth | ( )    | Compile compilation      |
+| LITERAL   | ( x -- )                                      | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
+| POSTPONE  | ( "name" -- )                                 | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
 | RECURSE   | ( -- )                                        | asm   | (x)    | Compile call to self (IMMEDIATE) |
-| STATE     | ( -- a-addr )                                 | forth | ( )    | Compile/interpret flag   |
-| [         | ( -- )                                        | forth | ( )    | Switch to interpret      |
-| ]         | ( -- )                                        | forth | ( )    | Switch to compile        |
-| [CHAR]    | ( "name" -- )                                 | forth | ( )    | Compile char literal     |
+| STATE     | ( -- a-addr )                                 | asm   | (x)    | Push state variable addr |
+| [         | ( -- )                                        | asm   | (x)    | Switch to interpret (IMM)|
+| ]         | ( -- )                                        | asm   | (x)    | Switch to compile        |
+| [CHAR]    | ( "name" -- )                                 | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
 | FIND      | ( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )  | asm   | (x)    | Dictionary lookup        |
-| >BODY     | ( xt -- a-addr )                              | forth | ( )    | xt to data field         |
+| >BODY     | ( xt -- a-addr )                              | asm   | (x)    | xt to data field         |
 | DECIMAL   | ( -- )                                        | forth | (x)    | core.fs: #10 BASE !     |
-| WORD      | ( char -- c-addr )                            | forth | ( )    | Parse delimited word     |
-| >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | ( )    | Convert string to number |
-| >IN       | ( -- a-addr )                                 | forth | ( )    | Input parse position     |
-| SOURCE    | ( -- c-addr u )                               | forth | ( )    | Current input buffer     |
+| WORD      | ( char -- c-addr )                            | forth | (x)    | core.fs                  |
+| >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | (x)    | core.fs                  |
+| >IN       | ( -- a-addr )                                 | asm   | (x)    | Push to_in variable addr |
+| SOURCE    | ( -- c-addr u )                               | asm   | (x)    | Current input buffer     |
 | EVALUATE  | ( c-addr u -- )                               | asm   | (x)    | Interpret string         |
 
 ### Control Flow
@@ -212,7 +212,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | LEAVE  | ( -- ) (R: loop-sys -- )                       | asm   | (x)    | Exit DO loop early       |
 | UNLOOP | ( -- ) (R: limit index -- )                    | asm   | (x)    | Discard loop params      |
 | RECURSE| ( -- )                                         | asm   | (x)    | Compile call to self     |
-| EXIT   | ( -- )                                         | asm   | ( )    | Return from word (RET)   |
+| EXIT   | ( -- )                                         | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
 
 ### Comments
 
@@ -225,10 +225,10 @@ Status: ( ) = not yet implemented, (x) = implemented
 
 | Word          | Stack effect                                  | Layer | Status | Notes                   |
 |---------------|-----------------------------------------------|-------|--------|-------------------------|
-| ABORT         | ( -- )                                        | forth | ( )    | Clear stacks, QUIT      |
-| ABORT"        | ( flag "ccc" -- )                             | forth | ( )    | Conditional abort + msg |
-| QUIT          | ( -- )                                        | forth | ( )    | Main interpreter loop   |
-| ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | ( )    | Query environment       |
+| ABORT         | ( -- )                                        | asm   | (x)    | Clear stacks, reset REPL |
+| ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE)      |
+| QUIT          | ( -- )                                        | asm   | (x)    | Reset RSP, enter REPL    |
+| ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | (x)    | core.fs (always false)   |
 | S"            | ( "ccc" -- c-addr u )                         | asm   | (x)    | Inline string literal   |
 
 ## Core Extension Words (6.2)
@@ -236,37 +236,40 @@ Status: ( ) = not yet implemented, (x) = implemented
 The standard also defines 49 optional extension words. We plan to implement
 commonly useful ones:
 
-| Word       | Stack effect                                  | Notes                        |
-|------------|-----------------------------------------------|------------------------------|
-| NIP        | ( x1 x2 -- x2 )                              | asm (x)                      |
-| TUCK       | ( x1 x2 -- x2 x1 x2 )                       | asm (x)                      |
-| <>         | ( x1 x2 -- flag )                            | forth (x) = INVERT (core.fs) |
-| 0<>        | ( x -- flag )                                 | forth (x) 0= INVERT (core.fs) |
-| 0>         | ( n -- flag )                                 | 0 >                         |
-| AGAIN      | ( -- )                                        | Unconditional loop back      |
-| HEX        | ( -- )                                        | Set BASE to 16               |
-| TRUE       | ( -- true )                                   | -1                           |
-| FALSE      | ( -- false )                                  | 0                            |
-| WITHIN     | ( n lo hi -- flag )                           | OVER - >R - R> U<            |
-| CASE       | ( -- )                                        | Begin CASE statement         |
-| OF         | ( x1 x2 -- \| x1 )                           | Test case value              |
-| ENDOF      | ( -- )                                        | End of case branch           |
-| ENDCASE    | ( x -- )                                      | End CASE statement           |
-| ?DO        | ( limit index -- )                            | Skip-if-equal DO             |
-| VALUE      | ( x "name" -- )                               | Named value                  |
-| TO         | ( x "name" -- )                               | Assign to VALUE              |
-| PARSE      | ( char -- c-addr u )                          | Parse with delimiter         |
-| PARSE-NAME | ( -- c-addr u )                               | Parse whitespace-delimited   |
-| PICK       | ( xu...x0 u -- xu...x0 xu )                  | Copy nth item (asm) (x)      |
-| PAD        | ( -- c-addr )                                 | Scratch buffer               |
-| ERASE      | ( addr u -- )                                 | Fill with zeros              |
-| REFILL     | ( -- flag )                                   | Refill input buffer          |
-| SOURCE-ID  | ( -- 0 \| -1 )                               | Input source identifier      |
-| .(         | ( "ccc)" -- )                                 | Print immediately            |
-| .R         | ( n1 n2 -- )                                  | Right-justified print        |
-| U.R        | ( u n -- )                                    | Right-justified unsigned     |
-| U>         | ( u1 u2 -- flag )                             | Unsigned greater-than        |
-| \          | ( -- )                                        | Line comment                 |
+| Word       | Stack effect                                  | Status | Notes                   |
+|------------|-----------------------------------------------|--------|-------------------------|
+| NIP        | ( x1 x2 -- x2 )                              | (x)    | asm                     |
+| TUCK       | ( x1 x2 -- x2 x1 x2 )                       | (x)    | asm                     |
+| <>         | ( x1 x2 -- flag )                             | (x)    | core.fs                 |
+| 0<>        | ( x -- flag )                                 | (x)    | core.fs                 |
+| 0>         | ( n -- flag )                                 | (x)    | core.fs                 |
+| AGAIN      | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
+| HEX        | ( -- )                                        | (x)    | core.fs                 |
+| TRUE       | ( -- true )                                   | (x)    | core.fs                 |
+| FALSE      | ( -- false )                                  | (x)    | core.fs                 |
+| WITHIN     | ( n lo hi -- flag )                           | (x)    | core.fs                 |
+| CASE       | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
+| OF         | ( x1 x2 -- \| x1 )                           | (x)    | asm (IMMEDIATE)         |
+| ENDOF      | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
+| ENDCASE    | ( x -- )                                      | (x)    | asm (IMMEDIATE)         |
+| COMPILE,   | ( xt -- )                                     | (x)    | asm                     |
+| ?DO        | ( limit index -- )                            | ( )    | Skip-if-equal DO        |
+| VALUE      | ( x "name" -- )                               | ( )    | Named value             |
+| TO         | ( x "name" -- )                               | ( )    | Assign to VALUE         |
+| :NONAME    | ( -- xt )                                     | ( )    | Anonymous definition    |
+| PARSE      | ( char -- c-addr u )                          | ( )    | Parse with delimiter    |
+| PARSE-NAME | ( -- c-addr u )                               | ( )    | Parse whitespace        |
+| PICK       | ( xu...x0 u -- xu...x0 xu )                   | (x)    | asm                     |
+| PAD        | ( -- c-addr )                                 | (x)    | asm                     |
+| ERASE      | ( addr u -- )                                 | (x)    | core.fs                 |
+| UNUSED     | ( -- u )                                      | (x)    | asm                     |
+| SOURCE-ID  | ( -- 0 \| -1 )                                | ( )    | Input source identifier |
+| .(         | ( "ccc)" -- )                                 | (x)    | core.fs (IMMEDIATE)     |
+| .R         | ( n1 n2 -- )                                  | (x)    | core.fs                 |
+| U.R        | ( u n -- )                                    | (x)    | core.fs                 |
+| U>         | ( u1 u2 -- flag )                              | (x)    | core.fs                 |
+| HOLDS      | ( c-addr u -- )                               | (x)    | core.fs                 |
+| \\         | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
 
 ## Future Standard Word Sets
 

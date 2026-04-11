@@ -106,7 +106,7 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] build_header refactor — shared by :, CREATE, CONSTANT
 - [x] DOES> — attach runtime behavior to CREATE'd words
 
-### 3e. core.fs Bootstrap — IN PROGRESS
+### 3e. core.fs Bootstrap — MOSTLY COMPLETE
 
 - [x] Comments: `(` and `\` (asm, IMMEDIATE)
 - [x] EVALUATE ( c-addr u -- ) — interpret a string as Forth
@@ -123,6 +123,11 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Pictured numeric output: <#, #, #S, #>, HOLD, SIGN, BASE, PAD, HLD
 - [x] Formatting: U., .R
 - [x] */MOD (redefined with M* FM/MOD), DECIMAL
+- [x] Batch 1: LSHIFT, RSHIFT, U<, 2/, +!, 2!, 2@, 2*, CHAR+, CHARS, FILL, MOVE, ALIGN, ALIGNED, CHAR, -ROT
+- [x] Batch 2: STATE, [, ], LITERAL, ['], [CHAR], EXIT, POSTPONE, COMPILE,
+- [x] Batch 3: >BODY, >IN, SOURCE, ABORT, QUIT, ABORT", >NUMBER, >DIGIT?, WORD, ENVIRONMENT?
+- [x] Batch 4: CASE/OF/ENDOF/ENDCASE, UNUSED, 0>, U>, WITHIN, ERASE, U.R, HOLDS, .(
+- [ ] Remaining: ?DO, VALUE/TO, :NONAME, PARSE, PARSE-NAME, SOURCE-ID
 
 ---
 
