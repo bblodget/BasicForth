@@ -415,6 +415,22 @@ assert_output "*/mod"              "3 7 2 */mod . ."                  "10 1"
 assert_output "decimal"            ": test decimal 42 . ; test"       "42"
 
 # =========================================================================
+section "BASE and Number Formatting"
+# =========================================================================
+
+assert_output "hex output"         ': hex 16 base ! ; hex #255 . decimal'       "FF"
+assert_output "hex u. output"      ': hex 16 base ! ; hex #255 u. decimal'      "FF"
+assert_output "hex input"          ': hex 16 base ! ; FF . decimal'              "FF"
+assert_output "hex $ prefix"       ': hex 16 base ! ; $FF . decimal'             "FF"
+assert_output "dec # in hex"       ': hex 16 base ! ; #100 . decimal'            "64"
+assert_output "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
+assert_output "bin % prefix"       '%1010 .'                                      "10"
+assert_output "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
+assert_output "$ prefix decimal"   '$FF .'                                        "255"
+assert_output "# prefix hex"       ': hex 16 base ! ; hex #255 . decimal'         "FF"
+assert_output "base restore"       ': hex 16 base ! ; hex #42 . decimal 42 .'    "2A 42"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 
