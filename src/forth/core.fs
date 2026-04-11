@@ -40,7 +40,8 @@
 : COUNT   dup 1+ swap c@ ;
 
 \ Number base
-: DECIMAL   10 base ! ;
+: DECIMAL   #10 base ! ;
+: HEX       $10 base ! ;
 
 \ Pictured numeric output
 \ Builds strings right-to-left in PAD buffer.
