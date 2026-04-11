@@ -61,10 +61,16 @@
 : #S        begin # 2dup or 0= until ;
 : #>        2drop hld @ pad 68 + over - ;
 
+\ Double-cell helpers
+: DNEGATE   ( d-lo d-hi -- d-lo' d-hi' )
+            invert swap invert 1+ swap over 0= if 1+ then ;
+: DABS      ( d-lo d-hi -- d-lo d-hi )
+            dup 0< if dnegate then ;
+
 \ Formatted output
 : U.        0 <# #S #> type space ;
-: .         dup >r abs s>d <# #S r> sign #> type space ;
-: .R        >r dup >r abs s>d <# #S r> sign #> r> over - spaces type ;
+: .         dup >r s>d dabs <# #S r> sign #> type space ;
+: .R        >r dup >r s>d dabs <# #S r> sign #> r> over - spaces type ;
 
 \ Redefine */ using double-width intermediate
 : */MOD     >r m* r> fm/mod ;
