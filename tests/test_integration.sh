@@ -509,6 +509,34 @@ assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-i
 assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
 
 # =========================================================================
+section "System Words"
+# =========================================================================
+
+# >BODY
+assert_output ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
+
+# >IN
+assert_output ">in"                '>in @ .'                          "0"
+
+# SOURCE
+assert_output "source"             ': test source nip ; test .'      ""
+
+# ABORT
+assert_output "abort recovers"     '1 2 abort 3 .'                   "> "
+
+# ABORT"
+assert_output 'abort" true'        ': test true abort" oops" ; test' "oops"
+assert_output 'abort" false'       ': test false abort" oops" 42 ; test .' "42"
+
+# >NUMBER
+assert_output ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
+assert_output ">number hex"        ': test hex 0 0 s" FF" >number 2drop . . decimal ; test' "0 FF"
+assert_output ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
+
+# ENVIRONMENT?
+assert_output "environment?"       's" test" environment? .'         "0"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

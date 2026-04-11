@@ -2585,6 +2585,58 @@ forth_hld:
     STR X9, [X19, #-CELL]!
     RET
 
+// ---------- System Words ----------
+
+// >BODY ( xt -- a-addr )  Convert execution token to data field address.
+// For CREATE'd words: STP(4) + BL forth_lit(4) + value(8) + LDP+RET(8)
+// The inline value is at offset 8 from xt.
+.global forth_to_body
+forth_to_body:
+    LDR X9, [X19]                  // xt
+    LDR X9, [X9, #8]              // read inline value (data field address)
+    STR X9, [X19]
+    RET
+
+// >IN ( -- a-addr )  Push address of >IN variable.
+.global forth_to_in
+forth_to_in:
+    ADR X9, to_in
+    STR X9, [X19, #-CELL]!
+    RET
+
+// SOURCE ( -- c-addr u )  Push current input source address and length.
+.global forth_source
+forth_source:
+    ADR X9, source_addr
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    ADR X9, source_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
+// ABORT ( i*x -- ) ( R: j*x -- )  Clear stacks, reset to REPL.
+.global forth_abort
+forth_abort:
+    ADR X9, sp0
+    LDR X19, [X9]                  // reset data stack
+    ADR X9, rp0
+    LDR X9, [X9]
+    MOV SP, X9                     // reset return stack
+    ADR X9, state
+    STR XZR, [X9]                  // reset compile state
+    B repl_loop
+
+// QUIT ( -- ) ( R: i*x -- )  Reset return stack, enter interpreter loop.
+.global forth_quit
+forth_quit:
+    ADR X9, rp0
+    LDR X9, [X9]
+    MOV SP, X9                     // reset return stack
+    ADR X9, state
+    STR XZR, [X9]                  // reset compile state
+    B repl_loop
+
 // ---------- Compiler Words ----------
 
 // STATE ( -- a-addr )  Push address of STATE variable.
@@ -3279,7 +3331,12 @@ DEFWORD dict_bracket_char, "[char]",   forth_bracket_char, dict_bracket_tick, F_
 DEFWORD dict_exit,       "exit",       forth_exit,        dict_bracket_char, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_compile_comma, "compile,", forth_compile_comma, dict_exit
 DEFWORD dict_postpone,   "postpone",   forth_postpone,    dict_compile_comma, F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_postpone
+DEFWORD dict_to_body,    ">body",      forth_to_body,     dict_postpone
+DEFWORD dict_to_in,      ">in",        forth_to_in,       dict_to_body
+DEFWORD dict_source,     "source",     forth_source,      dict_to_in
+DEFWORD dict_abort,      "abort",      forth_abort,       dict_source
+DEFWORD dict_quit,       "quit",       forth_quit,        dict_abort
+.global dict_quit
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

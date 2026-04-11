@@ -166,3 +166,7 @@ dict_full:
     MOV X10, #3
     STR X10, [X9]
     RET
+
+.global repl_loop
+repl_loop:
+    RET

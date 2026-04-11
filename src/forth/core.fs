@@ -110,5 +110,54 @@
 \ Character helpers
 : CHAR      parse-word drop c@ ;
 
+\ System words
+: ENVIRONMENT?  ( c-addr u -- false ) 2drop false ;
+
+\ Helper: convert char to digit value, or -1 if invalid
+: >DIGIT?   ( char -- n true | false )
+            dup 48 < if drop false exit then
+            dup 58 < if 48 - dup base @ < if true else drop false then exit then
+            dup 65 < if drop false exit then
+            dup 91 < if 55 - dup base @ < if true else drop false then exit then
+            dup 97 < if drop false exit then
+            dup 123 < if 87 - dup base @ < if true else drop false then exit then
+            drop false ;
+
+\ >NUMBER ( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )
+\ Convert string to number, accumulating into double ud.
+\ Stack order: ( ud-lo ud-hi c-addr u ) with u on top.
+\ Stops at first non-digit character.
+: >NUMBER  ( ud-lo ud-hi c-addr u -- ud-lo' ud-hi' c-addr' u' )
+    begin dup 0 > while
+        over c@ >digit?
+        0= if exit then             ( ud-lo ud-hi c-addr u digit )
+        \ Stash c-addr and u on return stack, keep digit on data stack
+        swap >r swap >r             ( ud-lo ud-hi digit  R: u c-addr )
+        rot rot                     ( digit ud-lo ud-hi )
+        swap >r                     ( digit ud-hi  R: u c-addr ud-lo )
+        base @ *                    ( digit ud-hi*base )
+        r> base @ um*               ( digit ud-hi*base prod-lo prod-hi )
+        rot +                       ( digit prod-lo new-ud-hi )
+        -rot +                      ( new-ud-hi new-ud-lo )
+        swap                        ( new-ud-lo new-ud-hi )
+        r> 1+ r> 1-                 ( new-ud-lo new-ud-hi c-addr+1 u-1 )
+    repeat ;
+
+\ ABORT" ( flag "ccc" -- )  IMMEDIATE, COMPILE_ONLY
+\ If flag is true at runtime, print message and abort.
+: ABORT"  postpone if  postpone s"  postpone type  postpone abort  postpone then ; immediate
+
+\ WORD ( char "<chars>ccc<char>" -- c-addr )
+\ Parse delimited string, return counted string at HERE.
+: WORD
+    drop                            \ ignore delimiter (use whitespace)
+    parse-word                      ( c-addr u )
+    dup here c!                     \ store count at HERE
+    here 1+ swap                    ( c-addr here+1 u )
+    dup >r                          ( c-addr here+1 u  R: u )
+    move                            \ copy string to HERE+1
+    r> here 1+ + 0 swap c!         \ null-terminate (optional)
+    here ;                          \ return counted string address
+
 \ Defining words
 : VARIABLE  create 1 cells allot ;

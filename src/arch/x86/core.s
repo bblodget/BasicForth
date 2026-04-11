@@ -2377,6 +2377,52 @@ forth_hld:
     mov %rax, (%r15)
     ret
 
+# ---------- System Words ----------
+
+# >BODY ( xt -- a-addr )  Convert execution token to data field address.
+# For CREATE'd words, the code is: CALL forth_lit(5) + value(8) + RET + NOPs
+# The inline value at offset 5 IS the data field address.
+.global forth_to_body
+forth_to_body:
+    mov (%r15), %rax                # xt
+    mov 5(%rax), %rax               # read inline value (data field address)
+    mov %rax, (%r15)
+    ret
+
+# >IN ( -- a-addr )  Push address of >IN variable.
+.global forth_to_in
+forth_to_in:
+    sub $CELL, %r15
+    lea to_in(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# SOURCE ( -- c-addr u )  Push current input source address and length.
+.global forth_source
+forth_source:
+    sub $CELL, %r15
+    mov source_addr(%rip), %rax
+    mov %rax, (%r15)
+    sub $CELL, %r15
+    mov source_len(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# ABORT ( i*x -- ) ( R: j*x -- )  Clear stacks, reset to REPL.
+.global forth_abort
+forth_abort:
+    mov sp0(%rip), %r15             # reset data stack
+    mov rp0(%rip), %rsp             # reset return stack
+    movq $0, state(%rip)            # reset compile state
+    jmp repl_loop
+
+# QUIT ( -- ) ( R: i*x -- )  Reset return stack, enter interpreter loop.
+.global forth_quit
+forth_quit:
+    mov rp0(%rip), %rsp             # reset return stack
+    movq $0, state(%rip)            # reset compile state
+    jmp repl_loop
+
 # ---------- Compiler Words ----------
 
 # STATE ( -- a-addr )  Push address of STATE variable.
@@ -3015,7 +3061,12 @@ DEFWORD dict_bracket_char, "[char]",   forth_bracket_char, dict_bracket_tick, F_
 DEFWORD dict_exit,       "exit",       forth_exit,        dict_bracket_char, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_compile_comma, "compile,", forth_compile_comma, dict_exit
 DEFWORD dict_postpone,   "postpone",   forth_postpone,    dict_compile_comma, F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_postpone
+DEFWORD dict_to_body,    ">body",      forth_to_body,     dict_postpone
+DEFWORD dict_to_in,      ">in",        forth_to_in,       dict_to_body
+DEFWORD dict_source,     "source",     forth_source,      dict_to_in
+DEFWORD dict_abort,      "abort",      forth_abort,       dict_source
+DEFWORD dict_quit,       "quit",       forth_quit,        dict_abort
+.global dict_quit
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

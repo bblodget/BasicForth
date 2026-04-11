@@ -138,3 +138,7 @@ stack_overflow:
 dict_full:
     movq $3, error_flag(%rip)
     ret
+
+.global repl_loop
+repl_loop:
+    ret
