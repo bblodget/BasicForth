@@ -500,6 +500,7 @@ forth_fm_mod:
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
+.global forth_one_plus
 forth_one_plus:
 
     LDR X9, [X19]
