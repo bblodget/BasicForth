@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.3.0 — 2026-04-11
+
+Full ANS Forth core word set (section 6.1). All 133 required core words
+are now implemented, plus many useful core extension words. BasicForth
+is a standards-compliant Forth environment.
+
+### Defining Words
+- `CREATE`, `CONSTANT`, `VARIABLE`, `DOES>`, `>BODY`
+- `HERE`, `ALLOT`, `,`, `C,`
+
+### Counted Loops
+- `DO`, `LOOP`, `+LOOP`, `I`, `J`, `UNLOOP`, `LEAVE`
+
+### Multi-Way Branching
+- `CASE`, `OF`, `ENDOF`, `ENDCASE`
+
+### Double-Cell Arithmetic
+- `S>D`, `UM*`, `M*`, `UM/MOD`, `SM/REM`, `FM/MOD`
+- `DNEGATE`, `DABS` (helpers in core.fs)
+
+### Pictured Numeric Output
+- `<#`, `#`, `#S`, `#>`, `HOLD`, `HOLDS`, `SIGN`
+- `BASE`, `PAD`, `HLD`, `DECIMAL`, `HEX`
+- `.` redefined using pictured output (respects BASE)
+- `U.`, `.R`, `U.R`, `*/MOD`, `*/`
+
+### Compiler Words
+- `STATE`, `[`, `]`, `LITERAL`, `POSTPONE`, `COMPILE,`
+- `[']`, `[CHAR]`, `EXIT`
+
+### System Words
+- `>IN`, `SOURCE`, `>NUMBER`, `WORD`, `ENVIRONMENT?`
+- `ABORT`, `ABORT"`, `QUIT`
+
+### String Words
+- `TYPE`, `S"`, `."`, `COUNT`, `CHAR`, `PICK`
+- Unterminated string error detection
+
+### Simple Core Words
+- Arithmetic: `LSHIFT`, `RSHIFT`, `2*`, `2/`, `+!`
+- Memory: `2!`, `2@`, `FILL`, `MOVE`, `ALIGN`, `ALIGNED`, `CHAR+`, `CHARS`
+- Comparison: `U<`
+- Stack: `-ROT`
+
+### Core Extension Words
+- `0>`, `U>`, `WITHIN`, `ERASE`, `UNUSED`
+- `.(` (immediate print)
+
+### Bug Fixes
+- ARM64 `+LOOP` off-by-one branch offset (TBNZ +2 → +3)
+- `LEAVE` outside DO now detected at compile time
+- Stale compiler state (do_depth, leave_count) reset on error
+- Unknown-word compile abort restores DSP
+- `compile_s_quote` bounds check and unterminated string detection
+- `.R` signed-number handling with double-cell DABS
+- `.` handles INT64_MIN correctly via DNEGATE
+- Missing `.global forth_one_plus` on ARM64
+
+### Architecture
+- Per-test timing in integration tests with slow-test threshold
+- ARM64 software 128/64-bit division for UM/MOD
+- DOES> patching: x86 RET+NOPs → JMP rel32, ARM64 RET → B
+- POSTPONE handles both IMMEDIATE and non-IMMEDIATE words
+
+### Documentation
+- docs/Defining_Words.md — dictionary layout, CREATE, DOES>
+- docs/String_Words.md — inline string compilation
+- docs/Pictured_Numeric_Output.md — number formatting, double-cell math
+- Updated Core_Primitives.md, Conditionals.md, Forth_Core_Words.md
+
+### Testing
+- 119 unit tests (C harness)
+- 236 integration tests (shell-based, piped I/O)
+
+---
+
 ## v0.2.0 — 2026-04-09
 
 Control flow, file loading, and the core.fs bootstrap. BasicForth can now
