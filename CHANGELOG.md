@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.4.0 — 2026-04-12
+
+Core extensions complete, plus words from four additional standard word
+sets: Programming-Tools, String, Facility, and Double-Number. Platform
+layer extended with terminal query and timing functions, enabling games
+and interactive applications.
+
+### Core Extension Words (completing section 6.2)
+- `?DO` — skip-if-equal counted loop
+- `VALUE`, `TO` — named mutable values with interpret/compile dual behavior
+- `:NONAME` — anonymous colon definitions (pushes xt)
+- `PARSE` — parse with arbitrary delimiter character
+- `PARSE-NAME` — standard alias for PARSE-WORD
+- `SOURCE-ID` — input source identifier (0=keyboard, -1=EVALUATE)
+
+### Programming-Tools Words (section 15)
+- `WORDS` — list all dictionary words
+- `DUMP` — hex+ASCII memory dump
+- `?` — fetch and print shorthand
+
+### String Words (section 17)
+- `/STRING` — adjust string address and length
+- `COMPARE` — lexicographic string comparison
+- `CMOVE`, `CMOVE>` — forward and backward byte copy
+- `-TRAILING` — remove trailing spaces
+- `BLANK` — fill with spaces
+
+### Facility Words (section 10)
+- `KEY?` — non-blocking input check
+- `MS` — millisecond delay
+- `PAGE` — clear screen (ANSI)
+- `AT-XY` — cursor positioning (ANSI)
+- `SCREEN-WIDTH`, `SCREEN-HEIGHT` — terminal size query
+
+### Double-Number Words (section 8)
+- `D+`, `D-` — double-cell addition and subtraction
+- `D.` — print signed double-cell number
+- `D0=`, `D0<` — double-cell zero tests
+- `D=`, `D<` — double-cell comparison
+
+### Platform Layer
+- 6 new platform functions: `platform_key_ready`, `platform_ms`,
+  `platform_page`, `platform_at_xy`, `platform_screen_width`,
+  `platform_screen_height`
+- Linux: FIONREAD ioctl, nanosleep, TIOCGWINSZ ioctl, ANSI escapes
+- Clean abstraction for future Windows/bare-metal ports
+
+### Testing
+- 119 unit tests (C harness)
+- 280 integration tests (shell-based, piped I/O)
+
+---
+
 ## v0.3.0 — 2026-04-11
 
 Full ANS Forth core word set (section 6.1). All 133 required core words

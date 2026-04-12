@@ -36,11 +36,13 @@ as the code evolves:
 ## Architecture
 
 - Multi-arch: src/arch/arm64/ and src/arch/x86/
-- Shared Forth source: src/forth/ (future core.fs)
+- Shared Forth source: src/forth/core.fs (loaded at startup)
 - No libc, no dynamic linker — static ELF binaries
 - Subroutine Threaded Code (STC)
 - 64-bit cells (native word size on both architectures)
 - Linux syscalls (SVC #0 on ARM64, syscall on x86-64)
+- Platform layer abstraction (platform_linux.s) — isolates all OS interaction
+  for future portability to Windows, bare metal, RTOS
 - Open to minimal libraries for threading, graphics, sound where it makes sense
 
 ## Register Allocation
