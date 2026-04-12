@@ -2592,6 +2592,16 @@ forth_screen_h:
     mov %rax, (%r15)
     ret
 
+# ---------- INCLUDE ----------
+# INCLUDE ( "filename" -- )
+# Parse the next word from input and load it as a Forth source file.
+# Convenience wrapper: INCLUDE foo.fs  is equivalent to  s" foo.fs" included
+.global forth_include
+forth_include:
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_included             # ( c-addr u -- )
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -3543,7 +3553,8 @@ DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
 DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
 DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
 DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
-.global dict_cursor_on
+DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
+.global dict_include
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

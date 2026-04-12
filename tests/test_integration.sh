@@ -697,6 +697,9 @@ assert_output "key_escape"           'key_escape .'                       "27"
 assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
 assert_output "rnd zero base"       '1 rnd .'                             "0"
 
+# INCLUDE (parse-word + included)
+assert_output "include word"         'include core.fs 42 .'                      "42"
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

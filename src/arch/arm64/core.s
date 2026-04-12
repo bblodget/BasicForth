@@ -2807,6 +2807,17 @@ forth_screen_h:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- INCLUDE ----------
+// INCLUDE ( "filename" -- )
+// Parse the next word from input and load it as a Forth source file.
+.global forth_include
+forth_include:
+    STP X29, X30, [SP, #-16]!
+    BL forth_parse_word             // ( -- c-addr u )
+    BL forth_included               // ( c-addr u -- )
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -3840,7 +3851,8 @@ DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
 DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
 DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
 DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
-.global dict_cursor_on
+DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
+.global dict_include
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

@@ -6,7 +6,7 @@
 \ Requires: KEY?, MS, MS@, AT-XY, PAGE, SCREEN-WIDTH, SCREEN-HEIGHT,
 \           CURSOR-OFF, CURSOR-ON, KEY_UP/DOWN/LEFT/RIGHT, rnd
 \
-\ Usage: s" examples/snake.fs" included
+\ Usage: include examples/snake.fs
 \        snake
 
 screen-width dup 2 mod - constant WIDTH
