@@ -195,11 +195,14 @@ create body-y MAX_LEN allot
 
 : game-init  init-vars reset-screen draw-border update-food ;
 
+: drain-keys  begin key? while key drop repeat ;
+
 : game-over
     WIDTH 2 / 6 - HEIGHT 2 / at-xy ." GAME OVER!"
     WIDTH 2 / 6 - HEIGHT 2 / 1+ at-xy ." Score: " score @ .
-    WIDTH 2 / 9 - HEIGHT 2 / 2 + at-xy ." Press any key..."
-    key drop ;
+    WIDTH 2 / 9 - HEIGHT 2 / 2 + at-xy ." Press q to quit..."
+    drain-keys
+    begin key [char] q = until ;
 
 : snake
     page cursor-off
