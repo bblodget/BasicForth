@@ -393,7 +393,10 @@ CASE, OF, ENDOF, ENDCASE
 |---------------|-------------------|------------------------------------|
 | KEY?          | ( -- flag )       | Non-blocking input check           |
 | MS            | ( u -- )          | Delay u milliseconds               |
+| MS@           | ( -- u )          | Monotonic millisecond timestamp    |
 | PAGE          | ( -- )            | Clear screen, cursor home          |
 | AT-XY         | ( col row -- )    | Position cursor (0-based)          |
+| CURSOR-OFF    | ( -- )            | Hide terminal cursor               |
+| CURSOR-ON     | ( -- )            | Show terminal cursor               |
 | SCREEN-WIDTH  | ( -- u )          | Terminal width in columns           |
 | SCREEN-HEIGHT | ( -- u )          | Terminal height in rows             |

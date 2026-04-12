@@ -46,18 +46,30 @@ stack and passes it in the appropriate register.
 
 ### platform_key
 
-Read one character from stdin (blocking).
+Read one character from stdin (blocking), with ANSI escape sequence parsing.
 
 |              | ARM64                             | x86-64                           |
 |--------------|-----------------------------------|----------------------------------|
 | **Input**    | none                              | none                             |
-| **Output**   | X0 = character                    | RDI = character                  |
+| **Output**   | X0 = character or key code        | RDI = character or key code      |
 | **Clobbers** | X0-X7 (syscall)                   | RAX, RCX, R11 (syscall)         |
 | **Syscall**  | read(0, &buf, 1) — SYS_read #63  | read(0, &buf, 1) — SYS_read #0  |
 
-Implementation: allocates a 1-byte buffer on the stack, calls read, returns
-the byte in the output register. Blocks until a character is available
-(VMIN=1, VTIME=0).
+Implementation: reads one byte. If the byte is ESC (27), checks FIONREAD
+for additional bytes. If an ANSI escape sequence follows (`ESC [ letter`),
+parses it and returns an abstract key code:
+
+| Sequence  | Key code | Constant   |
+|-----------|----------|------------|
+| ESC [ A   | 129      | KEY_UP     |
+| ESC [ B   | 130      | KEY_DOWN   |
+| ESC [ C   | 131      | KEY_RIGHT  |
+| ESC [ D   | 132      | KEY_LEFT   |
+| ESC alone | 27       | KEY_ESCAPE |
+
+Standalone ESC (no following bytes available) returns 27. Unknown sequences
+return 27 (the ESC byte). Blocks until a character is available (VMIN=1,
+VTIME=0).
 
 Called by `forth_key` in core.s, which pushes the result onto the data stack.
 
@@ -294,6 +306,43 @@ Query terminal height in rows.
 Reads `ws_row` (offset 0) from the `winsize` struct. Returns 25 if the
 ioctl fails or returns 0.
 
+### platform_ms_get
+
+Return the current monotonic time in milliseconds.
+
+|              | ARM64                                     | x86-64                                      |
+|--------------|-------------------------------------------|----------------------------------------------|
+| **Input**    | none                                      | none                                         |
+| **Output**   | X0 = milliseconds                         | RAX = milliseconds                           |
+| **Syscall**  | clock_gettime(1, &ts) — SYS_clock_gettime #113 | clock_gettime(1, &ts) — SYS_clock_gettime #228 |
+
+Uses CLOCK_MONOTONIC (1). Computes `tv_sec * 1000 + tv_nsec / 1000000`.
+Used by `forth_ms_get` (MS@) for game loop timing and RNG seeding.
+
+### platform_cursor_off
+
+Hide the terminal cursor.
+
+|              | ARM64              | x86-64             |
+|--------------|--------------------|---------------------|
+| **Input**    | none               | none                |
+| **Output**   | none               | none                |
+
+Writes ANSI escape sequence `ESC[?25l` (6 bytes) via `platform_write`.
+On a future bare metal platform, this would disable the VGA/framebuffer
+cursor.
+
+### platform_cursor_on
+
+Show the terminal cursor.
+
+|              | ARM64              | x86-64             |
+|--------------|--------------------|---------------------|
+| **Input**    | none               | none                |
+| **Output**   | none               | none                |
+
+Writes ANSI escape sequence `ESC[?25h` (6 bytes) via `platform_write`.
+
 ## I-Cache Coherency (ARM64)
 
 ARM64 CPUs have **separate instruction and data caches** that are not
@@ -388,6 +437,7 @@ VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 | rt_sigaction  |     134 |       13 | (sig, &act, &oldact, sigsetsize)     |
 | ioctl         |      29 |       16 | (fd, cmd, arg)                       |
 | nanosleep     |     101 |       35 | (&timespec_req, &timespec_rem)       |
+| clock_gettime |     113 |      228 | (clockid, &timespec)                 |
 | openat        |      56 |      257 | (dirfd, path, flags, mode)           |
 | exit          |      93 |       60 | (status)                             |
 

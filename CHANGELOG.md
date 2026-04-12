@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased (snake-game branch)
+
+Snake game port from BareMetalForth, plus platform and Forth additions
+to support interactive games.
+
+### Platform Layer
+- `platform_key`: ANSI escape sequence parsing — arrow keys (ESC[A/B/C/D)
+  return abstract key codes 129-132, standalone ESC returns 27
+- `platform_ms_get`: monotonic millisecond timestamp via clock_gettime
+- `platform_cursor_off`, `platform_cursor_on`: ANSI cursor visibility
+
+### New Forth Words (asm)
+- `MS@` ( -- u ) — monotonic millisecond timestamp
+- `CURSOR-OFF` ( -- ) — hide terminal cursor
+- `CURSOR-ON` ( -- ) — show terminal cursor
+
+### New Forth Words (core.fs)
+- Key constants: `KEY_ESCAPE` (27), `KEY_UP` (129), `KEY_DOWN` (130),
+  `KEY_RIGHT` (131), `KEY_LEFT` (132)
+- `random` ( -- n ) — LCG random number generator, seeded from MS@
+- `rnd` ( n -- 0..n-1 ) — random number in range
+
+### Snake Game
+- `examples/snake.fs` — terminal-based snake game
+- Adaptive frame timing, score overlay, game-over screen
+- Works on both x86-64 and ARM64 (tested on Pumpkin board)
+
+### Testing
+- 119 unit tests + 292 integration tests
+
+---
+
 ## v0.4.0 — 2026-04-12
 
 Core extensions complete, plus words from four additional standard word

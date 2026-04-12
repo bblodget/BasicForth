@@ -302,6 +302,9 @@ commonly useful ones:
 | KEY?          | ( -- flag )        | (x)    | asm (platform)          |
 | PAGE          | ( -- )             | (x)    | asm (platform)          |
 | MS            | ( u -- )           | (x)    | asm (platform)          |
+| MS@           | ( -- u )           | (x)    | asm (platform)          |
+| CURSOR-OFF    | ( -- )             | (x)    | asm (platform)          |
+| CURSOR-ON     | ( -- )             | (x)    | asm (platform)          |
 | SCREEN-WIDTH  | ( -- u )           | (x)    | asm (platform)          |
 | SCREEN-HEIGHT | ( -- u )           | (x)    | asm (platform)          |
 
@@ -338,13 +341,20 @@ implement as separate libraries:
 
 Words not in the standard, specific to BasicForth's goals:
 
-| Word     | Stack effect      | Layer | Status | Notes                                  |
-|----------|-------------------|-------|--------|----------------------------------------|
-| BYE      | ( -- )            | asm   | (x)    | Print "Goodbye!", restore terminal, exit |
-| .S       | ( -- )            | asm   | (x)    | Print stack non-destructively          |
-| INCLUDED | ( c-addr u -- )   | asm   | (x)    | Load and interpret a Forth source file |
-| TRUE     | ( -- -1 )         | forth | (x)    | -1 (in core.fs)                        |
-| FALSE    | ( -- 0 )          | forth | (x)    | 0 (in core.fs)                         |
+| Word        | Stack effect      | Layer | Status | Notes                                  |
+|-------------|-------------------|-------|--------|----------------------------------------|
+| BYE         | ( -- )            | asm   | (x)    | Print "Goodbye!", restore terminal, exit |
+| .S          | ( -- )            | asm   | (x)    | Print stack non-destructively          |
+| INCLUDED    | ( c-addr u -- )   | asm   | (x)    | Load and interpret a Forth source file |
+| TRUE        | ( -- -1 )         | forth | (x)    | -1 (in core.fs)                        |
+| FALSE       | ( -- 0 )          | forth | (x)    | 0 (in core.fs)                         |
+| KEY_ESCAPE  | ( -- 27 )         | forth | (x)    | ESC key constant                       |
+| KEY_UP      | ( -- 129 )        | forth | (x)    | Arrow key constant                     |
+| KEY_DOWN    | ( -- 130 )        | forth | (x)    | Arrow key constant                     |
+| KEY_RIGHT   | ( -- 131 )        | forth | (x)    | Arrow key constant                     |
+| KEY_LEFT    | ( -- 132 )        | forth | (x)    | Arrow key constant                     |
+| random      | ( -- n )          | forth | (x)    | LCG random number                      |
+| rnd         | ( n -- 0..n-1 )   | forth | (x)    | Random in range                        |
 
 *This section will grow as we add game, graphics, and robotics words.*
 
