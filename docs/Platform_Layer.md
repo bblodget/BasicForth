@@ -214,6 +214,86 @@ below.
 Not needed on x86-64, where stores are immediately visible to instruction
 fetch (coherent I-cache).
 
+### platform_key_ready
+
+Non-blocking check if keyboard input is available.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | none                               | none                               |
+| **Output**   | X0 = byte count (>0 if ready)     | RDI = byte count (>0 if ready)     |
+| **Syscall**  | ioctl(0, FIONREAD, &count) #29    | ioctl(0, FIONREAD, &count) #16    |
+
+Returns 0 on failure or if no input available. Used by `forth_key_q` (KEY?)
+which converts the count to a Forth boolean (-1 or 0).
+
+### platform_ms
+
+Sleep for a given number of milliseconds.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = milliseconds                  | RDI = milliseconds                 |
+| **Output**   | none                               | none                               |
+| **Syscall**  | nanosleep(&ts, NULL) #101          | nanosleep(&ts, NULL) #35          |
+
+Builds a timespec struct on the stack: `tv_sec = ms / 1000`,
+`tv_nsec = (ms % 1000) * 1000000`. Used by `forth_ms` (MS) for game loops
+and animation delays.
+
+### platform_page
+
+Clear the screen and move cursor to home position.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | none                               | none                               |
+| **Output**   | none                               | none                               |
+
+Writes ANSI escape sequences `ESC[2J` (clear screen) + `ESC[H` (cursor
+home) via `platform_write`. On a future bare metal platform, this would
+clear VGA memory or the framebuffer directly.
+
+### platform_at_xy
+
+Move the cursor to a given column and row.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = col, X1 = row (0-based)      | RDI = col, RSI = row (0-based)     |
+| **Output**   | none                               | none                               |
+
+Builds ANSI escape sequence `ESC[{row+1};{col+1}H` dynamically (converts
+integers to decimal ASCII). On a future bare metal platform, this would
+set VGA CRTC registers or framebuffer cursor position.
+
+### platform_screen_width
+
+Query terminal width in columns.
+
+|              | ARM64                              | x86-64                              |
+|--------------|------------------------------------|--------------------------------------|
+| **Input**    | none                               | none                                 |
+| **Output**   | X0 = columns                       | RAX = columns                        |
+| **Syscall**  | ioctl(1, TIOCGWINSZ, &ws) #29     | ioctl(1, TIOCGWINSZ, &ws) #16      |
+
+Reads `ws_col` (offset 2) from the `winsize` struct. Returns 80 if the
+ioctl fails or returns 0. On a future bare metal platform, this would
+return the VGA column count or framebuffer width / font width.
+
+### platform_screen_height
+
+Query terminal height in rows.
+
+|              | ARM64                              | x86-64                              |
+|--------------|------------------------------------|--------------------------------------|
+| **Input**    | none                               | none                                 |
+| **Output**   | X0 = rows                          | RAX = rows                           |
+| **Syscall**  | ioctl(1, TIOCGWINSZ, &ws) #29     | ioctl(1, TIOCGWINSZ, &ws) #16      |
+
+Reads `ws_row` (offset 0) from the `winsize` struct. Returns 25 if the
+ioctl fails or returns 0.
+
 ## I-Cache Coherency (ARM64)
 
 ARM64 CPUs have **separate instruction and data caches** that are not
@@ -294,13 +374,6 @@ array length and the speed fields that x86 includes.
 
 VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 
-## Defined Constants (for future use)
-
-| Constant | Value  | Purpose                                                                     |
-|----------|--------|-----------------------------------------------------------------------------|
-| FIONREAD | 0x541B | ioctl command: get bytes available to read. For a future `KEY?` word that   |
-|          |        | checks if input is available without blocking.                              |
-
 ## Syscall Reference
 
 | Syscall       | ARM64 # | x86-64 # | Signature                            |
@@ -314,8 +387,18 @@ VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 | munmap        |     215 |       11 | (addr, len)                          |
 | rt_sigaction  |     134 |       13 | (sig, &act, &oldact, sigsetsize)     |
 | ioctl         |      29 |       16 | (fd, cmd, arg)                       |
+| nanosleep     |     101 |       35 | (&timespec_req, &timespec_rem)       |
 | openat        |      56 |      257 | (dirfd, path, flags, mode)           |
 | exit          |      93 |       60 | (status)                             |
+
+### ioctl Commands
+
+| Constant   | Value  | Purpose                                   |
+|------------|--------|-------------------------------------------|
+| TCGETS     | 0x5401 | Get terminal attributes                   |
+| TCSETS     | 0x5402 | Set terminal attributes                   |
+| FIONREAD   | 0x541B | Get bytes available to read (for KEY?)    |
+| TIOCGWINSZ | 0x5413 | Get terminal window size (for SCREEN-WIDTH/HEIGHT) |
 
 ### Syscall ABI
 
@@ -333,7 +416,6 @@ Functions to be added as BasicForth grows:
 
 | Function            | Purpose                                       | Phase |
 |---------------------|-----------------------------------------------|-------|
-| platform_key_ready  | Non-blocking input check via FIONREAD ioctl   |     2 |
 | platform_read_file  | Read from file descriptor                     |     4 |
 | platform_write_file | Write to file descriptor                      |     4 |
 | platform_lseek      | Seek within file                              |     4 |
