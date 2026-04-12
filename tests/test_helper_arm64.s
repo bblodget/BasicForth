@@ -117,6 +117,19 @@ platform_screen_height:
     MOV X0, #25
     RET
 
+.global platform_ms_get
+platform_ms_get:
+    MOV X0, #12345
+    RET
+
+.global platform_cursor_off
+platform_cursor_off:
+    RET
+
+.global platform_cursor_on
+platform_cursor_on:
+    RET
+
 // I-cache flush for compiled code (same as platform_linux.s).
 // Needed by compiler tests that execute code written to dict_space.
 // Reads CTR_EL0 to determine cache line sizes (varies by CPU).

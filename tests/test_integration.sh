@@ -675,6 +675,18 @@ assert_output "d. positive"         ': t 42 0 d. ; t'                     "42"
 assert_output "d. negative"         ': t -42 -1 d. ; t'                   "-42"
 
 # =========================================================================
+section "Snake Game Prerequisites"
+# =========================================================================
+
+# MS@ (millisecond timestamp)
+assert_output "ms@ nonzero"          'ms@ 0 > .'                          "-1"
+assert_output "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
+
+# CURSOR-OFF / CURSOR-ON (just check they don't crash)
+assert_output "cursor-off"           'cursor-off 42 .'                    "42"
+assert_output "cursor-on"            'cursor-on 42 .'                     "42"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

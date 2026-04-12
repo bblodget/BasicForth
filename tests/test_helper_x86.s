@@ -123,6 +123,19 @@ platform_screen_height:
     mov $25, %eax
     ret
 
+.global platform_ms_get
+platform_ms_get:
+    mov $12345, %eax
+    ret
+
+.global platform_cursor_off
+platform_cursor_off:
+    ret
+
+.global platform_cursor_on
+platform_cursor_on:
+    ret
+
 # --- Return stack test wrappers ---
 # These call >R / R> / R@ within a single stack frame so the return
 # stack context is correct. Called via call_primitive like any other word.

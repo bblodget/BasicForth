@@ -2592,6 +2592,32 @@ forth_screen_h:
     mov %rax, (%r15)
     ret
 
+# ---------- MS@ ----------
+# MS@ ( -- u )
+# Return current monotonic milliseconds.
+.global forth_ms_get
+forth_ms_get:
+    call platform_ms_get            # RAX = milliseconds
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ---------- CURSOR-OFF ----------
+# CURSOR-OFF ( -- )
+# Hide the terminal cursor.
+.global forth_cursor_off
+forth_cursor_off:
+    call platform_cursor_off
+    ret
+
+# ---------- CURSOR-ON ----------
+# CURSOR-ON ( -- )
+# Show the terminal cursor.
+.global forth_cursor_on
+forth_cursor_on:
+    call platform_cursor_on
+    ret
+
 # ---------- HERE, ALLOT, COMMA, C-COMMA ----------
 
 # HERE ( -- addr )
@@ -3514,7 +3540,10 @@ DEFWORD dict_page,       "page",       forth_page,        dict_ms
 DEFWORD dict_at_xy,      "at-xy",      forth_at_xy,       dict_page
 DEFWORD dict_screen_w,   "screen-width",  forth_screen_w, dict_at_xy
 DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
-.global dict_screen_h
+DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
+DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
+DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
+.global dict_cursor_on
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
