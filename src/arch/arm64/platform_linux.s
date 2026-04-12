@@ -511,3 +511,192 @@ platform_close_file:
     MOV X8, #SYS_close
     SVC #0
     RET
+
+// ---------- Facility Platform Functions ----------
+
+.equ SYS_nanosleep, 101
+.equ TIOCGWINSZ,    0x5413
+
+// platform_key_ready ( -- X0=flag )
+// Non-blocking check if a key is available on stdin.
+.global platform_key_ready
+platform_key_ready:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #16
+    STR XZR, [SP]                   // zero the count
+    MOV X8, #SYS_ioctl
+    MOV X0, #STDIN
+    MOV X1, #FIONREAD
+    MOV X2, SP
+    SVC #0
+    CMP X0, #0
+    B.LT .Lkr_none
+    LDR W0, [SP]                    // count of bytes available
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lkr_none:
+    MOV X0, #0
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_ms ( X0=milliseconds -- )
+// Sleep for the given number of milliseconds.
+.global platform_ms
+platform_ms:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #16                 // timespec: tv_sec(8), tv_nsec(8)
+    // tv_sec = ms / 1000
+    MOV X1, #1000
+    UDIV X2, X0, X1                 // X2 = seconds
+    MSUB X3, X2, X1, X0            // X3 = remainder ms
+    STR X2, [SP]                    // tv_sec
+    // tv_nsec = (ms % 1000) * 1000000
+    MOV X4, #0x4240
+    MOVK X4, #0xF, LSL #16          // X4 = 1000000
+    MUL X3, X3, X4
+    STR X3, [SP, #8]               // tv_nsec
+    MOV X8, #SYS_nanosleep
+    MOV X0, SP                      // req
+    MOV X1, #0                      // rem = NULL
+    SVC #0
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_page ( -- )
+// Clear screen using ANSI escape sequences.
+.global platform_page
+platform_page:
+    STP X29, X30, [SP, #-16]!
+    ADR X0, ansi_page
+    MOV X1, #ansi_page_len
+    BL platform_write
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_at_xy ( X0=col X1=row -- )
+// Move cursor using ANSI escape sequence ESC[row+1;col+1H.
+.global platform_at_xy
+platform_at_xy:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    ADD X23, X0, #1                 // col+1 (1-based)
+    ADD X24, X1, #1                 // row+1 (1-based)
+    SUB SP, SP, #32                 // buffer
+
+    // Build ESC[row;colH
+    MOV X0, SP
+    MOV W9, #0x1b                   // ESC
+    STRB W9, [X0], #1
+    MOV W9, #'['
+    STRB W9, [X0], #1
+
+    // Convert row to decimal
+    MOV X1, X24
+    BL .Latxy_itoa_arm64
+
+    MOV W9, #';'
+    STRB W9, [X0], #1
+
+    // Convert col to decimal
+    MOV X1, X23
+    BL .Latxy_itoa_arm64
+
+    MOV W9, #'H'
+    STRB W9, [X0], #1
+
+    // Write escape sequence
+    MOV X1, X0
+    MOV X0, SP
+    SUB X1, X1, X0                  // length
+    BL platform_write
+
+    ADD SP, SP, #32
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// Helper: write unsigned integer X1 as decimal to [X0], advance X0
+.Latxy_itoa_arm64:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #32                 // temp digit buffer
+    MOV X2, #0                      // digit count
+    MOV X3, SP
+    MOV X4, #10
+.Latxy_div:
+    UDIV X5, X1, X4
+    MSUB X6, X5, X4, X1            // X6 = remainder
+    ADD W6, W6, #'0'
+    STRB W6, [X3, X2]
+    ADD X2, X2, #1
+    MOV X1, X5
+    CBNZ X1, .Latxy_div
+    // Digits are in reverse — emit backwards
+    SUB X2, X2, #1
+.Latxy_emit:
+    LDRB W6, [X3, X2]
+    STRB W6, [X0], #1
+    SUBS X2, X2, #1
+    B.GE .Latxy_emit
+    ADD SP, SP, #32
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_screen_width ( -- X0=cols )
+// Query terminal width. Default 80 on failure.
+.global platform_screen_width
+platform_screen_width:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #16
+    MOV X8, #SYS_ioctl
+    MOV X0, #STDOUT
+    MOV X1, #TIOCGWINSZ
+    MOV X2, SP
+    SVC #0
+    CMP X0, #0
+    B.LT .Lsw_def
+    LDRH W0, [SP, #2]              // ws_col at offset 2
+    CBZ W0, .Lsw_def
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lsw_def:
+    MOV X0, #80
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_screen_height ( -- X0=rows )
+// Query terminal height. Default 25 on failure.
+.global platform_screen_height
+platform_screen_height:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #16
+    MOV X8, #SYS_ioctl
+    MOV X0, #STDOUT
+    MOV X1, #TIOCGWINSZ
+    MOV X2, SP
+    SVC #0
+    CMP X0, #0
+    B.LT .Lsh_def
+    LDRH W0, [SP]                   // ws_row at offset 0
+    CBZ W0, .Lsh_def
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lsh_def:
+    MOV X0, #25
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- ANSI Escape Sequences ----------
+.section .rodata
+ansi_page:
+    .byte 0x1b
+    .ascii "[2J"
+    .byte 0x1b
+    .ascii "[H"
+.equ ansi_page_len, . - ansi_page

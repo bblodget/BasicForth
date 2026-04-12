@@ -1524,8 +1524,10 @@ forth_semicolon:
     # Compile RET
     call compile_ret
 
-    # Calculate code length and write it
+    # Calculate code length and write it (skip for :NONAME)
     mov colon_code_len_addr(%rip), %rax   # RAX = code_len field address
+    test %rax, %rax
+    jz .Lsemi_noname                      # :NONAME has no code_len field
     lea 4(%rax), %rcx                     # RCX = code start (right after field)
     mov %r13, %rdx                        # RDX = HERE (right after compiled code)
     sub %rcx, %rdx                        # RDX = code length
@@ -1534,6 +1536,7 @@ forth_semicolon:
     # Clear HIDDEN flag on new entry (LATEST + 8 is flags byte)
     andb $~F_HIDDEN, 8(%r12)
 
+.Lsemi_noname:
     # Return to interpret mode
     movq $0, state(%rip)
     ret
@@ -1780,6 +1783,7 @@ forth_evaluate:
     push %rbx
     push %rbp
     push %r14
+    push %r8
 
     # Pop c-addr and u from data stack
     mov (%r15), %rcx                # RCX = u (top)
@@ -1790,11 +1794,13 @@ forth_evaluate:
     mov source_addr(%rip), %rbx     # save old source_addr
     mov source_len(%rip), %rbp      # save old source_len
     mov to_in(%rip), %r14           # save old to_in
+    mov source_id(%rip), %r8        # save old source_id
 
     # Set new source context
     mov %rsi, source_addr(%rip)
     mov %rcx, source_len(%rip)
     movq $0, to_in(%rip)
+    movq $-1, source_id(%rip)       # EVALUATE = -1
 
     # Interpret the string
     call forth_interpret_line
@@ -1804,8 +1810,10 @@ forth_evaluate:
     mov %rbx, source_addr(%rip)
     mov %rbp, source_len(%rip)
     mov %r14, to_in(%rip)
+    mov %r8, source_id(%rip)
 
     pop %rax                        # restore result
+    pop %r8
     pop %r14
     pop %rbp
     pop %rbx
@@ -2241,6 +2249,347 @@ forth_endcase:
     jmp .Lendcase_loop
 .Lendcase_done:
     pop %rbx
+    ret
+
+# ---------- PARSE ----------
+# PARSE ( char "ccc<char>" -- c-addr u )
+# Parse input delimited by char. Does NOT skip leading delimiters.
+# Advances >IN past the delimiter (or to end of input).
+.global forth_parse
+forth_parse:
+    push %rbx
+    mov (%r15), %rax                # RAX = delimiter char
+    add $CELL, %r15                 # pop delimiter
+
+    # Load source context
+    mov source_addr(%rip), %rsi     # RSI = buffer base
+    mov source_len(%rip), %rcx      # RCX = total length
+    mov to_in(%rip), %rdx           # RDX = current offset (>IN)
+
+    # Start of parsed region
+    lea (%rsi,%rdx), %rdi           # RDI = c-addr (start of string)
+    mov %rdx, %rbx                  # save start offset
+
+    # Scan for delimiter
+.Lparse_scan:
+    cmp %rcx, %rdx
+    jge .Lparse_end                 # end of input
+    cmpb %al, (%rsi,%rdx)
+    je .Lparse_found
+    inc %rdx
+    jmp .Lparse_scan
+
+.Lparse_found:
+    # Delimiter found at rdx — advance >IN past it
+    lea 1(%rdx), %rcx
+    mov %rcx, to_in(%rip)
+    jmp .Lparse_push
+
+.Lparse_end:
+    # End of input — >IN = source_len
+    mov %rdx, to_in(%rip)
+
+.Lparse_push:
+    # Length = rdx - start
+    sub %rbx, %rdx                  # RDX = string length
+    sub $CELL, %r15
+    mov %rdi, (%r15)                # push c-addr
+    sub $CELL, %r15
+    mov %rdx, (%r15)                # push u
+    pop %rbx
+    ret
+
+# ---------- SOURCE-ID ----------
+# SOURCE-ID ( -- n )
+# Returns 0 for keyboard input, -1 for EVALUATE string.
+.global forth_source_id
+forth_source_id:
+    sub $CELL, %r15
+    mov source_id(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# ---------- VALUE ----------
+# VALUE ( x "name" -- )
+# Create a named value. Like CONSTANT: the value is stored inline.
+# TO can modify the inline value at xt+5 (after the CALL forth_lit opcode).
+.global forth_value
+forth_value:
+    # Identical to CONSTANT
+    push %rbx
+    push %rbp
+
+    # Pop value from data stack BEFORE build_header
+    mov (%r15), %rax
+    add $CELL, %r15
+    push %rax                       # save value
+
+    call build_header
+    jc .Lvalue_err
+
+    # Compile code that pushes the value
+    pop %rax                        # restore value
+    call compile_literal            # emit CALL forth_lit + value
+    call compile_ret                # emit RET
+
+    # Fill code_len
+    mov colon_code_len_addr(%rip), %rax
+    lea 4(%rax), %rcx
+    mov %r13, %rdx
+    sub %rcx, %rdx
+    mov %edx, (%rax)
+
+    # Clear HIDDEN flag
+    andb $~F_HIDDEN, 8(%r12)
+
+    pop %rbp
+    pop %rbx
+    ret
+
+.Lvalue_err:
+    pop %rax                        # restore saved value
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push it back
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- TO ----------
+# TO ( x "name" -- ) IMMEDIATE
+# Assign a new value to a VALUE word. In interpret mode, stores immediately.
+# In compile mode, compiles code to store at runtime.
+# Value address is xt + 5 (skip CALL opcode + 4-byte rel32 of forth_lit).
+.global forth_to
+forth_to:
+    push %rbx
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
+    mov (%r15), %rax                # flag
+    test %rax, %rax
+    jz .Lto_not_found
+    add $CELL, %r15                 # drop flag
+    mov (%r15), %rax                # xt
+    add $CELL, %r15                 # drop xt
+
+    # Value address = xt + 5 (past CALL forth_lit opcode)
+    lea 5(%rax), %rbx               # RBX = addr of inline value
+
+    # Check STATE
+    cmpq $0, state(%rip)
+    jne .Lto_compile
+
+    # Interpret mode: pop x from stack, store to value address
+    mov (%r15), %rax                # x
+    add $CELL, %r15
+    mov %rax, (%rbx)                # store x at value address
+    pop %rbx
+    ret
+
+.Lto_compile:
+    # Compile mode: compile LITERAL(addr) + CALL(forth_store)
+    mov %rbx, %rax                  # addr of inline value
+    call compile_literal            # compile addr as literal
+    lea forth_store(%rip), %rax
+    call compile_call               # compile call to !
+    pop %rbx
+    ret
+
+.Lto_not_found:
+    # Word not found — set error token and abort
+    add $CELL, %r15                 # drop 0 flag
+    mov (%r15), %rax                # u
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15
+    pop %rbx
+    jmp .Lcf_abort
+
+# ---------- :NONAME ----------
+# :NONAME ( -- xt )
+# Begin an anonymous colon definition. Pushes the xt (HERE) to the data stack.
+# ; ends it normally.
+.global forth_noname
+forth_noname:
+    # Save state for error recovery
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
+
+    # Save HERE as the xt — this is where the code will start
+    mov %r13, %rax
+
+    # Push xt to data stack
+    sub $CELL, %r15
+    mov %rax, (%r15)
+
+    # Save DSP AFTER pushing xt (so ; sees balanced stack)
+    mov %r15, colon_dsp(%rip)
+
+    # Enter compile mode
+    movq $-1, state(%rip)
+
+    # No code_len field for :NONAME (no dictionary entry)
+    # Set colon_code_len_addr to 0 so ; skips code_len fill
+    movq $0, colon_code_len_addr(%rip)
+
+    ret
+
+# ---------- ?DO ----------
+# ?DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
+# Like DO but skips the loop body if limit == index.
+# Compiles: compare-and-branch-equal-forward, then push to return stack.
+# The forward branch is patched by LOOP/+LOOP (same as DO's skip-patch).
+.global forth_question_do
+forth_question_do:
+    # Compile ?DO inline code:
+    # Phase 1: Load limit and index, pop from data stack
+    # Phase 2: Compare — if equal, branch forward (skip loop body entirely)
+    # Phase 3: Push limit and index to return stack
+    # The key difference from DO: branch BEFORE pushing to return stack,
+    # so if we skip, return stack is clean.
+    call compile_question_do_inline # RAX = skip-patch address
+    incq do_depth(%rip)
+    sub $6*CELL, %r15
+    mov %rax, 5*CELL(%r15)         # skip-patch address
+    movq $CF_ORIG, 4*CELL(%r15)    # tag
+    mov leave_count(%rip), %rax
+    mov %rax, 3*CELL(%r15)
+    movq $CF_LEAVE, 2*CELL(%r15)   # tag
+    mov %r13, CELL(%r15)           # body address = HERE
+    movq $CF_DEST, (%r15)          # tag
+    ret
+
+# compile_question_do_inline — emit ?DO's inline code (22 bytes).
+# Same as compile_do_inline but: compare and branch BEFORE pushing to
+# return stack. If equal, skip the entire loop body (clean return stack).
+# Returns: RAX = address of JE offset field (for LOOP to patch).
+compile_question_do_inline:
+    CHECK_DICT 22
+    movb $0x49, 0(%r13)            # mov (%r15), %rax      (index)
+    movb $0x8B, 1(%r13)
+    movb $0x07, 2(%r13)
+    movb $0x49, 3(%r13)            # mov 8(%r15), %rdx     (limit)
+    movb $0x8B, 4(%r13)
+    movb $0x57, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x49, 7(%r13)            # add $16, %r15         (pop both)
+    movb $0x83, 8(%r13)
+    movb $0xC7, 9(%r13)
+    movb $0x10, 10(%r13)
+    movb $0x48, 11(%r13)           # cmp %rax, %rdx
+    movb $0x39, 12(%r13)
+    movb $0xC2, 13(%r13)
+    movb $0x0F, 14(%r13)           # je rel32              (skip if equal)
+    movb $0x84, 15(%r13)
+    movl $0, 16(%r13)              # placeholder offset
+    movb $0x52, 20(%r13)           # push %rdx (limit)
+    movb $0x50, 21(%r13)           # push %rax (index)
+    lea 16(%r13), %rax             # RAX = JE offset field address
+    add $22, %r13
+    ret
+
+# ---------- WORDS ----------
+# WORDS ( -- )
+# Print all words in the dictionary, walking from LATEST to end.
+.global forth_words
+forth_words:
+    push %rbx
+    push %rbp
+    mov %r12, %rbx                  # RBX = current entry (start at LATEST)
+
+.Lwords_loop:
+    test %rbx, %rbx
+    jz .Lwords_done                 # NULL link = end of dictionary
+
+    # Extract name length from flags byte (offset 8 from entry)
+    movzbl 8(%rbx), %eax            # flags+len byte
+    and $F_LENMASK, %eax            # mask to get length
+    mov %rax, %rbp                  # RBP = name length
+
+    # Name starts at offset 9
+    lea 9(%rbx), %rsi               # RSI = name address
+    mov %rbp, %rdx                  # RDX = name length
+    call platform_write
+
+    # Print space
+    sub $16, %rsp
+    movb $' ', (%rsp)
+    lea (%rsp), %rsi
+    mov $1, %rdx
+    call platform_write
+    add $16, %rsp
+
+    # Follow link to next entry
+    mov (%rbx), %rbx
+    jmp .Lwords_loop
+
+.Lwords_done:
+    pop %rbp
+    pop %rbx
+    ret
+
+# ---------- KEY? ----------
+# KEY? ( -- flag )
+# Non-blocking check if input is available. Returns -1 if key ready, 0 if not.
+.global forth_key_q
+forth_key_q:
+    call platform_key_ready         # RDI = count (>0 if ready)
+    test %edi, %edi
+    jz .Lkq_no
+    mov $-1, %rax                   # TRUE
+    jmp .Lkq_push
+.Lkq_no:
+    xor %eax, %eax                  # FALSE
+.Lkq_push:
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ---------- MS ----------
+# MS ( u -- )
+# Pause for u milliseconds.
+.global forth_ms
+forth_ms:
+    mov (%r15), %rdi                # pop milliseconds
+    add $CELL, %r15
+    call platform_ms
+    ret
+
+# ---------- PAGE ----------
+# PAGE ( -- )
+# Clear the screen and move cursor to home position.
+.global forth_page
+forth_page:
+    call platform_page
+    ret
+
+# ---------- AT-XY ----------
+# AT-XY ( u1 u2 -- )
+# Move cursor. u1=column, u2=row (both 0-based per ANS standard).
+.global forth_at_xy
+forth_at_xy:
+    mov (%r15), %rsi                # u2 = row (top)
+    mov CELL(%r15), %rdi            # u1 = col (second)
+    add $2*CELL, %r15
+    call platform_at_xy
+    ret
+
+# ---------- SCREEN-WIDTH ----------
+# SCREEN-WIDTH ( -- u )
+.global forth_screen_w
+forth_screen_w:
+    call platform_screen_width      # RAX = columns
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ---------- SCREEN-HEIGHT ----------
+# SCREEN-HEIGHT ( -- u )
+.global forth_screen_h
+forth_screen_h:
+    call platform_screen_height     # RAX = rows
+    sub $CELL, %r15
+    mov %rax, (%r15)
     ret
 
 # ---------- HERE, ALLOT, COMMA, C-COMMA ----------
@@ -3152,7 +3501,20 @@ DEFWORD dict_case,       "case",       forth_case,        dict_unused,    F_IMME
 DEFWORD dict_of,         "of",         forth_of,          dict_case,      F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_endof,      "endof",      forth_endof,       dict_of,        F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_endcase,    "endcase",    forth_endcase,     dict_endof,     F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_endcase
+DEFWORD dict_parse,      "parse",      forth_parse,       dict_endcase
+DEFWORD dict_source_id,  "source-id",  forth_source_id,   dict_parse
+DEFWORD dict_value,      "value",      forth_value,       dict_source_id
+DEFWORD dict_to,         "to",         forth_to,          dict_value,     F_IMMEDIATE
+DEFWORD dict_noname,     ":noname",    forth_noname,      dict_to
+DEFWORD dict_question_do,"?do",        forth_question_do, dict_noname,    F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_words,      "words",      forth_words,       dict_question_do
+DEFWORD dict_key_q,      "key?",       forth_key_q,       dict_words
+DEFWORD dict_ms,         "ms",         forth_ms,          dict_key_q
+DEFWORD dict_page,       "page",       forth_page,        dict_ms
+DEFWORD dict_at_xy,      "at-xy",      forth_at_xy,       dict_page
+DEFWORD dict_screen_w,   "screen-width",  forth_screen_w, dict_at_xy
+DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
+.global dict_screen_h
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -3250,6 +3612,9 @@ leave_stack:                        # Patch addresses for pending LEAVEs
     .space MAX_LEAVES * 8
 .global hld
 hld:                                # Current HOLD pointer for pictured numeric output
+    .quad 0
+.global source_id
+source_id:                          # Input source identifier (0=keyboard, -1=EVALUATE)
     .quad 0
 .equ PAD_SIZE, 68                   # 64 binary digits + sign + padding
 .global pad

@@ -253,23 +253,71 @@ commonly useful ones:
 | ENDOF      | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
 | ENDCASE    | ( x -- )                                      | (x)    | asm (IMMEDIATE)         |
 | COMPILE,   | ( xt -- )                                     | (x)    | asm                     |
-| ?DO        | ( limit index -- )                            | ( )    | Skip-if-equal DO        |
-| VALUE      | ( x "name" -- )                               | ( )    | Named value             |
-| TO         | ( x "name" -- )                               | ( )    | Assign to VALUE         |
-| :NONAME    | ( -- xt )                                     | ( )    | Anonymous definition    |
-| PARSE      | ( char -- c-addr u )                          | ( )    | Parse with delimiter    |
-| PARSE-NAME | ( -- c-addr u )                               | ( )    | Parse whitespace        |
+| ?DO        | ( limit index -- )                            | (x)    | asm (IMMEDIATE)         |
+| VALUE      | ( x "name" -- )                               | (x)    | asm                     |
+| TO         | ( x "name" -- )                               | (x)    | asm (IMMEDIATE)         |
+| :NONAME    | ( -- xt )                                     | (x)    | asm                     |
+| PARSE      | ( char -- c-addr u )                          | (x)    | asm                     |
+| PARSE-NAME | ( -- c-addr u )                               | (x)    | core.fs                 |
 | PICK       | ( xu...x0 u -- xu...x0 xu )                   | (x)    | asm                     |
 | PAD        | ( -- c-addr )                                 | (x)    | asm                     |
 | ERASE      | ( addr u -- )                                 | (x)    | core.fs                 |
 | UNUSED     | ( -- u )                                      | (x)    | asm                     |
-| SOURCE-ID  | ( -- 0 \| -1 )                                | ( )    | Input source identifier |
+| SOURCE-ID  | ( -- 0 \| -1 )                                | (x)    | asm                     |
 | .(         | ( "ccc)" -- )                                 | (x)    | core.fs (IMMEDIATE)     |
 | .R         | ( n1 n2 -- )                                  | (x)    | core.fs                 |
 | U.R        | ( u n -- )                                    | (x)    | core.fs                 |
 | U>         | ( u1 u2 -- flag )                              | (x)    | core.fs                 |
 | HOLDS      | ( c-addr u -- )                               | (x)    | core.fs                 |
 | \\         | ( -- )                                        | (x)    | asm (IMMEDIATE)         |
+
+## Programming-Tools Word Set (15)
+
+| Word  | Stack effect      | Status | Notes                   |
+|-------|-------------------|--------|-------------------------|
+| .S    | ( -- )            | (x)    | asm                     |
+| ?     | ( a-addr -- )     | (x)    | core.fs                 |
+| DUMP  | ( addr u -- )     | (x)    | core.fs                 |
+| SEE   | ( "name" -- )     | ( )    | future                  |
+| WORDS | ( -- )            | (x)    | asm                     |
+
+## String Word Set (17)
+
+| Word      | Stack effect                   | Status | Notes                   |
+|-----------|--------------------------------|--------|-------------------------|
+| -TRAILING | ( c-addr u1 -- c-addr u2 )    | (x)    | core.fs                 |
+| /STRING   | ( c-addr u n -- c-addr+n u-n ) | (x)    | core.fs                 |
+| BLANK     | ( c-addr u -- )                | (x)    | core.fs                 |
+| CMOVE     | ( c-addr1 c-addr2 u -- )       | (x)    | core.fs                 |
+| CMOVE>    | ( c-addr1 c-addr2 u -- )       | (x)    | core.fs                 |
+| COMPARE   | ( c-addr1 u1 c-addr2 u2 -- n ) | (x)    | core.fs                 |
+| SEARCH    | ( c-addr1 u1 c-addr2 u2 -- )  | ( )    | future                  |
+| SLITERAL  | ( c-addr u -- )                | ( )    | asm (IMMEDIATE)         |
+
+## Facility Word Set (10)
+
+| Word          | Stack effect      | Status | Notes                   |
+|---------------|-------------------|--------|-------------------------|
+| AT-XY         | ( u1 u2 -- )      | (x)    | asm (platform)          |
+| KEY?          | ( -- flag )        | (x)    | asm (platform)          |
+| PAGE          | ( -- )             | (x)    | asm (platform)          |
+| MS            | ( u -- )           | (x)    | asm (platform)          |
+| SCREEN-WIDTH  | ( -- u )           | (x)    | asm (platform)          |
+| SCREEN-HEIGHT | ( -- u )           | (x)    | asm (platform)          |
+
+## Double-Number Word Set (8)
+
+| Word    | Stack effect                    | Status | Notes                   |
+|---------|---------------------------------|--------|-------------------------|
+| D+      | ( d1 d2 -- d3 )                | (x)    | core.fs                 |
+| D-      | ( d1 d2 -- d3 )                | (x)    | core.fs                 |
+| D.      | ( d -- )                        | (x)    | core.fs                 |
+| D0=     | ( d -- flag )                   | (x)    | core.fs                 |
+| D0<     | ( d -- flag )                   | (x)    | core.fs                 |
+| D=      | ( d1 d2 -- flag )               | (x)    | core.fs                 |
+| D<      | ( d1 d2 -- flag )               | (x)    | core.fs                 |
+| DNEGATE | ( d -- d )                      | (x)    | core.fs                 |
+| DABS    | ( d -- d )                      | (x)    | core.fs                 |
 
 ## Future Standard Word Sets
 
@@ -279,16 +327,12 @@ implement as separate libraries:
 | Word Set          | Section | Words | Notes                              |
 |-------------------|---------|-------|------------------------------------|
 | Block             | 7       | 12    | Block file I/O                     |
-| Double-Number     | 8       | 20    | Double-cell arithmetic             |
 | Exception         | 9       | 5     | CATCH and THROW                    |
-| Facility          | 10      | 10    | KEY?, EKEY, AT-XY, PAGE            |
 | File-Access       | 11      | 27    | File I/O                           |
 | Floating-Point    | 12      | 51    | Floating-point math                |
 | Locals            | 13      | 2     | Local variables                    |
 | Memory-Allocation | 14      | 3     | ALLOCATE, FREE, RESIZE             |
-| Programming-Tools | 15      | 13    | SEE, WORDS, .S                     |
 | Search-Order      | 16      | 10    | Vocabulary / wordlist management   |
-| String            | 17      | 8     | String operations                  |
 
 ## BasicForth-Specific Words
 

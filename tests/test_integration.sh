@@ -573,6 +573,108 @@ assert_output "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swa
 assert_output "dot-paren"         '.( hello)'                         "hello"
 
 # =========================================================================
+section "Batch 1: Core Extension Words"
+# =========================================================================
+
+# PARSE-NAME
+assert_output "parse-name"           'parse-name hello type'              "hello"
+
+# PARSE
+assert_output "parse delim"          '41 parse hello) type'               "hello"
+assert_output "parse space"          '32 parse hello type'                "hello"
+assert_output "parse no delim"       '41 parse hello type'                "hello"
+
+# SOURCE-ID
+assert_output "source-id keyboard"   'source-id .'                        "0"
+assert_output "source-id evaluate"   ': t s" source-id ." evaluate ; t'  "-1"
+
+# VALUE / TO
+assert_output "value"                '10 value x x .'                     "10"
+assert_output "to interpret"         '10 value x 20 to x x .'            "20"
+assert_output "to compile"           '10 value x : t 20 to x ; t x .'   "20"
+assert_output "value unchanged"      '10 value x x . x .'                "10 10"
+
+# :NONAME
+assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"
+assert_output "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
+
+# ?DO
+assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
+assert_output "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
+assert_output "?do skip empty"       ': t 0 0 ?do i . loop ; t'          " ok"
+
+# WORDS
+assert_output "words"                'words'                              "words"
+
+# =========================================================================
+section "Batch 2: Programming-Tools + String Words"
+# =========================================================================
+
+# ?
+assert_output "question fetch"       'variable v 42 v ! v ?'              "42"
+
+# DUMP
+assert_output "dump"                 'here 16 dump'                       "|................|"
+
+# /STRING
+assert_output "/string"              ': t s" hello world" 6 /string type ; t'  "world"
+assert_output "/string zero"         ': t s" hello" 0 /string type ; t'        "hello"
+
+# COMPARE
+assert_output "compare equal"        ': t s" hello" s" hello" compare . ; t'   "0"
+assert_output "compare less"         ': t s" abc" s" abd" compare . ; t'       "-1"
+assert_output "compare greater"      ': t s" abd" s" abc" compare . ; t'       "1"
+assert_output "compare shorter"      ': t s" abc" s" abcd" compare . ; t'      "-1"
+assert_output "compare longer"       ': t s" abcd" s" abc" compare . ; t'      "1"
+
+# CMOVE
+assert_output "cmove"                'create s 65 c, 66 c, 67 c, create d 3 allot s d 3 cmove d c@ . d 1+ c@ . d 2 + c@ .'  "65 66 67"
+
+# -TRAILING
+assert_output "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"
+assert_output "-trailing none"       ': t s" hello" -trailing type ; t'        "hello"
+
+# BLANK
+assert_output "blank"                'create b 5 allot b 5 blank b c@ . b 4 + c@ .'  "32 32"
+
+# =========================================================================
+section "Batch 3: Facility + Double-Number Words"
+# =========================================================================
+
+# KEY?
+assert_output "key? no input"        'key? .'                              "0"
+
+# MS (just check it doesn't crash — timing is non-deterministic)
+assert_output "ms"                   '1 ms 42 .'                           "42"
+
+# SCREEN-WIDTH / SCREEN-HEIGHT (values depend on terminal)
+assert_output "screen-width"         'screen-width 0 > .'                  "-1"
+assert_output "screen-height"        'screen-height 0 > .'                 "-1"
+
+# D+
+assert_output "d+ simple"           ': t 1 0 3 0 d+ . . ; t'              "0 4"
+assert_output "d+ carry"            ': t -1 0 1 0 d+ . . ; t'             "1 0"
+
+# D-
+assert_output "d- simple"           ': t 5 0 3 0 d- . . ; t'              "0 2"
+
+# D0=
+assert_output "d0= true"            ': t 0 0 d0= . ; t'                   "-1"
+assert_output "d0= false"           ': t 1 0 d0= . ; t'                   "0"
+
+# D0<
+assert_output "d0< true"            ': t 0 -1 d0< . ; t'                  "-1"
+assert_output "d0< false"           ': t 0 1 d0< . ; t'                   "0"
+
+# D=
+assert_output "d= true"             ': t 5 0 5 0 d= . ; t'               "-1"
+assert_output "d= false"            ': t 5 0 6 0 d= . ; t'               "0"
+
+# D.
+assert_output "d. positive"         ': t 42 0 d. ; t'                     "42"
+assert_output "d. negative"         ': t -42 -1 d. ; t'                   "-42"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

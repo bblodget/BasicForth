@@ -1642,9 +1642,10 @@ forth_semicolon:
     // Compile RET
     BL compile_ret
 
-    // Calculate code length and write it
+    // Calculate code length and write it (skip for :NONAME)
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                    // X9 = code_len field address
+    CBZ X9, .Lsemi_noname           // :NONAME has no code_len field
     ADD X10, X9, #4                 // X10 = code start (right after field)
     SUB X11, X21, X10               // X11 = code length
     STR W11, [X9]                   // write code_len (32-bit)
@@ -1658,7 +1659,16 @@ forth_semicolon:
     LDRB W9, [X22, #8]
     AND W9, W9, #~F_HIDDEN
     STRB W9, [X22, #8]
+    B .Lsemi_done
 
+.Lsemi_noname:
+    // Flush I-cache for :NONAME compiled code
+    ADR X9, saved_here
+    LDR X0, [X9]                    // start = saved HERE (xt)
+    MOV X1, X21                     // end = HERE
+    BL platform_flush_icache
+
+.Lsemi_done:
     // Return to interpret mode
     ADR X9, state
     STR XZR, [X9]
@@ -1940,6 +1950,7 @@ forth_evaluate:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
 
     // Pop c-addr and u from data stack
     LDR X9, [X19]                   // X9 = u (top)
@@ -1953,11 +1964,15 @@ forth_evaluate:
     LDR X24, [X12]                  // save old source_len
     ADR X13, to_in
     LDR X25, [X13]                  // save old to_in
+    ADR X14, source_id
+    LDR X27, [X14]                  // save old source_id
 
     // Set new source context
     STR X10, [X11]                  // source_addr = c-addr
     STR X9, [X12]                   // source_len = u
     STR XZR, [X13]                  // to_in = 0
+    MOV X9, #-1
+    STR X9, [X14]                   // source_id = -1 (EVALUATE)
 
     // Interpret the string
     BL forth_interpret_line
@@ -1970,8 +1985,11 @@ forth_evaluate:
     STR X24, [X9]
     ADR X9, to_in
     STR X25, [X9]
+    ADR X9, source_id
+    STR X27, [X9]
 
     MOV X0, X26                     // restore result
+    LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
@@ -2427,6 +2445,365 @@ forth_endcase:
     BL patch_forward
     B .Lendcase_loop
 .Lendcase_done:
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- PARSE ----------
+// PARSE ( char "ccc<char>" -- c-addr u )
+// Parse input delimited by char. Does NOT skip leading delimiters.
+.global forth_parse
+forth_parse:
+    LDR X0, [X19], #CELL           // pop delimiter char
+
+    // Load source context
+    ADR X9, source_addr
+    LDR X10, [X9]                   // X10 = buffer base
+    ADR X9, source_len
+    LDR X11, [X9]                   // X11 = total length
+    ADR X9, to_in
+    LDR X12, [X9]                   // X12 = current offset (>IN)
+
+    // Start of parsed region
+    ADD X14, X10, X12               // X14 = c-addr (start)
+    MOV X15, X12                    // X15 = start offset (save)
+
+    // Scan for delimiter
+.Lparse_scan:
+    CMP X12, X11
+    B.GE .Lparse_end
+    LDRB W13, [X10, X12]
+    CMP W13, W0
+    B.EQ .Lparse_found
+    ADD X12, X12, #1
+    B .Lparse_scan
+
+.Lparse_found:
+    // Delimiter found — advance >IN past it
+    ADD X13, X12, #1
+    ADR X9, to_in
+    STR X13, [X9]
+    B .Lparse_push
+
+.Lparse_end:
+    // End of input — >IN = source_len
+    ADR X9, to_in
+    STR X12, [X9]
+
+.Lparse_push:
+    // Length = X12 - start offset
+    SUB X12, X12, X15
+    STR X14, [X19, #-CELL]!        // push c-addr
+    STR X12, [X19, #-CELL]!        // push u
+    RET
+
+// ---------- SOURCE-ID ----------
+// SOURCE-ID ( -- n )
+.global forth_source_id
+forth_source_id:
+    ADR X9, source_id
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
+// ---------- VALUE ----------
+// VALUE ( x "name" -- )
+// Like CONSTANT but TO can modify the inline value.
+.global forth_value
+forth_value:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+
+    // Pop value, save on return stack
+    LDR X9, [X19], #CELL
+    STP X9, XZR, [SP, #-16]!
+
+    BL build_header
+    CBNZ X0, .Lvalue_err
+
+    // Compile code that pushes the value
+    LDP X0, X9, [SP], #16          // restore value
+    BL compile_prolog
+    BL compile_literal
+    BL compile_ret
+
+    // Fill code_len
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]
+    ADD X10, X9, #4
+    SUB X11, X21, X10
+    STR W11, [X9]
+
+    // Flush I-cache
+    ADD X0, X9, #4
+    MOV X1, X21
+    BL platform_flush_icache
+
+    // Clear HIDDEN flag
+    LDRB W9, [X22, #8]
+    AND W9, W9, #~F_HIDDEN
+    STRB W9, [X22, #8]
+
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lvalue_err:
+    LDP X9, X10, [SP], #16
+    STR X9, [X19, #-CELL]!
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- TO ----------
+// TO ( x "name" -- ) IMMEDIATE
+// Value address on ARM64 = xt + 8 (past STP prolog + BL forth_lit opcode).
+.global forth_to
+forth_to:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    BL forth_parse_word
+    BL forth_find
+    LDR X23, [X19]                  // flag
+    CBZ X23, .Lto_not_found
+
+    ADD X19, X19, #CELL             // drop flag
+    LDR X0, [X19], #CELL           // pop xt
+
+    // Value address = xt + 8 (STP=4 + BL=4, then 8-byte inline value)
+    ADD X23, X0, #8                 // X23 = addr of inline value
+
+    // Check STATE
+    ADR X9, state
+    LDR X9, [X9]
+    CBNZ X9, .Lto_compile
+
+    // Interpret mode: pop x, store to value address
+    LDR X9, [X19], #CELL
+    STR X9, [X23]
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lto_compile:
+    // Compile mode: compile LITERAL(addr) + BL(forth_store)
+    MOV X0, X23
+    BL compile_literal
+    ADR X0, forth_store
+    BL compile_call
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Lto_not_found:
+    ADD X19, X19, #CELL             // drop 0 flag
+    LDR X9, [X19]
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #(2*CELL)
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    B .Lcf_abort
+
+// ---------- :NONAME ----------
+// :NONAME ( -- xt )
+.global forth_noname
+forth_noname:
+    // Save state for error recovery
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
+
+    STP X29, X30, [SP, #-16]!
+
+    // Save HERE as xt (before compiling prolog)
+    MOV X23, X21
+
+    // Compile prolog (STP X29, X30, [SP, #-16]!)
+    BL compile_prolog
+
+    LDP X29, X30, [SP], #16
+
+    // Push xt to data stack
+    STR X23, [X19, #-CELL]!
+
+    // Save DSP AFTER pushing xt (so ; sees balanced stack)
+    ADR X9, colon_dsp
+    STR X19, [X9]
+
+    // Enter compile mode
+    ADR X9, state
+    MOV X10, #-1
+    STR X10, [X9]
+
+    // No code_len field for :NONAME
+    ADR X9, colon_code_len_addr
+    STR XZR, [X9]
+
+    RET
+
+// ---------- ?DO ----------
+// ?DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
+.global forth_question_do
+forth_question_do:
+    STP X29, X30, [SP, #-16]!
+    BL compile_question_do_inline   // X0 = B.EQ patch address
+    ADR X9, do_depth
+    LDR X10, [X9]
+    ADD X10, X10, #1
+    STR X10, [X9]
+    SUB X19, X19, #6*CELL
+    STR X0, [X19, #5*CELL]         // skip-patch address
+    MOV X9, #CF_ORIG
+    STR X9, [X19, #4*CELL]
+    ADR X9, leave_count
+    LDR X10, [X9]
+    STR X10, [X19, #3*CELL]
+    MOV X9, #CF_LEAVE
+    STR X9, [X19, #2*CELL]
+    STR X21, [X19, #CELL]          // body address = HERE
+    MOV X9, #CF_DEST
+    STR X9, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
+// compile_question_do_inline — emit ?DO's inline code (24 bytes, 6 instructions).
+// Same structure as compile_do_inline: compare BEFORE push to return stack.
+// If equal, branch forward (skip loop body entirely, clean return stack).
+// Returns: X0 = address of B.EQ instruction (for LOOP to patch).
+compile_question_do_inline:
+    CHECK_DICT 24
+    // LDR X9, [X19]              (index = top of stack)
+    MOV W9, #(INSN_LDR_X9_X19 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X9_X19 >> 16), LSL #16
+    STR W9, [X21], #4
+    // LDR X10, [X19, #8]         (limit = second on stack)
+    MOV W9, #(INSN_LDR_X10_X19_8 & 0xFFFF)
+    MOVK W9, #(INSN_LDR_X10_X19_8 >> 16), LSL #16
+    STR W9, [X21], #4
+    // ADD X19, X19, #16           (pop both from data stack)
+    MOV W9, #(INSN_ADD_X19_X19_16 & 0xFFFF)
+    MOVK W9, #(INSN_ADD_X19_X19_16 >> 16), LSL #16
+    STR W9, [X21], #4
+    // CMP X9, X10
+    MOV W9, #(INSN_CMP_X9_X10 & 0xFFFF)
+    MOVK W9, #(INSN_CMP_X9_X10 >> 16), LSL #16
+    STR W9, [X21], #4
+    // B.EQ placeholder (skip if equal — branch BEFORE push to return stack)
+    MOV W9, #(INSN_BEQ_0 & 0xFFFF)
+    MOVK W9, #(INSN_BEQ_0 >> 16), LSL #16
+    MOV X0, X21                     // X0 = address of B.EQ (for patching)
+    STR W9, [X21], #4
+    // STP X9, X10, [SP, #-16]!   (push to return stack only if not skipping)
+    MOV W9, #(INSN_STP_X9_X10_SP_PRE & 0xFFFF)
+    MOVK W9, #(INSN_STP_X9_X10_SP_PRE >> 16), LSL #16
+    STR W9, [X21], #4
+    RET
+
+// ---------- WORDS ----------
+// WORDS ( -- )
+// Print all words in the dictionary.
+.global forth_words
+forth_words:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X23, X22                    // X23 = current entry (start at LATEST)
+
+.Lwords_loop:
+    CBZ X23, .Lwords_done           // NULL link = end of dictionary
+
+    // Extract name length from flags byte (offset 8)
+    LDRB W9, [X23, #8]
+    AND W9, W9, #F_LENMASK
+
+    // Name starts at offset 9
+    ADD X0, X23, #9                 // X0 = name address
+    MOV X1, X9                      // X1 = name length
+    BL platform_write
+
+    // Print space
+    SUB SP, SP, #16
+    MOV W9, #' '
+    STRB W9, [SP]
+    MOV X0, SP
+    MOV X1, #1
+    BL platform_write
+    ADD SP, SP, #16
+
+    // Follow link to next entry
+    LDR X23, [X23]
+    B .Lwords_loop
+
+.Lwords_done:
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- KEY? ----------
+// KEY? ( -- flag )
+.global forth_key_q
+forth_key_q:
+    STP X29, X30, [SP, #-16]!
+    BL platform_key_ready           // X0 = count
+    CMP X0, #0
+    CSETM X9, NE                    // -1 if ready, 0 if not
+    STR X9, [X19, #-CELL]!
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- MS ----------
+// MS ( u -- )
+.global forth_ms
+forth_ms:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19], #CELL           // pop milliseconds
+    BL platform_ms
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- PAGE ----------
+// PAGE ( -- )
+.global forth_page
+forth_page:
+    STP X29, X30, [SP, #-16]!
+    BL platform_page
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- AT-XY ----------
+// AT-XY ( u1 u2 -- ) u1=column, u2=row
+.global forth_at_xy
+forth_at_xy:
+    STP X29, X30, [SP, #-16]!
+    LDR X1, [X19], #CELL           // u2 = row (top)
+    LDR X0, [X19], #CELL           // u1 = col (second)
+    BL platform_at_xy
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- SCREEN-WIDTH ----------
+// SCREEN-WIDTH ( -- u )
+.global forth_screen_w
+forth_screen_w:
+    STP X29, X30, [SP, #-16]!
+    BL platform_screen_width
+    STR X0, [X19, #-CELL]!
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- SCREEN-HEIGHT ----------
+// SCREEN-HEIGHT ( -- u )
+.global forth_screen_h
+forth_screen_h:
+    STP X29, X30, [SP, #-16]!
+    BL platform_screen_height
+    STR X0, [X19, #-CELL]!
     LDP X29, X30, [SP], #16
     RET
 
@@ -3416,7 +3793,20 @@ DEFWORD dict_case,       "case",       forth_case,        dict_unused,    F_IMME
 DEFWORD dict_of,         "of",         forth_of,          dict_case,      F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_endof,      "endof",      forth_endof,       dict_of,        F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_endcase,    "endcase",    forth_endcase,     dict_endof,     F_IMMEDIATE+F_COMPILE_ONLY
-.global dict_endcase
+DEFWORD dict_parse,      "parse",      forth_parse,       dict_endcase
+DEFWORD dict_source_id,  "source-id",  forth_source_id,   dict_parse
+DEFWORD dict_value,      "value",      forth_value,       dict_source_id
+DEFWORD dict_to,         "to",         forth_to,          dict_value,     F_IMMEDIATE
+DEFWORD dict_noname,     ":noname",    forth_noname,      dict_to
+DEFWORD dict_question_do,"?do",        forth_question_do, dict_noname,    F_IMMEDIATE+F_COMPILE_ONLY
+DEFWORD dict_words,      "words",      forth_words,       dict_question_do
+DEFWORD dict_key_q,      "key?",       forth_key_q,       dict_words
+DEFWORD dict_ms,         "ms",         forth_ms,          dict_key_q
+DEFWORD dict_page,       "page",       forth_page,        dict_ms
+DEFWORD dict_at_xy,      "at-xy",      forth_at_xy,       dict_page
+DEFWORD dict_screen_w,   "screen-width",  forth_screen_w, dict_at_xy
+DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
+.global dict_screen_h
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -3512,6 +3902,9 @@ leave_stack:                        // Patch addresses for pending LEAVEs
     .space MAX_LEAVES * 8
 .global hld
 hld:                                // Current HOLD pointer for pictured numeric output
+    .quad 0
+.global source_id
+source_id:                          // Input source identifier (0=keyboard, -1=EVALUATE)
     .quad 0
 .equ PAD_SIZE, 68                   // 64 binary digits + sign + padding
 .global pad

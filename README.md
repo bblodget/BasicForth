@@ -8,33 +8,37 @@ Threaded Code (STC) with 64-bit cells.
 
 ## Status
 
-**v0.3.0** — Full ANS Forth core word set. All 133 required core words
-implemented, plus many useful core extension words.
-119 unit tests + 236 integration tests.
+**v0.4.0** — Full ANS Forth core word set plus words from five additional
+standard word sets. 29 new words for strings, tools, facility, and
+double-number arithmetic. Platform layer extended for games and
+interactive applications.
+119 unit tests + 280 integration tests.
 
 What works today:
 
 - **ANS Forth core word set** — all 133 required words from section 6.1
+- **Complete core extensions** — all commonly useful section 6.2 words
 - Interactive REPL with line editing (backspace, Ctrl+C)
-- Colon definitions (`: square dup * ;`)
-- Defining words: `CREATE`, `CONSTANT`, `VARIABLE`, `DOES>`
+- Colon definitions (`: square dup * ;`) and anonymous (`:NONAME`)
+- Defining words: `CREATE`, `CONSTANT`, `VARIABLE`, `VALUE`/`TO`, `DOES>`
 - Control flow: `IF ELSE THEN`, `BEGIN UNTIL AGAIN WHILE REPEAT`
-- Counted loops: `DO LOOP +LOOP I J UNLOOP LEAVE`
+- Counted loops: `DO LOOP +LOOP I J UNLOOP LEAVE`, `?DO` (skip-if-equal)
 - Multi-way branching: `CASE OF ENDOF ENDCASE`
 - Compiler words: `LITERAL`, `POSTPONE`, `[']`, `[CHAR]`, `EXIT`, `STATE`, `[ ]`
-- Double-cell arithmetic: `S>D`, `UM*`, `M*`, `UM/MOD`, `SM/REM`, `FM/MOD`
+- Double-cell arithmetic: `S>D`, `UM*`, `M*`, `UM/MOD`, `SM/REM`, `FM/MOD`, `D+`, `D-`, `D.`
 - Pictured numeric output: `<# # #S #> HOLD SIGN`, `BASE`, `HEX`, `DECIMAL`
 - Formatted output: `.` (base-aware), `U.`, `.R`, `U.R`
-- String words: `TYPE`, `S"`, `."`, `COUNT`, `CHAR`, `PICK`
+- String words: `TYPE`, `S"`, `."`, `COUNT`, `COMPARE`, `CMOVE`, `/STRING`, `-TRAILING`
 - System: `ABORT`, `ABORT"`, `QUIT`, `>NUMBER`, `SOURCE`, `>IN`, `EVALUATE`, `INCLUDED`
+- Facility: `KEY?`, `MS`, `PAGE`, `AT-XY`, `SCREEN-WIDTH`, `SCREEN-HEIGHT`
+- Tools: `WORDS`, `DUMP`, `.S`
 - File loading: auto-load `core.fs` at startup
 - Integer literals (decimal, `$hex`, `%binary`, `#decimal`)
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
-- Core extension words: `0>`, `U>`, `WITHIN`, `ERASE`, `UNUSED`, `.(`, `HOLDS`, `COMPILE,`, `NIP`, `TUCK`, and more
 
-What's next: remaining core extensions (?DO, VALUE/TO, :NONAME), Phase 4
-file system and storage.
+What's next: snake game port, Phase 4 file system and storage, locals
+word set, threading.
 
 ## Building
 
@@ -167,7 +171,7 @@ BasicForth/
       core.fs               Forth-defined words (loaded at startup)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (236 tests, piped I/O)
+    test_integration.sh     Integration tests (280 tests, piped I/O)
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge
   docs/                     Design documentation

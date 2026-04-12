@@ -127,7 +127,11 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Batch 2: STATE, [, ], LITERAL, ['], [CHAR], EXIT, POSTPONE, COMPILE,
 - [x] Batch 3: >BODY, >IN, SOURCE, ABORT, QUIT, ABORT", >NUMBER, >DIGIT?, WORD, ENVIRONMENT?
 - [x] Batch 4: CASE/OF/ENDOF/ENDCASE, UNUSED, 0>, U>, WITHIN, ERASE, U.R, HOLDS, .(
-- [ ] Remaining: ?DO, VALUE/TO, :NONAME, PARSE, PARSE-NAME, SOURCE-ID
+- [x] Batch 5: ?DO, VALUE/TO, :NONAME, PARSE, PARSE-NAME, SOURCE-ID, WORDS
+- [x] String words: /STRING, COMPARE, CMOVE, CMOVE>, -TRAILING, BLANK
+- [x] Programming-Tools: ?, DUMP, H.2, H.ADDR
+- [x] Facility: KEY?, MS, PAGE, AT-XY, SCREEN-WIDTH, SCREEN-HEIGHT (platform layer)
+- [x] Double-Number: D+, D-, D., D0=, D0<, D=, D<
 
 ---
 
@@ -180,6 +184,23 @@ completed. See Planning.md for high-level vision and design decisions.
 - [ ] Minimal Linux image with BasicForth as /sbin/init (PID 1)
 - [ ] Boot straight to Forth prompt
 - [ ] Built-in editor for standalone development
+
+---
+
+## Phase 8: Threading and Locals
+
+- [ ] Locals word set (section 13) — Gforth-style separate locals stack
+  - Separate locals stack (not return stack) to avoid conflicts with >R/R>
+  - `{` syntax: `{ a b c -- result }` declares locals, pops from data stack
+  - Each local name compiles to a locals-stack-relative fetch
+  - TO works with locals (compile a locals-stack-relative store)
+  - Reentrant and thread-safe (each thread gets its own locals stack)
+  - Required for safe multi-threaded Forth words
+- [ ] Threading support (pthreads or clone syscall)
+  - Per-thread data stack, return stack, and locals stack
+  - Shared dictionary (read-only after compilation)
+  - Thread-local state: SOURCE, >IN, STATE, BASE
+  - Synchronization primitives (mutex, semaphore)
 
 ---
 

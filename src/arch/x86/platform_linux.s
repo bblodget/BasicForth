@@ -464,3 +464,179 @@ platform_close_file:
     mov $SYS_close, %rax
     syscall
     ret
+
+# ---------- Facility Platform Functions ----------
+
+.equ SYS_nanosleep, 35
+.equ TIOCGWINSZ,    0x5413
+
+# platform_key_ready ( -- RDI=flag )
+# Non-blocking check if a key is available on stdin.
+# Uses ioctl(FIONREAD) to check bytes available.
+.global platform_key_ready
+platform_key_ready:
+    sub $16, %rsp                   # allocate space for count
+    movq $0, (%rsp)                 # zero it
+    mov $SYS_ioctl, %rax
+    mov $STDIN, %rdi
+    mov $FIONREAD, %rsi
+    lea (%rsp), %rdx
+    syscall
+    test %rax, %rax
+    js .Lkr_none                    # ioctl failed → no key
+    mov (%rsp), %edi                # count of bytes available
+    add $16, %rsp
+    ret
+.Lkr_none:
+    xor %edi, %edi
+    add $16, %rsp
+    ret
+
+# platform_ms ( RDI=milliseconds -- )
+# Sleep for the given number of milliseconds using nanosleep.
+.global platform_ms
+platform_ms:
+    sub $32, %rsp                   # timespec: tv_sec(8), tv_nsec(8)
+    # tv_sec = ms / 1000
+    mov %rdi, %rax
+    xor %edx, %edx
+    mov $1000, %rcx
+    div %rcx                        # RAX = seconds, RDX = remainder ms
+    mov %rax, (%rsp)                # tv_sec
+    # tv_nsec = (ms % 1000) * 1000000
+    imul $1000000, %rdx, %rdx
+    mov %rdx, 8(%rsp)              # tv_nsec
+    mov $SYS_nanosleep, %rax
+    lea (%rsp), %rdi                # req
+    xor %esi, %esi                  # rem = NULL
+    syscall
+    add $32, %rsp
+    ret
+
+# platform_page ( -- )
+# Clear the screen and move cursor to home using ANSI escape sequences.
+.global platform_page
+platform_page:
+    lea ansi_page(%rip), %rsi
+    mov $ansi_page_len, %rdx
+    call platform_write
+    ret
+
+# platform_at_xy ( RDI=col RSI=row -- )
+# Move cursor to (col, row) using ANSI escape sequence ESC[row+1;col+1H.
+# Builds the escape string on the stack.
+.global platform_at_xy
+platform_at_xy:
+    push %rbx
+    push %rbp
+    mov %rdi, %rbx                  # RBX = col (0-based)
+    mov %rsi, %rbp                  # RBP = row (0-based)
+    sub $32, %rsp
+
+    # Build ESC[row+1;col+1H in stack buffer
+    mov %rsp, %rdi                  # RDI = buffer
+    movb $0x1b, (%rdi)              # ESC
+    movb $'[', 1(%rdi)
+    lea 2(%rdi), %rdi
+
+    # Convert row+1 to decimal
+    lea 1(%rbp), %rax
+    call .Latxy_itoa                # writes digits, RDI advances
+
+    movb $';', (%rdi)
+    inc %rdi
+
+    # Convert col+1 to decimal
+    lea 1(%rbx), %rax
+    call .Latxy_itoa
+
+    movb $'H', (%rdi)
+    inc %rdi
+
+    # Write the escape sequence
+    mov %rdi, %rdx
+    lea (%rsp), %rsi
+    sub %rsi, %rdx                  # length
+    call platform_write
+
+    add $32, %rsp
+    pop %rbp
+    pop %rbx
+    ret
+
+# Helper: write unsigned integer in RAX as decimal ASCII to [RDI], advance RDI
+.Latxy_itoa:
+    # Convert to decimal digits on a mini stack
+    push %rcx
+    mov %rdi, %rcx                  # save start
+    mov $10, %r9
+    xor %r8d, %r8d                  # digit count
+.Latxy_div:
+    xor %edx, %edx
+    div %r9                         # RAX = quot, RDX = rem
+    add $'0', %dl
+    push %rdx                       # save digit
+    inc %r8d
+    test %rax, %rax
+    jnz .Latxy_div
+.Latxy_emit:
+    pop %rdx
+    movb %dl, (%rdi)
+    inc %rdi
+    dec %r8d
+    jnz .Latxy_emit
+    pop %rcx
+    ret
+
+# platform_screen_width ( -- RAX=cols )
+# Query terminal width via ioctl(TIOCGWINSZ). Default 80 on failure.
+.global platform_screen_width
+platform_screen_width:
+    sub $16, %rsp
+    mov $SYS_ioctl, %rax
+    mov $STDOUT, %rdi
+    mov $TIOCGWINSZ, %rsi
+    lea (%rsp), %rdx
+    syscall
+    test %rax, %rax
+    js .Lsw_default
+    movzwl 2(%rsp), %eax            # ws_col at offset 2
+    test %eax, %eax
+    jz .Lsw_default
+    add $16, %rsp
+    ret
+.Lsw_default:
+    mov $80, %eax
+    add $16, %rsp
+    ret
+
+# platform_screen_height ( -- RAX=rows )
+# Query terminal height via ioctl(TIOCGWINSZ). Default 25 on failure.
+.global platform_screen_height
+platform_screen_height:
+    sub $16, %rsp
+    mov $SYS_ioctl, %rax
+    mov $STDOUT, %rdi
+    mov $TIOCGWINSZ, %rsi
+    lea (%rsp), %rdx
+    syscall
+    test %rax, %rax
+    js .Lsh_default
+    movzwl (%rsp), %eax             # ws_row at offset 0
+    test %eax, %eax
+    jz .Lsh_default
+    add $16, %rsp
+    ret
+.Lsh_default:
+    mov $25, %eax
+    add $16, %rsp
+    ret
+
+# ---------- ANSI Escape Sequences ----------
+.section .rodata
+ansi_page:
+    .byte 0x1b
+    .ascii "[2J"
+    .byte 0x1b
+    .ascii "[H"
+.equ ansi_page_len, . - ansi_page

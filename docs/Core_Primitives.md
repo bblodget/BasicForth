@@ -319,19 +319,20 @@ AND, OR, XOR, INVERT, =, <, >, 0=, 0<, U<
 
 ### Memory and Dictionary
 
-| Word    | Stack effect                | Notes                           |
-|---------|-----------------------------|---------------------------------|
-| HERE    | ( -- addr )                 | Push HERE register              |
-| ALLOT   | ( n -- )                    | Bounds-checked both directions  |
-| ,       | ( x -- )                    | Store cell at HERE, advance     |
-| C,      | ( char -- )                 | Store byte at HERE, advance     |
-| CREATE  | ( "name" -- )               | Compile push-data-address code  |
-| CONSTANT| ( x "name" -- )             | Compile push-value code         |
-| DOES>   | ( -- a-addr )               | Attach runtime to CREATE'd word |
-| >BODY   | ( xt -- a-addr )            | xt to data field address        |
-| TYPE    | ( c-addr u -- )             | Write string to stdout          |
-| S"      | ( "ccc" -- c-addr u )       | Inline string literal (IMM+CO)  |
-| ."      | ( "ccc" -- )                | Compile string + TYPE (IMM+CO)  |
+| Word     | Stack effect                | Notes                           |
+|----------|-----------------------------|---------------------------------|
+| HERE     | ( -- addr )                 | Push HERE register              |
+| ALLOT    | ( n -- )                    | Bounds-checked both directions  |
+| ,        | ( x -- )                    | Store cell at HERE, advance     |
+| C,       | ( char -- )                 | Store byte at HERE, advance     |
+| CREATE   | ( "name" -- )               | Compile push-data-address code  |
+| CONSTANT | ( x "name" -- )             | Compile push-value code         |
+| VALUE    | ( x "name" -- )             | Like CONSTANT, mutable via TO   |
+| DOES>    | ( -- a-addr )               | Attach runtime to CREATE'd word |
+| >BODY    | ( xt -- a-addr )            | xt to data field address        |
+| TYPE     | ( c-addr u -- )             | Write string to stdout          |
+| S"       | ( "ccc" -- c-addr u )       | Inline string literal (IMM+CO)  |
+| ."       | ( "ccc" -- )                | Compile string + TYPE (IMM+CO)  |
 
 ### Variables (all in asm)
 
@@ -340,10 +341,11 @@ AND, OR, XOR, INVERT, =, <, >, 0=, 0<, U<
 | BASE   | ( -- a-addr )   | Number base variable               |
 | STATE  | ( -- a-addr )   | Compile/interpret flag variable    |
 | >IN    | ( -- a-addr )   | Input parse position variable      |
-| SOURCE | ( -- c-addr u ) | Current input buffer addr + length |
-| PAD    | ( -- c-addr )   | Scratch buffer address             |
-| HLD    | ( -- a-addr )   | Pictured output pointer variable   |
-| UNUSED | ( -- u )        | Free bytes in dictionary space     |
+| SOURCE    | ( -- c-addr u ) | Current input buffer addr + length |
+| SOURCE-ID | ( -- n )        | Input source: 0=keyboard, -1=EVALUATE |
+| PAD       | ( -- c-addr )   | Scratch buffer address             |
+| HLD       | ( -- a-addr )   | Pictured output pointer variable   |
+| UNUSED    | ( -- u )        | Free bytes in dictionary space     |
 
 ### Interpreter and Compiler
 
@@ -367,11 +369,15 @@ AND, OR, XOR, INVERT, =, <, >, 0=, 0<, U<
 | ]          | ( -- )                | Switch to compile mode             |
 | EXIT       | ( -- )                | Compile RET (IMM+CO)              |
 | COMPILE,   | ( xt -- )             | Compile call to xt                 |
+| TO         | ( x "name" -- )       | Assign to VALUE (IMMEDIATE)        |
+| :NONAME    | ( -- xt )             | Begin anonymous colon definition   |
+| PARSE      | ( char -- c-addr u )  | Parse with delimiter               |
+| WORDS      | ( -- )                | List all dictionary words          |
 
 ### Control Flow (all IMMEDIATE + COMPILE_ONLY, compile inline branches)
 
 IF, ELSE, THEN, BEGIN, UNTIL, AGAIN, WHILE, REPEAT, RECURSE,
-DO, LOOP, +LOOP, I, J, UNLOOP, LEAVE,
+DO, LOOP, +LOOP, I, J, UNLOOP, LEAVE, ?DO,
 CASE, OF, ENDOF, ENDCASE
 
 ### System
@@ -380,3 +386,14 @@ CASE, OF, ENDOF, ENDCASE
 |--------|-----------------------|----------------------------------|
 | ABORT  | ( i\*x -- )           | Clear stacks, reset to REPL      |
 | QUIT   | ( -- )                | Reset return stack, enter REPL   |
+
+### Facility (asm wrappers calling platform layer)
+
+| Word          | Stack effect      | Notes                              |
+|---------------|-------------------|------------------------------------|
+| KEY?          | ( -- flag )       | Non-blocking input check           |
+| MS            | ( u -- )          | Delay u milliseconds               |
+| PAGE          | ( -- )            | Clear screen, cursor home          |
+| AT-XY         | ( col row -- )    | Position cursor (0-based)          |
+| SCREEN-WIDTH  | ( -- u )          | Terminal width in columns           |
+| SCREEN-HEIGHT | ( -- u )          | Terminal height in rows             |

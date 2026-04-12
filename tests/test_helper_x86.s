@@ -96,6 +96,33 @@ platform_munmap:
 platform_close_file:
     ret
 
+.global platform_key_ready
+platform_key_ready:
+    xor %edi, %edi
+    ret
+
+.global platform_ms
+platform_ms:
+    ret
+
+.global platform_page
+platform_page:
+    ret
+
+.global platform_at_xy
+platform_at_xy:
+    ret
+
+.global platform_screen_width
+platform_screen_width:
+    mov $80, %eax
+    ret
+
+.global platform_screen_height
+platform_screen_height:
+    mov $25, %eax
+    ret
+
 # --- Return stack test wrappers ---
 # These call >R / R> / R@ within a single stack frame so the return
 # stack context is correct. Called via call_primitive like any other word.

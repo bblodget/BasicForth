@@ -90,6 +90,33 @@ platform_munmap:
 platform_close_file:
     RET
 
+.global platform_key_ready
+platform_key_ready:
+    MOV X0, #0
+    RET
+
+.global platform_ms
+platform_ms:
+    RET
+
+.global platform_page
+platform_page:
+    RET
+
+.global platform_at_xy
+platform_at_xy:
+    RET
+
+.global platform_screen_width
+platform_screen_width:
+    MOV X0, #80
+    RET
+
+.global platform_screen_height
+platform_screen_height:
+    MOV X0, #25
+    RET
+
 // I-cache flush for compiled code (same as platform_linux.s).
 // Needed by compiler tests that execute code written to dict_space.
 // Reads CTR_EL0 to determine cache line sizes (varies by CPU).
