@@ -178,3 +178,83 @@
 
 \ Defining words
 : VARIABLE  create 1 cells allot ;
+
+\ Standard alias for PARSE-WORD
+: PARSE-NAME  parse-word ;
+
+\ String words (17)
+: /STRING   ( c-addr u n -- c-addr+n u-n ) rot over + -rot - ;
+: CMOVE     ( c-addr1 c-addr2 u -- )
+            dup 0 > if 0 do over i + c@ over i + c! loop 2drop
+            else drop 2drop then ;
+: CMOVE>    ( c-addr1 c-addr2 u -- )
+            dup 0 > if
+                begin dup 0 > while
+                    1- >r over r@ + c@ over r@ + c! r>
+                repeat drop
+            then 2drop ;
+: -TRAILING ( c-addr u1 -- c-addr u2 )
+            begin dup 0> while
+                2dup + 1- c@ 32 <> if exit then
+                1-
+            repeat ;
+: BLANK     ( c-addr u -- ) 32 fill ;
+\ COMPARE: use variables to avoid deep stack juggling
+variable (cmp-a1)  variable (cmp-u1)
+variable (cmp-a2)  variable (cmp-u2)
+: COMPARE   ( c-addr1 u1 c-addr2 u2 -- n )
+    (cmp-u2) ! (cmp-a2) ! (cmp-u1) ! (cmp-a1) !
+    (cmp-u1) @ (cmp-u2) @ min   ( min-len )
+    0 ?do
+        (cmp-a1) @ i + c@
+        (cmp-a2) @ i + c@
+        2dup <> if
+            < if -1 else 1 then
+            unloop exit
+        then 2drop
+    loop
+    (cmp-u1) @ (cmp-u2) @
+    2dup = if 2drop 0
+    else < if -1 else 1 then then ;
+
+\ Programming-Tools words (15)
+: ?     ( a-addr -- ) @ . ;
+
+\ Hex output helpers for DUMP
+: H.2   ( u -- ) base @ >r hex
+        0 <# # # #> type
+        r> base ! ;
+
+: H.ADDR ( u -- ) base @ >r hex
+        0 <# # # # # # # # # #> type
+        r> base ! ;
+
+\ DUMP uses variables to keep the logic simple
+variable (dump-addr)  variable (dump-len)
+: DUMP  ( addr u -- )
+        (dump-len) ! (dump-addr) !
+        begin (dump-len) @ 0 > while
+            (dump-addr) @ h.addr ." : "
+            (dump-len) @ 16 min   ( n -- bytes this row )
+            dup 0 do (dump-addr) @ i + c@ h.2 space loop
+            dup 16 < if 16 over - 0 do ."    " loop then
+            ."  |"
+            dup 0 do
+                (dump-addr) @ i + c@ dup 32 < over 126 > or
+                if drop 46 then emit
+            loop
+            ." |" cr
+            dup (dump-addr) @ + (dump-addr) !
+            negate (dump-len) @ + (dump-len) !
+        repeat ;
+
+\ Double-Number words (8)
+: D+    ( d1-lo d1-hi d2-lo d2-hi -- d3-lo d3-hi )
+        rot + >r              ( d1-lo d2-lo  R: hi-sum )
+        over + dup rot u< if r> 1+ else r> then ;
+: D-    ( d1 d2 -- d3 ) dnegate d+ ;
+: D0=   ( d -- flag ) or 0= ;
+: D0<   ( d -- flag ) nip 0< ;
+: D=    ( d1 d2 -- flag ) d- d0= ;
+: D<    ( d1 d2 -- flag ) d- d0< ;
+: D.    ( d -- ) dup >r dabs <# #s r> sign #> type space ;
