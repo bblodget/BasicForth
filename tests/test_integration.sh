@@ -700,6 +700,7 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 
+
 # =========================================================================
 section "BYE"
 # =========================================================================

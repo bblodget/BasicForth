@@ -159,7 +159,7 @@ create body-y MAX_LEN allot
 
 : ate-food?  hx @ fx @ = hy @ fy @ = and ;
 
-: update-objects  hx @ hy @ update-body update-head ;
+: update-objects  update-body update-head ;
 
 : check-collision
     collision? if
