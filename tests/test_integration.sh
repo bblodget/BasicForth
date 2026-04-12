@@ -686,6 +686,17 @@ assert_output "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
 assert_output "cursor-off"           'cursor-off 42 .'                    "42"
 assert_output "cursor-on"            'cursor-on 42 .'                     "42"
 
+# Key constants
+assert_output "key_up"               'key_up .'                           "129"
+assert_output "key_down"             'key_down .'                         "130"
+assert_output "key_right"            'key_right .'                        "131"
+assert_output "key_left"             'key_left .'                         "132"
+assert_output "key_escape"           'key_escape .'                       "27"
+
+# Random number generator
+assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
+assert_output "rnd zero base"       '1 rnd .'                             "0"
+
 # =========================================================================
 section "BYE"
 # =========================================================================
