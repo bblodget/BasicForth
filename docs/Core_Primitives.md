@@ -361,6 +361,7 @@ AND, OR, XOR, INVERT, =, <, >, 0=, 0<, U<
 | \          | ( "ccc" -- )          | Line comment (IMMEDIATE)           |
 | EVALUATE   | ( c-addr u -- )       | Interpret string as Forth          |
 | INCLUDED   | ( c-addr u -- )       | Load and interpret a source file   |
+| INCLUDE    | ( "name" -- )         | Parse filename and load it         |
 | LITERAL    | ( x -- )              | Compile inline literal (IMM+CO)    |
 | POSTPONE   | ( "name" -- )         | Compile compilation semantics (IMM+CO) |
 | [']        | ( "name" -- )         | Compile xt as literal (IMM+CO)     |

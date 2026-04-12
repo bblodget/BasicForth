@@ -346,6 +346,7 @@ Words not in the standard, specific to BasicForth's goals:
 | BYE         | ( -- )            | asm   | (x)    | Print "Goodbye!", restore terminal, exit |
 | .S          | ( -- )            | asm   | (x)    | Print stack non-destructively          |
 | INCLUDED    | ( c-addr u -- )   | asm   | (x)    | Load and interpret a Forth source file |
+| INCLUDE     | ( "name" -- )     | asm   | (x)    | Parse filename and load it (INCLUDE foo.fs) |
 | TRUE        | ( -- -1 )         | forth | (x)    | -1 (in core.fs)                        |
 | FALSE       | ( -- 0 )          | forth | (x)    | 0 (in core.fs)                         |
 | KEY_ESCAPE  | ( -- 27 )         | forth | (x)    | ESC key constant                       |

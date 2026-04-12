@@ -9,10 +9,12 @@ depending on the current STATE.
 
 ```
 _start
+  ├── Save argc/argv[1] from initial stack pointer
   ├── Initialize engine registers (DSP, HERE, LATEST, sp0)
   ├── Set up guard pages and raw terminal mode
   ├── Print startup banner
   ├── Load core.fs via INCLUDED (silent skip if not found)
+  ├── If argv[1] given, load it via INCLUDED (silent skip if not found)
   │
   └── repl_loop:
         ├── Save rp0, saved_latest, saved_here (for error recovery)

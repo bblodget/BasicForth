@@ -15,6 +15,7 @@ to support interactive games.
 - `MS@` ( -- u ) — monotonic millisecond timestamp
 - `CURSOR-OFF` ( -- ) — hide terminal cursor
 - `CURSOR-ON` ( -- ) — show terminal cursor
+- `INCLUDE` ( "name" -- ) — parse filename and load it (convenience wrapper for INCLUDED)
 
 ### New Forth Words (core.fs)
 - Key constants: `KEY_ESCAPE` (27), `KEY_UP` (129), `KEY_DOWN` (130),
@@ -22,13 +23,17 @@ to support interactive games.
 - `random` ( -- n ) — LCG random number generator, seeded from MS@
 - `rnd` ( n -- 0..n-1 ) — random number in range
 
+### Command-Line File Loading
+- `./basicforth filename.fs` loads a Forth file at startup before the REPL
+- Saves argc/argv[1] at `_start`, loads after core.fs
+
 ### Snake Game
 - `examples/snake.fs` — terminal-based snake game
 - Adaptive frame timing, score overlay, game-over screen
 - Works on both x86-64 and ARM64 (tested on Pumpkin board)
 
 ### Testing
-- 119 unit tests + 292 integration tests
+- 119 unit tests + 294 integration tests
 
 ---
 
