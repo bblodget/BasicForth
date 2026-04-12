@@ -6,6 +6,9 @@ Inspired by 1980s BASIC — boot up and start coding. No libc, no dynamic
 linker, just static ELF binaries built from assembly source. Subroutine
 Threaded Code (STC) with 64-bit cells.
 
+Goal:  Fun, retro-inspired Forth environment for graphics, sounds, games
+and robotics on modern ARM64 and x86-64 hardware.
+
 ## Status
 
 **v0.4.0** — Full ANS Forth core word set plus words from five additional
