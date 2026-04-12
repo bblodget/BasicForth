@@ -18,6 +18,16 @@
 .equ INPUT_BUF_SIZE, 256
 
 _start:
+    # Save argc and argv[1] before stack is used for anything else
+    # Linux _start stack: [RSP]=argc, [RSP+8]=argv[0], [RSP+16]=argv[1]
+    mov (%rsp), %rax
+    mov %rax, start_argc(%rip)
+    cmp $2, %rax
+    jl .Lno_argv1
+    mov 16(%rsp), %rax
+    mov %rax, start_argv1(%rip)
+.Lno_argv1:
+
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
@@ -43,6 +53,28 @@ _start:
     sub $CELL, %r15
     movq $core_fs_len, (%r15)       # push length
     call forth_included
+
+    # If argv[1] was given, load it as a Forth source file
+    cmpq $2, start_argc(%rip)
+    jl .Lno_cmdline_file
+    # Find string length (null-terminated argv)
+    mov start_argv1(%rip), %rdi
+    mov %rdi, %rsi                  # RSI = start of string
+    xor %ecx, %ecx
+.Largv_len:
+    cmpb $0, (%rdi,%rcx)
+    je .Largv_len_done
+    inc %ecx
+    jmp .Largv_len
+.Largv_len_done:
+    # Push ( c-addr u ) and call INCLUDED
+    sub $CELL, %r15
+    mov %rsi, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movslq %ecx, %rax
+    mov %rax, (%r15)                # push length
+    call forth_included
+.Lno_cmdline_file:
 
 .global repl_loop
 repl_loop:
@@ -149,6 +181,13 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+
+.data
+.align 8
+start_argc:
+    .quad 0
+start_argv1:
+    .quad 0
 
 .bss
 .align 8

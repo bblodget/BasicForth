@@ -700,6 +700,23 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 
+# Command-line file argument (argv[1])
+# Load core.fs via argv[1] (it's idempotent — reloading defines the same words)
+t0=$(date +%s.%N)
+argv_output=$(printf 'true .\n' | timeout 2 $FORTH core.fs 2>&1)
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "argv file load"
+if [[ "$argv_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  argv file load\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  argv file load\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$argv_output" | head -5)"
+    ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

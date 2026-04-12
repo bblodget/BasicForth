@@ -18,12 +18,24 @@
 .equ INPUT_BUF_SIZE, 256
 
 _start:
+    // Save argc and argv[1] before stack is used for anything else
+    // Linux _start stack: [SP]=argc, [SP+8]=argv[0], [SP+16]=argv[1]
+    LDR X9, [SP]
+    ADR X10, start_argc
+    STR X9, [X10]
+    CMP X9, #2
+    B.LT .Lno_argv1
+    LDR X9, [SP, #16]
+    ADR X10, start_argv1
+    STR X9, [X10]
+.Lno_argv1:
+
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_include            // LATEST
+    ADR X22, dict_include           // LATEST
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -45,6 +57,27 @@ _start:
     MOV X9, #core_fs_len
     STR X9, [X19, #-CELL]!         // push length
     BL forth_included
+
+    // If argv[1] was given, load it as a Forth source file
+    ADR X9, start_argc
+    LDR X9, [X9]
+    CMP X9, #2
+    B.LT .Lno_cmdline_file
+    // Find string length (null-terminated argv)
+    ADR X9, start_argv1
+    LDR X0, [X9]                    // X0 = c-addr
+    MOV X1, #0                      // X1 = length counter
+.Largv_len:
+    LDRB W9, [X0, X1]
+    CBZ W9, .Largv_len_done
+    ADD X1, X1, #1
+    B .Largv_len
+.Largv_len_done:
+    // Push ( c-addr u ) and call INCLUDED
+    STR X0, [X19, #-CELL]!         // push c-addr
+    STR X1, [X19, #-CELL]!         // push length
+    BL forth_included
+.Lno_cmdline_file:
 
 .global repl_loop
 repl_loop:
@@ -163,6 +196,13 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+
+.data
+.align 3
+start_argc:
+    .quad 0
+start_argv1:
+    .quad 0
 
 .bss
 .align 4
