@@ -2025,6 +2025,7 @@ forth_included:
     CMP X0, #0
     B.LT .Lincl_open_err
 
+.Lincl_open_ok:
     MOV X23, X0                     // X23 = fd
 
     // Get file size
@@ -2152,10 +2153,76 @@ forth_included:
     RET
 
 .Lincl_open_err:
-    // Check for ENOENT (-2) — silent skip
+    // Check for ENOENT (-2) — try BASICFORTH_PATH fallback
     CMN X0, #2
-    B.EQ .Lincl_open_skip
+    B.NE .Lincl_open_other
 
+    // If BASICFORTH_PATH is set, try $BASICFORTH_PATH/filename
+    ADR X9, basicforth_path
+    LDR X0, [X9]
+    CBZ X0, .Lincl_open_skip       // not set → silent skip
+
+    // Build path in incl_path_buf: "$BASICFORTH_PATH/filename"
+    ADR X2, incl_path_buf
+    ADR X9, basicforth_path_len
+    LDR X3, [X9]                    // X3 = path len
+    ADR X9, file_name_len
+    LDR X4, [X9]                    // X4 = filename len
+    // Clamp total to 511 bytes
+    ADD X5, X3, X4
+    ADD X5, X5, #1                  // total = pathlen + 1 + namelen
+    CMP X5, #511
+    B.GT .Lincl_open_skip           // too long → skip
+    // Copy BASICFORTH_PATH
+    ADR X9, basicforth_path
+    LDR X0, [X9]                    // X0 = path ptr
+    MOV X1, X3                      // X1 = path len
+.Lincl_copy_path:
+    CBZ X1, .Lincl_copy_slash
+    LDRB W6, [X0], #1
+    STRB W6, [X2], #1
+    SUB X1, X1, #1
+    B .Lincl_copy_path
+.Lincl_copy_slash:
+    MOV W6, #'/'
+    STRB W6, [X2], #1
+    // Copy filename
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+.Lincl_copy_name:
+    CBZ X1, .Lincl_try_open2
+    LDRB W6, [X0], #1
+    STRB W6, [X2], #1
+    SUB X1, X1, #1
+    B .Lincl_copy_name
+.Lincl_try_open2:
+    // Try opening the prefixed path
+    ADR X0, incl_path_buf
+    ADR X9, basicforth_path_len
+    LDR X1, [X9]
+    ADR X9, file_name_len
+    LDR X9, [X9]
+    ADD X1, X1, X9
+    ADD X1, X1, #1                  // +1 for '/'
+    BL platform_open_file
+    CMP X0, #0
+    B.LT .Lincl_open_skip          // still failed → silent skip
+    // Success — update file_name for error reporting
+    ADR X9, file_name_addr
+    ADR X10, incl_path_buf
+    STR X10, [X9]
+    ADR X9, basicforth_path_len
+    LDR X10, [X9]
+    ADR X9, file_name_len
+    LDR X11, [X9]
+    ADD X10, X10, X11
+    ADD X10, X10, #1
+    STR X10, [X9]
+    B .Lincl_open_ok
+
+.Lincl_open_other:
     // Other open error — print message
     ADR X0, incl_err_open
     MOV X1, #incl_err_open_len
@@ -3862,6 +3929,11 @@ DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
 //   data_stack_bottom     page-aligned
 //   guard_page_overflow   4096 bytes — mprotect PROT_NONE at startup
 .bss
+// Scratch buffer for BASICFORTH_PATH/filename concatenation
+.align 3
+incl_path_buf:
+    .space 512
+
 .balign 4096
 .global guard_page_overflow
 guard_page_overflow:

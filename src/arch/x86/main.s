@@ -20,6 +20,7 @@
 _start:
     # Save argc and argv[1] before stack is used for anything else
     # Linux _start stack: [RSP]=argc, [RSP+8]=argv[0], [RSP+16]=argv[1]
+    # envp starts at [RSP + (argc+2)*8]
     mov (%rsp), %rax
     mov %rax, start_argc(%rip)
     cmp $2, %rax
@@ -27,6 +28,45 @@ _start:
     mov 16(%rsp), %rax
     mov %rax, start_argv1(%rip)
 .Lno_argv1:
+
+    # Walk envp to find BASICFORTH_PATH=
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
+.Lenv_loop:
+    mov (%rdi), %rsi                # RSI = envp[i]
+    test %rsi, %rsi
+    jz .Lenv_done                   # NULL = end of envp
+    # Compare prefix "BASICFORTH_PATH="
+    lea env_prefix(%rip), %rdx
+    mov $env_prefix_len, %ecx
+.Lenv_cmp:
+    test %ecx, %ecx
+    jz .Lenv_found                  # prefix matched
+    movzbl (%rsi), %eax
+    cmpb (%rdx), %al
+    jne .Lenv_next
+    inc %rsi
+    inc %rdx
+    dec %ecx
+    jmp .Lenv_cmp
+.Lenv_next:
+    add $8, %rdi
+    jmp .Lenv_loop
+.Lenv_found:
+    # RSI now points past "BASICFORTH_PATH=" — the value
+    mov %rsi, basicforth_path(%rip)
+    # Compute length
+    mov %rsi, %rdi
+    xor %ecx, %ecx
+.Lenv_strlen:
+    cmpb $0, (%rdi,%rcx)
+    je .Lenv_strlen_done
+    inc %ecx
+    jmp .Lenv_strlen
+.Lenv_strlen_done:
+    movslq %ecx, %rax
+    mov %rax, basicforth_path_len(%rip)
+.Lenv_done:
 
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
@@ -181,12 +221,20 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+env_prefix:     .ascii "BASICFORTH_PATH="
+.equ env_prefix_len, . - env_prefix
 
 .data
 .align 8
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+.global basicforth_path
+basicforth_path:
+    .quad 0
+.global basicforth_path_len
+basicforth_path_len:
     .quad 0
 
 .bss

@@ -123,6 +123,17 @@ platform_screen_height:
     mov $25, %eax
     ret
 
+# BASICFORTH_PATH variables (defined in main.s, needed by forth_included)
+.data
+.align 8
+.global basicforth_path
+basicforth_path:
+    .quad 0
+.global basicforth_path_len
+basicforth_path_len:
+    .quad 0
+
+.text
 .global platform_ms_get
 platform_ms_get:
     mov $12345, %eax

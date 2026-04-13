@@ -20,6 +20,7 @@
 _start:
     // Save argc and argv[1] before stack is used for anything else
     // Linux _start stack: [SP]=argc, [SP+8]=argv[0], [SP+16]=argv[1]
+    // envp starts at [SP + (argc+2)*8]
     LDR X9, [SP]
     ADR X10, start_argc
     STR X9, [X10]
@@ -29,6 +30,44 @@ _start:
     ADR X10, start_argv1
     STR X9, [X10]
 .Lno_argv1:
+
+    // Walk envp to find BASICFORTH_PATH=
+    LDR X0, [SP]                    // argc
+    ADD X0, X0, #2                  // skip argc + NULL terminator
+    LSL X0, X0, #3                  // *8
+    ADD X0, SP, X0                  // X0 = &envp[0]
+.Lenv_loop:
+    LDR X1, [X0]                    // X1 = envp[i]
+    CBZ X1, .Lenv_done              // NULL = end
+    // Compare prefix "BASICFORTH_PATH="
+    ADR X2, env_prefix
+    MOV X3, #env_prefix_len
+.Lenv_cmp:
+    CBZ X3, .Lenv_found             // prefix matched
+    LDRB W4, [X1], #1
+    LDRB W5, [X2], #1
+    CMP W4, W5
+    B.NE .Lenv_next
+    SUB X3, X3, #1
+    B .Lenv_cmp
+.Lenv_next:
+    ADD X0, X0, #8
+    B .Lenv_loop
+.Lenv_found:
+    // X1 now points past "BASICFORTH_PATH=" — the value
+    ADR X9, basicforth_path
+    STR X1, [X9]
+    // Compute length
+    MOV X2, #0
+.Lenv_strlen:
+    LDRB W3, [X1, X2]
+    CBZ W3, .Lenv_strlen_done
+    ADD X2, X2, #1
+    B .Lenv_strlen
+.Lenv_strlen_done:
+    ADR X9, basicforth_path_len
+    STR X2, [X9]
+.Lenv_done:
 
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
@@ -196,12 +235,20 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+env_prefix:     .ascii "BASICFORTH_PATH="
+.equ env_prefix_len, . - env_prefix
 
 .data
 .align 3
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+.global basicforth_path
+basicforth_path:
+    .quad 0
+.global basicforth_path_len
+basicforth_path_len:
     .quad 0
 
 .bss

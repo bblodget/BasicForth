@@ -717,6 +717,25 @@ else
     ((failed++))
 fi
 
+# BASICFORTH_PATH fallback (load core.fs from a non-CWD path)
+# Temporarily rename core.fs so CWD lookup fails, then use env var
+t0=$(date +%s.%N)
+mv core.fs core.fs.bak 2>/dev/null
+bp_output=$(printf 'true .\n' | BASICFORTH_PATH=../../../src/forth timeout 2 $FORTH 2>&1)
+mv core.fs.bak core.fs 2>/dev/null
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "BASICFORTH_PATH"
+if [[ "$bp_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  BASICFORTH_PATH\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  BASICFORTH_PATH\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 
