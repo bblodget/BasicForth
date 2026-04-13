@@ -204,6 +204,16 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Future / Usability
+
+- [ ] `BASICFORTH_PATH` colon-separated directory search
+  - Currently supports a single directory.  Extend to support multiple
+    directories separated by `:` (like PATH, LD_LIBRARY_PATH).
+  - `BASICFORTH_PATH=/path/to/lib:/path/to/examples`
+  - Search each directory in order when a file is not found in CWD.
+
+---
+
 ## Future / Hardening
 
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup
