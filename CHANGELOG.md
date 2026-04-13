@@ -27,13 +27,18 @@ to support interactive games.
 - `./basicforth filename.fs` loads a Forth file at startup before the REPL
 - Saves argc/argv[1] at `_start`, loads after core.fs
 
+### BASICFORTH_PATH Environment Variable
+- Fallback search directory for `INCLUDE`, `INCLUDED`, and startup core.fs
+- `BASICFORTH_PATH=src/forth ./basicforth` finds core.fs from any CWD
+- CWD is always tried first (existing behavior unchanged)
+
 ### Snake Game
 - `examples/snake.fs` — terminal-based snake game
 - Adaptive frame timing, score overlay, game-over screen
 - Works on both x86-64 and ARM64 (tested on Pumpkin board)
 
 ### Testing
-- 119 unit tests + 294 integration tests
+- 119 unit tests + 295 integration tests
 
 ---
 

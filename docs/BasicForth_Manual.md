@@ -94,10 +94,28 @@ make run-test-arm64
 ```
 
 Run from the build directory (`src/arch/x86/` or `src/arch/arm64/`)
-where `core.fs` is located.
+where `core.fs` is located, or set `BASICFORTH_PATH` to find library
+files from any directory:
+
+```
+BASICFORTH_PATH=src/forth src/arch/x86/basicforth
+```
+
+### Environment Variables
+
+| Variable          | Description                                      |
+|-------------------|--------------------------------------------------|
+| `BASICFORTH_PATH` | Directory to search when a file is not found in CWD |
+
+When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
+a file in the current directory, BasicForth retries with
+`$BASICFORTH_PATH/filename`. If the variable is not set, only CWD is
+searched.
+
+### Startup Sequence
 
 At startup, BasicForth:
-1. Loads `core.fs` from the current directory (silent skip if not found)
+1. Loads `core.fs` from CWD, falling back to `$BASICFORTH_PATH/core.fs`
 2. If a filename argument was given, loads it via INCLUDED
 3. Enters the interactive REPL
 
