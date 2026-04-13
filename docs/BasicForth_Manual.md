@@ -104,18 +104,18 @@ At startup, BasicForth:
 ### Loading Files from the REPL
 
 ```
-> include examples/snake.fs
+> include ../../../examples/snake.fs
  ok
 > snake
 ```
 
 `INCLUDE` parses the next word as a filename and loads it. Paths are
-relative to the current working directory.
+relative to the current working directory (the build directory).
 
 For the compile-only `S"` form (e.g., inside a colon definition):
 
 ```
-> : load-snake s" examples/snake.fs" included ; load-snake
+> : load-snake s" ../../../examples/snake.fs" included ; load-snake
 ```
 
 ## The Prompt
