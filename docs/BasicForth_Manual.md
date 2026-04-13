@@ -89,9 +89,12 @@ make run-test-arm64
 ## Usage
 
 ```
-basicforth                          # interactive REPL
-basicforth file.fs                  # load file, then enter REPL
+./basicforth                        # interactive REPL
+./basicforth file.fs                # load file, then enter REPL
 ```
+
+Run from the build directory (`src/arch/x86/` or `src/arch/arm64/`)
+where `core.fs` is located.
 
 At startup, BasicForth:
 1. Loads `core.fs` from the current directory (silent skip if not found)
