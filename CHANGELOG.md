@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased (snake-game branch)
+## v0.5.0 — 2026-04-12
 
 Snake game port from BareMetalForth, plus platform and Forth additions
-to support interactive games.
+to support interactive games, convenient file loading, and flexible
+library search.
 
 ### Platform Layer
 - `platform_key`: ANSI escape sequence parsing — arrow keys (ESC[A/B/C/D)

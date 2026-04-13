@@ -11,11 +11,10 @@ and robotics on modern ARM64 and x86-64 hardware.
 
 ## Status
 
-**v0.4.0** — Full ANS Forth core word set plus words from five additional
-standard word sets. 29 new words for strings, tools, facility, and
-double-number arithmetic. Platform layer extended for games and
-interactive applications.
-119 unit tests + 294 integration tests.
+**v0.5.0** — Snake game, INCLUDE word, command-line file loading, and
+BASICFORTH_PATH environment variable. Arrow key parsing, cursor control,
+millisecond timestamps, and random number generation for game support.
+119 unit tests + 295 integration tests.
 
 What works today:
 
