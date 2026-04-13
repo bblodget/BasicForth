@@ -4,10 +4,13 @@
 //
 // Linux-specific I/O via syscalls. Swap this file to port to bare metal.
 
-.equ SYS_ioctl, 29
-.equ SYS_read,  63
-.equ SYS_write, 64
-.equ SYS_exit,  93
+.equ SYS_ioctl,          29
+.equ SYS_read,           63
+.equ SYS_write,          64
+.equ SYS_exit,           93
+.equ SYS_clock_gettime,  113
+
+.equ CLOCK_MONOTONIC, 1
 
 .equ STDIN,  0
 .equ STDOUT, 1
@@ -117,23 +120,96 @@ platform_restore_term:
 // Read one character from stdin.
 // Returns: X0 = character read
 // On EOF (read returns 0), exits silently via platform_bye.
+// Parses ANSI escape sequences for arrow keys:
+//   ESC [ A → 129 (KEY_UP)    ESC [ B → 130 (KEY_DOWN)
+//   ESC [ C → 131 (KEY_RIGHT) ESC [ D → 132 (KEY_LEFT)
+// Standalone ESC (no following bytes) returns 27.
 .global platform_key
 platform_key:
-    STR X30, [SP, #-16]!
-    // Use stack padding area as read buffer (same trick as EMIT)
+    STP X29, X30, [SP, #-32]!      // 32 bytes: LR + scratch space
+    // Read one byte
     MOV X0, #STDIN
-    ADD X1, SP, #8             // buffer = stack padding area
-    MOV X2, #1                 // count = 1
+    ADD X1, SP, #16                 // buffer in stack scratch
+    MOV X2, #1
     MOV X8, #SYS_read
     SVC #0
-    CMP X0, #0                 // EOF? (read returned 0)
+    CMP X0, #0
     B.LE .Lkey_eof
-    LDRB W0, [SP, #8]          // return the character in X0
-    LDR X30, [SP], #16
+    LDRB W0, [SP, #16]
+    CMP W0, #27                     // ESC?
+    B.EQ .Lkey_esc
+    LDP X29, X30, [SP], #32
     RET
+
+.Lkey_esc:
+    // Check if more bytes available (FIONREAD)
+    STR XZR, [SP, #16]             // zero count
+    MOV X8, #SYS_ioctl
+    MOV X0, #STDIN
+    MOV X1, #FIONREAD
+    ADD X2, SP, #16
+    SVC #0
+    LDR W9, [SP, #16]
+    CBZ W9, .Lkey_esc_standalone
+
+    // Read next byte — expect '['
+    MOV X0, #STDIN
+    ADD X1, SP, #16
+    MOV X2, #1
+    MOV X8, #SYS_read
+    SVC #0
+    CMP X0, #0
+    B.LE .Lkey_esc_standalone
+    LDRB W9, [SP, #16]
+    CMP W9, #'['
+    B.NE .Lkey_esc_standalone
+
+    // Read final byte
+    MOV X0, #STDIN
+    ADD X1, SP, #16
+    MOV X2, #1
+    MOV X8, #SYS_read
+    SVC #0
+    CMP X0, #0
+    B.LE .Lkey_esc_standalone
+    LDRB W9, [SP, #16]
+
+    // Map A/B/C/D → 129-132
+    CMP W9, #'A'
+    B.EQ .Lkey_up
+    CMP W9, #'B'
+    B.EQ .Lkey_down
+    CMP W9, #'C'
+    B.EQ .Lkey_right
+    CMP W9, #'D'
+    B.EQ .Lkey_left
+    B .Lkey_esc_standalone
+
+.Lkey_up:
+    MOV X0, #129
+    LDP X29, X30, [SP], #32
+    RET
+.Lkey_down:
+    MOV X0, #130
+    LDP X29, X30, [SP], #32
+    RET
+.Lkey_right:
+    MOV X0, #131
+    LDP X29, X30, [SP], #32
+    RET
+.Lkey_left:
+    MOV X0, #132
+    LDP X29, X30, [SP], #32
+    RET
+
+.Lkey_esc_standalone:
+    MOV X0, #27
+    LDP X29, X30, [SP], #32
+    RET
+
 .Lkey_eof:
-    LDR X30, [SP], #16
-    B platform_bye              // silent exit on EOF
+    LDP X29, X30, [SP], #32
+    B platform_bye
 
 // ---------- EMIT ----------
 // Write one character to stdout.
@@ -692,6 +768,53 @@ platform_screen_height:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- MS@ (Millisecond Timestamp) ----------
+// platform_ms_get ( -- X0=milliseconds )
+// Returns monotonic milliseconds via clock_gettime(CLOCK_MONOTONIC).
+.global platform_ms_get
+platform_ms_get:
+    STP X29, X30, [SP, #-16]!
+    SUB SP, SP, #16                 // timespec: tv_sec(8), tv_nsec(8)
+    MOV X0, #CLOCK_MONOTONIC
+    MOV X1, SP
+    MOV X8, #SYS_clock_gettime
+    SVC #0
+    // ms = tv_sec * 1000 + tv_nsec / 1000000
+    LDR X0, [SP]                    // tv_sec
+    MOV X1, #1000
+    MUL X0, X0, X1                  // tv_sec * 1000
+    LDR X2, [SP, #8]               // tv_nsec
+    MOV X3, #0x4240
+    MOVK X3, #0xF, LSL #16          // X3 = 1000000
+    UDIV X2, X2, X3                 // tv_nsec / 1000000
+    ADD X0, X0, X2                  // total ms
+    ADD SP, SP, #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// ---------- Cursor Visibility ----------
+// platform_cursor_off ( -- )
+// Hide cursor using ANSI escape sequence ESC[?25l.
+.global platform_cursor_off
+platform_cursor_off:
+    STP X29, X30, [SP, #-16]!
+    ADR X0, ansi_cursor_off
+    MOV X1, #ansi_cursor_off_len
+    BL platform_write
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_cursor_on ( -- )
+// Show cursor using ANSI escape sequence ESC[?25h.
+.global platform_cursor_on
+platform_cursor_on:
+    STP X29, X30, [SP, #-16]!
+    ADR X0, ansi_cursor_on
+    MOV X1, #ansi_cursor_on_len
+    BL platform_write
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- ANSI Escape Sequences ----------
 .section .rodata
 ansi_page:
@@ -700,3 +823,13 @@ ansi_page:
     .byte 0x1b
     .ascii "[H"
 .equ ansi_page_len, . - ansi_page
+
+ansi_cursor_off:
+    .byte 0x1b
+    .ascii "[?25l"
+.equ ansi_cursor_off_len, . - ansi_cursor_off
+
+ansi_cursor_on:
+    .byte 0x1b
+    .ascii "[?25h"
+.equ ansi_cursor_on_len, . - ansi_cursor_on

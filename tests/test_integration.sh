@@ -675,6 +675,72 @@ assert_output "d. positive"         ': t 42 0 d. ; t'                     "42"
 assert_output "d. negative"         ': t -42 -1 d. ; t'                   "-42"
 
 # =========================================================================
+section "Snake Game Prerequisites"
+# =========================================================================
+
+# MS@ (millisecond timestamp)
+assert_output "ms@ nonzero"          'ms@ 0 > .'                          "-1"
+assert_output "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
+
+# CURSOR-OFF / CURSOR-ON (just check they don't crash)
+assert_output "cursor-off"           'cursor-off 42 .'                    "42"
+assert_output "cursor-on"            'cursor-on 42 .'                     "42"
+
+# Key constants
+assert_output "key_up"               'key_up .'                           "129"
+assert_output "key_down"             'key_down .'                         "130"
+assert_output "key_right"            'key_right .'                        "131"
+assert_output "key_left"             'key_left .'                         "132"
+assert_output "key_escape"           'key_escape .'                       "27"
+
+# Random number generator
+assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
+assert_output "rnd zero base"       '1 rnd .'                             "0"
+
+# INCLUDE (parse-word + included)
+assert_output "include word"         'include core.fs 42 .'                      "42"
+
+# Command-line file argument (argv[1])
+# Load core.fs via argv[1] (it's idempotent — reloading defines the same words)
+t0=$(date +%s.%N)
+argv_output=$(printf 'true .\n' | timeout 2 $FORTH core.fs 2>&1)
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "argv file load"
+if [[ "$argv_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  argv file load\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  argv file load\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$argv_output" | head -5)"
+    ((failed++))
+fi
+
+# BASICFORTH_PATH fallback (load core.fs from a non-CWD path)
+# Temporarily rename core.fs so CWD lookup fails, then use env var
+t0=$(date +%s.%N)
+mv core.fs core.fs.bak 2>/dev/null
+bp_output=$(printf 'true .\n' | BASICFORTH_PATH=../../../src/forth timeout 2 $FORTH 2>&1)
+mv core.fs.bak core.fs 2>/dev/null
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "BASICFORTH_PATH"
+if [[ "$bp_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  BASICFORTH_PATH\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  BASICFORTH_PATH\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
+# Snake game words (test game helpers without loading the full file)
+assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
+
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

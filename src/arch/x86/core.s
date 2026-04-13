@@ -1847,6 +1847,7 @@ forth_included:
     test %rax, %rax
     js .Lincl_open_err
 
+.Lincl_open_ok:
     mov %rax, %rbx                  # RBX = fd
 
     # Get file size
@@ -1968,10 +1969,53 @@ forth_included:
     ret
 
 .Lincl_open_err:
-    # Check for ENOENT (-2) — silent skip
+    # Check for ENOENT (-2) — try BASICFORTH_PATH fallback
     cmp $-2, %rax
-    je .Lincl_open_skip
+    jne .Lincl_open_other
 
+    # If BASICFORTH_PATH is set, try $BASICFORTH_PATH/filename
+    mov basicforth_path(%rip), %rax
+    test %rax, %rax
+    jz .Lincl_open_skip             # not set → silent skip
+
+    # Build path in incl_path_buf: "$BASICFORTH_PATH/filename"
+    lea incl_path_buf(%rip), %rdi
+    mov basicforth_path(%rip), %rsi
+    mov basicforth_path_len(%rip), %rcx
+    # Clamp total to 511 bytes (path + / + filename)
+    mov file_name_len(%rip), %rdx
+    lea 1(%rcx,%rdx), %rax          # total = pathlen + 1 + namelen
+    cmp $511, %rax
+    jg .Lincl_open_skip             # path too long → skip
+    # Copy BASICFORTH_PATH
+    cld
+    rep movsb
+    # Append '/'
+    movb $'/', (%rdi)
+    inc %rdi
+    # Copy filename
+    mov file_name_addr(%rip), %rsi
+    mov file_name_len(%rip), %rcx
+    rep movsb
+
+    # Try opening the prefixed path
+    lea incl_path_buf(%rip), %rsi
+    mov basicforth_path_len(%rip), %rdx
+    add file_name_len(%rip), %rdx
+    inc %rdx                         # +1 for '/'
+    call platform_open_file
+    test %rax, %rax
+    js .Lincl_open_skip             # still failed → silent skip
+    # Success — update file_name for error reporting
+    lea incl_path_buf(%rip), %rcx
+    mov %rcx, file_name_addr(%rip)
+    mov basicforth_path_len(%rip), %rcx
+    add file_name_len(%rip), %rcx
+    inc %rcx
+    mov %rcx, file_name_len(%rip)
+    jmp .Lincl_open_ok
+
+.Lincl_open_other:
     # Other open error — print message
     lea incl_err_open(%rip), %rsi
     mov $incl_err_open_len, %rdx
@@ -2590,6 +2634,42 @@ forth_screen_h:
     call platform_screen_height     # RAX = rows
     sub $CELL, %r15
     mov %rax, (%r15)
+    ret
+
+# ---------- INCLUDE ----------
+# INCLUDE ( "filename" -- )
+# Parse the next word from input and load it as a Forth source file.
+# Convenience wrapper: INCLUDE foo.fs  is equivalent to  s" foo.fs" included
+.global forth_include
+forth_include:
+    call forth_parse_word           # ( -- c-addr u )
+    call forth_included             # ( c-addr u -- )
+    ret
+
+# ---------- MS@ ----------
+# MS@ ( -- u )
+# Return current monotonic milliseconds.
+.global forth_ms_get
+forth_ms_get:
+    call platform_ms_get            # RAX = milliseconds
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ---------- CURSOR-OFF ----------
+# CURSOR-OFF ( -- )
+# Hide the terminal cursor.
+.global forth_cursor_off
+forth_cursor_off:
+    call platform_cursor_off
+    ret
+
+# ---------- CURSOR-ON ----------
+# CURSOR-ON ( -- )
+# Show the terminal cursor.
+.global forth_cursor_on
+forth_cursor_on:
+    call platform_cursor_on
     ret
 
 # ---------- HERE, ALLOT, COMMA, C-COMMA ----------
@@ -3514,7 +3594,11 @@ DEFWORD dict_page,       "page",       forth_page,        dict_ms
 DEFWORD dict_at_xy,      "at-xy",      forth_at_xy,       dict_page
 DEFWORD dict_screen_w,   "screen-width",  forth_screen_w, dict_at_xy
 DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
-.global dict_screen_h
+DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
+DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
+DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
+DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
+.global dict_include
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -3527,6 +3611,11 @@ DEFWORD dict_screen_h,   "screen-height", forth_screen_h, dict_screen_w
 # Reading past sp0 hits the underflow guard page → SIGSEGV → handler recovers.
 # Writing past bottom hits the overflow guard page → SIGSEGV → handler recovers.
 .bss
+# Scratch buffer for BASICFORTH_PATH/filename concatenation
+.align 8
+incl_path_buf:
+    .space 512
+
 .balign 4096
 .global guard_page_overflow
 guard_page_overflow:

@@ -117,6 +117,30 @@ platform_screen_height:
     MOV X0, #25
     RET
 
+// BASICFORTH_PATH variables (defined in main.s, needed by forth_included)
+.data
+.align 3
+.global basicforth_path
+basicforth_path:
+    .quad 0
+.global basicforth_path_len
+basicforth_path_len:
+    .quad 0
+
+.text
+.global platform_ms_get
+platform_ms_get:
+    MOV X0, #12345
+    RET
+
+.global platform_cursor_off
+platform_cursor_off:
+    RET
+
+.global platform_cursor_on
+platform_cursor_on:
+    RET
+
 // I-cache flush for compiled code (same as platform_linux.s).
 // Needed by compiler tests that execute code written to dict_space.
 // Reads CTR_EL0 to determine cache line sizes (varies by CPU).

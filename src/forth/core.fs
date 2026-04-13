@@ -248,6 +248,19 @@ variable (dump-addr)  variable (dump-len)
             negate (dump-len) @ + (dump-len) !
         repeat ;
 
+\ Key constants (abstract codes matching platform_key escape parsing)
+27  constant KEY_ESCAPE
+129 constant KEY_UP
+130 constant KEY_DOWN
+131 constant KEY_RIGHT
+132 constant KEY_LEFT
+
+\ Random number generator (Linear Congruential Generator)
+\ seed = (seed * 1103515245 + 12345) mod 2^64
+variable seed  ms@ seed !
+: random ( -- n ) seed @ 1103515245 * 12345 + dup seed ! ;
+: rnd    ( n -- 0..n-1 ) random swap mod abs ;
+
 \ Double-Number words (8)
 : D+    ( d1-lo d1-hi d2-lo d2-hi -- d3-lo d3-hi )
         rot + >r              ( d1-lo d2-lo  R: hi-sum )

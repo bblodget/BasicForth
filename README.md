@@ -15,7 +15,7 @@ and robotics on modern ARM64 and x86-64 hardware.
 standard word sets. 29 new words for strings, tools, facility, and
 double-number arithmetic. Platform layer extended for games and
 interactive applications.
-119 unit tests + 280 integration tests.
+119 unit tests + 294 integration tests.
 
 What works today:
 
@@ -32,16 +32,18 @@ What works today:
 - Pictured numeric output: `<# # #S #> HOLD SIGN`, `BASE`, `HEX`, `DECIMAL`
 - Formatted output: `.` (base-aware), `U.`, `.R`, `U.R`
 - String words: `TYPE`, `S"`, `."`, `COUNT`, `COMPARE`, `CMOVE`, `/STRING`, `-TRAILING`
-- System: `ABORT`, `ABORT"`, `QUIT`, `>NUMBER`, `SOURCE`, `>IN`, `EVALUATE`, `INCLUDED`
-- Facility: `KEY?`, `MS`, `PAGE`, `AT-XY`, `SCREEN-WIDTH`, `SCREEN-HEIGHT`
+- System: `ABORT`, `ABORT"`, `QUIT`, `>NUMBER`, `SOURCE`, `>IN`, `EVALUATE`, `INCLUDED`, `INCLUDE`
+- Facility: `KEY?`, `MS`, `MS@`, `PAGE`, `AT-XY`, `CURSOR-OFF`, `CURSOR-ON`, `SCREEN-WIDTH`, `SCREEN-HEIGHT`
 - Tools: `WORDS`, `DUMP`, `.S`
+- Game support: arrow key parsing, key constants, random number generator
+- Snake game: `examples/snake.fs` — works on x86-64 and ARM64
 - File loading: auto-load `core.fs` at startup
 - Integer literals (decimal, `$hex`, `%binary`, `#decimal`)
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: snake game port, Phase 4 file system and storage, locals
-word set, threading.
+What's next: Phase 4 file system and storage, locals word set, threading,
+more games.
 
 ## Building
 
@@ -77,6 +79,7 @@ make run-arm64    # Run ARM64 binary (native or via QEMU)
 
 # Or directly:
 src/arch/x86/basicforth
+src/arch/x86/basicforth examples/snake.fs   # load a file at startup
 ```
 
 ### Unit Tests
@@ -174,9 +177,11 @@ BasicForth/
       core.fs               Forth-defined words (loaded at startup)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (280 tests, piped I/O)
+    test_integration.sh     Integration tests (294 tests, piped I/O)
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge
+  examples/
+    snake.fs                Snake game
   docs/                     Design documentation
 ```
 

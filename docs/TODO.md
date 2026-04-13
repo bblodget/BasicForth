@@ -204,6 +204,23 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Future / Usability
+
+- [ ] `BASICFORTH_PATH` colon-separated directory search
+  - Currently supports a single directory.  Extend to support multiple
+    directories separated by `:` (like PATH, LD_LIBRARY_PATH).
+  - `BASICFORTH_PATH=/path/to/lib:/path/to/examples`
+  - Search each directory in order when a file is not found in CWD.
+- [ ] Fix `incl_path_buf` for nested INCLUDED calls
+  - The BASICFORTH_PATH fallback builds the resolved path in a single
+    shared buffer (`incl_path_buf`).  If a file loaded via the fallback
+    itself calls INCLUDED with a fallback, the buffer is overwritten and
+    `file_name_addr` (used for error reporting) points to stale data.
+  - Options: allocate the resolved path on the stack, or save/restore
+    `file_name_addr`/`file_name_len` around nested INCLUDED calls.
+
+---
+
 ## Future / Hardening
 
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup

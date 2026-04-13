@@ -11,10 +11,13 @@
 #   return:    RAX (result or negative errno)
 #   clobbered: RCX, R11
 
-.equ SYS_ioctl, 16
-.equ SYS_read,  0
-.equ SYS_write, 1
-.equ SYS_exit,  60
+.equ SYS_ioctl,          16
+.equ SYS_read,           0
+.equ SYS_write,          1
+.equ SYS_exit,           60
+.equ SYS_clock_gettime,  228
+
+.equ CLOCK_MONOTONIC, 1
 
 .equ STDIN,  0
 .equ STDOUT, 1
@@ -113,6 +116,10 @@ platform_restore_term:
 # Read one character from stdin.
 # Returns: RDI = character read (for forth_key to push)
 # On EOF (read returns 0), exits silently via platform_bye.
+# Parses ANSI escape sequences for arrow keys:
+#   ESC [ A → 129 (KEY_UP)    ESC [ B → 130 (KEY_DOWN)
+#   ESC [ C → 131 (KEY_RIGHT) ESC [ D → 132 (KEY_LEFT)
+# Standalone ESC (no following bytes) returns 27.
 .global platform_key
 platform_key:
     sub $16, %rsp               # allocate buffer on stack
@@ -123,9 +130,78 @@ platform_key:
     syscall
     test %rax, %rax             # EOF? (read returned 0)
     jle .Lkey_eof
-    movzbl 8(%rsp), %edi       # return char in RDI
+    movzbl 8(%rsp), %edi       # char in RDI
+    cmp $27, %edi               # ESC?
+    je .Lkey_esc
     add $16, %rsp
     ret
+
+.Lkey_esc:
+    # Check if more bytes are available (FIONREAD)
+    movq $0, (%rsp)
+    mov $SYS_ioctl, %rax
+    mov $STDIN, %rdi
+    mov $FIONREAD, %rsi
+    lea (%rsp), %rdx
+    syscall
+    cmpl $0, (%rsp)
+    jle .Lkey_esc_standalone    # no more bytes → standalone ESC
+
+    # Read next byte — expect '['
+    mov $SYS_read, %rax
+    mov $STDIN, %rdi
+    lea 8(%rsp), %rsi
+    mov $1, %rdx
+    syscall
+    test %rax, %rax
+    jle .Lkey_esc_standalone
+    cmpb $'[', 8(%rsp)
+    jne .Lkey_esc_standalone    # not '[' → return ESC (discard byte)
+
+    # Read the final byte of the escape sequence
+    mov $SYS_read, %rax
+    mov $STDIN, %rdi
+    lea 8(%rsp), %rsi
+    mov $1, %rdx
+    syscall
+    test %rax, %rax
+    jle .Lkey_esc_standalone
+    movzbl 8(%rsp), %edi
+
+    # Map A/B/C/D to abstract key codes 129-132
+    cmp $'A', %edi
+    je .Lkey_up
+    cmp $'B', %edi
+    je .Lkey_down
+    cmp $'C', %edi
+    je .Lkey_right
+    cmp $'D', %edi
+    je .Lkey_left
+    # Unknown sequence — return ESC
+    jmp .Lkey_esc_standalone
+
+.Lkey_up:
+    mov $129, %edi
+    add $16, %rsp
+    ret
+.Lkey_down:
+    mov $130, %edi
+    add $16, %rsp
+    ret
+.Lkey_right:
+    mov $131, %edi
+    add $16, %rsp
+    ret
+.Lkey_left:
+    mov $132, %edi
+    add $16, %rsp
+    ret
+
+.Lkey_esc_standalone:
+    mov $27, %edi
+    add $16, %rsp
+    ret
+
 .Lkey_eof:
     add $16, %rsp
     jmp platform_bye            # silent exit on EOF
@@ -632,6 +708,50 @@ platform_screen_height:
     add $16, %rsp
     ret
 
+# ---------- MS@ (Millisecond Timestamp) ----------
+# platform_ms_get ( -- RAX=milliseconds )
+# Returns monotonic milliseconds via clock_gettime(CLOCK_MONOTONIC).
+.global platform_ms_get
+platform_ms_get:
+    sub $32, %rsp                   # timespec: tv_sec(8), tv_nsec(8)
+    mov $SYS_clock_gettime, %rax
+    mov $CLOCK_MONOTONIC, %rdi
+    lea (%rsp), %rsi
+    syscall
+    # ms = tv_sec * 1000 + tv_nsec / 1000000
+    mov (%rsp), %rax                # tv_sec
+    imul $1000, %rax                # tv_sec * 1000
+    mov 8(%rsp), %rcx              # tv_nsec
+    mov $1000000, %rdx
+    push %rax                       # save sec*1000
+    mov %rcx, %rax
+    xor %edx, %edx
+    mov $1000000, %rcx
+    div %rcx                        # RAX = tv_nsec / 1000000
+    pop %rcx                        # sec*1000
+    add %rcx, %rax                  # total ms
+    add $32, %rsp
+    ret
+
+# ---------- Cursor Visibility ----------
+# platform_cursor_off ( -- )
+# Hide cursor using ANSI escape sequence ESC[?25l.
+.global platform_cursor_off
+platform_cursor_off:
+    lea ansi_cursor_off(%rip), %rsi
+    mov $ansi_cursor_off_len, %rdx
+    call platform_write
+    ret
+
+# platform_cursor_on ( -- )
+# Show cursor using ANSI escape sequence ESC[?25h.
+.global platform_cursor_on
+platform_cursor_on:
+    lea ansi_cursor_on(%rip), %rsi
+    mov $ansi_cursor_on_len, %rdx
+    call platform_write
+    ret
+
 # ---------- ANSI Escape Sequences ----------
 .section .rodata
 ansi_page:
@@ -640,3 +760,13 @@ ansi_page:
     .byte 0x1b
     .ascii "[H"
 .equ ansi_page_len, . - ansi_page
+
+ansi_cursor_off:
+    .byte 0x1b
+    .ascii "[?25l"
+.equ ansi_cursor_off_len, . - ansi_cursor_off
+
+ansi_cursor_on:
+    .byte 0x1b
+    .ascii "[?25h"
+.equ ansi_cursor_on_len, . - ansi_cursor_on

@@ -18,11 +18,61 @@
 .equ INPUT_BUF_SIZE, 256
 
 _start:
+    # Save argc and argv[1] before stack is used for anything else
+    # Linux _start stack: [RSP]=argc, [RSP+8]=argv[0], [RSP+16]=argv[1]
+    # envp starts at [RSP + (argc+2)*8]
+    mov (%rsp), %rax
+    mov %rax, start_argc(%rip)
+    cmp $2, %rax
+    jl .Lno_argv1
+    mov 16(%rsp), %rax
+    mov %rax, start_argv1(%rip)
+.Lno_argv1:
+
+    # Walk envp to find BASICFORTH_PATH=
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
+.Lenv_loop:
+    mov (%rdi), %rsi                # RSI = envp[i]
+    test %rsi, %rsi
+    jz .Lenv_done                   # NULL = end of envp
+    # Compare prefix "BASICFORTH_PATH="
+    lea env_prefix(%rip), %rdx
+    mov $env_prefix_len, %ecx
+.Lenv_cmp:
+    test %ecx, %ecx
+    jz .Lenv_found                  # prefix matched
+    movzbl (%rsi), %eax
+    cmpb (%rdx), %al
+    jne .Lenv_next
+    inc %rsi
+    inc %rdx
+    dec %ecx
+    jmp .Lenv_cmp
+.Lenv_next:
+    add $8, %rdi
+    jmp .Lenv_loop
+.Lenv_found:
+    # RSI now points past "BASICFORTH_PATH=" — the value
+    mov %rsi, basicforth_path(%rip)
+    # Compute length
+    mov %rsi, %rdi
+    xor %ecx, %ecx
+.Lenv_strlen:
+    cmpb $0, (%rdi,%rcx)
+    je .Lenv_strlen_done
+    inc %ecx
+    jmp .Lenv_strlen
+.Lenv_strlen_done:
+    movslq %ecx, %rax
+    mov %rax, basicforth_path_len(%rip)
+.Lenv_done:
+
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_screen_h(%rip), %r12   # LATEST
+    lea dict_include(%rip), %r12    # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -43,6 +93,28 @@ _start:
     sub $CELL, %r15
     movq $core_fs_len, (%r15)       # push length
     call forth_included
+
+    # If argv[1] was given, load it as a Forth source file
+    cmpq $2, start_argc(%rip)
+    jl .Lno_cmdline_file
+    # Find string length (null-terminated argv)
+    mov start_argv1(%rip), %rdi
+    mov %rdi, %rsi                  # RSI = start of string
+    xor %ecx, %ecx
+.Largv_len:
+    cmpb $0, (%rdi,%rcx)
+    je .Largv_len_done
+    inc %ecx
+    jmp .Largv_len
+.Largv_len_done:
+    # Push ( c-addr u ) and call INCLUDED
+    sub $CELL, %r15
+    mov %rsi, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movslq %ecx, %rax
+    mov %rax, (%r15)                # push length
+    call forth_included
+.Lno_cmdline_file:
 
 .global repl_loop
 repl_loop:
@@ -149,6 +221,21 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+env_prefix:     .ascii "BASICFORTH_PATH="
+.equ env_prefix_len, . - env_prefix
+
+.data
+.align 8
+start_argc:
+    .quad 0
+start_argv1:
+    .quad 0
+.global basicforth_path
+basicforth_path:
+    .quad 0
+.global basicforth_path_len
+basicforth_path_len:
+    .quad 0
 
 .bss
 .align 8

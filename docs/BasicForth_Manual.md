@@ -35,7 +35,8 @@ Run `make help` for a full list of targets.
 
 ```
 make
-make run
+cd src/arch/x86        # or arm64
+./basicforth
 ```
 
 This auto-detects your architecture — builds x86-64 on x86 hosts, ARM64 on ARM64 hosts.
@@ -85,17 +86,65 @@ make run-test-x86
 make run-test-arm64
 ```
 
+## Usage
+
+```
+./basicforth                        # interactive REPL
+./basicforth file.fs                # load file, then enter REPL
+```
+
+Run from the build directory (`src/arch/x86/` or `src/arch/arm64/`)
+where `core.fs` is located, or set `BASICFORTH_PATH` to find library
+files from any directory:
+
+```
+BASICFORTH_PATH=src/forth src/arch/x86/basicforth
+```
+
+### Environment Variables
+
+| Variable          | Description                                      |
+|-------------------|--------------------------------------------------|
+| `BASICFORTH_PATH` | Directory to search when a file is not found in CWD |
+
+When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
+a file in the current directory, BasicForth retries with
+`$BASICFORTH_PATH/filename`. If the variable is not set, only CWD is
+searched.
+
+### Startup Sequence
+
+At startup, BasicForth:
+1. Loads `core.fs` from CWD, falling back to `$BASICFORTH_PATH/core.fs`
+2. If a filename argument was given, loads it via INCLUDED
+3. Enters the interactive REPL
+
+### Loading Files from the REPL
+
+```
+> include ../../../examples/snake.fs
+ ok
+> snake
+```
+
+`INCLUDE` parses the next word as a filename and loads it. Paths are
+relative to the current working directory (the build directory).
+
+For the compile-only `S"` form (e.g., inside a colon definition):
+
+```
+> : load-snake s" ../../../examples/snake.fs" included ; load-snake
+```
+
 ## The Prompt
 
-When BasicForth starts, it runs a short self-test (stack primitives) and then
-presents a prompt:
+BasicForth presents an interactive prompt:
 
 ```
 > 
 ```
 
-Type a number and press Enter to see it parsed. Press Enter on an empty line
-to exit.
+Type Forth expressions and press Enter. Type `bye` to exit.
 
 ## Numbers
 
