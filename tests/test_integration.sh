@@ -354,6 +354,10 @@ assert_output "type"              ': test s" Hello" type ; test'                
 assert_output "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
 assert_output "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
 assert_output "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
+assert_output "dot-paren"         '.( Hello World!)'                           "Hello World!"
+# .( must not leak the parsed text onto the stack (regression: it used to push
+# one cell per character). depth 0 = . prints -1 only when the stack is clean.
+assert_output "dot-paren clean stack" '.( hi) depth 0 = .'                     "-1"
 assert_error  "s-quote no close" ': test s" no closing quote ;'                "unterminated string"
 assert_error  "dot-quote no close" ': test ." no closing quote ;'              "unterminated string"
 

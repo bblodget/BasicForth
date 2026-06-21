@@ -166,15 +166,8 @@
 : ERASE     0 fill ;
 : U.R       >r 0 <# #S #> r> over - spaces type ;
 : HOLDS     begin dup 0 > while 1- 2dup + c@ hold repeat 2drop ;
-: .(        \ parse and print until closing paren
-            begin
-                source >in @ > if
-                    source drop >in @ + c@ dup 41 = if
-                        drop 1 >in +! exit
-                    then
-                    emit 1 >in +!
-                else exit then
-            again ; immediate
+: .(        \ parse and print text up to the closing paren
+            [char] ) parse type ; immediate
 
 \ Defining words
 : VARIABLE  create 1 cells allot ;

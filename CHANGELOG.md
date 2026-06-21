@@ -30,6 +30,10 @@
 - New `examples/hello.fs` — an executable `#!` script demonstrating the
   feature.
 
+### Bug fixes
+- `.(` no longer leaks the parsed text onto the data stack (it pushed one
+  cell per character). Redefined as the standard `[char] ) parse type`.
+
 ### Testing
 - 119 unit tests + 303 integration tests (multi-directory, nested-INCLUDE
   error-context, `#!` script, and bundled-example cases)
