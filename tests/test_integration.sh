@@ -816,6 +816,57 @@ else
     ((failed++))
 fi
 
+# Shebang (#!) script support: a leading "#!" line is skipped so a Forth file
+# can be a Unix executable script. core.fs loads from CWD as usual.
+sb_dir="bf_shebang_test"
+rm -rf "$sb_dir"; mkdir -p "$sb_dir"
+# 1) shebang line skipped, rest of the script runs
+printf '#!/usr/bin/env basicforth\n7 6 * .\nbye\n' > "$sb_dir/run.fs"
+# 2) line numbers stay accurate: error sits on physical line 3
+printf '#!/usr/bin/env basicforth\n: good ;\nshebangbad\nbye\n' > "$sb_dir/lines.fs"
+# 3) a leading single '#' (decimal literal) must NOT be treated as a shebang
+printf '#10 .\nbye\n' > "$sb_dir/hashlit.fs"
+
+t0=$(date +%s.%N)
+sb_run=$(printf '' | timeout 2 $FORTH "$sb_dir/run.fs" 2>&1)
+sb_lines=$(printf '' | timeout 2 $FORTH "$sb_dir/lines.fs" 2>&1)
+sb_hash=$(printf '' | timeout 2 $FORTH "$sb_dir/hashlit.fs" 2>&1)
+rm -rf "$sb_dir"
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "shebang scripts"
+if [[ "$sb_run" == *"42"* ]]; then
+    printf "  ${GREEN}PASS${NC}  shebang skip + run\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  shebang skip + run\n"
+    printf "    Expected: 42\n    Got:      %s\n" "$(echo "$sb_run" | head -5)"; ((failed++))
+fi
+if [[ "$sb_lines" == *"lines.fs:3: ? shebangbad"* ]]; then
+    printf "  ${GREEN}PASS${NC}  shebang line numbers\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  shebang line numbers\n"
+    printf "    Expected: lines.fs:3: ? shebangbad\n    Got:      %s\n" "$(echo "$sb_lines" | head -5)"; ((failed++))
+fi
+if [[ "$sb_hash" == *"10"* ]]; then
+    printf "  ${GREEN}PASS${NC}  leading # literal not a shebang\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  leading # literal not a shebang\n"
+    printf "    Expected: 10\n    Got:      %s\n" "$(echo "$sb_hash" | head -5)"; ((failed++))
+fi
+
+# The bundled hello.fs shebang example must keep working (loads cleanly, runs).
+t0=$(date +%s.%N)
+hello_out=$(printf '' | timeout 2 $FORTH ../../../examples/hello.fs 2>&1)
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "examples/hello.fs"
+if [[ "$hello_out" == *"*****"* && "$hello_out" == *"42"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/hello.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/hello.fs\n"
+    printf "    Expected: ***** and 42\n    Got:      %s\n" "$(echo "$hello_out" | head -8)"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

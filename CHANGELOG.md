@@ -20,9 +20,19 @@
   typed rather than the resolved path (the trade for correct, nesting-safe
   reporting).
 
+### Unix `#!` script support (Tier 1)
+- `forth_included` skips a leading `#!` shebang line, so a Forth file can be
+  made executable (`chmod +x foo.fs`) and run directly via
+  `#!/usr/bin/env basicforth`. The check matches an exact `#!`, so a leading
+  `#` decimal literal is unaffected, and the shebang counts as line 1 so
+  error line numbers stay accurate. Scripts currently end with `bye` to exit
+  (run-and-exit flag and `ARGC`/`ARGV` are planned follow-ups).
+- New `examples/hello.fs` — an executable `#!` script demonstrating the
+  feature.
+
 ### Testing
-- 119 unit tests + 299 integration tests (multi-directory + nested-INCLUDE
-  error-context cases)
+- 119 unit tests + 303 integration tests (multi-directory, nested-INCLUDE
+  error-context, `#!` script, and bundled-example cases)
 
 ---
 
