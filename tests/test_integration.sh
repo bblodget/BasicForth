@@ -736,6 +736,63 @@ else
     ((failed++))
 fi
 
+# BASICFORTH_PATH multi-directory: two files resolved from two segments in one
+# run. core.fs lives in src/forth, snake.fs in examples; with core.fs moved out
+# of CWD, both are found via the colon-separated path (snake.fs in the 1st
+# segment, core.fs in the 2nd). MAX_LEN (100) is a snake.fs constant.
+t0=$(date +%s.%N)
+mv core.fs core.fs.bak 2>/dev/null
+bp_output=$(printf 'MAX_LEN .\n' | BASICFORTH_PATH=../../../examples:../../../src/forth timeout 2 $FORTH snake.fs 2>&1)
+mv core.fs.bak core.fs 2>/dev/null
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "BASICFORTH_PATH multidir"
+if [[ "$bp_output" == *"100"* ]]; then
+    printf "  ${GREEN}PASS${NC}  BASICFORTH_PATH multidir\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  BASICFORTH_PATH multidir\n"
+    printf "    Expected: 100\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
+# BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
+t0=$(date +%s.%N)
+mv core.fs core.fs.bak 2>/dev/null
+bp_output=$(printf 'true .\n' | BASICFORTH_PATH=/nonexistent-bf:../../../src/forth timeout 2 $FORTH 2>&1)
+mv core.fs.bak core.fs 2>/dev/null
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "BASICFORTH_PATH later-segment"
+if [[ "$bp_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  BASICFORTH_PATH later-segment\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  BASICFORTH_PATH later-segment\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
+# BASICFORTH_PATH multi-directory: empty segments are tolerated and skipped
+t0=$(date +%s.%N)
+mv core.fs core.fs.bak 2>/dev/null
+bp_output=$(printf 'true .\n' | BASICFORTH_PATH=:::../../../src/forth timeout 2 $FORTH 2>&1)
+mv core.fs.bak core.fs 2>/dev/null
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "BASICFORTH_PATH empty-segments"
+if [[ "$bp_output" == *"-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  BASICFORTH_PATH empty-segments\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  BASICFORTH_PATH empty-segments\n"
+    printf "    Expected: -1\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

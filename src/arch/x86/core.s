@@ -1973,47 +1973,76 @@ forth_included:
     cmp $-2, %rax
     jne .Lincl_open_other
 
-    # If BASICFORTH_PATH is set, try $BASICFORTH_PATH/filename
-    mov basicforth_path(%rip), %rax
-    test %rax, %rax
+    # BASICFORTH_PATH is a colon-separated list of directories. Try each in
+    # order; load the first match. CWD was already tried above. Empty segments
+    # are skipped (CWD is the implicit first lookup, so we don't re-search it).
+    #
+    # Loop registers (all callee-saved → survive platform_open_file):
+    #   RBP = cursor into basicforth_path (current segment start)
+    #   R14 = bytes remaining from the cursor
+    #   RBX = length of the current segment
+    mov basicforth_path(%rip), %rbp
+    test %rbp, %rbp
     jz .Lincl_open_skip             # not set → silent skip
+    mov basicforth_path_len(%rip), %r14
 
-    # Build path in incl_path_buf: "$BASICFORTH_PATH/filename"
-    lea incl_path_buf(%rip), %rdi
-    mov basicforth_path(%rip), %rsi
-    mov basicforth_path_len(%rip), %rcx
-    # Clamp total to 511 bytes (path + / + filename)
+.Lincl_seg_loop:
+    test %r14, %r14
+    jz .Lincl_open_skip             # no segments left → silent skip
+    # Scan for ':' to find this segment's length
+    xor %rbx, %rbx                  # seg_len = 0
+.Lincl_seg_scan:
+    cmp %r14, %rbx
+    jge .Lincl_seg_have            # rbx >= remaining → end of segment
+    cmpb $':', (%rbp,%rbx)
+    je .Lincl_seg_have
+    inc %rbx
+    jmp .Lincl_seg_scan
+.Lincl_seg_have:
+    # RBX = segment length; skip empty segments
+    test %rbx, %rbx
+    jz .Lincl_seg_next
+    # Clamp total (seg + '/' + filename) to 511 bytes
     mov file_name_len(%rip), %rdx
-    lea 1(%rcx,%rdx), %rax          # total = pathlen + 1 + namelen
+    lea 1(%rbx,%rdx), %rax          # total = seglen + 1 + namelen
     cmp $511, %rax
-    jg .Lincl_open_skip             # path too long → skip
-    # Copy BASICFORTH_PATH
+    jg .Lincl_seg_next             # too long → try next segment
+    # Build "segment/filename" in incl_path_buf
     cld
+    lea incl_path_buf(%rip), %rdi
+    mov %rbp, %rsi                  # segment start
+    mov %rbx, %rcx                  # segment length
     rep movsb
-    # Append '/'
     movb $'/', (%rdi)
     inc %rdi
-    # Copy filename
     mov file_name_addr(%rip), %rsi
     mov file_name_len(%rip), %rcx
     rep movsb
-
     # Try opening the prefixed path
     lea incl_path_buf(%rip), %rsi
-    mov basicforth_path_len(%rip), %rdx
+    mov %rbx, %rdx
     add file_name_len(%rip), %rdx
     inc %rdx                         # +1 for '/'
     call platform_open_file
     test %rax, %rax
-    js .Lincl_open_skip             # still failed → silent skip
+    js .Lincl_seg_next             # failed → try next segment
     # Success — update file_name for error reporting
     lea incl_path_buf(%rip), %rcx
     mov %rcx, file_name_addr(%rip)
-    mov basicforth_path_len(%rip), %rcx
+    mov %rbx, %rcx
     add file_name_len(%rip), %rcx
     inc %rcx
     mov %rcx, file_name_len(%rip)
     jmp .Lincl_open_ok
+.Lincl_seg_next:
+    # Advance past this segment, then skip the ':' delimiter if present
+    add %rbx, %rbp
+    sub %rbx, %r14
+    test %r14, %r14
+    jz .Lincl_open_skip            # no trailing delimiter → done
+    inc %rbp                        # skip ':'
+    dec %r14
+    jmp .Lincl_seg_loop
 
 .Lincl_open_other:
     # Other open error — print message

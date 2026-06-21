@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### BASICFORTH_PATH multi-directory search
+- `BASICFORTH_PATH` now accepts a colon-separated list of directories
+  (like `PATH`). On a CWD miss, each directory is searched in order and
+  the first match is loaded. Empty segments (leading/trailing/doubled
+  `:`) are skipped. Applies to `INCLUDE`, `INCLUDED`, the command-line
+  file argument, and the startup `core.fs` load.
+- Single-directory and unset behavior are unchanged.
+
+### Testing
+- 119 unit tests + 298 integration tests (3 new multi-directory cases)
+
+---
+
 ## v0.5.0 — 2026-04-12
 
 Snake game port from BareMetalForth, plus platform and Forth additions
