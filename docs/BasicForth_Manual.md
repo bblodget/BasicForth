@@ -101,16 +101,25 @@ files from any directory:
 BASICFORTH_PATH=src/forth src/arch/x86/basicforth
 ```
 
+`BASICFORTH_PATH` accepts a colon-separated list of directories, like
+`PATH`. For example, to find both `core.fs` and the bundled examples:
+
+```
+BASICFORTH_PATH=src/forth:examples src/arch/x86/basicforth snake.fs
+```
+
 ### Environment Variables
 
-| Variable          | Description                                      |
-|-------------------|--------------------------------------------------|
-| `BASICFORTH_PATH` | Directory to search when a file is not found in CWD |
+| Variable          | Description                                              |
+|-------------------|---------------------------------------------------------|
+| `BASICFORTH_PATH` | Colon-separated directories searched when a file is not found in CWD |
 
 When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
-a file in the current directory, BasicForth retries with
-`$BASICFORTH_PATH/filename`. If the variable is not set, only CWD is
-searched.
+a file in the current directory, BasicForth searches each directory in
+`$BASICFORTH_PATH` in order and loads the first match
+(`$DIR/filename`). The current directory is always tried first; empty
+segments (e.g. from a leading, trailing, or doubled `:`) are skipped.
+If the variable is not set, only CWD is searched.
 
 ### Startup Sequence
 

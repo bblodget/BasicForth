@@ -206,11 +206,12 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Future / Usability
 
-- [ ] `BASICFORTH_PATH` colon-separated directory search
-  - Currently supports a single directory.  Extend to support multiple
-    directories separated by `:` (like PATH, LD_LIBRARY_PATH).
+- [x] `BASICFORTH_PATH` colon-separated directory search
+  - Supports multiple directories separated by `:` (like PATH,
+    LD_LIBRARY_PATH).
   - `BASICFORTH_PATH=/path/to/lib:/path/to/examples`
-  - Search each directory in order when a file is not found in CWD.
+  - Each directory searched in order when a file is not found in CWD;
+    first match wins. Empty segments are skipped.
 - [ ] Fix `incl_path_buf` for nested INCLUDED calls
   - The BASICFORTH_PATH fallback builds the resolved path in a single
     shared buffer (`incl_path_buf`).  If a file loaded via the fallback

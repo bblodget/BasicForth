@@ -2157,26 +2157,47 @@ forth_included:
     CMN X0, #2
     B.NE .Lincl_open_other
 
-    // If BASICFORTH_PATH is set, try $BASICFORTH_PATH/filename
+    // BASICFORTH_PATH is a colon-separated list of directories. Try each in
+    // order; load the first match. CWD was already tried above. Empty segments
+    // are skipped (CWD is the implicit first lookup, so we don't re-search it).
+    //
+    // Loop registers (callee-saved → survive BL platform_open_file; they are
+    // reinitialized at .Lincl_open_ok on success):
+    //   X23 = cursor into basicforth_path (current segment start)
+    //   X24 = bytes remaining from the cursor
+    //   X25 = length of the current segment
     ADR X9, basicforth_path
-    LDR X0, [X9]
-    CBZ X0, .Lincl_open_skip       // not set → silent skip
-
-    // Build path in incl_path_buf: "$BASICFORTH_PATH/filename"
-    ADR X2, incl_path_buf
+    LDR X23, [X9]
+    CBZ X23, .Lincl_open_skip       // not set → silent skip
     ADR X9, basicforth_path_len
-    LDR X3, [X9]                    // X3 = path len
+    LDR X24, [X9]
+
+.Lincl_seg_loop:
+    CBZ X24, .Lincl_open_skip       // no segments left → silent skip
+    // Scan for ':' to find this segment's length
+    MOV X25, #0                     // seg_len = 0
+.Lincl_seg_scan:
+    CMP X25, X24
+    B.GE .Lincl_seg_have           // X25 >= remaining → end of segment
+    LDRB W9, [X23, X25]
+    CMP W9, #':'
+    B.EQ .Lincl_seg_have
+    ADD X25, X25, #1
+    B .Lincl_seg_scan
+.Lincl_seg_have:
+    // X25 = segment length; skip empty segments
+    CBZ X25, .Lincl_seg_next
+    // Clamp total (seg + '/' + filename) to 511 bytes
     ADR X9, file_name_len
     LDR X4, [X9]                    // X4 = filename len
-    // Clamp total to 511 bytes
-    ADD X5, X3, X4
-    ADD X5, X5, #1                  // total = pathlen + 1 + namelen
+    ADD X5, X25, X4
+    ADD X5, X5, #1                  // total = seglen + 1 + namelen
     CMP X5, #511
-    B.GT .Lincl_open_skip           // too long → skip
-    // Copy BASICFORTH_PATH
-    ADR X9, basicforth_path
-    LDR X0, [X9]                    // X0 = path ptr
-    MOV X1, X3                      // X1 = path len
+    B.GT .Lincl_seg_next           // too long → try next segment
+    // Build "segment/filename" in incl_path_buf
+    ADR X2, incl_path_buf
+    MOV X0, X23                     // segment start
+    MOV X1, X25                     // segment length
 .Lincl_copy_path:
     CBZ X1, .Lincl_copy_slash
     LDRB W6, [X0], #1
@@ -2200,27 +2221,33 @@ forth_included:
 .Lincl_try_open2:
     // Try opening the prefixed path
     ADR X0, incl_path_buf
-    ADR X9, basicforth_path_len
-    LDR X1, [X9]
+    MOV X1, X25                     // segment length
     ADR X9, file_name_len
     LDR X9, [X9]
     ADD X1, X1, X9
     ADD X1, X1, #1                  // +1 for '/'
     BL platform_open_file
     CMP X0, #0
-    B.LT .Lincl_open_skip          // still failed → silent skip
+    B.LT .Lincl_seg_next           // failed → try next segment
     // Success — update file_name for error reporting
     ADR X9, file_name_addr
     ADR X10, incl_path_buf
     STR X10, [X9]
-    ADR X9, basicforth_path_len
-    LDR X10, [X9]
+    MOV X10, X25                    // segment length
     ADR X9, file_name_len
     LDR X11, [X9]
     ADD X10, X10, X11
     ADD X10, X10, #1
     STR X10, [X9]
     B .Lincl_open_ok
+.Lincl_seg_next:
+    // Advance past this segment, then skip the ':' delimiter if present
+    ADD X23, X23, X25
+    SUB X24, X24, X25
+    CBZ X24, .Lincl_open_skip      // no trailing delimiter → done
+    ADD X23, X23, #1               // skip ':'
+    SUB X24, X24, #1
+    B .Lincl_seg_loop
 
 .Lincl_open_other:
     // Other open error — print message
