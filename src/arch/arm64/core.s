@@ -2086,7 +2086,26 @@ forth_included:
     ADR X11, to_in
     STR XZR, [X11]
 
+    // Save error-reporting globals across the call: a nested INCLUDE/INCLUDED
+    // would otherwise overwrite them and leave our own errors pointing at the
+    // wrong file and line. X0 (the result) is preserved across the restore.
+    ADR X9, file_name_addr
+    LDR X9, [X9]
+    ADR X10, file_name_len
+    LDR X10, [X10]
+    ADR X11, file_line_num
+    LDR X11, [X11]
+    STP X9, X10, [SP, #-16]!
+    STP X11, XZR, [SP, #-16]!
     BL forth_interpret_line
+    LDP X11, XZR, [SP], #16
+    LDP X9, X10, [SP], #16
+    ADR X12, file_name_addr
+    STR X9, [X12]
+    ADR X12, file_name_len
+    STR X10, [X12]
+    ADR X12, file_line_num
+    STR X11, [X12]
 
     CBNZ X0, .Lincl_error
 
@@ -2229,16 +2248,9 @@ forth_included:
     BL platform_open_file
     CMP X0, #0
     B.LT .Lincl_seg_next           // failed → try next segment
-    // Success — update file_name for error reporting
-    ADR X9, file_name_addr
-    ADR X10, incl_path_buf
-    STR X10, [X9]
-    MOV X10, X25                    // segment length
-    ADR X9, file_name_len
-    LDR X11, [X9]
-    ADD X10, X10, X11
-    ADD X10, X10, #1
-    STR X10, [X9]
+    // Found. Keep the original filename for error reporting — incl_path_buf is
+    // scratch only, so a nested INCLUDE that reuses it can't corrupt our error
+    // context.
     B .Lincl_open_ok
 .Lincl_seg_next:
     // Advance past this segment, then skip the ':' delimiter if present

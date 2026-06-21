@@ -1906,9 +1906,22 @@ forth_included:
     mov %rcx, source_len(%rip)
     movq $0, to_in(%rip)
 
-    # Save registers across call (RBX, RBP already callee-saved)
+    # Save registers across call (RBX, RBP already callee-saved). Also save the
+    # error-reporting globals: a nested INCLUDE/INCLUDED inside this line would
+    # otherwise overwrite them and leave our own errors pointing at the wrong
+    # file and line. The four 8-byte saves keep RSP at its body alignment
+    # (RSP%16==8), so an extra 8-byte pad is needed to 16-align the call per
+    # the SysV ABI. (push/pop count must stay balanced.)
     push %r8                        # save next_line_start
+    pushq file_name_addr(%rip)
+    pushq file_name_len(%rip)
+    pushq file_line_num(%rip)
+    sub $8, %rsp                    # pad: 16-align RSP before the call
     call forth_interpret_line
+    add $8, %rsp                    # drop pad
+    popq file_line_num(%rip)
+    popq file_name_len(%rip)
+    popq file_name_addr(%rip)
     pop %r8                         # restore next_line_start
 
     test %rax, %rax
@@ -2026,13 +2039,9 @@ forth_included:
     call platform_open_file
     test %rax, %rax
     js .Lincl_seg_next             # failed → try next segment
-    # Success — update file_name for error reporting
-    lea incl_path_buf(%rip), %rcx
-    mov %rcx, file_name_addr(%rip)
-    mov %rbx, %rcx
-    add file_name_len(%rip), %rcx
-    inc %rcx
-    mov %rcx, file_name_len(%rip)
+    # Found. Keep the original filename for error reporting — incl_path_buf is
+    # scratch only, so a nested INCLUDE that reuses it can't corrupt our error
+    # context.
     jmp .Lincl_open_ok
 .Lincl_seg_next:
     # Advance past this segment, then skip the ':' delimiter if present

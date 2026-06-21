@@ -793,6 +793,29 @@ else
     ((failed++))
 fi
 
+# Nested INCLUDED error context: a path-resolved file that includes another
+# path-resolved file must still report ITS OWN name and line for a later error.
+# The nested call must not clobber file_name/line globals or the path scratch.
+nested_dir="bf_nested_test"
+rm -rf "$nested_dir"; mkdir -p "$nested_dir"
+printf ': p1 ;\ninclude nchild.fs\nnopetok\n' > "$nested_dir/nparent.fs"
+printf ': c1 ;\n: c2 ;\n: c3 ;\n' > "$nested_dir/nchild.fs"
+t0=$(date +%s.%N)
+bp_output=$(printf 'include nparent.fs\n' | BASICFORTH_PATH="$nested_dir" timeout 2 $FORTH 2>&1)
+rm -rf "$nested_dir"
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "nested INCLUDED error context"
+if [[ "$bp_output" == *"nparent.fs:3: ? nopetok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  nested INCLUDED error context\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  nested INCLUDED error context\n"
+    printf "    Expected: nparent.fs:3: ? nopetok\n"
+    printf "    Got:      %s\n" "$(echo "$bp_output" | head -5)"
+    ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 
