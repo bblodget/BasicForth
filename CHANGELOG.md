@@ -10,8 +10,19 @@
   file argument, and the startup `core.fs` load.
 - Single-directory and unset behavior are unchanged.
 
+### Nested INCLUDED error reporting fix
+- A file that `INCLUDE`d another file could report the wrong filename and
+  line number for its own later errors: the nested call clobbered the
+  `file_name_addr`/`file_name_len`/`file_line_num` globals and the shared
+  path-resolution buffer. `forth_included` now saves and restores those
+  globals around each line, and the resolved-path buffer is scratch-only.
+- On a `BASICFORTH_PATH` hit, error messages now show the filename as
+  typed rather than the resolved path (the trade for correct, nesting-safe
+  reporting).
+
 ### Testing
-- 119 unit tests + 298 integration tests (3 new multi-directory cases)
+- 119 unit tests + 299 integration tests (multi-directory + nested-INCLUDE
+  error-context cases)
 
 ---
 

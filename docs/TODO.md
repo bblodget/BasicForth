@@ -212,13 +212,14 @@ completed. See Planning.md for high-level vision and design decisions.
   - `BASICFORTH_PATH=/path/to/lib:/path/to/examples`
   - Each directory searched in order when a file is not found in CWD;
     first match wins. Empty segments are skipped.
-- [ ] Fix `incl_path_buf` for nested INCLUDED calls
-  - The BASICFORTH_PATH fallback builds the resolved path in a single
-    shared buffer (`incl_path_buf`).  If a file loaded via the fallback
-    itself calls INCLUDED with a fallback, the buffer is overwritten and
-    `file_name_addr` (used for error reporting) points to stale data.
-  - Options: allocate the resolved path on the stack, or save/restore
-    `file_name_addr`/`file_name_len` around nested INCLUDED calls.
+- [x] Fix `incl_path_buf` for nested INCLUDED calls
+  - `forth_included` now saves/restores `file_name_addr`, `file_name_len`,
+    and `file_line_num` around the `forth_interpret_line` call, so a nested
+    INCLUDE no longer corrupts the parent's error context (it was reporting
+    the wrong file AND line).
+  - `incl_path_buf` is now scratch-only: on a fallback hit the error name
+    stays the original (as-typed) filename rather than the resolved path, so
+    no error-reporting state depends on the shared buffer.
 
 ---
 
