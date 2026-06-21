@@ -2053,6 +2053,31 @@ forth_included:
     ADR X10, file_line_num
     STR X9, [X10]                   // line counter = 1
 
+    // Skip a leading "#!" shebang line so a Forth file can be a Unix
+    // executable script (#!/usr/bin/env basicforth). Only the first line, and
+    // only on an exact "#!" so a leading '#' decimal literal is unaffected.
+    CMP X24, #2
+    B.LT .Lincl_line_loop           // too short to be a shebang
+    LDRB W9, [X25]
+    CMP W9, #'#'
+    B.NE .Lincl_line_loop
+    LDRB W9, [X25, #1]
+    CMP W9, #'!'
+    B.NE .Lincl_line_loop
+.Lincl_sb_scan:
+    CMP X26, X24
+    B.GE .Lincl_line_loop           // no newline → whole file was shebang
+    LDRB W9, [X25, X26]
+    CMP W9, #'\n'
+    B.EQ .Lincl_sb_eol
+    ADD X26, X26, #1
+    B .Lincl_sb_scan
+.Lincl_sb_eol:
+    ADD X26, X26, #1                // step past the newline
+    MOV X9, #2
+    ADR X10, file_line_num
+    STR X9, [X10]                   // first real line is line 2
+
 .Lincl_line_loop:
     CMP X26, X24
     B.GE .Lincl_done                // past end of file

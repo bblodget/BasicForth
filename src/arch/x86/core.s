@@ -1875,6 +1875,26 @@ forth_included:
     xor %r14d, %r14d                # line_start = 0
     movq $1, file_line_num(%rip)    # line counter = 1
 
+    # Skip a leading "#!" shebang line so a Forth file can be a Unix
+    # executable script (#!/usr/bin/env basicforth). Only the first line, and
+    # only on an exact "#!" so a leading '#' decimal literal is unaffected.
+    cmp $2, %rbp
+    jl .Lincl_line_loop             # too short to be a shebang
+    cmpb $'#', (%rbx)
+    jne .Lincl_line_loop
+    cmpb $'!', 1(%rbx)
+    jne .Lincl_line_loop
+.Lincl_sb_scan:
+    cmp %rbp, %r14
+    jge .Lincl_line_loop            # no newline → whole file was shebang
+    cmpb $'\n', (%rbx,%r14)
+    je .Lincl_sb_eol
+    inc %r14
+    jmp .Lincl_sb_scan
+.Lincl_sb_eol:
+    inc %r14                        # step past the newline
+    movq $2, file_line_num(%rip)    # first real line is line 2
+
 .Lincl_line_loop:
     cmp %rbp, %r14
     jge .Lincl_done                 # past end of file

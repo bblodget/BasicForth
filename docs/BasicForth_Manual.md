@@ -145,6 +145,37 @@ For the compile-only `S"` form (e.g., inside a colon definition):
 > : load-snake s" ../../../examples/snake.fs" included ; load-snake
 ```
 
+### Executable Scripts (`#!`)
+
+A Forth file can be run directly as a Unix executable script. Give it a
+`#!` first line pointing at the interpreter, make it executable, and run
+it:
+
+```
+#!/usr/bin/env basicforth
+.( Hello from BasicForth) cr
+bye
+```
+
+```
+$ chmod +x hello.fs
+$ ./hello.fs
+Hello from BasicForth
+```
+
+BasicForth ignores a leading `#!` line (only the first line, and only an
+exact `#!` — a leading `#` decimal literal such as `#10` is unaffected).
+Error line numbers still count the shebang as line 1, so they match the
+file's physical lines.
+
+Notes:
+- End the script with `bye`; otherwise BasicForth enters the interactive
+  REPL after the script runs. (A run-and-exit flag is a planned addition.)
+- `core.fs` is still loaded from the current directory or `BASICFORTH_PATH`,
+  so set `BASICFORTH_PATH` if the script is run from an arbitrary directory.
+- With `#!/usr/bin/env basicforth`, `basicforth` must be on your `PATH`;
+  alternatively use an absolute path to the binary.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

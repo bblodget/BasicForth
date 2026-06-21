@@ -223,6 +223,34 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Unix `#!` Script Support
+
+Run a Forth file as an executable Unix script:
+`chmod +x foo.fs` then `./foo.fs`, where the file begins with a
+`#!/usr/bin/env basicforth` line. The kernel-level shebang mechanism and
+command-line file loading already work; these tiers fill the gaps.
+
+- [ ] Tier 1 — Skip a leading `#!` shebang line
+  - In `forth_included`, if the file's first two bytes are `#!`, skip the
+    first line before interpreting (count it as line 1 so error line
+    numbers stay accurate). Two-byte check leaves a leading `#` decimal
+    literal unaffected.
+  - With this alone, scripts that end in `bye` work end-to-end.
+  - Mirror x86-64 and ARM64.
+- [ ] Tier 2 — Run-and-exit flag (no implicit REPL)
+  - A flag (e.g. `basicforth -s file.fs`) loads the file then exits instead
+    of dropping into the REPL, so scripts need no explicit `bye` and don't
+    fall into an interactive prompt on error.
+  - Shebang form: `#!/usr/bin/env -S basicforth -s`.
+  - No flag keeps today's "load then REPL" behavior (used by snake.fs).
+  - Requires command-line argument parsing in `main.s`.
+- [ ] Tier 3 — Script arguments and exit codes
+  - Expose `ARGC ( -- n )` and `ARG ( i -- c-addr u )` so scripts can read
+    their command-line arguments (save full `argv` at `_start`).
+  - Add an exit-with-status word so scripts can return a non-zero code.
+
+---
+
 ## Future / Hardening
 
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup
