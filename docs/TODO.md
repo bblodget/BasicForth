@@ -266,16 +266,21 @@ command-line file loading already work; these tiers fill the gaps.
   - Capture the full `argv` vector + `argc` at `_start` (we already save
     `argc` and `argv[1]`); this is startup/asm-word work, NOT a syscall — no
     new platform function needed for arg access.
-  - Expose to Forth, modeled on gforth (names final TBD):
-    - `argc ( -- u )` — number of args (incl. interpreter + script)
+  - Expose to Forth, mirroring gforth (variables + words) for portability:
+    - `argc` — VARIABLE holding the current arg count (`argc @`)
+    - `argv` — VARIABLE holding a pointer to the arg vector (`argv @` → char**)
     - `arg ( u -- c-addr u )` — uth arg as a string; `0 0` if out of range
-    - `next-arg ( -- c-addr u )` — consume next user arg; cursor starts past
-      the interpreter and the auto-loaded script; `0 0` when exhausted
-  - `bye-code ( n -- )` — exit with status n, silent (no "Goodbye!"). This is
+    - `next-arg ( -- c-addr u )` — return arg[1] and consume it; `0 0` when empty
+    - `shift-args ( -- )` — delete arg[1], shift the rest left, decrement
+      `argc` (O(1): copy arg[0] forward, advance `argv`, dec `argc`)
+    - At startup the auto-loaded script is shifted out, so `arg[0]` is the
+      interpreter and the first user arg is `arg[1]` / first `next-arg`.
+  - `bye-code ( n -- )` — exit with status n, silent (no "Goodbye!") so a
+    utility's stdout isn't corrupted; plain `bye` keeps its message. This is
     the ONLY real platform-layer addition (an exit-with-status syscall
     wrapper); also closes the Tier 2 exit-on-error gap.
   - Mirror x86-64 and ARM64. Integration tests (args + `$?`); doc + example
-    (e.g. a Forth `echo`).
+    `examples/echo.fs` (a Forth `echo`).
   - NOTE: an arg gives you the *string*; reading that data file is separate —
     see Phase 4 (expose file-read words).
 
