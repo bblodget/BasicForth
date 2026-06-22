@@ -236,17 +236,27 @@ command-line file loading already work; these tiers fill the gaps.
     counts as line 1 so error line numbers stay accurate). Mirrored on
     x86-64 and ARM64.
   - Scripts that end in `bye` work end-to-end; see `examples/hello.fs`.
-- [ ] Tier 2 — Run-and-exit flag (no implicit REPL)
-  - A flag (e.g. `basicforth -s file.fs`) loads the file then exits instead
-    of dropping into the REPL, so scripts need no explicit `bye` and don't
-    fall into an interactive prompt on error.
-  - Shebang form: `#!/usr/bin/env -S basicforth -s`.
-  - No flag keeps today's "load then REPL" behavior (used by snake.fs).
-  - Requires command-line argument parsing in `main.s`.
+- [~] Tier 2 — Run-and-exit flag (no implicit REPL) — DECIDED NOT TO DO
+  - The idea: a flag (e.g. `basicforth -s file.fs`) loads the file then exits
+    instead of dropping into the REPL, so scripts need no explicit `bye`.
+    Shebang form would be `#!/usr/bin/env -S basicforth -s`; no flag keeps
+    today's "load then REPL" behavior (used by snake.fs).
+  - Decision (2026-06): not worth it. GNU Forth (gforth) has no run-and-exit
+    flag either — its documented way to exit after processing is to append
+    `-e bye`, i.e. the same `bye` convention we already support. Ending a
+    script with `bye` (see `examples/hello.fs`) is the mainstream Forth
+    answer and is good enough.
+  - The only thing a flag would add over the `bye` convention is clean
+    exit-on-error with a non-zero exit status (a script that errors before
+    `bye` currently drops into the REPL rather than failing). Revisit only
+    if script exit codes are actually needed.
 - [ ] Tier 3 — Script arguments and exit codes
-  - Expose `ARGC ( -- n )` and `ARG ( i -- c-addr u )` so scripts can read
-    their command-line arguments (save full `argv` at `_start`).
-  - Add an exit-with-status word so scripts can return a non-zero code.
+  - Expose command-line arguments to scripts. Prefer mirroring gforth's
+    names for familiarity: `arg ( u -- c-addr u )`, `next-arg ( -- c-addr u )`,
+    `shift-args`, and the `argc` / `argv` variables (save full `argv` at
+    `_start`).
+  - Add an exit-with-status word so scripts can return a non-zero code (this
+    also covers the exit-on-error gap noted under Tier 2).
 
 ---
 
