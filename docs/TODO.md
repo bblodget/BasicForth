@@ -156,6 +156,13 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Phase 4: File System and Storage
 
+- [ ] Expose generic file-access words (`OPEN-FILE`, `READ-FILE`,
+  `CLOSE-FILE`, `R/O`, …)
+  - The platform already has the primitives used by INCLUDED
+    (`platform_open_file`, `platform_fstat`, `platform_mmap_file`,
+    `platform_close_file`); expose them as ANS file words so scripts can read
+    *data* files (e.g. a snake level passed as a Tier 3 argument). Natural
+    follow-on to the `#!` Tier 3 work.
 - [ ] Block storage (file-backed) or file-based source loading
 - [ ] LOAD, LIST, THRU (or INCLUDE for file-based)
 - [ ] SAVE / persistence of user definitions
@@ -250,13 +257,27 @@ command-line file loading already work; these tiers fill the gaps.
     exit-on-error with a non-zero exit status (a script that errors before
     `bye` currently drops into the REPL rather than failing). Revisit only
     if script exit codes are actually needed.
-- [ ] Tier 3 — Script arguments and exit codes
-  - Expose command-line arguments to scripts. Prefer mirroring gforth's
-    names for familiarity: `arg ( u -- c-addr u )`, `next-arg ( -- c-addr u )`,
-    `shift-args`, and the `argc` / `argv` variables (save full `argv` at
-    `_start`).
-  - Add an exit-with-status word so scripts can return a non-zero code (this
-    also covers the exit-on-error gap noted under Tier 2).
+- [ ] Tier 3 — Script arguments and exit codes  (NEXT — first branch)
+  - Enables writing Unix utilities / filters in Forth (read args + stdin,
+    return a status). Both invocation forms give the same argv layout:
+    `argv[0]`=interpreter, `argv[1]`=auto-loaded script, `argv[2..]`=user args:
+    - `basicforth snake.fs level1.txt`
+    - `./snake_start.fs level1.txt`  (shebang launcher that includes snake.fs)
+  - Capture the full `argv` vector + `argc` at `_start` (we already save
+    `argc` and `argv[1]`); this is startup/asm-word work, NOT a syscall — no
+    new platform function needed for arg access.
+  - Expose to Forth, modeled on gforth (names final TBD):
+    - `argc ( -- u )` — number of args (incl. interpreter + script)
+    - `arg ( u -- c-addr u )` — uth arg as a string; `0 0` if out of range
+    - `next-arg ( -- c-addr u )` — consume next user arg; cursor starts past
+      the interpreter and the auto-loaded script; `0 0` when exhausted
+  - `bye-code ( n -- )` — exit with status n, silent (no "Goodbye!"). This is
+    the ONLY real platform-layer addition (an exit-with-status syscall
+    wrapper); also closes the Tier 2 exit-on-error gap.
+  - Mirror x86-64 and ARM64. Integration tests (args + `$?`); doc + example
+    (e.g. a Forth `echo`).
+  - NOTE: an arg gives you the *string*; reading that data file is separate —
+    see Phase 4 (expose file-read words).
 
 ---
 
