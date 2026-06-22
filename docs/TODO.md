@@ -230,13 +230,12 @@ Run a Forth file as an executable Unix script:
 `#!/usr/bin/env basicforth` line. The kernel-level shebang mechanism and
 command-line file loading already work; these tiers fill the gaps.
 
-- [ ] Tier 1 — Skip a leading `#!` shebang line
-  - In `forth_included`, if the file's first two bytes are `#!`, skip the
-    first line before interpreting (count it as line 1 so error line
-    numbers stay accurate). Two-byte check leaves a leading `#` decimal
-    literal unaffected.
-  - With this alone, scripts that end in `bye` work end-to-end.
-  - Mirror x86-64 and ARM64.
+- [x] Tier 1 — Skip a leading `#!` shebang line
+  - `forth_included` skips a leading `#!` first line (exact two-byte `#!`
+    check, so a leading `#` decimal literal is unaffected; the shebang
+    counts as line 1 so error line numbers stay accurate). Mirrored on
+    x86-64 and ARM64.
+  - Scripts that end in `bye` work end-to-end; see `examples/hello.fs`.
 - [ ] Tier 2 — Run-and-exit flag (no implicit REPL)
   - A flag (e.g. `basicforth -s file.fs`) loads the file then exits instead
     of dropping into the REPL, so scripts need no explicit `bye` and don't
