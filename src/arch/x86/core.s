@@ -2805,6 +2805,28 @@ forth_bye_code:
     add $CELL, %r15
     jmp platform_exit
 
+# ---------- WRITE-FILE ----------
+# WRITE-FILE ( c-addr u fileid -- ior )
+# Write u bytes at c-addr to the file descriptor fileid. Returns ior: 0 on
+# success, else the positive errno. A single write() is issued (a partial
+# write on a pipe is reported as success); callers needing all-or-nothing can
+# loop. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
+.global forth_write_file
+forth_write_file:
+    mov (%r15), %rdi                # fileid (fd)
+    mov CELL(%r15), %rdx            # u (length)
+    mov 2*CELL(%r15), %rsi          # c-addr (buffer)
+    add $2*CELL, %r15               # pop fileid + u; TOS slot now holds c-addr
+    call platform_write_fd          # RAX = bytes written or -errno
+    test %rax, %rax
+    js .Lwf_err                     # negative → error
+    movq $0, (%r15)                 # ior = 0 (success)
+    ret
+.Lwf_err:
+    neg %rax                        # ior = errno (positive)
+    mov %rax, (%r15)
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -3763,8 +3785,9 @@ DEFWORD dict_arg,        "arg",           forth_arg,       dict_argv
 DEFWORD dict_shift_args, "shift-args",    forth_shift_args, dict_arg
 DEFWORD dict_next_arg,   "next-arg",      forth_next_arg,  dict_shift_args
 DEFWORD dict_bye_code,   "bye-code",      forth_bye_code,  dict_next_arg
+DEFWORD dict_write_file, "write-file",    forth_write_file, dict_bye_code
 .global dict_include
-.global dict_bye_code
+.global dict_write_file
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

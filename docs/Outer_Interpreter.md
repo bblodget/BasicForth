@@ -9,14 +9,19 @@ depending on the current STATE.
 
 ```
 _start
-  ├── Save argc/argv[1] from initial stack pointer
-  ├── Initialize engine registers (DSP, HERE, LATEST, sp0)
+  ├── Save argc/argv[1] + the full argv vector (arg_count/arg_base)
+  ├── Initialize engine registers (DSP, HERE, LATEST, sp0) and rp0
   ├── Set up guard pages and raw terminal mode
-  ├── Print startup banner
   ├── Load core.fs via INCLUDED (silent skip if not found)
-  ├── If argv[1] given, load it via INCLUDED (silent skip if not found)
+  ├── If argv[1] given (a script):
+  │     ├── shift-args (drop the script from the arg vector)
+  │     ├── set script_running, load it via INCLUDED
+  │     └── on error → exit non-zero (don't enter the REPL)
+  ├── Print startup banner — only here (so a script that ended in
+  │     bye/bye-code already exited) and only when stdout is a tty
   │
   └── repl_loop:
+        ├── If script_running still set (a fault recovered here) → exit non-zero
         ├── Save rp0, saved_latest, saved_here (for error recovery)
         ├── Print "> " prompt
         ├── ACCEPT a line into input buffer

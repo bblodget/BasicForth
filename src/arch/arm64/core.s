@@ -3052,6 +3052,31 @@ forth_bye_code:
     LDR X0, [X19], #CELL            // status = TOS, pop
     B platform_exit
 
+// ---------- WRITE-FILE ----------
+// WRITE-FILE ( c-addr u fileid -- ior )
+// Write u bytes at c-addr to the file descriptor fileid. Returns ior: 0 on
+// success, else the positive errno. A single write() is issued (a partial
+// write on a pipe is reported as success); callers needing all-or-nothing can
+// loop. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
+.global forth_write_file
+forth_write_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19]                  // fileid (fd)
+    LDR X2, [X19, #CELL]           // u (length)
+    LDR X1, [X19, #2*CELL]         // c-addr (buffer)
+    ADD X19, X19, #2*CELL          // pop fileid + u; TOS slot now holds c-addr
+    BL platform_write_fd           // X0 = bytes written or -errno
+    CMP X0, #0
+    B.GE .Lwf_ok                   // >= 0 → success
+    NEG X0, X0                     // ior = errno (positive)
+    STR X0, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+.Lwf_ok:
+    STR XZR, [X19]                 // ior = 0 (success)
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -4092,8 +4117,9 @@ DEFWORD dict_arg,        "arg",           forth_arg,       dict_argv
 DEFWORD dict_shift_args, "shift-args",    forth_shift_args, dict_arg
 DEFWORD dict_next_arg,   "next-arg",      forth_next_arg,  dict_shift_args
 DEFWORD dict_bye_code,   "bye-code",      forth_bye_code,  dict_next_arg
+DEFWORD dict_write_file, "write-file",    forth_write_file, dict_bye_code
 .global dict_include
-.global dict_bye_code
+.global dict_write_file
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

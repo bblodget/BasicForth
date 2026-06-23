@@ -156,13 +156,18 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Phase 4: File System and Storage
 
+- [x] Output handles (step 2): `stdin`/`stdout`/`stderr` (fileid = raw OS fd),
+  `write-file`/`write-line ( c-addr u fileid -- ior )`. `platform_write` split
+  into `platform_write_fd` with a stdout wrapper; `TYPE`/`EMIT` unchanged.
+  Lets a utility write to stderr without corrupting stdout.
 - [ ] Expose generic file-access words (`OPEN-FILE`, `READ-FILE`,
-  `CLOSE-FILE`, `R/O`, …)
+  `CLOSE-FILE`, `R/O`, …)  ← step 3 (input/files)
   - The platform already has the primitives used by INCLUDED
     (`platform_open_file`, `platform_fstat`, `platform_mmap_file`,
     `platform_close_file`); expose them as ANS file words so scripts can read
     *data* files (e.g. a snake level passed as a Tier 3 argument). Natural
-    follow-on to the `#!` Tier 3 work.
+    follow-on to the `#!` Tier 3 work. Reuse the fileid-as-fd model and the
+    `ior` convention established by the output words above.
 - [ ] Block storage (file-backed) or file-based source loading
 - [ ] LOAD, LIST, THRU (or INCLUDE for file-based)
 - [ ] SAVE / persistence of user definitions

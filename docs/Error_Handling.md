@@ -172,7 +172,31 @@ After any error recovery (guard page or software), the system state is:
 | LATEST      | Last good value (from `saved_latest`)     |
 | HERE        | Last good value (from `saved_here`)       |
 | STATE       | 0 (interpreting)                          |
-| Execution   | Resumes at `repl_loop` (prints prompt)    |
+| Execution   | Resumes at `repl_loop` (prints prompt) — but see "Startup Script Errors" below |
+
+## Startup Script Errors (Exit Non-Zero)
+
+The recovery above returns to the interactive REPL, which is correct when a
+human is at the keyboard. But a Forth file run as a utility (`basicforth
+foo.fs` or `./foo.fs`) should *fail* on an error, not silently drop the user
+into a prompt. So errors that occur while the startup script is running exit
+the process with a non-zero status instead.
+
+A `script_running` flag (in `main.s`) is set around the user-script load and
+cleared on clean completion. Both error channels honor it:
+
+- **Line errors** — an undefined word or failed parse makes `INCLUDED` print
+  `file:line: ? token` and return a non-zero code; `main.s` checks that return
+  and exits 1 instead of falling into the REPL.
+- **Faults / `ABORT` / `QUIT`** — these recover through `repl_loop` as above,
+  but a guard at the top of `repl_loop` sees `script_running` still set and
+  exits 1.
+
+For the fault path to work, `rp0` is initialized *before* the startup load
+(previously it was only set on the first `repl_loop` iteration, so a fault
+during startup would have recovered onto an invalid return stack). Errors while
+loading `core.fs` are deliberately excluded — a broken bootstrap drops to the
+REPL for debugging. See also the "Exiting With a Status" section of the Manual.
 
 ## Error Messages
 
