@@ -10,6 +10,9 @@ src/arch/x86/test_basicforth
 src/arch/arm64/core.fs
 src/arch/x86/core.fs
 
+# Redirect/output artifacts from running the example scripts
+examples/*.txt
+
 # Local deploy scripts (see deploy_template.sh)
 deploy.sh
 
