@@ -928,6 +928,52 @@ else
     printf "    Expected: 'one two three' (exact)\n    Got:      %s\n" "$(echo "$echo_out" | head -5)"; ((failed++))
 fi
 
+# Exit-on-error: a startup script that errors must exit non-zero instead of
+# dropping into the REPL, so a Forth utility fails like a Unix program.
+err_dir="$(mktemp -d)"
+printf '.( start) cr nosuchword 42 .\n'  > "$err_dir/bad.fs"     # undefined word
+printf 'drop\n'                          > "$err_dir/under.fs"   # stack underflow
+printf '.( done) cr bye\n'               > "$err_dir/ok.fs"      # clean + bye
+printf ': greet .( loaded) cr ;\n'       > "$err_dir/nobye.fs"   # clean, no bye
+
+t0=$(date +%s.%N)
+bad_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$err_dir/bad.fs" 2>&1); bad_status=$?
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$err_dir/under.fs" >/dev/null 2>&1; under_status=$?
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$err_dir/ok.fs" >/dev/null 2>&1; ok_status=$?
+# A clean script with no bye still falls into the REPL: the piped line runs.
+nobye_out=$(printf '999 . bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$err_dir/nobye.fs" 2>&1); nobye_status=$?
+rm -rf "$err_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "script exit status"
+
+# bad: reports the offending token, exits 1, and never reached the REPL prompt
+if [[ "$bad_status" == "1" && "$bad_out" == *"nosuchword"* && "$bad_out" != *"> "* ]]; then
+    printf "  ${GREEN}PASS${NC}  script error → exit 1, no REPL\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  script error → exit 1, no REPL\n"
+    printf "    Expected: status 1, 'nosuchword', no prompt\n    Got:      status %s / %s\n" "$bad_status" "$(echo "$bad_out" | head -3)"; ((failed++))
+fi
+# stack underflow (guard-page fault) during a script also exits non-zero
+if [[ "$under_status" != "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  script fault → non-zero exit\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  script fault → non-zero exit\n"
+    printf "    Expected: non-zero\n    Got:      %s\n" "$under_status"; ((failed++))
+fi
+# regression: a clean script ending in bye exits 0
+if [[ "$ok_status" == "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  clean script + bye → exit 0\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  clean script + bye → exit 0\n"
+    printf "    Expected: 0\n    Got:      %s\n" "$ok_status"; ((failed++))
+fi
+# regression: a clean script WITHOUT bye still drops into the REPL (runs 999 .)
+if [[ "$nobye_status" == "0" && "$nobye_out" == *"loaded"* && "$nobye_out" == *"999"* ]]; then
+    printf "  ${GREEN}PASS${NC}  clean no-bye script → REPL still runs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  clean no-bye script → REPL still runs\n"
+    printf "    Expected: status 0, 'loaded' and '999'\n    Got:      status %s / %s\n" "$nobye_status" "$(echo "$nobye_out" | head -3)"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 
