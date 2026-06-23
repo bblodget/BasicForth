@@ -99,7 +99,24 @@ modified settings:
 Uses ioctl with TCGETS (0x5401) to read current settings and TCSETS (0x5402)
 to apply new settings.
 
-Should be called once during initialization, before entering the main loop.
+**Lazy and idempotent.** It is *not* called at startup; instead the input
+primitives (`KEY`, `KEY?`, `ACCEPT`) call it on every read. It acts only the
+first time, and only when **stdin is a terminal** (`platform_isatty`); after
+that an internal `term_is_raw` flag short-circuits it. Rationale:
+
+- A program that never reads input — e.g. a script run as `tool.fs | less` —
+  never touches the terminal, so it can't flip it to raw just long enough for a
+  concurrent program (like `less`) to capture and later restore the raw state,
+  which would break the user's shell.
+- Keying off **stdin** (the thing we read), not stdout, means an interactive
+  session still gets raw mode even when its stdout is piped or redirected
+  (`basicforth | tee log`).
+
+The `term_is_raw` flag also tells `platform_restore_term` whether there is
+anything to undo. It is set **only after both ioctls succeed** (the `TCGETS`
+that captures `orig_termios` and the `TCSETS` that applies raw mode); if either
+fails, the flag stays clear so `restore_term` never writes back an invalid
+`orig_termios`.
 
 ### platform_restore_term
 
@@ -113,7 +130,9 @@ Restore the original terminal settings saved by `platform_raw_mode`.
 
 Uses ioctl TCSETS to write back the saved `orig_termios`. Must be called
 before exit — failure to restore leaves the terminal in raw mode (no echo,
-no line editing).
+no line editing). It is a **no-op unless `platform_raw_mode` actually switched
+the terminal** (the `term_is_raw` flag): a non-interactive run never saved an
+`orig_termios`, so restoring one would corrupt a terminal we never touched.
 
 ### platform_isatty
 

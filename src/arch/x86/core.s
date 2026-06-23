@@ -657,6 +657,7 @@ forth_emit:
 .global forth_key
 forth_key:
 
+    call platform_raw_mode      # lazily enter raw mode on first interactive input
     call platform_key           # RDI = character
     sub $CELL, %r15
     mov %rdi, (%r15)
@@ -670,6 +671,7 @@ forth_key:
 .global forth_accept
 forth_accept:
 
+    call platform_raw_mode      # lazily enter raw mode on first interactive input
     push %rbx
     push %rbp
     push %r12
@@ -2635,6 +2637,7 @@ forth_words:
 # Non-blocking check if input is available. Returns -1 if key ready, 0 if not.
 .global forth_key_q
 forth_key_q:
+    call platform_raw_mode          # lazily enter raw mode on first interactive input
     call platform_key_ready         # RDI = count (>0 if ready)
     test %edi, %edi
     jz .Lkq_no

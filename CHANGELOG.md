@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed: raw mode no longer corrupts the terminal for piped scripts
+- BasicForth entered raw mode (echo off) on *every* startup, even for a
+  non-interactive script. With `tool.fs | less`, `less` would start while the
+  terminal was raw, save that as its "restore-to" state, and on quit put the
+  terminal back into raw mode — leaving the shell with no echo.
+- Raw mode is now entered **lazily, on the first interactive input**
+  (`KEY`/`KEY?`/`ACCEPT`), and only when **stdin is a terminal**. A program
+  that never reads input never touches the terminal; and keying off stdin
+  (not stdout) means an interactive session still gets raw mode when its
+  stdout is piped or redirected. `platform_restore_term` is a matching no-op
+  when raw mode was never entered.
+
 ### Script arguments and exit status (Unix `#!` Tier 3)
 - Command-line arguments are now exposed to Forth, mirroring gforth:
   - `argc` — variable holding the current argument count

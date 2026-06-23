@@ -11,7 +11,7 @@ depending on the current STATE.
 _start
   ├── Save argc/argv[1] + the full argv vector (arg_count/arg_base)
   ├── Initialize engine registers (DSP, HERE, LATEST, sp0) and rp0
-  ├── Set up guard pages and raw terminal mode
+  ├── Set up guard pages (raw terminal mode is entered lazily on first input)
   ├── Load core.fs via INCLUDED (silent skip if not found)
   ├── If argv[1] given (a script):
   │     ├── shift-args (drop the script from the arg vector)
