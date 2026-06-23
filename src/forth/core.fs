@@ -264,3 +264,16 @@ variable seed  ms@ seed !
 : D=    ( d1 d2 -- flag ) d- d0= ;
 : D<    ( d1 d2 -- flag ) d- d0< ;
 : D.    ( d -- ) dup >r dabs <# #s r> sign #> type space ;
+
+\ File-output words (fileid = raw OS file descriptor)
+0 constant stdin
+1 constant stdout
+2 constant stderr
+
+\ WRITE-FILE ( c-addr u fileid -- ior ) is an ASM primitive in core.s.
+\ WRITE-LINE writes the string then a single newline to the same fileid,
+\ returning the ior of the first write that fails (0 if both succeed).
+create (write-nl) 10 c,
+: write-line ( c-addr u fileid -- ior )
+        dup >r write-file ?dup if r> drop exit then
+        (write-nl) 1 r> write-file ;

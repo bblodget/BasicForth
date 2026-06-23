@@ -115,9 +115,40 @@ Uses ioctl TCSETS to write back the saved `orig_termios`. Must be called
 before exit — failure to restore leaves the terminal in raw mode (no echo,
 no line editing).
 
+### platform_isatty
+
+Report whether a file descriptor refers to a terminal.
+
+|              | ARM64                                 | x86-64                                |
+|--------------|---------------------------------------|---------------------------------------|
+| **Input**    | X0 = fd                               | RDI = fd                              |
+| **Output**   | X0 = 1 if a tty, 0 otherwise          | RAX = 1 if a tty, 0 otherwise         |
+| **Clobbers** | X0-X7 (syscall)                       | RAX, RCX, R11 (syscall)              |
+| **Syscall**  | ioctl(fd, TCGETS, &buf) — SYS_ioctl   | ioctl(fd, TCGETS, &buf) — SYS_ioctl  |
+
+Probes with TCGETS: it succeeds on a tty and fails (`-ENOTTY`) on a
+pipe/file/redirect. Uses a private scratch termios buffer so it never disturbs
+the saved `orig_termios`. Used to print the startup banner only when stdout is
+an interactive terminal.
+
+### platform_exit
+
+Restore the terminal and exit the process with a caller-supplied status.
+
+|              | ARM64                            | x86-64                           |
+|--------------|----------------------------------|----------------------------------|
+| **Input**    | X0 = exit status                 | RDI = exit status                |
+| **Output**   | does not return                  | does not return                  |
+| **Syscall**  | exit(status) — SYS_exit #93      | exit(status) — SYS_exit #60     |
+
+Calls `platform_restore_term` first (preserving the status across the call),
+then the exit syscall. This is the only safe way to exit — calling exit
+directly would leave the terminal in raw mode. Backs the Forth word `BYE-CODE`
+and the non-zero exit taken when a startup script errors.
+
 ### platform_bye
 
-Restore the terminal and exit the process.
+Restore the terminal and exit with status 0.
 
 |              | ARM64                    | x86-64                   |
 |--------------|--------------------------|--------------------------|
@@ -125,13 +156,27 @@ Restore the terminal and exit the process.
 | **Output**   | does not return          | does not return          |
 | **Syscall**  | exit(0) — SYS_exit #93   | exit(0) — SYS_exit #60  |
 
-Calls `platform_restore_term` first, then the exit syscall. This is the
-only safe way to exit — calling exit directly would leave the terminal
-in raw mode.
+A thin wrapper: sets status 0 and jumps to `platform_exit`. Backs the Forth
+word `BYE`, which prints "Goodbye!" before calling it.
+
+### platform_write_fd
+
+Write a buffer to an arbitrary file descriptor.
+
+|              | ARM64                                | x86-64                               |
+|--------------|--------------------------------------|--------------------------------------|
+| **Input**    | X0 = fd, X1 = buffer, X2 = length    | RDI = fd, RSI = buffer, RDX = length |
+| **Output**   | X0 = bytes written, or -errno        | RAX = bytes written, or -errno       |
+| **Clobbers** | X0-X7 (syscall)                      | RAX, RCX, R11 (syscall)             |
+| **Syscall**  | write(fd, buf, len) — SYS_write #64  | write(fd, buf, len) — SYS_write #1  |
+
+Backs the Forth word `WRITE-FILE`, which turns the raw result into an `ior`
+(0 on success, else the positive errno).
 
 ### platform_write
 
-Write a buffer to stdout.
+Write a buffer to stdout. Thin wrapper: sets fd = 1 and tail-calls
+`platform_write_fd`, so existing callers are unchanged.
 
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|
@@ -140,7 +185,7 @@ Write a buffer to stdout.
 | **Clobbers** | X0-X7 (syscall)                    | RAX, RCX, R11 (syscall)           |
 | **Syscall**  | write(1, buf, len) — SYS_write #64 | write(1, buf, len) — SYS_write #1 |
 
-Used by DOT, DOT-S, error messages, and other multi-character output.
+Used by DOT, DOT-S, TYPE, error messages, and other multi-character output.
 
 ### platform_init_guard_pages
 
@@ -467,7 +512,6 @@ Functions to be added as BasicForth grows:
 | Function            | Purpose                                       | Phase |
 |---------------------|-----------------------------------------------|-------|
 | platform_read_file  | Read from file descriptor                     |     4 |
-| platform_write_file | Write to file descriptor                      |     4 |
 | platform_lseek      | Seek within file                              |     4 |
 | platform_fork_exec  | Fork and exec external process (for $EDITOR)  |     4 |
 | platform_fb_open    | Open framebuffer or DRM device                |     5 |

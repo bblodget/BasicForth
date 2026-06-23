@@ -225,6 +225,40 @@ to return a *specific* status on success or on a handled condition.
 See `examples/echo.fs` for a small Unix utility (a Forth `echo`) that uses
 `next-arg` and `bye-code`.
 
+### Writing to stdout, stderr, and files
+
+`TYPE` and `EMIT` always write to standard output. To target a specific
+stream — in particular standard error, so error text stays out of a utility's
+real output — use the file-output words. A *fileid* is a raw OS file
+descriptor; the three standard streams are predefined:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `stdin` | ( -- 0 ) | the standard-input fileid (0) |
+| `stdout` | ( -- 1 ) | the standard-output fileid (1) |
+| `stderr` | ( -- 2 ) | the standard-error fileid (2) |
+| `write-file` | ( c-addr u fileid -- ior ) | write `u` bytes to `fileid` |
+| `write-line` | ( c-addr u fileid -- ior ) | write `u` bytes plus a newline |
+
+Both return an `ior` (I/O result): `0` on success, otherwise the positive
+`errno` (e.g. `9` = `EBADF` for a bad descriptor). For example, a utility that
+reports a problem without corrupting its stdout:
+
+```forth
+: warn ( c-addr u -- ) stderr write-line drop ;
+: main ... ok? 0= if  s" input out of range" warn  1 bye-code  then ... ;
+```
+
+(`S"` is compile-only, so build strings inside a definition as shown.)
+
+Note: `write-file`/`write-line` issue a single `write(2)`; a partial write on a
+pipe is reported as success. For ordinary stdout/stderr and file output this is
+not a concern.
+
+See `examples/lines.fs` for a small utility that writes its data to stdout and
+its diagnostics to stderr, so `./lines.fs a b > out` leaves clean data in `out`
+while the log stays on the terminal.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

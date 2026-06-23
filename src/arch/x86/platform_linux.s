@@ -21,6 +21,7 @@
 
 .equ STDIN,  0
 .equ STDOUT, 1
+.equ STDERR, 2
 
 # Terminal ioctl commands
 .equ TCGETS, 0x5401
@@ -242,14 +243,21 @@ platform_emit:
     ret
 
 # ---------- WRITE ----------
-# Write buffer to stdout.
-# Input: RSI = buffer, RDX = length
-.global platform_write
-platform_write:
+# platform_write_fd ( RDI=fd, RSI=buffer, RDX=length -- RAX=bytes written or -errno )
+# Generic write to any file descriptor. Returns the raw syscall result so
+# callers (e.g. WRITE-FILE) can derive an ior.
+.global platform_write_fd
+platform_write_fd:
     mov $SYS_write, %rax
-    mov $STDOUT, %rdi
     syscall
     ret
+
+# platform_write ( RSI=buffer, RDX=length ) — write to stdout.
+# Thin wrapper so existing callers (TYPE, banner, error messages) are unchanged.
+.global platform_write
+platform_write:
+    mov $STDOUT, %rdi
+    jmp platform_write_fd
 
 # ---------- BYE ----------
 # Restore terminal and exit.

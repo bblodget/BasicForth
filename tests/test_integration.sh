@@ -974,6 +974,85 @@ else
     printf "    Expected: status 0, 'loaded' and '999'\n    Got:      status %s / %s\n" "$nobye_status" "$(echo "$nobye_out" | head -3)"; ((failed++))
 fi
 
+# File-output words: stdin/stdout/stderr handles + WRITE-FILE / WRITE-LINE.
+# Run from script files (not piped REPL input), so the source is not echoed to
+# stdout — essential for the stderr-separation check below.
+out_dir="$(mktemp -d)"
+printf 'stdin . stdout . stderr . cr bye\n'                 > "$out_dir/fds.fs"
+printf ': t s" abc" stdout write-file . ; t cr bye\n'       > "$out_dir/wf.fs"
+printf ': t s" L1" stdout write-line . ; t cr bye\n'        > "$out_dir/wl.fs"
+printf ': t s" XYZZY" 99 write-file . ; t cr bye\n'         > "$out_dir/badfd.fs"
+printf ': t s" STDERRMARK" stderr write-line drop ; t bye\n' > "$out_dir/err.fs"
+
+t0=$(date +%s.%N)
+fds_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/fds.fs" 2>/dev/null)
+wf_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/wf.fs" 2>/dev/null)
+wl_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/wl.fs" 2>/dev/null)
+badfd_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/badfd.fs" 2>/dev/null)
+err_drop=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/err.fs" 2>/dev/null)
+err_both=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$out_dir/err.fs" 2>&1)
+rm -rf "$out_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "file-output words"
+
+# stdin/stdout/stderr push 0/1/2
+if [[ "$fds_out" == *"0 1 2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  stdin/stdout/stderr constants\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stdin/stdout/stderr constants\n"
+    printf "    Expected: 0 1 2\n    Got:      %s\n" "$(echo "$fds_out" | head -3)"; ((failed++))
+fi
+# WRITE-FILE writes the bytes to stdout and returns ior 0
+if [[ "$wf_out" == *"abc0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  write-file → stdout, ior 0\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  write-file → stdout, ior 0\n"
+    printf "    Expected: abc0\n    Got:      %s\n" "$(echo "$wf_out" | head -3)"; ((failed++))
+fi
+# WRITE-LINE appends a newline; the line and the ior end up on separate lines
+if [[ "$wl_out" == *"L1"* && "$(printf '%s' "$wl_out" | sed -n '2p')" == "0 " ]]; then
+    printf "  ${GREEN}PASS${NC}  write-line → stdout + newline\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  write-line → stdout + newline\n"
+    printf "    Expected: 'L1' then '0 ' on next line\n    Got:      %s\n" "$(echo "$wl_out" | head -3)"; ((failed++))
+fi
+# Bad fd: nothing written, ior is EBADF (9), not 0
+if [[ "$badfd_out" == *"9"* && "$badfd_out" != *"XYZZY"* ]]; then
+    printf "  ${GREEN}PASS${NC}  write-file bad fd → ior 9, no output\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  write-file bad fd → ior 9, no output\n"
+    printf "    Expected: '9', no 'XYZZY'\n    Got:      %s\n" "$(echo "$badfd_out" | head -3)"; ((failed++))
+fi
+# stderr is a distinct stream: dropped by 2>/dev/null, present under 2>&1
+if [[ "$err_drop" != *"STDERRMARK"* && "$err_both" == *"STDERRMARK"* ]]; then
+    printf "  ${GREEN}PASS${NC}  write-line → stderr (separate from stdout)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  write-line → stderr (separate from stdout)\n"
+    printf "    Expected: absent under 2>/dev/null, present under 2>&1\n    Got:      drop=%s both=%s\n" "$err_drop" "$err_both"; ((failed++))
+fi
+
+# The bundled lines.fs utility: data lines → stdout, count → stderr (a clean
+# split), and a usage error + non-zero exit when no arguments are given.
+t0=$(date +%s.%N)
+lines_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/lines.fs" alpha beta 2>/dev/null)
+lines_both=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/lines.fs" alpha beta 2>&1)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/lines.fs" >/dev/null 2>&1; lines_noarg=$?
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/lines.fs"
+
+# stdout carries only the data lines; the count goes to stderr
+if [[ "$lines_out" == $'alpha\nbeta' && "$lines_both" == *"lines: 2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/lines.fs (stdout/stderr split)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/lines.fs (stdout/stderr split)\n"
+    printf "    Expected: stdout 'alpha<nl>beta', stderr 'lines: 2'\n    Got:      out=%s both=%s\n" "$lines_out" "$lines_both"; ((failed++))
+fi
+# no arguments → usage message + exit code 2
+if [[ "$lines_noarg" == "2" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/lines.fs no-args → exit 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/lines.fs no-args → exit 2\n"
+    printf "    Expected: 2\n    Got:      %s\n" "$lines_noarg"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

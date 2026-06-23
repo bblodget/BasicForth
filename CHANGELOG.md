@@ -34,6 +34,19 @@
   recovers onto a valid return stack (previously `rp0` was only set on REPL
   entry — a latent bug for faults during startup).
 
+### File-output words (stdout / stderr / fileid) (Phase 4)
+- `stdin`/`stdout`/`stderr` push the standard fileids (0/1/2); a fileid is a
+  raw OS file descriptor.
+- `write-file ( c-addr u fileid -- ior )` and `write-line ( c-addr u fileid --
+  ior )` write to any fileid, returning an `ior` (0 on success, else the
+  positive `errno`). `write-line` appends a newline. This lets a utility write
+  diagnostics to `stderr` without corrupting its stdout.
+- `TYPE`/`EMIT` are unchanged (still stdout). Internally `platform_write` was
+  split into `platform_write_fd ( fd buf len )` with a stdout wrapper; a single
+  `write(2)` is issued (a partial write on a pipe counts as success).
+- New `examples/lines.fs` — a utility that writes data to stdout and its count
+  to stderr, demonstrating the stdout/stderr split.
+
 ### BASICFORTH_PATH multi-directory search
 - `BASICFORTH_PATH` now accepts a colon-separated list of directories
   (like `PATH`). On a CWD miss, each directory is searched in order and

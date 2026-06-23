@@ -14,6 +14,7 @@
 
 .equ STDIN,  0
 .equ STDOUT, 1
+.equ STDERR, 2
 
 // Terminal ioctl commands
 .equ TCGETS, 0x5401
@@ -247,16 +248,23 @@ platform_emit:
     RET
 
 // ---------- WRITE ----------
-// Write buffer to stdout.
-// Input: X0 = buffer, X1 = length
+// platform_write_fd ( X0=fd, X1=buffer, X2=length -- X0=bytes written or -errno )
+// Generic write to any file descriptor. Returns the raw syscall result so
+// callers (e.g. WRITE-FILE) can derive an ior.
+.global platform_write_fd
+platform_write_fd:
+    MOV X8, #SYS_write
+    SVC #0
+    RET
+
+// platform_write ( X0=buffer, X1=length ) — write to stdout.
+// Thin wrapper so existing callers (TYPE, banner, error messages) are unchanged.
 .global platform_write
 platform_write:
     MOV X2, X1                  // count
     MOV X1, X0                  // buf
     MOV X0, #STDOUT
-    MOV X8, #SYS_write
-    SVC #0
-    RET
+    B platform_write_fd
 
 // ---------- FLUSH ICACHE ----------
 // Flush instruction cache for a range of addresses.

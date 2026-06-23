@@ -401,3 +401,20 @@ CASE, OF, ENDOF, ENDCASE
 | CURSOR-ON     | ( -- )            | Show terminal cursor               |
 | SCREEN-WIDTH  | ( -- u )          | Terminal width in columns           |
 | SCREEN-HEIGHT | ( -- u )          | Terminal height in rows             |
+
+### Scripting and file descriptors (all in asm)
+
+For running Forth files as Unix utilities — command-line arguments, exit
+status, and writing to arbitrary file descriptors. `argc`/`argv` push the
+address of mutable count/base cells (gforth-style variables). A fileid is a
+raw OS file descriptor (`stdin`/`stdout`/`stderr` = 0/1/2, defined in core.fs).
+
+| Word        | Stack effect           | Notes                                    |
+|-------------|------------------------|------------------------------------------|
+| ARGC        | ( -- a-addr )          | Address of the argument-count cell       |
+| ARGV        | ( -- a-addr )          | Address of the argv-base cell (char\*\*) |
+| ARG         | ( u -- c-addr u )      | uth argument as a string; 0 0 if none    |
+| NEXT-ARG    | ( -- c-addr u )        | Next argument, consumed; 0 0 when empty  |
+| SHIFT-ARGS  | ( -- )                 | Drop arg[1], decrement argc (O(1))       |
+| BYE-CODE    | ( n -- )               | Exit with status n, silently             |
+| WRITE-FILE  | ( c-addr u fileid -- ior ) | Write bytes to fileid; ior 0 = ok    |
