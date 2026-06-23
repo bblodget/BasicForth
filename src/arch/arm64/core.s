@@ -740,6 +740,7 @@ forth_emit:
 forth_key:
 
     STP X29, X30, [SP, #-16]!
+    BL platform_raw_mode       // lazily enter raw mode on first interactive input
     BL platform_key            // X0 = character
     STR X0, [X19, #-CELL]!    // push char
     LDP X29, X30, [SP], #16
@@ -756,6 +757,8 @@ forth_accept:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
+
+    BL platform_raw_mode        // lazily enter raw mode on first interactive input
 
     // Pop args from data stack: top = max_len, second = buf_addr
     LDR X24, [X19], #CELL      // X24 = max_len (top)
@@ -2881,6 +2884,7 @@ forth_words:
 .global forth_key_q
 forth_key_q:
     STP X29, X30, [SP, #-16]!
+    BL platform_raw_mode            // lazily enter raw mode on first interactive input
     BL platform_key_ready           // X0 = count
     CMP X0, #0
     CSETM X9, NE                    // -1 if ready, 0 if not

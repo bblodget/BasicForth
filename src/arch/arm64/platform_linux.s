@@ -54,12 +54,27 @@
 platform_raw_mode:
     STR X30, [SP, #-16]!
 
+    // Lazy and idempotent: called at the start of every interactive input
+    // (KEY / KEY? / ACCEPT). Switch to raw mode the first time, and only when
+    // stdin is a terminal. A program that never reads input (e.g. a script run
+    // as `tool.fs | less`) never touches the terminal; and we key off stdin
+    // (the thing we read), not stdout, so an interactive session still gets
+    // raw mode even when its stdout is piped/redirected.
+    ADR X9, term_is_raw
+    LDR X9, [X9]
+    CBNZ X9, .Lraw_skip             // already raw — nothing to do
+    MOV X0, #STDIN
+    BL platform_isatty
+    CBZ X0, .Lraw_skip              // stdin not a tty → stay cooked
+
     // TCGETS: read current terminal settings into orig_termios
     MOV X0, #STDIN
     MOV X1, #TCGETS
     ADR X2, orig_termios
     MOV X8, #SYS_ioctl
     SVC #0
+    CMP X0, #0
+    B.LT .Lraw_skip                // TCGETS failed → orig_termios invalid, bail
 
     // Copy orig_termios to raw_termios
     ADR X0, orig_termios
@@ -98,15 +113,27 @@ platform_raw_mode:
     ADR X2, raw_termios
     MOV X8, #SYS_ioctl
     SVC #0
+    CMP X0, #0
+    B.LT .Lraw_skip                // apply failed → terminal unchanged, don't mark
 
+    MOV X9, #1
+    ADR X10, term_is_raw            // raw applied and orig_termios valid
+    STR X9, [X10]
+.Lraw_skip:
     LDR X30, [SP], #16
     RET
 
 // ---------- RESTORE TERMINAL ----------
-// Restore original terminal settings (call before exit).
+// Restore original terminal settings (call before exit). No-op if we never
+// entered raw mode — otherwise we'd write an uninitialized orig_termios and
+// corrupt a terminal we never touched.
 .global platform_restore_term
 platform_restore_term:
     STR X30, [SP, #-16]!
+
+    ADR X9, term_is_raw
+    LDR X9, [X9]
+    CBZ X9, .Lrestore_skip
 
     MOV X0, #STDIN
     MOV X1, #TCSETS
@@ -114,6 +141,9 @@ platform_restore_term:
     MOV X8, #SYS_ioctl
     SVC #0
 
+    ADR X9, term_is_raw
+    STR XZR, [X9]
+.Lrestore_skip:
     LDR X30, [SP], #16
     RET
 
@@ -516,6 +546,10 @@ raw_termios:
     .space TERMIOS_SIZE
 isatty_termios:
     .space TERMIOS_SIZE
+// Non-zero once platform_raw_mode has actually switched the terminal to raw,
+// so platform_restore_term knows whether it has anything to restore.
+term_is_raw:
+    .space 8
 
 // Kernel sigaction struct (144 bytes on ARM64: handler+flags+mask, no restorer)
 .align 3

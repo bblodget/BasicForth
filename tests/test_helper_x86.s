@@ -65,6 +65,10 @@ platform_key:
     xor %edi, %edi
     ret
 
+.global platform_raw_mode
+platform_raw_mode:
+    ret
+
 .global platform_write
 platform_write:
     ret

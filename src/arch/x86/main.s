@@ -82,7 +82,8 @@ _start:
     mov %r13, saved_here(%rip)
 
     call platform_init_guard_pages
-    call platform_raw_mode
+    # Raw terminal mode is entered lazily on the first interactive input
+    # (KEY / KEY? / ACCEPT), so a script that only writes never touches the tty.
 
     # Initialize rp0 before any startup load, so a fault/ABORT during core.fs
     # or the script recovers onto a valid return stack (repl_loop re-saves it).

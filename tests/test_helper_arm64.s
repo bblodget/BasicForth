@@ -59,6 +59,10 @@ platform_key:
     MOV X0, #0
     RET
 
+.global platform_raw_mode
+platform_raw_mode:
+    RET
+
 .global platform_write
 platform_write:
     RET

@@ -61,12 +61,29 @@
 # Saves original settings for restore on exit.
 .global platform_raw_mode
 platform_raw_mode:
+    # Lazy and idempotent: called at the start of every interactive input
+    # (KEY / KEY? / ACCEPT). Switch to raw mode the first time, and only when
+    # stdin is a terminal. Consequences:
+    #   - A program that never reads input (e.g. `tool.fs | less`) never
+    #     touches the terminal, so it can't leave it in raw mode for a
+    #     downstream program to capture and later restore.
+    #   - We key off stdin (the thing we read), not stdout, so an interactive
+    #     session still gets raw mode even when its stdout is piped/redirected.
+    cmpq $0, term_is_raw(%rip)
+    jne .Lraw_skip                  # already raw — nothing to do
+    mov $STDIN, %rdi
+    call platform_isatty
+    test %rax, %rax
+    jz .Lraw_skip                   # stdin not a tty → stay cooked
+
     # TCGETS: read current terminal settings into orig_termios
     mov $SYS_ioctl, %rax
     mov $STDIN, %rdi
     mov $TCGETS, %rsi
     lea orig_termios(%rip), %rdx
     syscall
+    test %rax, %rax
+    js .Lraw_skip                   # TCGETS failed → orig_termios invalid, bail
 
     # Copy orig_termios to raw_termios
     lea orig_termios(%rip), %rsi
@@ -99,18 +116,28 @@ platform_raw_mode:
     mov $TCSETS, %rsi
     lea raw_termios(%rip), %rdx
     syscall
+    test %rax, %rax
+    js .Lraw_skip                   # apply failed → terminal unchanged, don't mark
 
+    movq $1, term_is_raw(%rip)      # raw applied and orig_termios valid
+.Lraw_skip:
     ret
 
 # ---------- RESTORE TERMINAL ----------
-# Restore original terminal settings (call before exit).
+# Restore original terminal settings (call before exit). No-op if we never
+# entered raw mode — otherwise we'd write an uninitialized orig_termios and
+# corrupt a terminal we never touched.
 .global platform_restore_term
 platform_restore_term:
+    cmpq $0, term_is_raw(%rip)
+    je .Lrestore_skip
     mov $SYS_ioctl, %rax
     mov $STDIN, %rdi
     mov $TCSETS, %rsi
     lea orig_termios(%rip), %rdx
     syscall
+    movq $0, term_is_raw(%rip)
+.Lrestore_skip:
     ret
 
 # ---------- ISATTY ----------
@@ -474,6 +501,10 @@ raw_termios:
     .space TERMIOS_SIZE
 isatty_termios:
     .space TERMIOS_SIZE
+# Non-zero once platform_raw_mode has actually switched the terminal to raw,
+# so platform_restore_term knows whether it has anything to restore.
+term_is_raw:
+    .space 8
 
 # Kernel sigaction struct (152 bytes)
 .align 8
