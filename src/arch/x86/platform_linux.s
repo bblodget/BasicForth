@@ -112,6 +112,25 @@ platform_restore_term:
     syscall
     ret
 
+# ---------- ISATTY ----------
+# platform_isatty ( RDI=fd -- RAX=1 if fd is a terminal, 0 otherwise )
+# Probes with TCGETS: it succeeds on a tty and fails (-ENOTTY) on a
+# pipe/file/redirect. Uses a private scratch buffer so it never disturbs the
+# saved orig_termios used for restore.
+.global platform_isatty
+platform_isatty:
+    mov $SYS_ioctl, %rax
+    mov $TCGETS, %rsi
+    lea isatty_termios(%rip), %rdx
+    syscall
+    test %rax, %rax
+    js .Lisatty_no             # negative errno -> not a tty
+    mov $1, %eax
+    ret
+.Lisatty_no:
+    xor %eax, %eax
+    ret
+
 # ---------- KEY ----------
 # Read one character from stdin.
 # Returns: RDI = character read (for forth_key to push)
@@ -234,12 +253,19 @@ platform_write:
 
 # ---------- BYE ----------
 # Restore terminal and exit.
+# platform_exit ( RDI=status -- ) — restore terminal and exit with status.
+.global platform_exit
+platform_exit:
+    push %rdi                   # preserve status across the ioctl call
+    call platform_restore_term
+    pop %rdi
+    mov $SYS_exit, %rax
+    syscall
+
 .global platform_bye
 platform_bye:
-    call platform_restore_term
-    mov $SYS_exit, %rax
-    xor %rdi, %rdi              # status = 0
-    syscall
+    xor %rdi, %rdi             # status = 0
+    jmp platform_exit
 
 # ---------- Guard Pages ----------
 # Set up SIGSEGV handler and mprotect guard pages around the data stack.
@@ -437,6 +463,8 @@ msg_guard_fail: .ascii "fatal: guard page setup failed\n"
 orig_termios:
     .space TERMIOS_SIZE
 raw_termios:
+    .space TERMIOS_SIZE
+isatty_termios:
     .space TERMIOS_SIZE
 
 # Kernel sigaction struct (152 bytes)

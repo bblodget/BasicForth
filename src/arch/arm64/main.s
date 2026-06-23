@@ -24,6 +24,11 @@ _start:
     LDR X9, [SP]
     ADR X10, start_argc
     STR X9, [X10]
+    ADR X10, arg_count
+    STR X9, [X10]                   // mutable count behind the ARGC variable
+    ADD X11, SP, #8                 // &argv[0]
+    ADR X10, arg_base
+    STR X11, [X10]                  // mutable base behind the ARGV variable
     CMP X9, #2
     B.LT .Lno_argv1
     LDR X9, [SP, #16]
@@ -74,7 +79,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_include           // LATEST
+    ADR X22, dict_bye_code          // LATEST
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -84,11 +89,6 @@ _start:
 
     BL platform_init_guard_pages
     BL platform_raw_mode
-
-    // Print startup banner
-    ADR X0, version_str
-    MOV X1, #version_len
-    BL platform_write
 
     // Try to load core.fs (silent skip if not found)
     ADR X9, core_fs_name
@@ -102,6 +102,10 @@ _start:
     LDR X9, [X9]
     CMP X9, #2
     B.LT .Lno_cmdline_file
+    // Shift the script (argv[1]) out of the arg vector first, so while the
+    // script runs its first argument is arg[1] / the first NEXT-ARG (gforth
+    // style). Loading uses start_argv1, independent of the vector.
+    BL forth_shift_args
     // Find string length (null-terminated argv)
     ADR X9, start_argv1
     LDR X0, [X9]                    // X0 = c-addr
@@ -117,6 +121,18 @@ _start:
     STR X1, [X19, #-CELL]!         // push length
     BL forth_included
 .Lno_cmdline_file:
+
+    // Print the startup banner now, only when actually entering the interactive
+    // REPL — a script that ends in bye/bye-code exits before reaching here — and
+    // only when stdout is a terminal, so piped/redirected output stays clean.
+    // This block sits before the repl_loop label, so it runs exactly once.
+    MOV X0, #1                      // STDOUT
+    BL platform_isatty
+    CBZ X0, .Lno_banner
+    ADR X0, version_str
+    MOV X1, #version_len
+    BL platform_write
+.Lno_banner:
 
 .global repl_loop
 repl_loop:
@@ -243,6 +259,14 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+// Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
+// char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.
+.global arg_count
+arg_count:
+    .quad 0
+.global arg_base
+arg_base:
     .quad 0
 .global basicforth_path
 basicforth_path:

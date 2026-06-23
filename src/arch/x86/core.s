@@ -2704,6 +2704,107 @@ forth_include:
     call forth_included             # ( c-addr u -- )
     ret
 
+# ---------- Command-line arguments (Tier 3) ----------
+# ARGC and ARGV are variables (mirroring gforth): they push the address of the
+# mutable count/base cells, so `argc @` and `argv @` work. arg_base is a char**
+# into the OS argv vector; SHIFT-ARGS / NEXT-ARG consume from the front.
+
+# ARGC ( -- a-addr ) — address of the argument-count cell.
+.global forth_argc
+forth_argc:
+    lea arg_count(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ARGV ( -- a-addr ) — address of the argv-base cell (a-addr @ -> char**).
+.global forth_argv
+forth_argv:
+    lea arg_base(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
+# ARG ( u -- c-addr u ) — the uth argument as a string; ( 0 0 ) if out of range.
+.global forth_arg
+forth_arg:
+    mov (%r15), %rcx                # rcx = u (index)
+    mov arg_count(%rip), %rax
+    cmp %rax, %rcx
+    jae .Larg_oob                   # u >= count (unsigned) -> out of range
+    mov arg_base(%rip), %rdx        # char** base
+    mov (%rdx,%rcx,8), %rsi         # char* = base[u]
+    xor %rcx, %rcx                  # strlen
+.Larg_strlen:
+    cmpb $0, (%rsi,%rcx)
+    je .Larg_done
+    inc %rcx
+    jmp .Larg_strlen
+.Larg_done:
+    mov %rsi, (%r15)                # replace u with c-addr
+    sub $CELL, %r15
+    mov %rcx, (%r15)                # push len
+    ret
+.Larg_oob:
+    movq $0, (%r15)                 # c-addr = 0
+    sub $CELL, %r15
+    movq $0, (%r15)                 # len = 0
+    ret
+
+# SHIFT-ARGS ( -- ) — delete arg[1], shifting the rest left and decrementing
+# argc. O(1): copy arg[0] forward into slot 1, then advance the base by a cell
+# (keeps arg[0] = program name). No-op when there is no arg[1] (count < 2).
+.global forth_shift_args
+forth_shift_args:
+    mov arg_count(%rip), %rax
+    cmp $2, %rax
+    jb .Lshift_done
+    mov arg_base(%rip), %rdx
+    mov (%rdx), %rcx                # base[0] (program name)
+    mov %rcx, CELL(%rdx)            # base[1] = base[0]
+    add $CELL, %rdx                 # base += 1
+    mov %rdx, arg_base(%rip)
+    decq arg_count(%rip)
+.Lshift_done:
+    ret
+
+# NEXT-ARG ( -- c-addr u ) — return arg[1] and consume it via SHIFT-ARGS;
+# ( 0 0 ) when no argument remains.
+.global forth_next_arg
+forth_next_arg:
+    mov arg_count(%rip), %rax
+    cmp $2, %rax
+    jb .Lnext_empty                 # no arg[1]
+    mov arg_base(%rip), %rdx
+    mov CELL(%rdx), %rsi            # char* = base[1]
+    xor %rcx, %rcx                  # strlen
+.Lnext_strlen:
+    cmpb $0, (%rsi,%rcx)
+    je .Lnext_got
+    inc %rcx
+    jmp .Lnext_strlen
+.Lnext_got:
+    sub $CELL, %r15
+    mov %rsi, (%r15)                # push c-addr
+    sub $CELL, %r15
+    mov %rcx, (%r15)                # push len
+    call forth_shift_args           # consume arg[1]
+    ret
+.Lnext_empty:
+    sub $CELL, %r15
+    movq $0, (%r15)                 # c-addr = 0
+    sub $CELL, %r15
+    movq $0, (%r15)                 # len = 0
+    ret
+
+# BYE-CODE ( n -- ) — exit with status n, silent (no "Goodbye!" banner) so a
+# utility's output is not corrupted.
+.global forth_bye_code
+forth_bye_code:
+    mov (%r15), %rdi                # status = TOS
+    add $CELL, %r15
+    jmp platform_exit
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -3656,7 +3757,14 @@ DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
 DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
 DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
 DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
+DEFWORD dict_argc,       "argc",          forth_argc,      dict_include
+DEFWORD dict_argv,       "argv",          forth_argv,      dict_argc
+DEFWORD dict_arg,        "arg",           forth_arg,       dict_argv
+DEFWORD dict_shift_args, "shift-args",    forth_shift_args, dict_arg
+DEFWORD dict_next_arg,   "next-arg",      forth_next_arg,  dict_shift_args
+DEFWORD dict_bye_code,   "bye-code",      forth_bye_code,  dict_next_arg
 .global dict_include
+.global dict_bye_code
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

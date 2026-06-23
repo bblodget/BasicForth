@@ -23,6 +23,9 @@ _start:
     # envp starts at [RSP + (argc+2)*8]
     mov (%rsp), %rax
     mov %rax, start_argc(%rip)
+    mov %rax, arg_count(%rip)       # mutable count behind the ARGC variable
+    lea 8(%rsp), %rdx               # &argv[0]
+    mov %rdx, arg_base(%rip)        # mutable base behind the ARGV variable
     cmp $2, %rax
     jl .Lno_argv1
     mov 16(%rsp), %rax
@@ -72,7 +75,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_include(%rip), %r12    # LATEST
+    lea dict_bye_code(%rip), %r12   # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -80,11 +83,6 @@ _start:
 
     call platform_init_guard_pages
     call platform_raw_mode
-
-    # Print startup banner
-    lea version_str(%rip), %rsi
-    mov $version_len, %rdx
-    call platform_write
 
     # Try to load core.fs (silent skip if not found)
     lea core_fs_name(%rip), %rax
@@ -97,6 +95,10 @@ _start:
     # If argv[1] was given, load it as a Forth source file
     cmpq $2, start_argc(%rip)
     jl .Lno_cmdline_file
+    # Shift the script (argv[1]) out of the arg vector FIRST, so that while the
+    # script runs its own first argument is arg[1] / the first NEXT-ARG (like
+    # gforth). Loading uses start_argv1, which is independent of the vector.
+    call forth_shift_args
     # Find string length (null-terminated argv)
     mov start_argv1(%rip), %rdi
     mov %rdi, %rsi                  # RSI = start of string
@@ -115,6 +117,19 @@ _start:
     mov %rax, (%r15)                # push length
     call forth_included
 .Lno_cmdline_file:
+
+    # Print the startup banner now, only when actually entering the interactive
+    # REPL — a script that ends in bye/bye-code exits before reaching here — and
+    # only when stdout is a terminal, so piped/redirected output stays clean.
+    # This block sits before the repl_loop label, so it runs exactly once.
+    mov $1, %rdi                    # STDOUT
+    call platform_isatty
+    test %rax, %rax
+    jz .Lno_banner
+    lea version_str(%rip), %rsi
+    mov $version_len, %rdx
+    call platform_write
+.Lno_banner:
 
 .global repl_loop
 repl_loop:
@@ -229,6 +244,14 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+# Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
+# char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.
+.global arg_count
+arg_count:
+    .quad 0
+.global arg_base
+arg_base:
     .quad 0
 .global basicforth_path
 basicforth_path:

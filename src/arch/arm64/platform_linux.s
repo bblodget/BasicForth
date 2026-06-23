@@ -116,6 +116,25 @@ platform_restore_term:
     LDR X30, [SP], #16
     RET
 
+// ---------- ISATTY ----------
+// platform_isatty ( X0=fd -- X0=1 if fd is a terminal, 0 otherwise )
+// Probes with TCGETS: it succeeds on a tty and fails (-ENOTTY) on a
+// pipe/file/redirect. Uses a private scratch buffer so it never disturbs the
+// saved orig_termios used for restore.
+.global platform_isatty
+platform_isatty:
+    MOV X1, #TCGETS
+    ADR X2, isatty_termios
+    MOV X8, #SYS_ioctl
+    SVC #0
+    CMP X0, #0
+    B.LT .Lisatty_no               // negative errno -> not a tty
+    MOV X0, #1
+    RET
+.Lisatty_no:
+    MOV X0, #0
+    RET
+
 // ---------- KEY ----------
 // Read one character from stdin.
 // Returns: X0 = character read
@@ -276,14 +295,20 @@ platform_flush_icache:
     RET
 
 // ---------- BYE ----------
-// Restore terminal and exit.
-.global platform_bye
-platform_bye:
-    STR X30, [SP, #-16]!
+// platform_exit ( X0=status ) — restore terminal and exit with status.
+.global platform_exit
+platform_exit:
+    STP X0, X30, [SP, #-16]!        // preserve status + LR across the call
     BL platform_restore_term
-    MOV X0, #0
+    LDP X0, X30, [SP], #16
     MOV X8, #SYS_exit
     SVC #0
+
+// Restore terminal and exit with status 0.
+.global platform_bye
+platform_bye:
+    MOV X0, #0
+    B platform_exit
 
 // ---------- Guard Pages ----------
 // Set up SIGSEGV handler and mprotect guard pages around the data stack.
@@ -480,6 +505,8 @@ msg_guard_fail: .ascii "fatal: guard page setup failed\n"
 orig_termios:
     .space TERMIOS_SIZE
 raw_termios:
+    .space TERMIOS_SIZE
+isatty_termios:
     .space TERMIOS_SIZE
 
 // Kernel sigaction struct (144 bytes on ARM64: handler+flags+mask, no restorer)

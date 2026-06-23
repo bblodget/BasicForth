@@ -73,6 +73,10 @@ platform_write:
 platform_bye:
     ret
 
+.global platform_exit
+platform_exit:
+    ret
+
 .global platform_open_file
 platform_open_file:
     mov $-2, %rax               # return -ENOENT
@@ -131,6 +135,12 @@ basicforth_path:
     .quad 0
 .global basicforth_path_len
 basicforth_path_len:
+    .quad 0
+.global arg_count
+arg_count:
+    .quad 0
+.global arg_base
+arg_base:
     .quad 0
 
 .text

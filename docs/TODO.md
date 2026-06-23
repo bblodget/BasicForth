@@ -257,7 +257,7 @@ command-line file loading already work; these tiers fill the gaps.
     exit-on-error with a non-zero exit status (a script that errors before
     `bye` currently drops into the REPL rather than failing). Revisit only
     if script exit codes are actually needed.
-- [ ] Tier 3 — Script arguments and exit codes  (NEXT — first branch)
+- [x] Tier 3 — Script arguments and exit codes  (DONE)
   - Enables writing Unix utilities / filters in Forth (read args + stdin,
     return a status). Both invocation forms give the same argv layout:
     `argv[0]`=interpreter, `argv[1]`=auto-loaded script, `argv[2..]`=user args:
@@ -281,6 +281,9 @@ command-line file loading already work; these tiers fill the gaps.
     wrapper); also closes the Tier 2 exit-on-error gap.
   - Mirror x86-64 and ARM64. Integration tests (args + `$?`); doc + example
     `examples/echo.fs` (a Forth `echo`).
+  - Also added (option 2 of the banner decision): the startup banner now
+    prints only when stdout is a terminal, so a utility's piped/redirected
+    stdout is clean. New platform calls: `platform_exit`, `platform_isatty`.
   - NOTE: an arg gives you the *string*; reading that data file is separate —
     see Phase 4 (expose file-read words).
 

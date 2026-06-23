@@ -2949,6 +2949,109 @@ forth_include:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- Command-line arguments (Tier 3) ----------
+// ARGC and ARGV are variables (mirroring gforth): they push the address of the
+// mutable count/base cells, so `argc @` and `argv @` work. arg_base is a char**
+// into the OS argv vector; SHIFT-ARGS / NEXT-ARG consume from the front.
+
+// ARGC ( -- a-addr ) — address of the argument-count cell.
+.global forth_argc
+forth_argc:
+    ADR X9, arg_count
+    STR X9, [X19, #-CELL]!
+    RET
+
+// ARGV ( -- a-addr ) — address of the argv-base cell (a-addr @ -> char**).
+.global forth_argv
+forth_argv:
+    ADR X9, arg_base
+    STR X9, [X19, #-CELL]!
+    RET
+
+// ARG ( u -- c-addr u ) — the uth argument as a string; ( 0 0 ) if out of range.
+.global forth_arg
+forth_arg:
+    LDR X1, [X19]                   // X1 = u (index)
+    ADR X9, arg_count
+    LDR X2, [X9]                    // X2 = count
+    CMP X1, X2
+    B.HS .Larg_oob                  // u >= count (unsigned)
+    ADR X9, arg_base
+    LDR X3, [X9]                    // X3 = char** base
+    LDR X4, [X3, X1, LSL #3]        // X4 = char* = base[u]
+    MOV X5, #0                      // strlen
+.Larg_strlen:
+    LDRB W6, [X4, X5]
+    CBZ W6, .Larg_done
+    ADD X5, X5, #1
+    B .Larg_strlen
+.Larg_done:
+    STR X4, [X19]                   // replace u with c-addr
+    STR X5, [X19, #-CELL]!          // push len
+    RET
+.Larg_oob:
+    MOV X9, #0
+    STR X9, [X19]                   // c-addr = 0
+    STR X9, [X19, #-CELL]!          // len = 0
+    RET
+
+// SHIFT-ARGS ( -- ) — delete arg[1], shifting the rest left and decrementing
+// argc. O(1): copy arg[0] forward into slot 1, then advance the base by a cell
+// (keeps arg[0] = program name). No-op when there is no arg[1] (count < 2).
+.global forth_shift_args
+forth_shift_args:
+    ADR X9, arg_count
+    LDR X0, [X9]
+    CMP X0, #2
+    B.LO .Lshift_done               // count < 2 -> nothing to shift
+    ADR X10, arg_base
+    LDR X1, [X10]                   // char** base
+    LDR X2, [X1]                    // base[0] (program name)
+    STR X2, [X1, #CELL]             // base[1] = base[0]
+    ADD X1, X1, #CELL               // base += 1
+    STR X1, [X10]
+    SUB X0, X0, #1
+    STR X0, [X9]                    // count -= 1
+.Lshift_done:
+    RET
+
+// NEXT-ARG ( -- c-addr u ) — return arg[1] and consume it via SHIFT-ARGS;
+// ( 0 0 ) when no argument remains.
+.global forth_next_arg
+forth_next_arg:
+    ADR X9, arg_count
+    LDR X0, [X9]
+    CMP X0, #2
+    B.LO .Lnext_empty               // no arg[1]
+    ADR X10, arg_base
+    LDR X1, [X10]
+    LDR X4, [X1, #CELL]             // char* = base[1]
+    MOV X5, #0                      // strlen
+.Lnext_strlen:
+    LDRB W6, [X4, X5]
+    CBZ W6, .Lnext_got
+    ADD X5, X5, #1
+    B .Lnext_strlen
+.Lnext_got:
+    STR X4, [X19, #-CELL]!          // push c-addr
+    STR X5, [X19, #-CELL]!          // push len
+    STR X30, [SP, #-16]!            // save LR across the call
+    BL forth_shift_args             // consume arg[1]
+    LDR X30, [SP], #16
+    RET
+.Lnext_empty:
+    MOV X9, #0
+    STR X9, [X19, #-CELL]!          // c-addr = 0
+    STR X9, [X19, #-CELL]!          // len = 0
+    RET
+
+// BYE-CODE ( n -- ) — exit with status n, silent (no "Goodbye!" banner) so a
+// utility's output is not corrupted.
+.global forth_bye_code
+forth_bye_code:
+    LDR X0, [X19], #CELL            // status = TOS, pop
+    B platform_exit
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -3983,7 +4086,14 @@ DEFWORD dict_ms_get,     "ms@",           forth_ms_get,    dict_screen_h
 DEFWORD dict_cursor_off, "cursor-off",    forth_cursor_off, dict_ms_get
 DEFWORD dict_cursor_on,  "cursor-on",     forth_cursor_on, dict_cursor_off
 DEFWORD dict_include,    "include",       forth_include,   dict_cursor_on
+DEFWORD dict_argc,       "argc",          forth_argc,      dict_include
+DEFWORD dict_argv,       "argv",          forth_argv,      dict_argc
+DEFWORD dict_arg,        "arg",           forth_arg,       dict_argv
+DEFWORD dict_shift_args, "shift-args",    forth_shift_args, dict_arg
+DEFWORD dict_next_arg,   "next-arg",      forth_next_arg,  dict_shift_args
+DEFWORD dict_bye_code,   "bye-code",      forth_bye_code,  dict_next_arg
 .global dict_include
+.global dict_bye_code
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

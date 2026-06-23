@@ -11,6 +11,14 @@ if [ $# -eq 0 ]; then
 fi
 FORTH="$*"
 
+# Resolve the repo root from this script's own location (it lives in tests/),
+# so file-path tests work no matter what the caller's working directory is —
+# i.e. the documented "./test_integration.sh <path-to-basicforth>" invocation
+# from any directory, not only from the build dir the Makefile cd's into.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
@@ -426,7 +434,7 @@ assert_output "hex output"         'hex #255 . decimal'       "FF"
 assert_output "hex u. output"      'hex #255 u. decimal'      "FF"
 assert_output "hex input"          ': hex 16 base ! ; FF . decimal'              "FF"
 assert_output "hex $ prefix"       ': hex 16 base ! ; $FF . decimal'             "FF"
-assert_output "dec # in hex"       ': hex 16 base ! ; #100 . decimal'            "64"
+assert_output "dec # in hex"       'hex #100 . decimal'                         "64"
 assert_output "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
 assert_output "bin % prefix"       '%1010 .'                                      "10"
 assert_output "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
@@ -519,8 +527,9 @@ section "System Words"
 # >BODY
 assert_output ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
 
-# >IN
-assert_output ">in"                '>in @ .'                          "0"
+# >IN — reflects the parse offset into the current line. For the fixed input
+# ">in @ .", >in has advanced past ">in @" (to column 5) when @ runs.
+assert_output ">in"                '>in @ .'                          "5"
 
 # SOURCE
 assert_output "source"             ': test source nip ; test .'      ""
@@ -538,7 +547,7 @@ assert_output ">number hex"        ': test hex 0 0 s" FF" >number 2drop . . deci
 assert_output ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
 
 # ENVIRONMENT?
-assert_output "environment?"       's" test" environment? .'         "0"
+assert_output "environment?"       ': et s" test" environment? . ; et'  "0"
 
 # =========================================================================
 section "Core Extension Words"
@@ -860,7 +869,7 @@ fi
 
 # The bundled hello.fs shebang example must keep working (loads cleanly, runs).
 t0=$(date +%s.%N)
-hello_out=$(printf '' | timeout 2 $FORTH ../../../examples/hello.fs 2>&1)
+hello_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/hello.fs" 2>&1)
 t1=$(date +%s.%N)
 ms=$(elapsed_ms "$t0" "$t1")
 update_slowest "$ms" "examples/hello.fs"
@@ -869,6 +878,54 @@ if [[ "$hello_out" == *"*****"* && "$hello_out" == *"42"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  examples/hello.fs\n"
     printf "    Expected: ***** and 42\n    Got:      %s\n" "$(echo "$hello_out" | head -8)"; ((failed++))
+fi
+
+# Tier 3: command-line arguments (argc/argv/arg/next-arg) and exit status.
+# Under a script, argv[1] (the script) is shifted out, so the user's args are
+# arg[1..] and argc counts the interpreter + remaining user args.
+args_dir="$(mktemp -d)"
+# walk all args with next-arg, and report argc
+printf 'argc @ . cr\n: w begin next-arg dup while type space repeat 2drop ; w cr\nbye\n' > "$args_dir/walk.fs"
+# index a specific arg and an out-of-range one
+printf '1 arg type cr\n5 arg . . cr\nbye\n' > "$args_dir/idx.fs"
+# exit status
+printf '7 bye-code\n' > "$args_dir/code.fs"
+
+t0=$(date +%s.%N)
+walk_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$args_dir/walk.fs" alpha beta gamma 2>&1)
+idx_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$args_dir/idx.fs" alpha beta 2>&1)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$args_dir/code.fs" >/dev/null 2>&1; code_status=$?
+echo_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/echo.fs" one two three 2>/dev/null)
+rm -rf "$args_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "script args"
+
+# argc = interpreter + 3 user args = 4, and next-arg yields all three
+if [[ "$walk_out" == *"4"* && "$walk_out" == *"alpha beta gamma"* ]]; then
+    printf "  ${GREEN}PASS${NC}  script args (argc + next-arg)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  script args (argc + next-arg)\n"
+    printf "    Expected: 4 and 'alpha beta gamma'\n    Got:      %s\n" "$(echo "$walk_out" | head -5)"; ((failed++))
+fi
+# 1 arg -> first user arg; 5 arg -> out of range (0 0)
+if [[ "$idx_out" == *"alpha"* && "$idx_out" == *"0 0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  arg indexing + out-of-range\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  arg indexing + out-of-range\n"
+    printf "    Expected: alpha and '0 0'\n    Got:      %s\n" "$(echo "$idx_out" | head -5)"; ((failed++))
+fi
+# bye-code sets the process exit status
+if [[ "$code_status" == "7" ]]; then
+    printf "  ${GREEN}PASS${NC}  bye-code exit status\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bye-code exit status\n"
+    printf "    Expected: 7\n    Got:      %s\n" "$code_status"; ((failed++))
+fi
+# the bundled echo.fs utility prints its args, with clean (banner-free) stdout
+if [[ "$echo_out" == "one two three" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/echo.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/echo.fs\n"
+    printf "    Expected: 'one two three' (exact)\n    Got:      %s\n" "$(echo "$echo_out" | head -5)"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)
