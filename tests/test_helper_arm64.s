@@ -67,6 +67,10 @@ platform_write:
 platform_bye:
     RET
 
+.global platform_exit
+platform_exit:
+    RET
+
 .global platform_open_file
 platform_open_file:
     MOV X0, #-2                     // return -ENOENT
@@ -125,6 +129,12 @@ basicforth_path:
     .quad 0
 .global basicforth_path_len
 basicforth_path_len:
+    .quad 0
+.global arg_count
+arg_count:
+    .quad 0
+.global arg_base
+arg_base:
     .quad 0
 
 .text

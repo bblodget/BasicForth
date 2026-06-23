@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Script arguments and exit status (Unix `#!` Tier 3)
+- Command-line arguments are now exposed to Forth, mirroring gforth:
+  - `argc` — variable holding the current argument count
+  - `argv` — variable holding a pointer to the argument vector
+  - `arg ( u -- c-addr u )` — the uth argument as a string (`0 0` if out of range)
+  - `next-arg ( -- c-addr u )` — return the next argument and consume it
+  - `shift-args ( -- )` — drop the first argument, decrementing `argc`
+  - At startup the auto-loaded script is shifted out, so a script's first
+    argument is `arg[1]` / the first `next-arg`.
+- `bye-code ( n -- )` — exit with status `n`, silently (no "Goodbye!"), so a
+  utility's stdout is not corrupted. Plain `bye` is unchanged.
+- The startup banner is now printed only when entering the interactive REPL
+  (a script ending in `bye`/`bye-code` exits first) and only when stdout is a
+  terminal, so a script used as a Unix utility produces clean stdout whether
+  its output goes to a terminal, a pipe, or a file. New platform calls:
+  `platform_exit`, `platform_isatty`.
+- New `examples/echo.fs` — a Forth `echo` utility (executable `#!` script).
+- Fixed three integration tests that had been matching substrings in the
+  startup banner (`0` from `v0.5.0`, `64` from `x86-64`) rather than real
+  command output; they now assert actual output.
+
 ### BASICFORTH_PATH multi-directory search
 - `BASICFORTH_PATH` now accepts a colon-separated list of directories
   (like `PATH`). On a CWD miss, each directory is searched in order and
@@ -35,8 +56,9 @@
   cell per character). Redefined as the standard `[char] ) parse type`.
 
 ### Testing
-- 119 unit tests + 303 integration tests (multi-directory, nested-INCLUDE
-  error-context, `#!` script, and bundled-example cases)
+- 119 unit tests + 309 integration tests (multi-directory, nested-INCLUDE
+  error-context, `#!` script, script-argument/`bye-code`, and bundled-example
+  cases)
 
 ---
 

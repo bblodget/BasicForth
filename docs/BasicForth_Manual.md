@@ -169,12 +169,51 @@ Error line numbers still count the shebang as line 1, so they match the
 file's physical lines.
 
 Notes:
-- End the script with `bye`; otherwise BasicForth enters the interactive
-  REPL after the script runs. (A run-and-exit flag is a planned addition.)
+- End the script with `bye` (or `0 bye-code`); otherwise BasicForth enters
+  the interactive REPL after the script runs.
 - `core.fs` is still loaded from the current directory or `BASICFORTH_PATH`,
   so set `BASICFORTH_PATH` if the script is run from an arbitrary directory.
 - With `#!/usr/bin/env basicforth`, `basicforth` must be on your `PATH`;
   alternatively use an absolute path to the binary.
+- The startup banner is printed only when BasicForth enters the interactive
+  REPL (a script ending in `bye`/`bye-code` exits first) and only when stdout
+  is a terminal, so a script run as a utility produces clean output whether its
+  output goes to a terminal, a pipe, or a file.
+
+### Command-Line Arguments
+
+Scripts can read their arguments, mirroring gforth:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `argc` | ( -- a-addr ) | variable: number of arguments (`argc @`) |
+| `argv` | ( -- a-addr ) | variable: pointer to the argument vector |
+| `arg` | ( u -- c-addr u ) | the uth argument as a string; `0 0` if out of range |
+| `next-arg` | ( -- c-addr u ) | return the next argument and consume it; `0 0` when none remain |
+| `shift-args` | ( -- ) | drop the first argument, decrementing `argc` |
+
+The auto-loaded script itself is removed from the vector at startup, so a
+script's own first argument is `arg[1]` and the first `next-arg`. `arg[0]`
+is the interpreter name. Both of these pass `level1.txt` as the first
+argument:
+
+```
+basicforth game.fs level1.txt        # game.fs is the script
+./game.fs level1.txt                 # shebang launcher, same result
+```
+
+### Exiting With a Status
+
+`bye-code ( n -- )` exits with status `n` (visible to the shell as `$?`)
+and prints nothing, so a utility's output is not corrupted. Plain `bye`
+prints `Goodbye!` and exits 0, for interactive use.
+
+```forth
+matched? if  0 bye-code  else  1 bye-code  then
+```
+
+See `examples/echo.fs` for a small Unix utility (a Forth `echo`) that uses
+`next-arg` and `bye-code`.
 
 ## The Prompt
 
