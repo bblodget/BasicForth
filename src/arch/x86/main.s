@@ -84,6 +84,10 @@ _start:
     call platform_init_guard_pages
     call platform_raw_mode
 
+    # Initialize rp0 before any startup load, so a fault/ABORT during core.fs
+    # or the script recovers onto a valid return stack (repl_loop re-saves it).
+    mov %rsp, rp0(%rip)
+
     # Try to load core.fs (silent skip if not found)
     lea core_fs_name(%rip), %rax
     sub $CELL, %r15
@@ -115,7 +119,14 @@ _start:
     sub $CELL, %r15
     movslq %ecx, %rax
     mov %rax, (%r15)                # push length
+    # Mark that we are running the user script: any error (a line error
+    # returned here, or a fault/ABORT that recovers into repl_loop) must exit
+    # non-zero instead of dropping into the REPL, like a failing Unix utility.
+    movq $1, script_running(%rip)
     call forth_included
+    test %rax, %rax
+    jnz .Lscript_error              # line error — message already printed
+    movq $0, script_running(%rip)   # script completed cleanly
 .Lno_cmdline_file:
 
     # Print the startup banner now, only when actually entering the interactive
@@ -133,6 +144,12 @@ _start:
 
 .global repl_loop
 repl_loop:
+    # If a startup script faulted or ABORTed, recovery lands here with
+    # script_running still set (the clean-completion path clears it first) —
+    # exit non-zero rather than entering the interactive REPL.
+    cmpq $0, script_running(%rip)
+    jne .Lscript_error
+
     # Save return stack pointer for error recovery
     mov %rsp, rp0(%rip)
 
@@ -201,6 +218,15 @@ repl_bye:
     add $CELL, %r15                 # drop 0 count
     jmp forth_bye
 
+# A startup script aborted — either INCLUDED returned an error for a bad line,
+# or a fault/ABORT/QUIT recovered into repl_loop with script_running still set.
+# Exit non-zero (silently; the diagnostic was already printed) so the script
+# fails like a Unix utility instead of dropping into the REPL.
+.Lscript_error:
+    movq $0, script_running(%rip)
+    mov $1, %rdi
+    jmp platform_exit
+
 # ---------- Error Handlers ----------
 # Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 # in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -244,6 +270,10 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+# Non-zero while the startup script (argv[1]) is executing; an error during that
+# window exits non-zero instead of dropping into the REPL. Only main.s uses it.
+script_running:
     .quad 0
 # Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
 # char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.

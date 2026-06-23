@@ -255,8 +255,13 @@ command-line file loading already work; these tiers fill the gaps.
     answer and is good enough.
   - The only thing a flag would add over the `bye` convention is clean
     exit-on-error with a non-zero exit status (a script that errors before
-    `bye` currently drops into the REPL rather than failing). Revisit only
-    if script exit codes are actually needed.
+    `bye` currently drops into the REPL rather than failing).
+  - UPDATE (2026-06): that remaining gap is now closed without a flag. A
+    `script_running` flag is set around the startup script load; an error
+    during it — a line error returned by INCLUDED, or a fault/ABORT/QUIT that
+    recovers into repl_loop — exits non-zero instead of entering the REPL.
+    (`rp0` is now initialized before the startup load so a fault there recovers
+    onto a valid return stack.) core.fs load errors still drop to the REPL.
 - [x] Tier 3 — Script arguments and exit codes  (DONE)
   - Enables writing Unix utilities / filters in Forth (read args + stdin,
     return a status). Both invocation forms give the same argv layout:

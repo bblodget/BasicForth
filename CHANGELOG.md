@@ -23,6 +23,17 @@
   startup banner (`0` from `v0.5.0`, `64` from `x86-64`) rather than real
   command output; they now assert actual output.
 
+### Scripts exit non-zero on error
+- A startup script that errors — an undefined word, a failed parse, a stack
+  underflow, `ABORT`/`QUIT` — now prints its diagnostic and exits with a
+  non-zero status instead of dropping into the interactive REPL, so a Forth
+  utility fails like any other Unix program. Errors while loading `core.fs`
+  still drop to the REPL (a broken bootstrap is a development problem).
+- Internally: a `script_running` flag scopes this to the user script, and
+  `rp0` is now initialized before the startup load so a fault during it
+  recovers onto a valid return stack (previously `rp0` was only set on REPL
+  entry — a latent bug for faults during startup).
+
 ### BASICFORTH_PATH multi-directory search
 - `BASICFORTH_PATH` now accepts a colon-separated list of directories
   (like `PATH`). On a CWD miss, each directory is searched in order and

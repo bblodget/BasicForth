@@ -90,6 +90,12 @@ _start:
     BL platform_init_guard_pages
     BL platform_raw_mode
 
+    // Initialize rp0 before any startup load, so a fault/ABORT during core.fs
+    // or the script recovers onto a valid return stack (repl_loop re-saves it).
+    MOV X9, SP
+    ADR X10, rp0
+    STR X9, [X10]
+
     // Try to load core.fs (silent skip if not found)
     ADR X9, core_fs_name
     STR X9, [X19, #-CELL]!         // push c-addr
@@ -119,7 +125,16 @@ _start:
     // Push ( c-addr u ) and call INCLUDED
     STR X0, [X19, #-CELL]!         // push c-addr
     STR X1, [X19, #-CELL]!         // push length
+    // Mark that we are running the user script: any error (a line error
+    // returned here, or a fault/ABORT that recovers into repl_loop) must exit
+    // non-zero instead of dropping into the REPL, like a failing Unix utility.
+    MOV X9, #1
+    ADR X10, script_running
+    STR X9, [X10]
     BL forth_included
+    CBNZ X0, .Lscript_error        // line error — message already printed
+    ADR X10, script_running
+    STR XZR, [X10]                 // script completed cleanly
 .Lno_cmdline_file:
 
     // Print the startup banner now, only when actually entering the interactive
@@ -136,6 +151,13 @@ _start:
 
 .global repl_loop
 repl_loop:
+    // If a startup script faulted or ABORTed, recovery lands here with
+    // script_running still set (the clean-completion path clears it first) —
+    // exit non-zero rather than entering the interactive REPL.
+    ADR X9, script_running
+    LDR X9, [X9]
+    CBNZ X9, .Lscript_error
+
     // Save return stack pointer for error recovery
     MOV X9, SP
     ADR X10, rp0
@@ -210,6 +232,16 @@ repl_bye:
     ADD X19, X19, #CELL             // drop 0 count
     B forth_bye
 
+// A startup script aborted — either INCLUDED returned an error for a bad line,
+// or a fault/ABORT/QUIT recovered into repl_loop with script_running still set.
+// Exit non-zero (silently; the diagnostic was already printed) so the script
+// fails like a Unix utility instead of dropping into the REPL.
+.Lscript_error:
+    ADR X10, script_running
+    STR XZR, [X10]
+    MOV X0, #1
+    B platform_exit
+
 // ---------- Error Handlers ----------
 // Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 // in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -259,6 +291,11 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+// Non-zero while the startup script (argv[1]) is executing; an error during
+// that window exits non-zero instead of dropping into the REPL. Only main.s
+// uses it.
+script_running:
     .quad 0
 // Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
 // char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.

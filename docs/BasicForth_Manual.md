@@ -171,6 +171,12 @@ file's physical lines.
 Notes:
 - End the script with `bye` (or `0 bye-code`); otherwise BasicForth enters
   the interactive REPL after the script runs.
+- If the script hits an error (an undefined word, a failed parse, a stack
+  underflow, `ABORT`, …), BasicForth prints the diagnostic and exits with a
+  non-zero status instead of dropping into the REPL — so a Forth utility fails
+  like any other Unix program. (Errors while loading `core.fs` still drop to
+  the REPL, since a broken bootstrap is a development problem, not a script
+  failure.)
 - `core.fs` is still loaded from the current directory or `BASICFORTH_PATH`,
   so set `BASICFORTH_PATH` if the script is run from an arbitrary directory.
 - With `#!/usr/bin/env basicforth`, `basicforth` must be on your `PATH`;
@@ -211,6 +217,10 @@ prints `Goodbye!` and exits 0, for interactive use.
 ```forth
 matched? if  0 bye-code  else  1 bye-code  then
 ```
+
+A script that errors before reaching `bye`/`bye-code` exits with status `1`
+automatically (see the Notes above), so you only need an explicit `bye-code`
+to return a *specific* status on success or on a handled condition.
 
 See `examples/echo.fs` for a small Unix utility (a Forth `echo`) that uses
 `next-arg` and `bye-code`.
