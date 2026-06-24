@@ -273,6 +273,7 @@ the ANS File-Access wordset:
 | `create-file` | ( c-addr u fam -- fileid ior ) | create or truncate, then open (mode 0666) |
 | `close-file` | ( fileid -- ior ) | close |
 | `read-file` | ( c-addr u1 fileid -- u2 ior ) | read up to u1 bytes; u2 = actual, 0 at end of file |
+| `read-line` | ( c-addr u1 fileid -- u2 flag ior ) | read one line (≤ u1 chars); newline not stored; flag false only at end of file |
 | `file-size` | ( fileid -- ud ior ) | size in bytes, as a double |
 
 Every operation returns an `ior` (`0` success, else the positive `errno`).
@@ -290,12 +291,33 @@ create buf 4096 allot
     r> close-file drop ;
 ```
 
+`read-line` returns one line per call into a buffer — the newline (and a CR
+immediately before it) are not stored, and `flag` is false only once end of
+file is reached with nothing left to read, which is the loop's stop signal. At
+most `u1` characters are stored, so size the buffer for your longest line; a
+line longer than `u1` fills the buffer and the rest of that line is discarded,
+so the next call starts at the following line.
+
+```forth
+create line 256 allot
+: cat-lines ( c-addr u -- )
+    r/o open-file if drop exit then        ( fileid )       \ bail on open error
+    >r
+    begin  line 256 r@ read-line drop  while                 ( u2 )
+        line swap stdout write-line drop   \ write-line re-adds the newline
+    repeat drop
+    r> close-file drop ;
+```
+
 `create-file` pairs with `write-file` (above) to produce files. See
 `examples/cat.fs` for a complete Forth `cat` — args → `open-file` → `read-file`
 loop → `write-file` to stdout → `close-file`, with errors on stderr and a
-non-zero exit on failure. `examples/sort.fs` goes further: it slurps a file
-with `file-size`/`read-file`, sorts the lines with `compare`, and writes
-`<name>_sorted.<ext>` with `create-file`/`write-line`.
+non-zero exit on failure. `examples/cat-lines.fs` is the same program written
+with `read-line`/`write-line` instead, so you can compare the byte-exact and
+line-oriented styles side by side (the line version normalizes CRLF to LF).
+`examples/sort.fs` goes further: it slurps a file with `file-size`/`read-file`,
+sorts the lines with `compare`, and writes `<name>_sorted.<ext>` with
+`create-file`/`write-line`.
 
 ## The Prompt
 
