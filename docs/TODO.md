@@ -174,9 +174,13 @@ completed. See Planning.md for high-level vision and design decisions.
   no cross-call state, so multiple files / reused fds are always safe. Defined
   in core.fs on top of `read-file` (one byte per read()), so no new asm/platform
   code — a buffered version can replace it later behind the same interface.
-- [ ] Block storage (file-backed) or file-based source loading
-- [ ] LOAD, LIST, THRU (or INCLUDE for file-based)
-- [ ] SAVE / persistence of user definitions
+- Block storage / `LOAD` / `LIST` / `THRU` (Forth screens) — **Won't do.** Block
+  screens are a historical storage model; BasicForth already loads source from
+  files via `INCLUDE`/`INCLUDED`, and the Phase 4 file-access words cover real
+  file I/O, so block storage adds little.
+- [ ] SAVE / persistence of user definitions (under discussion — leaning toward
+  source-replay: log accepted definition text, `SAVE` writes it, startup can
+  re-`INCLUDE` it)
 
 ---
 
