@@ -19,14 +19,15 @@
 create catbuf 4096 allot
 0 value exit-status
 
-: cat-fd ( fileid -- )                  \ copy fileid to stdout until EOF
+: cat-fd ( fileid -- )                  \ copy fileid to stdout; flag any I/O error
     >r
     begin
         catbuf 4096 r@ read-file        ( u2 ior )
-        drop                            ( u2 )   \ a read error ends the copy
+        if drop  1 to exit-status  r> drop exit then   \ read error: stop, fail
         dup 0>
     while                               ( u2 )
-        catbuf swap stdout write-file drop
+        catbuf swap stdout write-file   ( ior )
+        if 1 to exit-status  r> drop exit then          \ write error: stop, fail
     repeat
     drop  r> drop ;
 
@@ -41,7 +42,7 @@ create catbuf 4096 allot
     then
     nip nip                             ( fileid )
     dup cat-fd
-    close-file drop ;
+    close-file if 1 to exit-status then ;
 
 : cat ( -- )
     next-arg dup 0= if
