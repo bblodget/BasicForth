@@ -1123,6 +1123,16 @@ if [[ "$cat_noarg" == "2" ]]; then
 else
     printf "  ${RED}FAIL${NC}  examples/cat.fs no-args → exit 2\n    Expected: 2\n    Got:      %s\n" "$cat_noarg"; ((failed++))
 fi
+# A read error must not be silently swallowed: a directory opens but read-file
+# returns EISDIR, so cat must exit non-zero.
+cd_dir="$(mktemp -d)"; mkdir -p "$cd_dir/sub"
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat.fs" "$cd_dir/sub" >/dev/null 2>&1; cat_rderr=$?
+rm -rf "$cd_dir"
+if [[ "$cat_rderr" != "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat.fs read error → non-zero\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat.fs read error → non-zero\n    Expected: non-zero\n    Got:      %s\n" "$cat_rderr"; ((failed++))
+fi
 
 # The bundled sort.fs utility: sort a file's lines into <name>_sorted.<ext>.
 so_dir="$(mktemp -d)"

@@ -27,7 +27,7 @@
     then
     0 >r                                \ count on the return stack
     begin   ( c-addr u )
-        stdout write-line drop          \ the data → stdout, one line each
+        stdout write-line if 1 bye-code then   \ data → stdout; fail if it can't be written
         r> 1+ >r                        \ bump count
         next-arg dup 0=                 \ ( c-addr u flag )
     until
