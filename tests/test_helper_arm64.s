@@ -84,6 +84,21 @@ platform_open_file:
     MOV X0, #-2                     // return -ENOENT
     RET
 
+.global platform_open_file_mode
+platform_open_file_mode:
+    MOV X0, #-2                     // return -ENOENT
+    RET
+
+.global platform_create_file
+platform_create_file:
+    MOV X0, #-2                     // return -ENOENT
+    RET
+
+.global platform_read_file
+platform_read_file:
+    MOV X0, #0                      // return 0 (EOF)
+    RET
+
 .global platform_fstat
 platform_fstat:
     MOV X0, #0

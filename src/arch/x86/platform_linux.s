@@ -529,6 +529,11 @@ stat_buf:
 
 .equ AT_FDCWD,    -100
 .equ O_RDONLY,    0
+.equ O_WRONLY,    1
+.equ O_RDWR,      2
+.equ O_CREAT,     64        # 0100 octal
+.equ O_TRUNC,     512       # 01000 octal
+.equ CREATE_MODE, 438       # 0666 octal
 .equ PROT_READ,   1
 .equ MAP_PRIVATE, 2
 
@@ -537,13 +542,12 @@ stat_buf:
 
 .text
 
-# platform_open_file ( RSI=path RDX=len -- RAX=fd )
-# Copies path to scratch buffer, null-terminates, opens with O_RDONLY.
-# Returns fd (>=0) or negative errno on failure.
-.global platform_open_file
-platform_open_file:
-    push %rbx
-
+# platform_open_file_mode ( RSI=path RDX=len R8=flags R9=mode -- RAX=fd )
+# Copies path to scratch buffer, null-terminates, opens with the given open
+# flags and mode. Returns fd (>=0) or negative errno on failure. R8/R9 survive
+# the path copy (rep movsb only touches RDI/RSI/RCX).
+.global platform_open_file_mode
+platform_open_file_mode:
     # Copy path to scratch buffer and null-terminate
     lea path_scratch(%rip), %rdi
     mov %rdx, %rcx              # count = len
@@ -555,28 +559,44 @@ platform_open_file:
     rep movsb
     movb $0, (%rdi)             # null terminate
 
-    # openat(AT_FDCWD, path, O_RDONLY, 0)
+    # openat(AT_FDCWD, path, flags, mode)
     mov $SYS_openat, %rax
     mov $AT_FDCWD, %rdi
     lea path_scratch(%rip), %rsi
-    xor %edx, %edx              # O_RDONLY = 0
-    xor %r10d, %r10d            # mode = 0
+    mov %r8, %rdx              # flags
+    mov %r9, %r10             # mode
     syscall
-
-    pop %rbx
     ret
 
+# platform_open_file ( RSI=path RDX=len -- RAX=fd )
+# Thin wrapper: open existing file read-only (used by INCLUDED).
+.global platform_open_file
+platform_open_file:
+    xor %r8d, %r8d             # flags = O_RDONLY (0)
+    xor %r9d, %r9d             # mode = 0
+    jmp platform_open_file_mode
+
+# platform_create_file ( RSI=path RDX=len R8=fam -- RAX=fd )
+# Create or truncate a file: open with fam | O_CREAT | O_TRUNC, mode 0666.
+.global platform_create_file
+platform_create_file:
+    or $(O_CREAT | O_TRUNC), %r8
+    mov $CREATE_MODE, %r9
+    jmp platform_open_file_mode
+
 # platform_fstat ( RDI=fd -- RAX=size )
-# Returns file size via fstat.
+# Returns file size via fstat, or a negative errno if the fstat syscall fails.
 .global platform_fstat
 platform_fstat:
-    mov %rdi, %rbx              # save fd (not needed but clear)
     mov $SYS_fstat, %rax
     # RDI already = fd
     lea stat_buf(%rip), %rsi
     syscall
+    test %rax, %rax
+    js .Lfstat_done            # syscall failed → return -errno (already in RAX)
     # Extract st_size
     mov stat_buf+STAT_ST_SIZE(%rip), %rax
+.Lfstat_done:
     ret
 
 # platform_mmap_file ( RDI=fd RSI=size -- RAX=addr )
@@ -601,10 +621,18 @@ platform_munmap:
     syscall
     ret
 
-# platform_close_file ( RDI=fd -- )
+# platform_close_file ( RDI=fd -- RAX=0 or -errno )
 .global platform_close_file
 platform_close_file:
     mov $SYS_close, %rax
+    syscall
+    ret
+
+# platform_read_file ( RDI=fd RSI=buf RDX=count -- RAX=bytes read or -errno )
+# Single read() of up to count bytes. RAX is 0 at end of file.
+.global platform_read_file
+platform_read_file:
+    mov $SYS_read, %rax
     syscall
     ret
 

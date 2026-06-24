@@ -218,18 +218,39 @@ See [Error_Handling.md](Error_Handling.md) for details.
 | **Output**   | none (fatal on failure) | none (fatal on failure) |
 | **Syscall**  | mprotect, rt_sigaction | mprotect, rt_sigaction |
 
+### platform_open_file_mode
+
+Open a file with caller-supplied flags and mode. Copies the path to a scratch
+buffer, null-terminates it, and calls openat. Backs `OPEN-FILE`/`CREATE-FILE`.
+
+|              | ARM64                                      | x86-64                                     |
+|--------------|--------------------------------------------|--------------------------------------------|
+| **Input**    | X0 = path, X1 = len, X2 = flags, X3 = mode | RSI = path, RDX = len, R8 = flags, R9 = mode |
+| **Output**   | X0 = fd (or negative errno)                | RAX = fd (or negative errno)               |
+| **Syscall**  | openat(AT_FDCWD, path, flags, mode) #56    | openat(AT_FDCWD, path, flags, mode) #257   |
+
 ### platform_open_file
 
-Open a file for reading. Copies path to a scratch buffer, null-terminates
-it, and calls openat with O_RDONLY.
+Open an existing file read-only. Thin wrapper: sets flags = O_RDONLY, mode = 0
+and jumps to `platform_open_file_mode`, so `forth_included` is unchanged.
 
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|
 | **Input**    | X0 = path, X1 = length            | RSI = path, RDX = length           |
 | **Output**   | X0 = fd (or negative errno)        | RAX = fd (or negative errno)       |
-| **Syscall**  | openat(AT_FDCWD, path, 0, 0) #56  | openat(AT_FDCWD, path, 0, 0) #257 |
 
-Returns -2 (ENOENT) if file not found. Used by `forth_included`.
+Returns -2 (ENOENT) if file not found.
+
+### platform_create_file
+
+Create or truncate a file, then open it. Wrapper that ORs `O_CREAT | O_TRUNC`
+into the given access method, sets mode 0666, and jumps to
+`platform_open_file_mode`. Backs `CREATE-FILE`.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = path, X1 = len, X2 = fam     | RSI = path, RDX = len, R8 = fam    |
+| **Output**   | X0 = fd (or negative errno)        | RAX = fd (or negative errno)       |
 
 ### platform_fstat
 
@@ -238,10 +259,11 @@ Get file size via fstat.
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|
 | **Input**    | X0 = fd                            | RDI = fd                           |
-| **Output**   | X0 = file size                     | RAX = file size                    |
+| **Output**   | X0 = file size, or negative errno  | RAX = file size, or negative errno |
 | **Syscall**  | fstat(fd, &stat_buf) #80           | fstat(fd, &stat_buf) #5           |
 
-Extracts st_size from offset 48 in the stat structure.
+Extracts st_size from offset 48 in the stat structure; returns the negative
+errno if the syscall fails. Used by `forth_included` and `FILE-SIZE`.
 
 ### platform_mmap_file
 
@@ -272,7 +294,19 @@ Close a file descriptor.
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|
 | **Input**    | X0 = fd                            | RDI = fd                           |
+| **Output**   | X0 = 0, or negative errno          | RAX = 0, or negative errno         |
 | **Syscall**  | close(fd) #57                      | close(fd) #3                      |
+
+### platform_read_file
+
+Read up to `count` bytes from a file descriptor into a buffer. Backs
+`READ-FILE`. A single `read()` is issued; the result is 0 at end of file.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = fd, X1 = buf, X2 = count      | RDI = fd, RSI = buf, RDX = count   |
+| **Output**   | X0 = bytes read, or negative errno | RAX = bytes read, or negative errno |
+| **Syscall**  | read(fd, buf, count) #63           | read(fd, buf, count) #0           |
 
 ### platform_flush_icache (ARM64 only)
 
@@ -530,7 +564,6 @@ Functions to be added as BasicForth grows:
 
 | Function            | Purpose                                       | Phase |
 |---------------------|-----------------------------------------------|-------|
-| platform_read_file  | Read from file descriptor                     |     4 |
 | platform_lseek      | Seek within file                              |     4 |
 | platform_fork_exec  | Fork and exec external process (for $EDITOR)  |     4 |
 | platform_fb_open    | Open framebuffer or DRM device                |     5 |

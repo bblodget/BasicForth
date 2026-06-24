@@ -3081,6 +3081,104 @@ forth_write_file:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- File access (Phase 4) ----------
+// fileid is a raw OS file descriptor; ior is 0 on success, else positive errno.
+
+// OPEN-FILE   ( c-addr u fam -- fileid ior )  open an existing file
+// CREATE-FILE ( c-addr u fam -- fileid ior )  create/truncate (mode 0666)
+// fam is the access method from R/O (0), W/O (1) or R/W (2).
+.global forth_open_file
+forth_open_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X2, [X19]                   // flags = fam (R/O=0, W/O=1, R/W=2 = OS flags)
+    MOV X3, #0                      // mode = 0
+    LDR X1, [X19, #CELL]            // u (path length)
+    LDR X0, [X19, #2*CELL]          // c-addr (path)
+    ADD X19, X19, #CELL             // pop fam → ( c-addr u )
+    BL platform_open_file_mode      // X0 = fd or -errno
+    B .Lopen_result
+.global forth_create_file
+forth_create_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X2, [X19]                   // fam (platform adds O_CREAT|O_TRUNC, mode 0666)
+    LDR X1, [X19, #CELL]            // u (path length)
+    LDR X0, [X19, #2*CELL]          // c-addr (path)
+    ADD X19, X19, #CELL             // pop fam → ( c-addr u )
+    BL platform_create_file         // X0 = fd or -errno
+.Lopen_result:
+    CMP X0, #0
+    B.LT .Lopen_err
+    STR X0, [X19, #CELL]            // fileid = fd (c-addr slot)
+    STR XZR, [X19]                  // ior = 0 (u slot)
+    LDP X29, X30, [SP], #16
+    RET
+.Lopen_err:
+    NEG X0, X0                      // errno
+    STR XZR, [X19, #CELL]           // fileid = 0
+    STR X0, [X19]                   // ior = errno
+    LDP X29, X30, [SP], #16
+    RET
+
+// CLOSE-FILE ( fileid -- ior )
+.global forth_close_file
+forth_close_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19]                   // fileid
+    BL platform_close_file          // X0 = 0 or -errno
+    CMP X0, #0
+    B.LT .Lclose_err
+    STR XZR, [X19]                  // ior = 0
+    LDP X29, X30, [SP], #16
+    RET
+.Lclose_err:
+    NEG X0, X0
+    STR X0, [X19]                   // ior = errno
+    LDP X29, X30, [SP], #16
+    RET
+
+// READ-FILE ( c-addr u1 fileid -- u2 ior )  read up to u1 bytes; u2 = actual
+.global forth_read_file
+forth_read_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19]                   // fileid
+    LDR X2, [X19, #CELL]            // u1 (count)
+    LDR X1, [X19, #2*CELL]          // c-addr (buffer)
+    ADD X19, X19, #CELL             // pop fileid → ( c-addr u1 )
+    BL platform_read_file           // X0 = bytes read or -errno
+    CMP X0, #0
+    B.LT .Lread_err
+    STR X0, [X19, #CELL]            // u2 = bytes (c-addr slot)
+    STR XZR, [X19]                  // ior = 0
+    LDP X29, X30, [SP], #16
+    RET
+.Lread_err:
+    NEG X0, X0
+    STR XZR, [X19, #CELL]           // u2 = 0
+    STR X0, [X19]                   // ior = errno
+    LDP X29, X30, [SP], #16
+    RET
+
+// FILE-SIZE ( fileid -- ud ior )  file size as a double cell, via fstat
+.global forth_file_size
+forth_file_size:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19]                   // fileid
+    BL platform_fstat               // X0 = size or -errno
+    CMP X0, #0
+    B.LT .Lfsize_err
+    STR X0, [X19]                   // ud-lo = size (overwrite fileid)
+    STR XZR, [X19, #-CELL]!         // push ud-hi = 0
+    STR XZR, [X19, #-CELL]!         // push ior = 0
+    LDP X29, X30, [SP], #16
+    RET
+.Lfsize_err:
+    NEG X0, X0                      // errno
+    STR XZR, [X19]                  // ud-lo = 0
+    STR XZR, [X19, #-CELL]!         // push ud-hi = 0
+    STR X0, [X19, #-CELL]!          // push ior = errno
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -4122,8 +4220,13 @@ DEFWORD dict_shift_args, "shift-args",    forth_shift_args, dict_arg
 DEFWORD dict_next_arg,   "next-arg",      forth_next_arg,  dict_shift_args
 DEFWORD dict_bye_code,   "bye-code",      forth_bye_code,  dict_next_arg
 DEFWORD dict_write_file, "write-file",    forth_write_file, dict_bye_code
+DEFWORD dict_open_file,   "open-file",    forth_open_file,   dict_write_file
+DEFWORD dict_create_file, "create-file",  forth_create_file, dict_open_file
+DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
+DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
+DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
 .global dict_include
-.global dict_write_file
+.global dict_file_size
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

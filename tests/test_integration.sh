@@ -1053,6 +1053,50 @@ else
     printf "    Expected: 2\n    Got:      %s\n" "$lines_noarg"; ((failed++))
 fi
 
+# File-access words: open-file / read-file / close-file, file-size, and a
+# create-file + write-file + reopen roundtrip. Run from a script (s" is
+# compile-only) reading a fixture file. ." prints at runtime (unlike .().
+fa_dir="$(mktemp -d)"
+printf 'hello' > "$fa_dir/data.txt"        # 5 bytes, no trailing newline
+cat > "$fa_dir/fa.fs" <<FAEOF
+create fabuf 128 allot
+: t
+   s" $fa_dir/data.txt" r/o open-file drop          ( fileid )
+   dup file-size drop drop ." SZ=" . cr             ( fileid )
+   >r fabuf 128 r@ read-file drop ." RD=" fabuf swap type cr
+   r> close-file drop
+   s" $fa_dir/out.txt" w/o create-file drop >r
+   s" WROTE" r@ write-file drop r> close-file drop
+   s" $fa_dir/missing" r/o open-file ." MISS=" . drop cr ;
+t bye
+FAEOF
+t0=$(date +%s.%N)
+fa_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$fa_dir/fa.fs" 2>/dev/null)
+fa_disk=$(cat "$fa_dir/out.txt" 2>/dev/null)
+rm -rf "$fa_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "file-access words"
+
+if [[ "$fa_out" == *"SZ=5"* ]]; then
+    printf "  ${GREEN}PASS${NC}  file-size\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  file-size\n    Expected: SZ=5\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_out" == *"RD=hello"* ]]; then
+    printf "  ${GREEN}PASS${NC}  open-file + read-file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  open-file + read-file\n    Expected: RD=hello\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_out" == *"MISS=2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  open-file missing → ior 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  open-file missing → ior 2\n    Expected: MISS=2\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_disk" == "WROTE" ]]; then
+    printf "  ${GREEN}PASS${NC}  create-file + write-file roundtrip\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  create-file + write-file roundtrip\n    Expected: WROTE\n    Got:      %s\n" "$fa_disk"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

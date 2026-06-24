@@ -277,3 +277,10 @@ create (write-nl) 10 c,
 : write-line ( c-addr u fileid -- ior )
         dup >r write-file ?dup if r> drop exit then
         (write-nl) 1 r> write-file ;
+
+\ File-access methods (fam): the values passed to OPEN-FILE / CREATE-FILE.
+\ They are the OS open() flags; BIN is a no-op (Linux has no text/binary mode).
+0 constant r/o
+1 constant w/o
+2 constant r/w
+: bin ( fam1 -- fam2 ) ;

@@ -84,5 +84,5 @@ inside the system it's testing.
 | Layer              | Approach           | Status                          |
 |--------------------|--------------------|---------------------------------|
 | `core.s`           | C harness (unit)   | 119 tests, both arches          |
-| Full binary        | Shell integration   | 318 tests, both arches          |
+| Full binary        | Shell integration   | 327 tests, both arches          |
 | `core.fs`          | Forth testbench    | Future                          |

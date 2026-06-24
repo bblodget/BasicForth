@@ -160,14 +160,14 @@ completed. See Planning.md for high-level vision and design decisions.
   `write-file`/`write-line ( c-addr u fileid -- ior )`. `platform_write` split
   into `platform_write_fd` with a stdout wrapper; `TYPE`/`EMIT` unchanged.
   Lets a utility write to stderr without corrupting stdout.
-- [ ] Expose generic file-access words (`OPEN-FILE`, `READ-FILE`,
-  `CLOSE-FILE`, `R/O`, …)  ← step 3 (input/files)
-  - The platform already has the primitives used by INCLUDED
-    (`platform_open_file`, `platform_fstat`, `platform_mmap_file`,
-    `platform_close_file`); expose them as ANS file words so scripts can read
-    *data* files (e.g. a snake level passed as a Tier 3 argument). Natural
-    follow-on to the `#!` Tier 3 work. Reuse the fileid-as-fd model and the
-    `ior` convention established by the output words above.
+- [x] Generic file-access words (step 3): `open-file`, `create-file`,
+  `close-file`, `read-file`, `file-size`, and `r/o`/`w/o`/`r/w`/`bin`. fileid =
+  raw OS fd, `ior` = 0/positive errno (same model as the output words). New
+  `platform_read_file`; `platform_open_file` generalized to
+  `platform_open_file_mode` (+ read-only wrapper) and `platform_create_file`;
+  `platform_fstat` reports errors. Example `examples/cat.fs`. `read-line` was
+  deliberately deferred (needs per-file buffering; `read-file` covers reading
+  data files).
 - [ ] Block storage (file-backed) or file-based source loading
 - [ ] LOAD, LIST, THRU (or INCLUDE for file-based)
 - [ ] SAVE / persistence of user definitions

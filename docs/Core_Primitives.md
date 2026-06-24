@@ -418,3 +418,17 @@ raw OS file descriptor (`stdin`/`stdout`/`stderr` = 0/1/2, defined in core.fs).
 | SHIFT-ARGS  | ( -- )                 | Drop arg[1], decrement argc (O(1))       |
 | BYE-CODE    | ( n -- )               | Exit with status n, silently             |
 | WRITE-FILE  | ( c-addr u fileid -- ior ) | Write bytes to fileid; ior 0 = ok    |
+
+### File access (all in asm)
+
+ANS File-Access wordset over the same fileid (raw fd) and ior conventions.
+`R/O`/`W/O`/`R/W` and `BIN` are defined in core.fs. `ior` is 0 on success,
+else the positive errno.
+
+| Word        | Stack effect                  | Notes                                |
+|-------------|-------------------------------|--------------------------------------|
+| OPEN-FILE   | ( c-addr u fam -- fileid ior )| Open an existing file                |
+| CREATE-FILE | ( c-addr u fam -- fileid ior )| Create/truncate, mode 0666           |
+| CLOSE-FILE  | ( fileid -- ior )             | Close                                |
+| READ-FILE   | ( c-addr u1 fileid -- u2 ior )| Read up to u1 bytes; u2 = actual     |
+| FILE-SIZE   | ( fileid -- ud ior )          | Size in bytes, as a double           |
