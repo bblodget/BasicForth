@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `read-line` — line-at-a-time file reading (Phase 4)
+- `read-line ( c-addr u1 fileid -- u2 flag ior )` returns exactly one line per
+  call. It stores at most u1 characters (u2 <= u1) and consumes the line
+  terminator without storing it. The terminator is LF; a CR immediately before
+  it is removed, so CRLF files read cleanly. `flag` is false only at end of file
+  with nothing read (the loop's stop signal); `ior` is 0 (incl. normal EOF) or a
+  positive errno. A line longer than u1 fills the buffer and the rest of that
+  line is read and discarded, so the next call starts at the following line
+  (truncation, a deliberate choice over ANS "continuation"). No state is kept
+  between calls, so reading several files or reused fds is always safe. Defined
+  in core.fs on top of `read-file` (one byte per read()); a buffered version can
+  replace it later behind the same interface.
+- New `examples/cat-lines.fs` — the `cat` program rewritten with
+  `read-line`/`write-line`, a line-oriented companion to the byte-exact
+  `examples/cat.fs` (it normalizes CRLF to LF).
+
 ### File-access words (read & write files) (Phase 4)
 - `open-file`/`create-file ( c-addr u fam -- fileid ior )`, `close-file
   ( fileid -- ior )`, `read-file ( c-addr u1 fileid -- u2 ior )`, and

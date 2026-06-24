@@ -278,6 +278,52 @@ create (write-nl) 10 c,
         dup >r write-file ?dup if r> drop exit then
         (write-nl) 1 r> write-file ;
 
+\ READ-LINE ( c-addr u1 fileid -- u2 flag ior )
+\ Reads one line from fileid into c-addr, one byte at a time via READ-FILE,
+\ always reading through the line terminator so every call returns exactly one
+\ line. At most u1 characters are stored (u2 <= u1); the terminator (LF, with a
+\ CR immediately before it removed so CRLF text reads cleanly) is consumed but
+\ not stored. flag is false only at end of file with nothing read, true
+\ otherwise; ior = 0 (incl. normal EOF) or a positive errno.
+\
+\ A line longer than u1 fills the buffer, then the remaining characters of that
+\ line are read and discarded, so the next call starts at the following line.
+\ (One read-line = one line; an over-long line is truncated, not continued — a
+\ deliberate choice over the ANS "return the rest next call" behavior.) No state
+\ is kept between calls, so reading several files or reused fds is always safe.
+\ One read() syscall per byte — fine for source/text; a buffered version can
+\ replace this later behind the same interface.
+variable (rl-fid)                       \ open file id
+variable (rl-buf)                       \ buffer base address
+variable (rl-max)                       \ buffer size (u1)
+create   (rl-ch) 1 allot                \ 1-byte scratch for each read
+: read-line ( c-addr u1 fileid -- u2 flag ior )
+        (rl-fid) ! (rl-max) ! (rl-buf) !
+        0                               ( count )
+        begin
+            (rl-ch) 1 (rl-fid) @ read-file   ( count u2 ior )
+            ?dup if                     \ I/O error
+                >r drop                 ( count ; ior on R )
+                dup 0> r> exit          ( count flag ior )
+            then
+            0= if                       \ u2 = 0 → end of file
+                dup 0> 0 exit           ( count flag ior )
+            then
+            (rl-ch) c@                  ( count ch )
+            dup 10 = if                 \ LF → end of line
+                drop                    ( count )
+                dup 0> if               \ strip a trailing CR if present
+                    dup 1- (rl-buf) @ + c@ 13 = if 1- then
+                then
+                true 0 exit             ( count flag ior )
+            then
+            over (rl-max) @ < if        \ room left? store it; else discard
+                over (rl-buf) @ + c!  1+    ( count+1 )
+            else
+                drop                    ( count )  \ buffer full: drop the char
+            then
+        again ;
+
 \ File-access methods (fam): the values passed to OPEN-FILE / CREATE-FILE.
 \ They are the OS open() flags; BIN is a no-op (Linux has no text/binary mode).
 0 constant r/o

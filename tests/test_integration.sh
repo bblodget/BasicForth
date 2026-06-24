@@ -1097,6 +1097,58 @@ else
     printf "  ${RED}FAIL${NC}  create-file + write-file roundtrip\n    Expected: WROTE\n    Got:      %s\n" "$fa_disk"; ((failed++))
 fi
 
+# READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
+# blank line returns u2=0/flag=true, the last line without a trailing newline
+# is still read, then EOF returns flag=false. Each line is bracketed [..] so
+# empty lines and trailing whitespace are visible.
+rl_dir="$(mktemp -d)"
+printf 'alpha\nbeta\r\ngamma\n\ndelta' > "$rl_dir/in.txt"   # CRLF line 2, blank line 4, no final NL
+cat > "$rl_dir/rl.fs" <<RLEOF
+create lbuf 64 allot
+: t
+   s" $rl_dir/in.txt" r/o open-file drop >r
+   begin lbuf 64 r@ read-line drop while
+      ." [" lbuf swap stdout write-file drop ." ]" cr
+   repeat drop
+   r> close-file drop ." DONE" cr ;
+t 0 bye-code
+RLEOF
+# One line per call with an undersized (4-char) buffer: a line that exactly
+# fills the buffer ("abcd") consumes its terminator (NO phantom empty line), and
+# a line longer than the buffer ("abcdefghij") fills the buffer and the rest is
+# discarded so the next call starts at the following line. Expected:
+#   abcd | 12 | abcd (efghij dropped) | Z
+printf 'abcd\n12\nabcdefghij\nZ\n' > "$rl_dir/edge.txt"
+cat > "$rl_dir/rledge.fs" <<RLEOF
+create lbuf 4 allot
+: t
+   s" $rl_dir/edge.txt" r/o open-file drop >r
+   begin lbuf 4 r@ read-line drop while
+      ." [" lbuf swap stdout write-file drop ." ]" cr
+   repeat drop
+   r> close-file drop ." DONE" cr ;
+t 0 bye-code
+RLEOF
+t0=$(date +%s.%N)
+rl_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$rl_dir/rl.fs" 2>/dev/null)
+rledge_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$rl_dir/rledge.fs" 2>/dev/null)
+rm -rf "$rl_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "read-line"
+
+rl_want=$'[alpha]\n[beta]\n[gamma]\n[]\n[delta]\nDONE'
+if [[ "$rl_out" == "$rl_want" ]]; then
+    printf "  ${GREEN}PASS${NC}  read-line (CRLF strip, blank line, no final newline, EOF)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  read-line (CRLF strip, blank line, no final newline, EOF)\n    Expected: %q\n    Got:      %q\n" "$rl_want" "$rl_out"; ((failed++))
+fi
+# exact-fill consumes terminator (no phantom blank); over-long truncates to u1
+rledge_want=$'[abcd]\n[12]\n[abcd]\n[Z]\nDONE'
+if [[ "$rledge_out" == "$rledge_want" ]]; then
+    printf "  ${GREEN}PASS${NC}  read-line exact-fill terminator + over-long truncation\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  read-line exact-fill terminator + over-long truncation\n    Expected: %q\n    Got:      %q\n" "$rledge_want" "$rledge_out"; ((failed++))
+fi
+
 # The bundled cat.fs utility: concatenate files to stdout; missing file →
 # stderr + exit 1; no args → usage + exit 2.
 ca_dir="$(mktemp -d)"
@@ -1132,6 +1184,39 @@ if [[ "$cat_rderr" != "0" ]]; then
     printf "  ${GREEN}PASS${NC}  examples/cat.fs read error → non-zero\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  examples/cat.fs read error → non-zero\n    Expected: non-zero\n    Got:      %s\n" "$cat_rderr"; ((failed++))
+fi
+
+# The companion cat-lines.fs reads with READ-LINE instead of READ-FILE. It
+# concatenates the same way, but being line-oriented it normalizes CRLF to LF.
+cl_dir="$(mktemp -d)"
+printf 'AAA\nBBB\n' > "$cl_dir/x"; printf 'one\r\ntwo\r\n' > "$cl_dir/crlf"
+t0=$(date +%s.%N)
+cl_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat-lines.fs" "$cl_dir/x" "$cl_dir/x" 2>/dev/null)
+cl_crlf=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat-lines.fs" "$cl_dir/crlf" 2>/dev/null)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat-lines.fs" "$cl_dir/nope" >/dev/null 2>&1; cl_miss=$?
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat-lines.fs" >/dev/null 2>&1; cl_noarg=$?
+rm -rf "$cl_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/cat-lines.fs"
+
+if [[ "$cl_out" == $'AAA\nBBB\nAAA\nBBB' ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat-lines.fs concatenates files\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat-lines.fs concatenates files\n    Expected: AAA<nl>BBB<nl>AAA<nl>BBB\n    Got:      %q\n" "$cl_out"; ((failed++))
+fi
+if [[ "$cl_crlf" == $'one\ntwo' ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat-lines.fs normalizes CRLF to LF\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat-lines.fs normalizes CRLF to LF\n    Expected: one<nl>two (no CR)\n    Got:      %q\n" "$cl_crlf"; ((failed++))
+fi
+if [[ "$cl_miss" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat-lines.fs missing file → exit 1\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat-lines.fs missing file → exit 1\n    Expected: 1\n    Got:      %s\n" "$cl_miss"; ((failed++))
+fi
+if [[ "$cl_noarg" == "2" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat-lines.fs no-args → exit 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat-lines.fs no-args → exit 2\n    Expected: 2\n    Got:      %s\n" "$cl_noarg"; ((failed++))
 fi
 
 # The bundled sort.fs utility: sort a file's lines into <name>_sorted.<ext>.

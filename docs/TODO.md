@@ -165,9 +165,15 @@ completed. See Planning.md for high-level vision and design decisions.
   raw OS fd, `ior` = 0/positive errno (same model as the output words). New
   `platform_read_file`; `platform_open_file` generalized to
   `platform_open_file_mode` (+ read-only wrapper) and `platform_create_file`;
-  `platform_fstat` reports errors. Example `examples/cat.fs`. `read-line` was
-  deliberately deferred (needs per-file buffering; `read-file` covers reading
-  data files).
+  `platform_fstat` reports errors. Example `examples/cat.fs`.
+- [x] `read-line ( c-addr u1 fileid -- u2 flag ior )` (step 4): one line per
+  call — at most u1 chars stored (u2 <= u1), terminator (LF, preceding CR
+  stripped) consumed not stored; `flag` false only at EOF with nothing read. A
+  line longer than u1 fills the buffer and the rest is discarded so the next
+  call starts at the following line (truncation, chosen over ANS continuation);
+  no cross-call state, so multiple files / reused fds are always safe. Defined
+  in core.fs on top of `read-file` (one byte per read()), so no new asm/platform
+  code — a buffered version can replace it later behind the same interface.
 - [ ] Block storage (file-backed) or file-based source loading
 - [ ] LOAD, LIST, THRU (or INCLUDE for file-based)
 - [ ] SAVE / persistence of user definitions
