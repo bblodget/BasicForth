@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### File-access words (read & write files) (Phase 4)
+- `open-file`/`create-file ( c-addr u fam -- fileid ior )`, `close-file
+  ( fileid -- ior )`, `read-file ( c-addr u1 fileid -- u2 ior )`, and
+  `file-size ( fileid -- ud ior )`. With `write-file` from the previous slice,
+  scripts can now read and write data files. fileid is a raw OS fd; `ior` is 0
+  on success else the positive errno.
+- Access methods `r/o`/`w/o`/`r/w` (= the OS open flags) and `bin` (a no-op on
+  Linux), defined in core.fs.
+- Platform layer: new `platform_read_file`; `platform_open_file` split into
+  `platform_open_file_mode` (flags + mode) with a read-only wrapper, plus
+  `platform_create_file`; `platform_fstat` now returns a negative errno on
+  failure so `file-size` can report it. `INCLUDED` is unchanged.
+- New `examples/cat.fs` — a Forth `cat` (args → open → read loop → write to
+  stdout → close; errors on stderr, non-zero exit on failure).
+- New `examples/sort.fs` — sort a file's lines into `<name>_sorted.<ext>`
+  (slurp with `read-file`, sort with `compare`, emit with `write-line`).
+
 ### Fixed: raw mode no longer corrupts the terminal for piped scripts
 - BasicForth entered raw mode (echo off) on *every* startup, even for a
   non-interactive script. With `tool.fs | less`, `less` would start while the

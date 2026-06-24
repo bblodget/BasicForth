@@ -259,6 +259,44 @@ See `examples/lines.fs` for a small utility that writes its data to stdout and
 its diagnostics to stderr, so `./lines.fs a b > out` leaves clean data in `out`
 while the log stays on the terminal.
 
+### Reading and Writing Files
+
+Files are opened by name and accessed through a *fileid* (a raw OS file
+descriptor, the same kind of value as `stdin`/`stdout`/`stderr`). These follow
+the ANS File-Access wordset:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `r/o` `w/o` `r/w` | ( -- fam ) | access method: read-only / write-only / read-write |
+| `bin` | ( fam1 -- fam2 ) | binary mode — a no-op on Linux |
+| `open-file` | ( c-addr u fam -- fileid ior ) | open an existing file |
+| `create-file` | ( c-addr u fam -- fileid ior ) | create or truncate, then open (mode 0666) |
+| `close-file` | ( fileid -- ior ) | close |
+| `read-file` | ( c-addr u1 fileid -- u2 ior ) | read up to u1 bytes; u2 = actual, 0 at end of file |
+| `file-size` | ( fileid -- ud ior ) | size in bytes, as a double |
+
+Every operation returns an `ior` (`0` success, else the positive `errno`).
+A typical read-a-whole-file-in-chunks loop (`S"` is compile-only, so build the
+name inside a definition):
+
+```forth
+create buf 4096 allot
+: dump ( c-addr u -- )
+    r/o open-file if drop exit then        ( fileid )       \ bail on open error
+    >r
+    begin  buf 4096 r@ read-file drop  dup 0>  while         ( u2 )
+        buf swap stdout write-file drop
+    repeat drop
+    r> close-file drop ;
+```
+
+`create-file` pairs with `write-file` (above) to produce files. See
+`examples/cat.fs` for a complete Forth `cat` — args → `open-file` → `read-file`
+loop → `write-file` to stdout → `close-file`, with errors on stderr and a
+non-zero exit on failure. `examples/sort.fs` goes further: it slurps a file
+with `file-size`/`read-file`, sorts the lines with `compare`, and writes
+`<name>_sorted.<ext>` with `create-file`/`write-line`.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

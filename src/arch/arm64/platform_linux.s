@@ -574,6 +574,11 @@ stat_buf:
 
 .equ AT_FDCWD,    -100
 .equ O_RDONLY,    0
+.equ O_WRONLY,    1
+.equ O_RDWR,      2
+.equ O_CREAT,     64        // 0100 octal
+.equ O_TRUNC,     512       // 01000 octal
+.equ CREATE_MODE, 438       // 0666 octal
 .equ PROT_READ_V, 1
 .equ MAP_PRIVATE_V, 2
 
@@ -582,51 +587,70 @@ stat_buf:
 
 .text
 
-// platform_open_file ( X0=path X1=len -- X0=fd )
-// Copies path to scratch buffer, null-terminates, opens with O_RDONLY.
-// Returns fd (>=0) or negative errno on failure.
-.global platform_open_file
-platform_open_file:
+// platform_open_file_mode ( X0=path X1=len X2=flags X3=mode -- X0=fd )
+// Copies path to scratch buffer, null-terminates, opens with the given flags
+// and mode. Returns fd (>=0) or negative errno. The copy uses X9-X11 so the
+// incoming X2 (flags) and X3 (mode) survive for the openat call.
+.global platform_open_file_mode
+platform_open_file_mode:
     STP X29, X30, [SP, #-16]!
 
     // Copy path to scratch buffer and null-terminate
-    ADR X2, path_scratch
-    MOV X3, X1                      // X3 = len
-    CMP X3, #255                    // clamp to buffer size - 1
-    B.LE .Lopen_copy
-    MOV X3, #255
-.Lopen_copy:
-    CBZ X3, .Lopen_null
-    LDRB W4, [X0], #1
-    STRB W4, [X2], #1
-    SUB X3, X3, #1
-    B .Lopen_copy
-.Lopen_null:
-    STRB WZR, [X2]                  // null terminate
+    ADR X9, path_scratch
+    MOV X10, X1                     // X10 = len
+    CMP X10, #255                   // clamp to buffer size - 1
+    B.LE .Lopenm_copy
+    MOV X10, #255
+.Lopenm_copy:
+    CBZ X10, .Lopenm_null
+    LDRB W11, [X0], #1
+    STRB W11, [X9], #1
+    SUB X10, X10, #1
+    B .Lopenm_copy
+.Lopenm_null:
+    STRB WZR, [X9]                  // null terminate
 
-    // openat(AT_FDCWD, path, O_RDONLY, 0)
+    // openat(AT_FDCWD, path, flags, mode)
     MOV X0, #AT_FDCWD
     ADR X1, path_scratch
-    MOV X2, #O_RDONLY
-    MOV X3, #0
+    // X2 = flags, X3 = mode (preserved above)
     MOV X8, #SYS_openat
     SVC #0
 
     LDP X29, X30, [SP], #16
     RET
 
+// platform_open_file ( X0=path X1=len -- X0=fd )
+// Thin wrapper: open existing file read-only (used by INCLUDED).
+.global platform_open_file
+platform_open_file:
+    MOV X2, #O_RDONLY              // flags
+    MOV X3, #0                     // mode
+    B platform_open_file_mode
+
+// platform_create_file ( X0=path X1=len X2=fam -- X0=fd )
+// Create or truncate a file: open with fam | O_CREAT | O_TRUNC, mode 0666.
+.global platform_create_file
+platform_create_file:
+    MOV X9, #(O_CREAT | O_TRUNC)
+    ORR X2, X2, X9                 // flags = fam | O_CREAT | O_TRUNC
+    MOV X3, #CREATE_MODE           // mode
+    B platform_open_file_mode
+
 // platform_fstat ( X0=fd -- X0=size )
-// Returns file size via fstat.
+// Returns file size via fstat, or a negative errno if the fstat syscall fails.
 .global platform_fstat
 platform_fstat:
     // fstat(fd, &stat_buf)
-    MOV X1, X0                      // save fd... wait, X0=fd already
     ADR X1, stat_buf
     MOV X8, #SYS_fstat
     SVC #0
+    CMP X0, #0
+    B.LT .Lfstat_done              // syscall failed → return -errno (in X0)
     // Extract st_size
     ADR X9, stat_buf
     LDR X0, [X9, #STAT_ST_SIZE]
+.Lfstat_done:
     RET
 
 // platform_mmap_file ( X0=fd X1=size -- X0=addr )
@@ -650,10 +674,18 @@ platform_munmap:
     SVC #0
     RET
 
-// platform_close_file ( X0=fd -- )
+// platform_close_file ( X0=fd -- X0=0 or -errno )
 .global platform_close_file
 platform_close_file:
     MOV X8, #SYS_close
+    SVC #0
+    RET
+
+// platform_read_file ( X0=fd X1=buf X2=count -- X0=bytes read or -errno )
+// Single read() of up to count bytes. X0 is 0 at end of file.
+.global platform_read_file
+platform_read_file:
+    MOV X8, #SYS_read
     SVC #0
     RET
 

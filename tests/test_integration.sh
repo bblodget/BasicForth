@@ -1053,6 +1053,111 @@ else
     printf "    Expected: 2\n    Got:      %s\n" "$lines_noarg"; ((failed++))
 fi
 
+# File-access words: open-file / read-file / close-file, file-size, and a
+# create-file + write-file + reopen roundtrip. Run from a script (s" is
+# compile-only) reading a fixture file. ." prints at runtime (unlike .().
+fa_dir="$(mktemp -d)"
+printf 'hello' > "$fa_dir/data.txt"        # 5 bytes, no trailing newline
+cat > "$fa_dir/fa.fs" <<FAEOF
+create fabuf 128 allot
+: t
+   s" $fa_dir/data.txt" r/o open-file drop          ( fileid )
+   dup file-size drop drop ." SZ=" . cr             ( fileid )
+   >r fabuf 128 r@ read-file drop ." RD=" fabuf swap type cr
+   r> close-file drop
+   s" $fa_dir/out.txt" w/o create-file drop >r
+   s" WROTE" r@ write-file drop r> close-file drop
+   s" $fa_dir/missing" r/o open-file ." MISS=" . drop cr ;
+t bye
+FAEOF
+t0=$(date +%s.%N)
+fa_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$fa_dir/fa.fs" 2>/dev/null)
+fa_disk=$(cat "$fa_dir/out.txt" 2>/dev/null)
+rm -rf "$fa_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "file-access words"
+
+if [[ "$fa_out" == *"SZ=5"* ]]; then
+    printf "  ${GREEN}PASS${NC}  file-size\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  file-size\n    Expected: SZ=5\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_out" == *"RD=hello"* ]]; then
+    printf "  ${GREEN}PASS${NC}  open-file + read-file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  open-file + read-file\n    Expected: RD=hello\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_out" == *"MISS=2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  open-file missing → ior 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  open-file missing → ior 2\n    Expected: MISS=2\n    Got:      %s\n" "$fa_out"; ((failed++))
+fi
+if [[ "$fa_disk" == "WROTE" ]]; then
+    printf "  ${GREEN}PASS${NC}  create-file + write-file roundtrip\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  create-file + write-file roundtrip\n    Expected: WROTE\n    Got:      %s\n" "$fa_disk"; ((failed++))
+fi
+
+# The bundled cat.fs utility: concatenate files to stdout; missing file →
+# stderr + exit 1; no args → usage + exit 2.
+ca_dir="$(mktemp -d)"
+printf 'AAA\n' > "$ca_dir/x"; printf 'BBB\n' > "$ca_dir/y"
+t0=$(date +%s.%N)
+cat_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat.fs" "$ca_dir/x" "$ca_dir/y" 2>/dev/null)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat.fs" "$ca_dir/nope" >/dev/null 2>&1; cat_miss=$?
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/cat.fs" >/dev/null 2>&1; cat_noarg=$?
+rm -rf "$ca_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/cat.fs"
+
+if [[ "$cat_out" == $'AAA\nBBB' ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat.fs concatenates files\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat.fs concatenates files\n    Expected: AAA<nl>BBB\n    Got:      %s\n" "$cat_out"; ((failed++))
+fi
+if [[ "$cat_miss" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat.fs missing file → exit 1\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat.fs missing file → exit 1\n    Expected: 1\n    Got:      %s\n" "$cat_miss"; ((failed++))
+fi
+if [[ "$cat_noarg" == "2" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/cat.fs no-args → exit 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/cat.fs no-args → exit 2\n    Expected: 2\n    Got:      %s\n" "$cat_noarg"; ((failed++))
+fi
+
+# The bundled sort.fs utility: sort a file's lines into <name>_sorted.<ext>.
+so_dir="$(mktemp -d)"
+printf 'cherry\napple\nbanana\napple\n' > "$so_dir/u.txt"
+t0=$(date +%s.%N)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/sort.fs" "$so_dir/u.txt" >/dev/null 2>&1; sort_exit=$?
+sort_out=$(cat "$so_dir/u_sorted.txt" 2>/dev/null)
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/sort.fs" >/dev/null 2>&1; sort_noarg=$?
+rm -rf "$so_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/sort.fs"
+
+# byte-order ascending, output written to the _sorted file, exit 0
+if [[ "$sort_out" == $'apple\napple\nbanana\ncherry' && "$sort_exit" == "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/sort.fs sorts lines\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/sort.fs sorts lines\n    Expected: apple/apple/banana/cherry, exit 0\n    Got:      exit %s / %s\n" "$sort_exit" "$sort_out"; ((failed++))
+fi
+if [[ "$sort_noarg" == "2" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/sort.fs no-args → exit 2\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/sort.fs no-args → exit 2\n    Expected: 2\n    Got:      %s\n" "$sort_noarg"; ((failed++))
+fi
+
+# Read error must fail loudly, not produce empty output with exit 0: a directory
+# opens fine but read-file returns EISDIR.
+re_dir="$(mktemp -d)"; mkdir -p "$re_dir/sub.txt"
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH "$REPO_ROOT/examples/sort.fs" "$re_dir/sub.txt" >/dev/null 2>&1; sort_rderr=$?
+[ -e "$re_dir/sub_sorted.txt" ] && re_made=yes || re_made=no
+rm -rf "$re_dir"
+if [[ "$sort_rderr" != "0" && "$re_made" == "no" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/sort.fs read error → non-zero, no output\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/sort.fs read error → non-zero, no output\n    Got:      exit %s, output-made=%s\n" "$sort_rderr" "$re_made"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

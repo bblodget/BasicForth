@@ -90,6 +90,21 @@ platform_open_file:
     mov $-2, %rax               # return -ENOENT
     ret
 
+.global platform_open_file_mode
+platform_open_file_mode:
+    mov $-2, %rax               # return -ENOENT
+    ret
+
+.global platform_create_file
+platform_create_file:
+    mov $-2, %rax               # return -ENOENT
+    ret
+
+.global platform_read_file
+platform_read_file:
+    xor %eax, %eax              # return 0 (EOF)
+    ret
+
 .global platform_fstat
 platform_fstat:
     xor %eax, %eax
