@@ -2035,6 +2035,8 @@ forth_included:
     MOV X0, X23
     BL platform_fstat               // -> X0=size
     MOV X24, X0                     // X24 = file size
+    CMP X24, #0
+    B.LE .Lincl_empty               // empty (or fstat error) → nothing to map
 
     // mmap the file
     MOV X0, X23                     // fd
@@ -2151,12 +2153,19 @@ forth_included:
     MOV X1, X24
     BL platform_munmap
 
+.Lincl_empty_join:
     MOV X0, #0                      // return 0 = success
     LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
+
+// Empty file (size 0): nothing was mapped — just close the fd and succeed.
+.Lincl_empty:
+    MOV X0, X23                     // fd
+    BL platform_close_file
+    B .Lincl_empty_join
 
 .Lincl_error:
     // Print "filename:line: ? token\n"

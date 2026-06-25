@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed: INCLUDE/INCLUDED of an empty or tiny file
+- `forth_included` could close a standard file descriptor when loading a 0-, 1-,
+  or 2-byte file: x86 `platform_mmap_file` clobbered the callee-saved `%rbx`
+  (which `forth_included` used for the fd), so the subsequent close ran
+  `close(file_size)` — `close(0/1/2)` = stdin/stdout/stderr. For larger files it
+  closed an unopened fd (a harmless leak), which is why it went unnoticed until
+  empty-`session.fs` auto-load hit it. `platform_mmap_file` now leaves `%rbx`
+  alone, and `forth_included` treats a 0-byte file as a clean no-op (skips
+  `mmap`). Empty/whitespace source files now load correctly.
+
 ### Session persistence — SAVE (Phase 4)
 - `save ( -- )` writes the words you define interactively to `session.fs` in the
   current directory; an interactive session auto-loads `session.fs` at startup

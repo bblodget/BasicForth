@@ -1856,6 +1856,8 @@ forth_included:
     mov %rbx, %rdi
     call platform_fstat             # RDI=fd → RAX=size
     mov %rax, %rbp                  # RBP = file size
+    test %rbp, %rbp
+    jle .Lincl_empty                # empty (or fstat error) → nothing to map
 
     # mmap the file
     mov %rbx, %rdi                  # fd
@@ -1960,12 +1962,19 @@ forth_included:
     mov %rbp, %rsi
     call platform_munmap
 
+.Lincl_empty_join:
     xor %eax, %eax                  # return 0 = success
     pop %r8
     pop %r14
     pop %rbp
     pop %rbx
     ret
+
+# Empty file (size 0): nothing was mapped — just close the fd and succeed.
+.Lincl_empty:
+    mov %rbx, %rdi                  # fd
+    call platform_close_file
+    jmp .Lincl_empty_join
 
 .Lincl_error:
     # Print "filename:line: ? token\n"

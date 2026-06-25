@@ -1366,6 +1366,13 @@ mkdir "$fail_dir/session.fs.new"
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 sv_safe=$(cat "$fail_dir/session.fs" 2>/dev/null)
 rm -rf "$fail_dir"
+# An empty (0-byte) session.fs must auto-load cleanly, not wedge the REPL.
+# (Regression: forth_included mishandled empty/tiny files, closing a std fd.)
+empty_dir="$(mktemp -d)"
+: > "$empty_dir/session.fs"
+sv_empty=$( cd "$empty_dir" && printf '3 4 + . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+rm -rf "$empty_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1399,6 +1406,11 @@ if [[ "$sv_safe" == "PRECIOUS" ]]; then
     printf "  ${GREEN}PASS${NC}  a failed save preserves the existing session.fs\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  a failed save destroyed session.fs\n    Got: %q\n" "$sv_safe"; ((failed++))
+fi
+if [[ "$sv_empty" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  empty session.fs auto-loads without wedging the REPL\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  empty session.fs wedged the REPL\n    Expected 7\n    Got: %q\n" "$sv_empty"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)

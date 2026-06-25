@@ -645,11 +645,11 @@ platform_fstat:
 # Maps file with PROT_READ, MAP_PRIVATE.
 .global platform_mmap_file
 platform_mmap_file:
-    mov %rsi, %rbx              # save size
+    # NB: do not touch %rbx — it is callee-saved and forth_included holds the fd
+    # there across this call. size already arrives in %rsi (= mmap arg2/length).
+    mov %rdi, %r8               # arg5 = fd (save before clobbering %rdi)
     mov $SYS_mmap, %rax
-    mov %rdi, %r8               # arg5 = fd
     xor %edi, %edi              # arg1 = addr = NULL
-    mov %rbx, %rsi              # arg2 = length = size
     mov $PROT_READ, %edx        # arg3 = prot
     mov $MAP_PRIVATE, %r10d     # arg4 = flags
     xor %r9d, %r9d              # arg6 = offset = 0
