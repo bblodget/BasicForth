@@ -1874,6 +1874,16 @@ forth_included:
 
     pop %rbx                        # RBX = mmap base address
 
+    # Save the outer interpreter's source pointers. The line loop below
+    # overwrites source_addr/source_len/to_in to point at this file's lines;
+    # the caller must keep parsing its own line after we return, and the mmap is
+    # freed on exit — so these must be restored (otherwise a later parse reads a
+    # freed page). 3 pushes + an 8-byte pad keep the 16-byte call alignment.
+    pushq source_addr(%rip)
+    pushq source_len(%rip)
+    pushq to_in(%rip)
+    sub $8, %rsp
+
     # Process file line by line
     # RBX = mmap base, RBP = file size, R14 = line_start offset
     xor %r14d, %r14d                # line_start = 0
@@ -1961,20 +1971,29 @@ forth_included:
     mov %rbx, %rdi
     mov %rbp, %rsi
     call platform_munmap
-
-.Lincl_empty_join:
+    # Restore the outer interpreter's source pointers (saved before the loop)
+    add $8, %rsp
+    popq to_in(%rip)
+    popq source_len(%rip)
+    popq source_addr(%rip)
     xor %eax, %eax                  # return 0 = success
+    jmp .Lincl_pop_regs
+
+# Shared register epilogue (no source restore — for paths that never ran the
+# line loop, so never saved the source pointers).
+.Lincl_pop_regs:
     pop %r8
     pop %r14
     pop %rbp
     pop %rbx
     ret
 
-# Empty file (size 0): nothing was mapped — just close the fd and succeed.
+# Empty file (size 0): nothing was mapped, source pointers were not saved.
 .Lincl_empty:
     mov %rbx, %rdi                  # fd
     call platform_close_file
-    jmp .Lincl_empty_join
+    xor %eax, %eax                  # return 0 = success
+    jmp .Lincl_pop_regs
 
 .Lincl_error:
     # Print "filename:line: ? token\n"
@@ -2004,13 +2023,13 @@ forth_included:
     mov %rbx, %rdi
     mov %rbp, %rsi
     call platform_munmap
-
+    # Restore the outer interpreter's source pointers (saved before the loop)
+    add $8, %rsp
+    popq to_in(%rip)
+    popq source_len(%rip)
+    popq source_addr(%rip)
     mov $1, %eax                    # return 1 = error
-    pop %r8
-    pop %r14
-    pop %rbp
-    pop %rbx
-    ret
+    jmp .Lincl_pop_regs
 
 .Lincl_open_err:
     # Check for ENOENT (-2) — try BASICFORTH_PATH fallback
@@ -2097,11 +2116,7 @@ forth_included:
 
 .Lincl_open_skip:
     xor %eax, %eax                  # return 0 (not an error for ENOENT)
-    pop %r8
-    pop %r14
-    pop %rbp
-    pop %rbx
-    ret
+    jmp .Lincl_pop_regs
 
 .Lincl_mmap_err:
     # mmap failed — close fd and print error
@@ -2116,11 +2131,7 @@ forth_included:
     mov $'\n', %rdi
     call platform_emit
     mov $1, %eax
-    pop %r8
-    pop %r14
-    pop %rbp
-    pop %rbx
-    ret
+    jmp .Lincl_pop_regs
 
 .section .rodata
 incl_err_sep:    .ascii ": ? "

@@ -214,6 +214,17 @@ completed. See Planning.md for high-level vision and design decisions.
   frame. Works fine at the REPL and when nested in another included file.
   Routed around for SAVE (session.fs is loaded in asm by main.s), but the
   general case should be fixed.
+- [x] **Fixed: `INCLUDE`/`INCLUDED` left the outer interpreter parsing a freed
+  mmap.** `forth_included` overwrote `source_addr`/`source_len`/`to_in` with the
+  file's lines but never restored the caller's values, then `munmap`ed the file.
+  After the include the outer `forth_interpret_line` parsed from the (now freed)
+  mapping. It only "worked" when `include` was the last token of a line *and* the
+  file was fully consumed (so `to_in >= source_len` → no deref); any leftover
+  token, or a compile-time error inside the file (which leaves `to_in` mid-line),
+  dereferenced the freed page — wedging the REPL or **segfaulting** once the SAVE
+  capture hooks were active. Fix: `forth_included` now saves the source pointers
+  before the line loop and restores them on every loop-exit path (both arches).
+  Bonus: tokens after `include <file>` on the same line now run correctly.
 
 ---
 

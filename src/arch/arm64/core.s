@@ -2051,6 +2051,21 @@ forth_included:
     MOV X0, X23
     BL platform_close_file
 
+    // Save the outer interpreter's source pointers. The line loop overwrites
+    // source_addr/source_len/to_in; the caller must keep parsing its own line
+    // after we return, and the mmap is freed on exit, so these are restored on
+    // the loop-exit paths. 32 bytes keeps SP 16-aligned (3 used, 8 pad).
+    SUB SP, SP, #32
+    ADR X9, source_addr
+    LDR X10, [X9]
+    STR X10, [SP, #0]
+    ADR X9, source_len
+    LDR X10, [X9]
+    STR X10, [SP, #8]
+    ADR X9, to_in
+    LDR X10, [X9]
+    STR X10, [SP, #16]
+
     // Process file line by line
     // X25 = mmap base, X24 = file size, X26 = line_start offset
     MOV X26, #0                     // line_start = 0
@@ -2152,20 +2167,35 @@ forth_included:
     MOV X0, X25
     MOV X1, X24
     BL platform_munmap
-
-.Lincl_empty_join:
+    // Restore the outer interpreter's source pointers (saved before the loop)
+    LDR X10, [SP, #0]
+    ADR X9, source_addr
+    STR X10, [X9]
+    LDR X10, [SP, #8]
+    ADR X9, source_len
+    STR X10, [X9]
+    LDR X10, [SP, #16]
+    ADR X9, to_in
+    STR X10, [X9]
+    ADD SP, SP, #32
     MOV X0, #0                      // return 0 = success
+    B .Lincl_pop_regs
+
+// Shared register epilogue (no source restore — for paths that never ran the
+// line loop, so never saved the source pointers).
+.Lincl_pop_regs:
     LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
 
-// Empty file (size 0): nothing was mapped — just close the fd and succeed.
+// Empty file (size 0): nothing was mapped, source pointers were not saved.
 .Lincl_empty:
     MOV X0, X23                     // fd
     BL platform_close_file
-    B .Lincl_empty_join
+    MOV X0, #0                      // return 0 = success
+    B .Lincl_pop_regs
 
 .Lincl_error:
     // Print "filename:line: ? token\n"
@@ -2200,13 +2230,19 @@ forth_included:
     MOV X0, X25
     MOV X1, X24
     BL platform_munmap
-
+    // Restore the outer interpreter's source pointers (saved before the loop)
+    LDR X10, [SP, #0]
+    ADR X9, source_addr
+    STR X10, [X9]
+    LDR X10, [SP, #8]
+    ADR X9, source_len
+    STR X10, [X9]
+    LDR X10, [SP, #16]
+    ADR X9, to_in
+    STR X10, [X9]
+    ADD SP, SP, #32
     MOV X0, #1                      // return 1 = error
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .Lincl_open_err:
     // Check for ENOENT (-2) — try BASICFORTH_PATH fallback
@@ -2313,11 +2349,7 @@ forth_included:
 
 .Lincl_open_skip:
     MOV X0, #0                      // return 0 (not an error for ENOENT)
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .Lincl_mmap_err:
     // mmap failed — close fd and print error
@@ -2334,11 +2366,7 @@ forth_included:
     MOV X0, #'\n'
     BL platform_emit
     MOV X0, #1
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .section .rodata
 incl_err_sep:    .ascii ": ? "

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed: INCLUDE left the interpreter parsing a freed file mapping
+- `forth_included` set `source_addr`/`source_len`/`to_in` to the included file's
+  lines but never restored the caller's values, then `munmap`ed the file — so
+  after the include the outer interpreter parsed from a freed mapping. It only
+  worked when `include` was the last token of a line and the file was fully
+  consumed; a leftover token, or a compile-time error inside the file (an
+  undefined word inside a `:`), dereferenced the freed page and wedged the REPL
+  or segfaulted (with the SAVE capture hooks active). `forth_included` now saves
+  and restores the source pointers around the line loop on both architectures.
+- Bonus: tokens after `include <file>` on the same line now run correctly, and
+  `reload` recovers cleanly from a `session.fs` with an error.
+
 ### MARKER — dictionary restore points
 - `marker ( "name" -- )` defines a word that, when run, restores `HERE` and
   `LATEST` to their values from just before the marker — forgetting the marker

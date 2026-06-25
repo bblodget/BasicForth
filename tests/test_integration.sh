@@ -1144,6 +1144,30 @@ else
     printf "  ${RED}FAIL${NC}  create-file + write-file roundtrip\n    Expected: WROTE\n    Got:      %s\n" "$fa_disk"; ((failed++))
 fi
 
+# INCLUDE error recovery: a compile-time error in an included file (an undefined
+# word inside a :) must recover cleanly — the REPL keeps going (regression: it
+# left source_addr pointing at the freed mmap → wedge/segfault). Also, tokens
+# after `include <file>` on the same line must run (source pointers restored).
+inc_dir="$(mktemp -d)"
+inc_forth="${FORTH/.\//$PWD/}"          # absolute path (these subshells cd away)
+printf ': c1 nosuchword ;\n' > "$inc_dir/bad.fs"
+printf ': g1 7 ;\n' > "$inc_dir/good.fs"
+inc_recover=$( cd "$inc_dir" && printf 'include bad.fs\n5 6 + . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
+inc_rest=$( cd "$inc_dir" && printf 'include good.fs g1 . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
+rm -rf "$inc_dir"
+if [[ "$inc_recover" == *"11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  INCLUDE recovers from a compile error (REPL keeps going)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  INCLUDE compile-error recovery\n    Expected 11\n    Got: %q\n" "$inc_recover"; ((failed++))
+fi
+if [[ "$inc_rest" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tokens after 'include <file>' on the same line run\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tokens after include\n    Expected 7\n    Got: %q\n" "$inc_rest"; ((failed++))
+fi
+
 # READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
 # blank line returns u2=0/flag=true, the last line without a trailing newline
 # is still read, then EOF returns flag=false. Each line is bracketed [..] so
