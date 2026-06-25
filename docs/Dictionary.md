@@ -106,11 +106,11 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **I/O**: emit, key, accept, type, .", s", write-file
 - **File access**: open-file, create-file, close-file, read-file, read-line, file-size, rename-file
 - **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
-- **Session persistence**: save (write interactive definitions to session.fs; auto-loaded at startup)
+- **Session persistence**: save (write definitions to session.fs; auto-loaded at startup), -session (forget session defs), reload (-session + re-include session.fs)
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
 - **Compiler**: :, ;, immediate, ', evaluate, included
 - **Control flow**: if, then, else, begin, until, again, while, repeat, recurse, do, loop, +loop, i, j, unloop, leave (IMMEDIATE+COMPILE_ONLY)
-- **Defining**: here, allot, , (comma), c,, create, constant, does>
+- **Defining**: here, allot, , (comma), c,, create, constant, does>, marker
 - **Scripting**: argc, argv, arg, next-arg, shift-args, bye-code
 - **Other**: find, parse-word, execute, ., .s, bye, number, lit (HIDDEN)
 

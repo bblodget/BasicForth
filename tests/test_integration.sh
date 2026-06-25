@@ -355,6 +355,54 @@ assert_output "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 
 assert_output "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
 
 # =========================================================================
+section "MARKER"
+# =========================================================================
+# Define a marker, define words after it, use them, then run the marker.
+assert_output "MARKER define+use+forget" \
+    "marker -w  : mfoo 111 ;  : mbar 222 ;  mfoo . mbar .  -w"  "111 222"
+# Running the marker rewinds HERE to exactly its pre-marker value (space reclaimed).
+assert_output "MARKER reclaims HERE" \
+    "here marker -w  : mfoo 1 ;  : mbar 2 ;  -w  here = ."  "-1"
+# After the marker runs, the words it covered are gone (referencing one errors).
+assert_error "MARKER forgets its words" \
+    "marker -w  : mzap 7 ;  -w  mzap"  "mzap"
+# The reclaimed space is reusable: a fresh definition after the marker works.
+assert_output "MARKER space is reusable" \
+    "marker -w  : mfoo 1 ;  -w  : mfoo 999 ;  mfoo ."  "999"
+# Nested markers: the outer marker forgets the inner one too.
+assert_error "MARKER nested (outer forgets inner)" \
+    "marker -a  : x1 1 ;  marker -b  : x2 2 ;  -a  -b"  "-b"
+
+# =========================================================================
+section "CHAR robustness"
+# =========================================================================
+# char is a parse-time word; misusing it inside a definition (should be [char])
+# left it parsing nothing at run time and dereferencing parse-word's NULL c-addr
+# → segfault. It must no longer crash; the REPL must survive the next line.
+char_safe=$(printf ': star char * emit ;\nstar\n4242 . bye\n' | timeout 5 $FORTH 2>&1)
+if [[ "$char_safe" == *"4242"* ]]; then
+    printf "  ${GREEN}PASS${NC}  char with no word does not segfault (REPL survives)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  char with no word crashed the REPL\n    Expected 4242\n    Got: %q\n" "$char_safe"; ((failed++))
+fi
+assert_output "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
+assert_output "char still works at interpret level"  'char * .'                      "42"
+# [char] with no word at the very end of a page-sized included file: the byte
+# after the mmap is an unmapped page, so dereferencing parse-word's (now NULL)
+# c-addr would fault. [char] must check the length and not dereference.
+pb_dir="$(mktemp -d)"
+{ printf ': foo '; printf '%4084s' ''; printf '[char]'; } > "$pb_dir/page.fs"  # exactly 4096 bytes
+pb_forth="${FORTH/.\//$PWD/}"
+pb_out=$( cd "$pb_dir" && printf 'include page.fs\n4242 . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $pb_forth 2>&1 )
+rm -rf "$pb_dir"
+if [[ "$pb_out" == *"4242"* ]]; then
+    printf "  ${GREEN}PASS${NC}  [char] at end of a page-sized file does not fault\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  [char] at a page boundary faulted\n    Expected 4242\n    Got: %q\n" "$pb_out"; ((failed++))
+fi
+
+# =========================================================================
 section "String Words"
 # =========================================================================
 
@@ -1125,6 +1173,30 @@ else
     printf "  ${RED}FAIL${NC}  create-file + write-file roundtrip\n    Expected: WROTE\n    Got:      %s\n" "$fa_disk"; ((failed++))
 fi
 
+# INCLUDE error recovery: a compile-time error in an included file (an undefined
+# word inside a :) must recover cleanly — the REPL keeps going (regression: it
+# left source_addr pointing at the freed mmap → wedge/segfault). Also, tokens
+# after `include <file>` on the same line must run (source pointers restored).
+inc_dir="$(mktemp -d)"
+inc_forth="${FORTH/.\//$PWD/}"          # absolute path (these subshells cd away)
+printf ': c1 nosuchword ;\n' > "$inc_dir/bad.fs"
+printf ': g1 7 ;\n' > "$inc_dir/good.fs"
+inc_recover=$( cd "$inc_dir" && printf 'include bad.fs\n5 6 + . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
+inc_rest=$( cd "$inc_dir" && printf 'include good.fs g1 . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
+rm -rf "$inc_dir"
+if [[ "$inc_recover" == *"11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  INCLUDE recovers from a compile error (REPL keeps going)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  INCLUDE compile-error recovery\n    Expected 11\n    Got: %q\n" "$inc_recover"; ((failed++))
+fi
+if [[ "$inc_rest" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tokens after 'include <file>' on the same line run\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tokens after include\n    Expected 7\n    Got: %q\n" "$inc_rest"; ((failed++))
+fi
+
 # READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
 # blank line returns u2=0/flag=true, the last line without a trailing newline
 # is still read, then EOF returns flag=false. Each line is bracketed [..] so
@@ -1373,6 +1445,49 @@ empty_dir="$(mktemp -d)"
 sv_empty=$( cd "$empty_dir" && printf '3 4 + . bye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
 rm -rf "$empty_dir"
+# -session / reload loop. Even when a session uses -session and reload, the saved
+# file must stay PURE definitions (those lines are never captured).
+rl_dir="$(mktemp -d)"
+( cd "$rl_dir" && printf ': widget 100 ;\nsave\n-session\nreload\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+rl_pure=$(cat "$rl_dir/session.fs" 2>/dev/null)
+# In one session: word works, -session forgets it, reload brings it back.
+rl_loop=$( cd "$rl_dir" && printf 'widget .\n-session\nwidget\nreload\nwidget .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+# reload picks up an external edit to session.fs.
+printf ': widget 999 ;\n' > "$rl_dir/session.fs"
+rl_edit=$( cd "$rl_dir" && printf 'reload\nwidget . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+rm -rf "$rl_dir"
+# reload of a session.fs with a compile error must NOT wedge/crash the REPL
+# (regression: forth_included left the freed mmap as the source → segfault).
+bad_dir="$(mktemp -d)"
+printf ': good 1 ;\n: bad nosuchword ;\n' > "$bad_dir/session.fs"
+rl_bad=$( cd "$bad_dir" && printf 'reload\n5 6 + . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$bad_dir"
+# reload with NO session.fs must not destroy the live session or wipe the log:
+# define a word interactively, reload (file absent), the word must survive.
+miss_dir="$(mktemp -d)"
+rl_miss=$( cd "$miss_dir" && printf ': keepme 42 ;\nreload\nkeepme . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$miss_dir"
+# Persistence is interactive-only: reload from a NON-interactive run (no
+# BASICFORTH_SESSION, piped stdin) must NOT auto-load session.fs.
+scope_dir="$(mktemp -d)"
+printf ': secret 123 ;\n' > "$scope_dir/session.fs"
+rl_scope=$( cd "$scope_dir" && printf 'reload\nsecret . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$scope_dir"
+# A reload that faults mid-load (stack underflow in session.fs) must not leave
+# the one-shot (skip-capture) flag stuck — the next definition must still be
+# captured and saved.
+stuck_dir="$(mktemp -d)"
+printf ': keep 1 ;\ndrop\n' > "$stuck_dir/session.fs"   # 'drop' underflows on load
+( cd "$stuck_dir" && printf 'reload\n: persisted 42 ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+rl_stuck=$(cat "$stuck_dir/session.fs" 2>/dev/null)
+rm -rf "$stuck_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1411,6 +1526,41 @@ if [[ "$sv_empty" == *"7"* ]]; then
     printf "  ${GREEN}PASS${NC}  empty session.fs auto-loads without wedging the REPL\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  empty session.fs wedged the REPL\n    Expected 7\n    Got: %q\n" "$sv_empty"; ((failed++))
+fi
+if [[ "$rl_pure" == *": widget 100 ;"* && "$rl_pure" != *"-session"* && "$rl_pure" != *"reload"* ]]; then
+    printf "  ${GREEN}PASS${NC}  session.fs stays pure definitions (no -session/reload lines)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  session.fs polluted with -session/reload\n    Got: %q\n" "$rl_pure"; ((failed++))
+fi
+if [[ "$rl_loop" == *"100"*"100"* && "$rl_loop" == *"? widget"* ]]; then
+    printf "  ${GREEN}PASS${NC}  -session forgets, reload restores (edit/compile/run loop)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  -session/reload loop\n    Expected 100 ... ? widget ... 100\n    Got: %q\n" "$rl_loop"; ((failed++))
+fi
+if [[ "$rl_edit" == *"999"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload picks up an external edit to session.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload did not pick up the edit\n    Expected 999\n    Got: %q\n" "$rl_edit"; ((failed++))
+fi
+if [[ "$rl_bad" == *"reload:"* && "$rl_bad" == *"11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload of a bad session.fs warns and the REPL keeps going\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload of a bad session.fs\n    Expected a 'reload:' warning and 11\n    Got: %q\n" "$rl_bad"; ((failed++))
+fi
+if [[ "$rl_miss" == *"cannot read"* && "$rl_miss" == *"42"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload with no session.fs reports it and keeps the live session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload with missing session.fs lost the session\n    Expected 'cannot read' and 42\n    Got: %q\n" "$rl_miss"; ((failed++))
+fi
+if [[ "$rl_scope" == *"no active session"* && "$rl_scope" == *"? secret"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload is a no-op outside an interactive session (scope)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload auto-loaded session.fs outside an interactive session\n    Got: %q\n" "$rl_scope"; ((failed++))
+fi
+if [[ "$rl_stuck" == *"persisted"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a faulting reload does not leave skip-capture stuck\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)

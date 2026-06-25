@@ -1116,7 +1116,8 @@ forth_parse_word:
 .Lpw_empty:
     ADR X9, to_in
     STR X12, [X9]
-    // Push 0 0
+    // No word: return ( 0 0 ). u = 0 is the signal; the c-addr is a deliberate
+    // NULL — callers must check u before fetching (CHAR/[CHAR] do), never deref.
     STR XZR, [X19, #-CELL]!      // c-addr = 0
     STR XZR, [X19, #-CELL]!      // u = 0
     RET
@@ -2051,6 +2052,21 @@ forth_included:
     MOV X0, X23
     BL platform_close_file
 
+    // Save the outer interpreter's source pointers. The line loop overwrites
+    // source_addr/source_len/to_in; the caller must keep parsing its own line
+    // after we return, and the mmap is freed on exit, so these are restored on
+    // the loop-exit paths. 32 bytes keeps SP 16-aligned (3 used, 8 pad).
+    SUB SP, SP, #32
+    ADR X9, source_addr
+    LDR X10, [X9]
+    STR X10, [SP, #0]
+    ADR X9, source_len
+    LDR X10, [X9]
+    STR X10, [SP, #8]
+    ADR X9, to_in
+    LDR X10, [X9]
+    STR X10, [SP, #16]
+
     // Process file line by line
     // X25 = mmap base, X24 = file size, X26 = line_start offset
     MOV X26, #0                     // line_start = 0
@@ -2152,20 +2168,35 @@ forth_included:
     MOV X0, X25
     MOV X1, X24
     BL platform_munmap
-
-.Lincl_empty_join:
+    // Restore the outer interpreter's source pointers (saved before the loop)
+    LDR X10, [SP, #0]
+    ADR X9, source_addr
+    STR X10, [X9]
+    LDR X10, [SP, #8]
+    ADR X9, source_len
+    STR X10, [X9]
+    LDR X10, [SP, #16]
+    ADR X9, to_in
+    STR X10, [X9]
+    ADD SP, SP, #32
     MOV X0, #0                      // return 0 = success
+    B .Lincl_pop_regs
+
+// Shared register epilogue (no source restore — for paths that never ran the
+// line loop, so never saved the source pointers).
+.Lincl_pop_regs:
     LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
 
-// Empty file (size 0): nothing was mapped — just close the fd and succeed.
+// Empty file (size 0): nothing was mapped, source pointers were not saved.
 .Lincl_empty:
     MOV X0, X23                     // fd
     BL platform_close_file
-    B .Lincl_empty_join
+    MOV X0, #0                      // return 0 = success
+    B .Lincl_pop_regs
 
 .Lincl_error:
     // Print "filename:line: ? token\n"
@@ -2200,13 +2231,19 @@ forth_included:
     MOV X0, X25
     MOV X1, X24
     BL platform_munmap
-
+    // Restore the outer interpreter's source pointers (saved before the loop)
+    LDR X10, [SP, #0]
+    ADR X9, source_addr
+    STR X10, [X9]
+    LDR X10, [SP, #8]
+    ADR X9, source_len
+    STR X10, [X9]
+    LDR X10, [SP, #16]
+    ADR X9, to_in
+    STR X10, [X9]
+    ADD SP, SP, #32
     MOV X0, #1                      // return 1 = error
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .Lincl_open_err:
     // Check for ENOENT (-2) — try BASICFORTH_PATH fallback
@@ -2313,11 +2350,7 @@ forth_included:
 
 .Lincl_open_skip:
     MOV X0, #0                      // return 0 (not an error for ENOENT)
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .Lincl_mmap_err:
     // mmap failed — close fd and print error
@@ -2334,11 +2367,7 @@ forth_included:
     MOV X0, #'\n'
     BL platform_emit
     MOV X0, #1
-    LDP X27, X28, [SP], #16
-    LDP X25, X26, [SP], #16
-    LDP X23, X24, [SP], #16
-    LDP X29, X30, [SP], #16
-    RET
+    B .Lincl_pop_regs
 
 .section .rodata
 incl_err_sep:    .ascii ": ? "
@@ -3265,6 +3294,56 @@ forth_hook_store:
     STR X0, [X2, X1, LSL #3]        // session_hooks[id] = xt
     RET
 
+// ---------- Dictionary restore points (MARKER) ----------
+// (latest@) ( -- a )  push the LATEST register (newest dictionary entry).
+.global forth_latest_at
+forth_latest_at:
+    STR X22, [X19, #-CELL]!         // push LATEST (X22)
+    RET
+
+// (restore-dict) ( here latest -- )  rewind the dictionary: set HERE and LATEST.
+// MARKER's runtime calls this to forget everything defined after the marker.
+.global forth_restore_dict
+forth_restore_dict:
+    LDR X22, [X19], #CELL           // latest (TOS), pop
+    LDR X21, [X19], #CELL           // here, pop
+    RET
+
+// (session-mark!) ( -- )  record the current HERE/LATEST as the session restore
+// point (set once at session startup, just past core.fs).
+.global forth_session_mark
+forth_session_mark:
+    ADR X0, session_mark_here
+    STR X21, [X0]
+    ADR X0, session_mark_latest
+    STR X22, [X0]
+    RET
+
+// (session-restore) ( -- )  rewind HERE/LATEST to the session restore point,
+// forgetting everything defined after it. No-op if no point was recorded.
+.global forth_session_restore
+forth_session_restore:
+    ADR X0, session_mark_latest
+    LDR X1, [X0]
+    CBZ X1, .Lsr_done
+    ADR X0, session_mark_here
+    LDR X21, [X0]
+    ADR X0, session_mark_latest
+    LDR X22, [X0]
+.Lsr_done:
+    RET
+
+// (included?) ( c-addr u -- ior )  like INCLUDED, but leaves forth_included's
+// result on the stack: 0 = clean load, non-zero = a line errored. RELOAD uses it
+// to detect a bad session.fs (and skip re-syncing the log to a broken file).
+.global forth_included_ior
+forth_included_ior:
+    STP X29, X30, [SP, #-16]!
+    BL forth_included              // consumes ( c-addr u ); X0 = 0 or 1
+    STR X0, [X19, #-CELL]!         // push ior
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -3635,9 +3714,13 @@ forth_bracket_tick:
 forth_bracket_char:
     STP X29, X30, [SP, #-16]!
     BL forth_parse_word             // ( -- c-addr u )
+    LDR X10, [X19]                  // u (top)
     LDR X9, [X19, #CELL]           // c-addr (second item)
-    LDRB W0, [X9]                   // first character
     ADD X19, X19, #(2*CELL)         // drop c-addr and u
+    MOV W0, #0                      // default char = 0 (no word)
+    CBZ X10, .Lbc_compile           // u == 0 → compile 0, do NOT deref c-addr
+    LDRB W0, [X9]                   // first character
+.Lbc_compile:
     BL compile_literal
     LDP X29, X30, [SP], #16
     RET
@@ -4314,7 +4397,12 @@ DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
-DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_munmap
+DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
+DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at
+DEFWORD dict_session_mark,"(session-mark!)",forth_session_mark,dict_restore_dict
+DEFWORD dict_session_restore,"(session-restore)",forth_session_restore,dict_session_mark
+DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_restore
+DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 .global dict_include
 .global dict_hook_store
 
@@ -4389,6 +4477,12 @@ saved_here:                         // HERE before current : for error recovery
 session_hooks:                      // [0]=session-seed [1]=capture-line [2]=capture-reset
     .quad 0                         //   xts; 0 = not registered. Set by (hook!).
     .quad 0
+    .quad 0
+.global session_mark_here
+session_mark_here:                  // session restore point (HERE) — 0 = unset
+    .quad 0
+.global session_mark_latest
+session_mark_latest:                // session restore point (LATEST) — 0 = unset
     .quad 0
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry

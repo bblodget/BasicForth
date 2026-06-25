@@ -1256,7 +1256,8 @@ static void test_parse_word_spaces(void)
         fail("PARSE-WORD: second word -> bar",
              "u=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 
-    /* Third call: no more tokens */
+    /* Third call: no more tokens — returns ( 0 0 ). u=0 signals "no word"; the
+     * c-addr is NULL, and callers must check u before fetching it. */
     dsp_in = setup_0();
     call_primitive(forth_parse_word, dsp_in, &dsp_out);
     if (stack_depth(dsp_out) == 2 && dsp_out[0] == 0 && dsp_out[1] == 0)

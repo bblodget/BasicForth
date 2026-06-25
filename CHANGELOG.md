@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Fixed: `char` / `[char]` could segfault on missing input
+- `parse-word` returns `( 0 0 )` when there is no next word; `char`
+  (`parse-word drop c@`) and `[char]` both fetched that `c-addr` *without
+  checking the length*, dereferencing a NULL (or, at the end of a page-sized
+  included file, an unmapped) address. So `: star char * emit ;` then `star` (a
+  misuse — `[char]` is the in-definition form), a bare `char`, or an `[char]` at
+  the very end of a file all crashed. Fix: the callers now check `u` before
+  fetching — `char` returns 0 when there is no word, and `[char]` compiles 0 —
+  so the invalid `c-addr` is never dereferenced. `[char] *` and interpret-time
+  `char *` are unchanged.
+
+### Fixed: INCLUDE left the interpreter parsing a freed file mapping
+- `forth_included` set `source_addr`/`source_len`/`to_in` to the included file's
+  lines but never restored the caller's values, then `munmap`ed the file — so
+  after the include the outer interpreter parsed from a freed mapping. It only
+  worked when `include` was the last token of a line and the file was fully
+  consumed; a leftover token, or a compile-time error inside the file (an
+  undefined word inside a `:`), dereferenced the freed page and wedged the REPL
+  or segfaulted (with the SAVE capture hooks active). `forth_included` now saves
+  and restores the source pointers around the line loop on both architectures.
+- Bonus: tokens after `include <file>` on the same line now run correctly, and
+  `reload` recovers cleanly from a `session.fs` with an error.
+
+### Session reload — edit/compile/run loop
+- `-session ( -- )` forgets everything defined since startup (the session
+  definitions and anything entered interactively), keeping `core.fs` and the
+  session words. `reload ( -- )` does `-session` then re-`include`s the
+  (possibly hand-edited) `session.fs`. Built on a restore point recorded just
+  past `core.fs` at startup (`(session-mark!)`/`(session-restore)` primitives,
+  both arches), so the file needs no marker header.
+- `session.fs` now stays *pure definitions*: capture is forward-only (a marker
+  run / `-session` moves `LATEST` backward and is not logged), and `reload`
+  suppresses its own line. After a clean reload the in-memory log is re-seeded
+  from the file, so a later `save` matches the edited file. If `session.fs` has
+  an error, `reload` reports it (`reload: …`), leaves the log untouched (so
+  `save` can't persist a broken file), and the REPL keeps running.
+- Clarified in TODO: `INCLUDED` from inside a colon word is **not** buggy; it is
+  `( c-addr u -- )` per ANS (the earlier "underflow" was a stray `included drop`).
+
+### MARKER — dictionary restore points
+- `marker ( "name" -- )` defines a word that, when run, restores `HERE` and
+  `LATEST` to their values from just before the marker — forgetting the marker
+  and every later definition and reclaiming the dictionary space. The modern
+  replacement for `FORGET`; the basis of an edit/compile/run loop and (soon) a
+  cleanly reloadable `session.fs`. Markers nest.
+- Defined in core.fs with `CREATE ... DOES>`, on two small primitives:
+  `(latest@) ( -- a )` and `(restore-dict) ( here latest -- )`, on both
+  architectures. New docs/Marker.md.
+
 ### Fixed: INCLUDE/INCLUDED of an empty or tiny file
 - `forth_included` could close a standard file descriptor when loading a 0-, 1-,
   or 2-byte file: x86 `platform_mmap_file` clobbered the callee-saved `%rbx`

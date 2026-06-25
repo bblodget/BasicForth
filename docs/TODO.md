@@ -191,19 +191,46 @@ completed. See Planning.md for high-level vision and design decisions.
   file I/O, so block storage adds little.
 - [x] SAVE / persistence of user definitions — source-replay. `save` writes
   interactively-defined words to `session.fs`; an interactive session auto-loads
-  it at startup (after core.fs). Capture excludes transient actions (HERE/STATE
-  delta), handles multi-line defs, discards errored defs; idempotent and
+  it at startup (after core.fs). Capture excludes transient actions (LATEST/STATE
+  delta — bare ALLOT/,/C, are not captured), handles multi-line defs, discards
+  errored defs; idempotent and
   cumulative. Heap-backed log; REPL hooks `(session-seed)`/`(capture-line)`/
   `(capture-reset)` registered via `(hook!)`; gated to interactive tty sessions
   (`BASICFORTH_SESSION=1`/`0` overrides). See docs/Persistence.md.
   - Known limitation: persists definitions, not runtime state (a `variable`
     reloads uninitialized). Redefinitions accumulate in the file.
-- [ ] Bug: `INCLUDED`/`INCLUDE` called from inside a colon definition (e.g.
-  `: load s" foo.fs" included ;`) underflows the data stack — the per-line
-  `forth_interpret_line` re-enters unsafely when there's an enclosing Forth-word
-  frame. Works fine at the REPL and when nested in another included file.
-  Routed around for SAVE (session.fs is loaded in asm by main.s), but the
-  general case should be fixed.
+- [x] `MARKER` — dictionary restore points (modern replacement for `FORGET`).
+  `marker <name>` defines a word that rewinds `HERE`/`LATEST` to before the
+  marker, forgetting it and all later definitions. `CREATE ... DOES>` in core.fs
+  over `(latest@)`/`(restore-dict)` primitives. See docs/Marker.md. (`FORGET`
+  deferred — obsolescent, footgun-prone; BareMetalForth also did marker-only.)
+- [x] Session integration for `MARKER`: `-session` forgets the session
+  definitions (rewinds to a restore point recorded just past core.fs, so core.fs
+  and the session words survive) and `reload` does `-session` + re-`include`
+  session.fs — the edit/compile/run loop. session.fs stays *pure definitions*:
+  capture is forward-only (a marker run / `-session` moves LATEST backward and is
+  not logged) and `reload` sets a one-shot skip flag. Implemented with an
+  external restore point (`(session-mark!)`/`(session-restore)` globals) rather
+  than a marker-in-the-file, so the file needs no `marker -session` header. See
+  docs/Persistence.md.
+- [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
+  **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
+  the stack; errors are printed, not returned as an ior). The earlier "underflow"
+  was an erroneous `included drop` — the `drop` underflowed after the file
+  loaded. `: load s" foo.fs" included ;` (no `drop`) works fine, which is what
+  `reload` relies on. The SAVE startup still loads session.fs in asm, but that's
+  now just a convenience, not a workaround.
+- [x] **Fixed: `INCLUDE`/`INCLUDED` left the outer interpreter parsing a freed
+  mmap.** `forth_included` overwrote `source_addr`/`source_len`/`to_in` with the
+  file's lines but never restored the caller's values, then `munmap`ed the file.
+  After the include the outer `forth_interpret_line` parsed from the (now freed)
+  mapping. It only "worked" when `include` was the last token of a line *and* the
+  file was fully consumed (so `to_in >= source_len` → no deref); any leftover
+  token, or a compile-time error inside the file (which leaves `to_in` mid-line),
+  dereferenced the freed page — wedging the REPL or **segfaulting** once the SAVE
+  capture hooks were active. Fix: `forth_included` now saves the source pointers
+  before the line loop and restores them on every loop-exit path (both arches).
+  Bonus: tokens after `include <file>` on the same line now run correctly.
 
 ---
 

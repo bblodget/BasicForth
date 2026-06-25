@@ -12,10 +12,46 @@ that happens to be written by the machine.
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
 | `save` | ( -- ) | write the captured definitions to `session.fs` in the current directory |
+| `-session` | ( -- ) | forget everything defined since startup (session words + interactive definitions) |
+| `reload` | ( -- ) | `-session`, then re-`include` the (possibly edited) `session.fs` |
 
 There is no separate "load" word: an interactive session **auto-loads**
 `session.fs` from the current directory at startup (if present), right after
 `core.fs`.
+
+## The edit / compile / run loop
+
+`session.fs` is a plain, hand-editable Forth file. Edit it in another terminal
+(vi, your editor of choice), then in the running BasicForth pull the changes in:
+
+```
+> reload
+```
+
+`reload` forgets all the current session definitions (`-session`) and re-loads
+`session.fs`, so you get a clean redefinition every time — no duplicate buildup,
+and definitions you deleted from the file actually disappear. You can also do the
+two steps by hand (`-session` then `include session.fs`).
+
+This works because at startup BasicForth records a **restore point** just past
+`core.fs`; `-session` rewinds the dictionary to it (keeping `core.fs` and the
+session words themselves, including `-session`/`reload`). Markers underpin this —
+see [Marker.md](Marker.md).
+
+`session.fs` stays **pure definitions** — `-session` and `reload` are never
+written into it (capture logs only lines that *define* a word; forgetting moves
+`LATEST` backward and is ignored, and `reload` suppresses its own line). So the
+file is always clean to hand-edit.
+
+If the edited `session.fs` has an error, `reload` shows the file's own
+`session.fs:line: ? token` diagnostic, then reports `reload: session.fs had
+errors — session may be incomplete`. Loading stops at the bad line, the in-memory
+log is left untouched (so a later `save` won't persist a broken file), and the
+REPL keeps running — fix the file and `reload` again.
+
+If `session.fs` is missing or unreadable, `reload` reports `reload: cannot read
+session.fs` and does nothing — it does **not** forget the current session or
+clear the log, so nothing is lost.
 
 ## What gets captured
 
@@ -59,7 +95,10 @@ it never leaves an empty `session.fs` lying around.
 Capture and auto-load are active **only in an interactive terminal session** —
 when standard input is a TTY and no script file was given on the command line.
 Running a Forth script (`basicforth tool.fs`) or piping input never auto-loads
-your session or captures anything, so utilities and automation stay clean.
+your session or captures anything, so utilities and automation stay clean. The
+session words respect this too: outside an interactive session `reload` is a
+no-op (it reports `reload: no active session` rather than auto-loading
+`session.fs`), `-session` forgets nothing, and `save` has an empty log to write.
 
 You can override the default with the `BASICFORTH_SESSION` environment variable:
 

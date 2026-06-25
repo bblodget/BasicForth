@@ -376,9 +376,34 @@ hello!
 `session.fs` is a readable, editable Forth file. Only definitions are captured —
 transient actions like `5 double .` are not — and saving is idempotent and
 cumulative. This is interactive-only: running a script or piping input never
-auto-loads or captures. See `docs/Persistence.md` for the full details and
-limitations (notably: variable/value *contents* are not persisted, only the
-definitions).
+auto-loads or captures.
+
+For an edit/compile/run loop, edit `session.fs` in another terminal and type
+`reload` to pull the changes in — it forgets the current session definitions
+(`-session`) and re-loads the file. `session.fs` stays pure definitions (the
+`-session`/`reload` words are never written into it). See `docs/Persistence.md`
+for the full details and limitations (notably: variable/value *contents* are not
+persisted, only the definitions).
+
+### Forgetting definitions (`marker`)
+
+`marker <name>` sets a restore point in the dictionary. Running `<name>` later
+forgets `<name>` and everything defined after it, reclaiming the space — the
+standard way to undo a batch of definitions and the basis of an
+edit/compile/run loop.
+
+```
+> marker -work
+> : double  dup + ;
+> 5 double .
+10
+> -work          \ forget double and -work itself
+> double
+? double         \ gone
+```
+
+By convention marker names start with `-`. See `docs/Marker.md` for details
+(nesting, what is and isn't reclaimed, and the planned tie-in with sessions).
 
 ## The Prompt
 

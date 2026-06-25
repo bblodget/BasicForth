@@ -108,7 +108,10 @@
 : ALIGNED   7 + -8 and ;
 
 \ Character helpers
-: CHAR      parse-word drop c@ ;
+\ CHAR ( "name" -- c )  first character of the next word; 0 if there is no next
+\ word (so `char` with nothing after it does not fetch a stray address). Note:
+\ CHAR parses at run time — inside a definition use [CHAR] to bake in a literal.
+: CHAR      parse-word if c@ else drop 0 then ;
 
 \ System words
 : ENVIRONMENT?  ( c-addr u -- false ) 2drop false ;
@@ -372,6 +375,22 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
     nip 2dup r> move                  ( a1 a2 )  \ copy payload into new block
     swap free ;                       ( a2 ior )  \ release old; ior from FREE
 
+\ ===== Dictionary restore points: MARKER =====
+\ MARKER <name> defines <name> as a word that, when executed, restores HERE and
+\ LATEST to their values just before the marker — forgetting <name> and every
+\ definition made after it (and reclaiming the dictionary space). The modern
+\ replacement for FORGET; handy for an edit/compile/run loop.
+\
+\ Like CONSTANT (create , does> @), but it snapshots HERE/LATEST *before* CREATE
+\ builds its own header, stores them in the body, and restores instead of
+\ fetching. Executing the marker sets the registers back via (restore-dict); its
+\ now-orphaned code sits above the new HERE and is overwritten by the next word.
+: marker ( "name" -- )
+    here (latest@)                    ( saved-here saved-latest )
+    create swap , ,                   \ body: [saved-here][saved-latest]
+  does> ( body -- )
+    dup @ swap cell+ @ (restore-dict) ;
+
 \ ===== Session persistence (SAVE) =====
 \ Capture the source text of interactive definitions into a heap-backed log,
 \ which SAVE writes to session.fs. At startup an interactive session seeds the
@@ -420,29 +439,42 @@ variable (ap-len)                       \ scratch: byte count for (buf-append)
 create (log)  3 cells allot             \ accumulated definitions (seed + session)
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
+variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
+variable (session-on)                   \ true only after (session-init) ran — i.e.
+                                        \ an interactive session (scopes SAVE/RELOAD)
 create (nl) 10 c,                       \ a single newline byte
 
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
-\ returns to interpret, decide whether the group defined a word (LATEST advanced
-\ — a new header was linked) and flush it to the log, or was a transient action
-\ (LATEST unchanged) and discard it. Using LATEST, not HERE, means bare ALLOT /
-\ , / C, (which move HERE but define no word) are correctly not captured.
+\ returns to interpret, decide whether the group defined a word — flush it to the
+\ log — or not — discard it. A line is a definition only when LATEST moved
+\ *forward* (a new header linked), so transient actions, bare ALLOT/,/C, and
+\ marker runs / -session (which move LATEST *backward*) are all not captured.
+\ RELOAD sets (skip-capture) so its own line is never logged either.
 : (capture-line) ( c-addr u latest -- )
     >r                                  ( c-addr u )   \ R: latest
     (pend) (buf-append)                 \ append the raw line...
     (nl) 1 (pend) (buf-append)          \ ...plus a newline
     state @ if  r> drop exit  then      \ still compiling → wait for more lines
-    r@ (cap-latest) @ <> if             \ LATEST advanced → a word was defined
-        (pend) (log) (buf-append-buf)    \ flush the group into the session log
+    (skip-capture) @ if                 \ RELOAD etc.: discard, don't log
+        false (skip-capture) !
+        (pend) (buf-reset)  r> (cap-latest) !  exit
     then
-    (pend) (buf-reset)                  \ clear pending (flushed or transient)
+    r@ (cap-latest) @ u> if             \ LATEST moved forward → a word was defined
+        (pend) (log) (buf-append-buf)    \ flush the group into the session log
+    then                                \ backward (forget/-session) or same → discard
+    (pend) (buf-reset)                  \ clear pending
     r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
 
 \ (capture-reset): called at the top of the REPL loop with the current LATEST.
 \ Drops a pending partial definition left behind by a line error or fault (only
-\ when not compiling), and resyncs the LATEST baseline.
+\ when not compiling), and resyncs the LATEST baseline. Also clears a stuck
+\ (skip-capture): RELOAD sets that one-shot flag and expects the next
+\ (capture-line) to consume it, but if RELOAD aborts/faults first (e.g. an
+\ out-of-memory in seed-log) that never happens — so clear it here, else the
+\ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
+    false (skip-capture) !
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
     (cap-latest) ! ;
@@ -458,14 +490,23 @@ create (nl) 10 c,                       \ a single newline byte
         (log) cell+ +!                  \ log.len += u2
     again ;
 
-\ (session-seed): copy an existing session.fs into the log so SAVE rewrites it
-\ cumulatively. main.s loads (INCLUDEs) session.fs itself, in asm — calling
-\ INCLUDED from inside a colon word re-enters the interpreter unsafely.
-: (session-seed) ( -- )
+\ (seed-log): reset the log and load the current session.fs's bytes into it, so
+\ SAVE rewrites the file's content (plus later additions) rather than drifting
+\ from a hand-edited file. No-op (empty log) when session.fs is absent.
+: (seed-log) ( -- )
+    (log) (buf-reset)
     s" session.fs" r/o open-file        ( fileid ior )
-    if drop exit then                   \ no session.fs → nothing to restore
-    dup (slurp-into-log)                \ copy its text into the log (for rewrite)
+    if drop exit then                   \ no session.fs → log stays empty
+    dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
+
+\ (session-init): runs once at interactive startup (after core.fs, before
+\ session.fs is loaded). Records the restore point so -session/RELOAD rewind to
+\ here — keeping core.fs and the session words — then seeds the log.
+: (session-init) ( -- )
+    (session-mark!)
+    true (session-on) !                 \ mark this run as an interactive session
+    (seed-log) ;
 
 \ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
 \ A no-op when nothing has been captured (e.g. capture wasn't active), so it
@@ -485,10 +526,40 @@ create (nl) 10 c,                       \ a single newline byte
     abort" save: rename error"
     ." saved to session.fs" cr ;
 
+\ -session: forget everything defined since startup (the session definitions and
+\ anything entered interactively), keeping core.fs and the session words. A no-op
+\ outside an interactive session (no restore point recorded).
+: -session ( -- )  (session-restore) ;
+
+\ RELOAD: the edit/compile/run loop — forget the current session definitions and
+\ re-load the (possibly hand-edited) session.fs. (skip-capture) keeps the RELOAD
+\ line out of the captured log. The log is re-synced from the file (so a later
+\ SAVE matches it) ONLY when the file loads cleanly; if a line errors, the file's
+\ own diagnostic (filename:line: ? token) is shown, loading stops there, the log
+\ is left untouched (so SAVE can't persist a broken file), and RELOAD reports
+\ that the session may be incomplete. The REPL keeps running — fix the file and
+\ reload again.
+: reload ( -- )
+    \ Persistence is interactive-only: do nothing when there is no active session
+    \ (e.g. RELOAD called from a script or a pipe), so it never auto-loads
+    \ session.fs outside that scope.
+    (session-on) @ 0= if  ." reload: no active session" cr  exit  then
+    \ Verify session.fs is readable BEFORE destroying the live session — a
+    \ missing or unreadable file must not forget the session or wipe the log
+    \ (forth_included silently treats a missing file as a clean no-op).
+    s" session.fs" r/o open-file        ( fileid ior )
+    if  drop ." reload: cannot read session.fs" cr  exit  then
+    close-file drop
+    true (skip-capture) !
+    -session
+    s" session.fs" (included?)          ( ior )
+    if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
+    (seed-log) ;
+
 \ Initialize the buffers and register the hooks with the asm REPL.
 (log)  3 cells erase
 (pend) 3 cells erase
-0 (cap-latest) !
-' (session-seed)  0 (hook!)
+0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !
+' (session-init)  0 (hook!)
 ' (capture-line)  1 (hook!)
 ' (capture-reset) 2 (hook!)
