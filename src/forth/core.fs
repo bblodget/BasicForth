@@ -330,3 +330,44 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 1 constant w/o
 2 constant r/w
 : bin ( fam1 -- fam2 ) ;
+
+\ ===== Dynamic memory: ANS MEMORY wordset =====
+\ A heap separate from the dictionary, one mmap per allocation. Each block has
+\ a one-cell header at its mmap base recording the mapped length (so FREE /
+\ RESIZE know how much to unmap); the address handed to the caller is
+\ base + 1 cell, still cell-aligned. The heap is data-only (no execute).
+\ Allocations are page-granular, so this suits a few large buffers rather than
+\ many tiny ones; the interface can be re-backed by a finer allocator later.
+
+\ ALLOCATE ( u -- a-addr ior )  reserve u bytes; ior 0 on success. A zero-size
+\ request is rejected with a non-zero ior (no allocation), matching gforth.
+: allocate ( u -- a-addr ior )
+    dup 0= if  drop 0 22 exit  then   \ reject 0 bytes (EINVAL); nothing mapped
+    cell+ dup (mmap-anon)             ( total addr )  \ map header + payload
+    dup 0< if  nip negate 0 swap exit  then           ( 0 errno )  \ mmap failed
+    tuck !                            ( base )  \ stash total length in header
+    cell+ 0 ;                         ( a-addr 0 )
+
+\ FREE ( a-addr -- ior )  return a block from ALLOCATE/RESIZE to the system.
+\ A null a-addr (e.g. a failed ALLOCATE's result) is rejected with a non-zero
+\ ior instead of dereferencing the header at a-addr - cell.
+: free ( a-addr -- ior )
+    dup 0= if  drop 22 exit  then     \ reject null (EINVAL); don't deref
+    1 cells -                         ( base )  \ step back to the header
+    dup @ (munmap)                    ( n )    \ unmap base for its stored length
+    negate ;                          \ 0 stays 0; -errno → positive ior
+
+\ RESIZE ( a-addr1 u -- a-addr2 ior )  change a block's size, preserving its
+\ contents up to the smaller of old/new. May move the block. On failure the
+\ original block is unchanged and a-addr2 = a-addr1. A null a-addr1 is rejected
+\ with a non-zero ior (it would otherwise deref a wild header).
+: resize ( a-addr1 u -- a-addr2 ior )
+    over 0= if  drop 22 exit  then    ( 0 ior )  \ reject null a-addr1
+    over 1 cells - @ 1 cells -        ( a1 u olduser )  \ old payload byte count
+    over min >r                       ( a1 u )  \ R: bytes to copy = min(u,old)
+    dup allocate                      ( a1 u a2 ior )
+    ?dup if                           \ allocate failed → keep original
+        >r 2drop r> r> drop exit      ( a1 ior )
+    then
+    nip 2dup r> move                  ( a1 a2 )  \ copy payload into new block
+    swap free ;                       ( a2 ior )  \ release old; ior from FREE

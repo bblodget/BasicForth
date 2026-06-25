@@ -319,6 +319,39 @@ line-oriented styles side by side (the line version normalizes CRLF to LF).
 sorts the lines with `compare`, and writes `<name>_sorted.<ext>` with
 `create-file`/`write-line`.
 
+### Dynamic memory
+
+The dictionary is a fixed arena, so for large or variable-size buffers there is
+a heap — memory obtained from the kernel on demand (via anonymous `mmap`) and
+kept separate from the dictionary. It is the standard ANS MEMORY wordset:
+
+| Word | Stack effect | Meaning |
+|------|--------------|---------|
+| `allocate` | ( u -- a-addr ior ) | reserve `u` bytes; `ior` 0 on success, else the `errno` (and `a-addr` 0) |
+| `free` | ( a-addr -- ior ) | release a block from `allocate`/`resize` |
+| `resize` | ( a-addr1 u -- a-addr2 ior ) | change a block's size, preserving contents up to the smaller of old/new; may move it |
+
+`allocate` of `0` bytes is rejected with a non-zero `ior` (nothing is
+allocated). On a `resize` failure the original block is unchanged and
+`a-addr2 = a-addr1`. Allocations are page-granular (rounded up to 4 KB), so the
+heap suits a handful of large buffers rather than many tiny ones.
+
+```forth
+1024 allocate  ( a-addr ior )
+if   drop                  \ failed: discard the (zero) a-addr
+     ." out of memory" cr
+else ( a-addr )
+    dup 42 swap !          \ use the block...
+    free drop              \ ...then return it
+then
+```
+
+`examples/tac.fs` (the Unix `tac` — print stdin's lines in reverse) is the
+worked example: a pipe's size is unknown, so it slurps stdin into an
+`allocate`d buffer that doubles with `resize` whenever it fills, then emits the
+lines back-to-front and `free`s it. It has no fixed input limit, in contrast to
+`sort.fs`, which relies on `file-size` and a fixed buffer.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

@@ -278,9 +278,24 @@ Memory-map a file with PROT_READ, MAP_PRIVATE.
 Returns -1 (MAP_FAILED) on error. Used by `forth_included` to load
 source files without a fixed buffer size.
 
+### platform_mmap_anon
+
+Map anonymous (file-less) zero-filled memory with PROT_READ|PROT_WRITE,
+MAP_PRIVATE|MAP_ANONYMOUS — a data heap separate from the dictionary, with no
+execute permission. Backs the ANS MEMORY wordset (`ALLOCATE`/`FREE`/`RESIZE`).
+
+|              | ARM64                                       | x86-64                                      |
+|--------------|---------------------------------------------|---------------------------------------------|
+| **Input**    | X0 = size                                   | RDI = size                                  |
+| **Output**   | X0 = mapped address, or negative errno      | RAX = mapped address, or negative errno     |
+| **Syscall**  | mmap(0, size, 3, 0x22, -1, 0) #222          | mmap(0, size, 3, 0x22, -1, 0) #9            |
+
+Page-granular (the kernel rounds size up to a whole page); returns a negative
+errno on failure (MAP_FAILED path). Released with `platform_munmap`.
+
 ### platform_munmap
 
-Unmap a previously mapped file region.
+Unmap a previously mapped region (file or anonymous).
 
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|

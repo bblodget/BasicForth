@@ -2920,6 +2920,29 @@ forth_file_size:
     mov %rcx, (%r15)                # ior = errno
     ret
 
+# ---------- Heap primitives (Phase 4) ----------
+# Thin wrappers over the anonymous-mmap platform calls. The ANS MEMORY words
+# ALLOCATE/FREE/RESIZE are built on these in core.fs; sign handling and the
+# length-header bookkeeping live there.
+
+# (mmap-anon) ( size -- addr )  addr is page-aligned, or a negative errno.
+.global forth_mmap_anon
+forth_mmap_anon:
+    mov (%r15), %rdi                # size
+    call platform_mmap_anon         # RAX = addr or -errno
+    mov %rax, (%r15)
+    ret
+
+# (munmap) ( addr size -- n )  n = 0 on success, or a negative errno.
+.global forth_munmap
+forth_munmap:
+    mov (%r15), %rsi                # size
+    mov CELL(%r15), %rdi            # addr
+    add $CELL, %r15                 # pop size → TOS slot now = addr slot
+    call platform_munmap            # RAX = 0 or -errno
+    mov %rax, (%r15)
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -3884,8 +3907,10 @@ DEFWORD dict_create_file, "create-file",  forth_create_file, dict_open_file
 DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_file_size
+DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 .global dict_include
-.global dict_file_size
+.global dict_munmap
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

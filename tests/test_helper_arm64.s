@@ -109,6 +109,11 @@ platform_mmap_file:
     MOV X0, #-1                     // return MAP_FAILED
     RET
 
+.global platform_mmap_anon
+platform_mmap_anon:
+    MOV X0, #-1                     // return MAP_FAILED
+    RET
+
 .global platform_munmap
 platform_munmap:
     RET

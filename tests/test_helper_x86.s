@@ -115,6 +115,11 @@ platform_mmap_file:
     mov $-1, %rax               # return MAP_FAILED
     ret
 
+.global platform_mmap_anon
+platform_mmap_anon:
+    mov $-1, %rax               # return MAP_FAILED
+    ret
+
 .global platform_munmap
 platform_munmap:
     ret

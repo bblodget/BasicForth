@@ -27,18 +27,19 @@ the benefit with 10% of the effort.
 **Makefile integration** — A target like `make app SRC=snake.fs ENTRY=snake`
 that produces a standalone binary.
 
-## malloc / Heap (dynamic memory)
+## Growing the dictionary at runtime
 
-Today all memory is one fixed `DICT_SPACE_SIZE` arena (~57 KB free after
-core.fs), with no heap. Idea: add an ANS MEMORY wordset (`ALLOCATE`/`FREE`/
-`RESIZE`) backed by `mmap(MAP_ANONYMOUS)` — a heap *separate* from the
-dictionary, allocated from the kernel on demand with no libc. That would unblock
-several other ideas: session-source buffers for `SAVE`/persistence, storage for
-the interactive help text, and scratch space for the text-processing library.
+The mmap-backed data heap (ANS MEMORY wordset: `ALLOCATE`/`FREE`/`RESIZE`) is
+now implemented — see Phase 4 in TODO.md. That covers dynamic *data*: session
+buffers for `SAVE`/persistence, help text, and text-processing scratch.
 
-A separate, harder step would be *growing the dictionary itself* when it runs
-out of space (movable `HERE`, guard-page handling) — treat the mmap heap as the
-first, simpler piece and dictionary growth as a later maybe. Needs more
+What's still a wild idea is the harder, separate piece: *growing the dictionary
+itself* when it runs out of space (today it's one fixed `DICT_SPACE_SIZE` arena,
+~57 KB free after core.fs). Unlike the data heap, dictionary space must be
+**executable** (compiled words run from it), so this needs a `PROT_EXEC`
+mapping — or `mprotect` to add exec, see Future/Hardening in TODO.md — plus a
+movable or chained `HERE` and guard-page handling. Could be a second mmap region
+that `HERE` spills into, or a relocation of the whole arena. Needs more
 discussion before it's firmed up.
 
 ## Perl-style Text-Processing Library
