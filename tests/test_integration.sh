@@ -400,6 +400,34 @@ assert_output "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
 assert_output "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
 
 # =========================================================================
+section "Dynamic Memory (heap)"
+# =========================================================================
+# ALLOCATE/FREE round-trip: store and read a cell, ior 0 throughout.
+assert_output "ALLOCATE/FREE round-trip" \
+    ": t 64 allocate .\" ior=\" . dup 4242 swap ! dup @ .\" val=\" . free .\" f=\" . ; t" \
+    "ior=0 val=4242 f=0"
+# Zero-size request is rejected with a non-zero ior (no allocation).
+assert_output "ALLOCATE 0 → non-zero ior" \
+    ": t 0 allocate .\" z=\" . drop ; t" \
+    "z=22"
+# RESIZE grows the block and preserves existing contents.
+assert_output "RESIZE preserves contents" \
+    ": t 16 allocate drop dup 7 swap ! 256 resize .\" r=\" . dup @ .\" p=\" . free drop ; t" \
+    "r=0 p=7"
+# An impossibly large request fails cleanly: a-addr 0 and a non-zero ior.
+assert_output "ALLOCATE failure → a-addr 0" \
+    ": t 1000000000000000 allocate swap .\" a=\" . 0<> .\" bad=\" . ; t" \
+    "a=0 bad=-1"
+# FREE / RESIZE of a null pointer (e.g. a failed ALLOCATE's result) must not
+# dereference it — return a non-zero ior instead of faulting.
+assert_output "FREE null → non-zero ior" \
+    ": t 0 free .\" fz=\" . ; t" \
+    "fz=22"
+assert_output "RESIZE null → a-addr 0, non-zero ior" \
+    ": t 0 64 resize .\" rz=\" . .\" ra=\" . ; t" \
+    "rz=22 ra=0"
+
+# =========================================================================
 section "Double-Cell Arithmetic"
 # =========================================================================
 

@@ -535,7 +535,9 @@ stat_buf:
 .equ O_TRUNC,     512       # 01000 octal
 .equ CREATE_MODE, 438       # 0666 octal
 .equ PROT_READ,   1
+.equ PROT_WRITE,  2
 .equ MAP_PRIVATE, 2
+.equ MAP_ANONYMOUS, 0x20
 
 # st_size is at offset 48 in struct stat (x86-64)
 .equ STAT_ST_SIZE, 48
@@ -611,6 +613,22 @@ platform_mmap_file:
     mov $PROT_READ, %edx        # arg3 = prot
     mov $MAP_PRIVATE, %r10d     # arg4 = flags
     xor %r9d, %r9d              # arg6 = offset = 0
+    syscall
+    ret
+
+# platform_mmap_anon ( RDI=size -- RAX=addr )
+# Anonymous private read/write mapping (heap memory backed by no file). Returns
+# the page-aligned base address, or a negative errno on failure (MAP_FAILED).
+# Page-granular: the kernel rounds size up to a whole page.
+.global platform_mmap_anon
+platform_mmap_anon:
+    mov %rdi, %rsi              # arg2 = length = size
+    mov $SYS_mmap, %rax
+    xor %edi, %edi              # arg1 = addr = NULL (let kernel choose)
+    mov $(PROT_READ | PROT_WRITE), %edx          # arg3 = prot (data, no exec)
+    mov $(MAP_PRIVATE | MAP_ANONYMOUS), %r10d    # arg4 = flags
+    mov $-1, %r8               # arg5 = fd = -1 (required for MAP_ANONYMOUS)
+    xor %r9d, %r9d            # arg6 = offset = 0
     syscall
     ret
 

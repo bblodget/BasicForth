@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Dynamic memory — ANS MEMORY wordset (Phase 4)
+- `allocate ( u -- a-addr ior )`, `free ( a-addr -- ior )`, and
+  `resize ( a-addr1 u -- a-addr2 ior )` provide a heap separate from the
+  dictionary, obtained from the kernel on demand. Backed by anonymous `mmap`
+  (one mapping per allocation), data-only (no execute permission). `allocate 0`
+  is rejected with a non-zero `ior`; `resize` preserves contents up to the
+  smaller of old/new and may move the block. Allocations are page-granular.
+- New platform call `platform_mmap_anon` (anonymous `PROT_READ|PROT_WRITE`,
+  `MAP_PRIVATE|MAP_ANONYMOUS`) on both architectures; `munmap` reused for
+  release. `ALLOCATE`/`FREE`/`RESIZE` live in core.fs on top of the
+  `(mmap-anon)`/`(munmap)` primitives, with the length-header bookkeeping and a
+  portable allocate-copy-free `RESIZE` in Forth — so the internals can later be
+  re-backed by a finer-grained allocator behind the same interface.
+
 ### `read-line` — line-at-a-time file reading (Phase 4)
 - `read-line ( c-addr u1 fileid -- u2 flag ior )` returns exactly one line per
   call. It stores at most u1 characters (u2 <= u1) and consumes the line

@@ -174,6 +174,17 @@ completed. See Planning.md for high-level vision and design decisions.
   no cross-call state, so multiple files / reused fds are always safe. Defined
   in core.fs on top of `read-file` (one byte per read()), so no new asm/platform
   code — a buffered version can replace it later behind the same interface.
+- [x] Dynamic memory — ANS MEMORY wordset (`ALLOCATE`/`FREE`/`RESIZE`): a heap
+  *separate* from the dictionary, obtained from the kernel on demand via
+  anonymous `mmap` (one mapping per allocation, data-only/no-exec). New
+  `platform_mmap_anon`; `munmap` reused. `ALLOCATE`/`FREE`/`RESIZE` defined in
+  core.fs over `(mmap-anon)`/`(munmap)` primitives, with a one-cell length
+  header and a portable allocate-copy-free `RESIZE`, so the internals can be
+  re-backed by a finer allocator later. `ALLOCATE 0` returns a non-zero `ior`;
+  page-granular, so suited to a few large buffers. This unblocks later ideas
+  that need scratch storage (SAVE session log, help text, text-processing lib).
+  Still deferred (harder, separate step): *growing the dictionary itself* — a
+  `PROT_EXEC` mapping with a movable `HERE` (see WildIdeas / Future-Hardening).
 - Block storage / `LOAD` / `LIST` / `THRU` (Forth screens) — **Won't do.** Block
   screens are a historical storage model; BasicForth already loads source from
   files via `INCLUDE`/`INCLUDED`, and the Phase 4 file-access words cover real

@@ -105,6 +105,7 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **Memory**: @, !, c@, c!
 - **I/O**: emit, key, accept, type, .", s", write-file
 - **File access**: open-file, create-file, close-file, read-file, read-line, file-size
+- **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
 - **Compiler**: :, ;, immediate, ', evaluate, included
 - **Control flow**: if, then, else, begin, until, again, while, repeat, recurse, do, loop, +loop, i, j, unloop, leave (IMMEDIATE+COMPILE_ONLY)
