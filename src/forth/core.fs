@@ -372,6 +372,22 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
     nip 2dup r> move                  ( a1 a2 )  \ copy payload into new block
     swap free ;                       ( a2 ior )  \ release old; ior from FREE
 
+\ ===== Dictionary restore points: MARKER =====
+\ MARKER <name> defines <name> as a word that, when executed, restores HERE and
+\ LATEST to their values just before the marker — forgetting <name> and every
+\ definition made after it (and reclaiming the dictionary space). The modern
+\ replacement for FORGET; handy for an edit/compile/run loop.
+\
+\ Like CONSTANT (create , does> @), but it snapshots HERE/LATEST *before* CREATE
+\ builds its own header, stores them in the body, and restores instead of
+\ fetching. Executing the marker sets the registers back via (restore-dict); its
+\ now-orphaned code sits above the new HERE and is overwritten by the next word.
+: marker ( "name" -- )
+    here (latest@)                    ( saved-here saved-latest )
+    create swap , ,                   \ body: [saved-here][saved-latest]
+  does> ( body -- )
+    dup @ swap cell+ @ (restore-dict) ;
+
 \ ===== Session persistence (SAVE) =====
 \ Capture the source text of interactive definitions into a heap-backed log,
 \ which SAVE writes to session.fs. At startup an interactive session seeds the

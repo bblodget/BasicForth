@@ -355,6 +355,25 @@ assert_output "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 
 assert_output "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
 
 # =========================================================================
+section "MARKER"
+# =========================================================================
+# Define a marker, define words after it, use them, then run the marker.
+assert_output "MARKER define+use+forget" \
+    "marker -w  : mfoo 111 ;  : mbar 222 ;  mfoo . mbar .  -w"  "111 222"
+# Running the marker rewinds HERE to exactly its pre-marker value (space reclaimed).
+assert_output "MARKER reclaims HERE" \
+    "here marker -w  : mfoo 1 ;  : mbar 2 ;  -w  here = ."  "-1"
+# After the marker runs, the words it covered are gone (referencing one errors).
+assert_error "MARKER forgets its words" \
+    "marker -w  : mzap 7 ;  -w  mzap"  "mzap"
+# The reclaimed space is reusable: a fresh definition after the marker works.
+assert_output "MARKER space is reusable" \
+    "marker -w  : mfoo 1 ;  -w  : mfoo 999 ;  mfoo ."  "999"
+# Nested markers: the outer marker forgets the inner one too.
+assert_error "MARKER nested (outer forgets inner)" \
+    "marker -a  : x1 1 ;  marker -b  : x2 2 ;  -a  -b"  "-b"
+
+# =========================================================================
 section "String Words"
 # =========================================================================
 

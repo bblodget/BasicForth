@@ -3004,6 +3004,23 @@ forth_hook_store:
     mov %rdx, (%rcx,%rax,8)         # session_hooks[id] = xt
     ret
 
+# ---------- Dictionary restore points (MARKER) ----------
+# (latest@) ( -- a )  push the LATEST register (newest dictionary entry).
+.global forth_latest_at
+forth_latest_at:
+    sub $CELL, %r15
+    mov %r12, (%r15)                # push LATEST (R12)
+    ret
+
+# (restore-dict) ( here latest -- )  rewind the dictionary: set HERE and LATEST.
+# MARKER's runtime calls this to forget everything defined after the marker.
+.global forth_restore_dict
+forth_restore_dict:
+    mov (%r15), %r12               # latest (TOS)
+    mov CELL(%r15), %r13          # here
+    add $2*CELL, %r15             # pop both
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -3971,7 +3988,9 @@ DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
-DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_munmap
+DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
+DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at
+DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_restore_dict
 .global dict_include
 .global dict_hook_store
 

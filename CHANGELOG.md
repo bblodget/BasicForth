@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### MARKER — dictionary restore points
+- `marker ( "name" -- )` defines a word that, when run, restores `HERE` and
+  `LATEST` to their values from just before the marker — forgetting the marker
+  and every later definition and reclaiming the dictionary space. The modern
+  replacement for `FORGET`; the basis of an edit/compile/run loop and (soon) a
+  cleanly reloadable `session.fs`. Markers nest.
+- Defined in core.fs with `CREATE ... DOES>`, on two small primitives:
+  `(latest@) ( -- a )` and `(restore-dict) ( here latest -- )`, on both
+  architectures. New docs/Marker.md.
+
 ### Fixed: INCLUDE/INCLUDED of an empty or tiny file
 - `forth_included` could close a standard file descriptor when loading a 0-, 1-,
   or 2-byte file: x86 `platform_mmap_file` clobbered the callee-saved `%rbx`

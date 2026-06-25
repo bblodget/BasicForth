@@ -380,6 +380,26 @@ auto-loads or captures. See `docs/Persistence.md` for the full details and
 limitations (notably: variable/value *contents* are not persisted, only the
 definitions).
 
+### Forgetting definitions (`marker`)
+
+`marker <name>` sets a restore point in the dictionary. Running `<name>` later
+forgets `<name>` and everything defined after it, reclaiming the space — the
+standard way to undo a batch of definitions and the basis of an
+edit/compile/run loop.
+
+```
+> marker -work
+> : double  dup + ;
+> 5 double .
+10
+> -work          \ forget double and -work itself
+> double
+? double         \ gone
+```
+
+By convention marker names start with `-`. See `docs/Marker.md` for details
+(nesting, what is and isn't reclaimed, and the planned tie-in with sessions).
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:
