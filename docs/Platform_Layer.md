@@ -265,6 +265,18 @@ Get file size via fstat.
 Extracts st_size from offset 48 in the stat structure; returns the negative
 errno if the syscall fails. Used by `forth_included` and `FILE-SIZE`.
 
+### platform_rename
+
+Atomically rename/replace a file (`renameat` from the current directory). Copies
+both paths into null-terminated scratch buffers first. Backs `RENAME-FILE`, used
+by `SAVE` to swap a freshly written temp file over `session.fs`.
+
+|              | ARM64                                        | x86-64                                       |
+|--------------|----------------------------------------------|----------------------------------------------|
+| **Input**    | X0=old, X1=old_len, X2=new, X3=new_len       | RDI=old, RSI=old_len, RDX=new, RCX=new_len   |
+| **Output**   | X0 = 0, or negative errno                    | RAX = 0, or negative errno                   |
+| **Syscall**  | renameat(AT_FDCWD, old, AT_FDCWD, new) #38   | renameat(AT_FDCWD, old, AT_FDCWD, new) #264  |
+
 ### platform_mmap_file
 
 Memory-map a file with PROT_READ, MAP_PRIVATE.

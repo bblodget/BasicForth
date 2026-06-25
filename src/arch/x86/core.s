@@ -2811,23 +2811,44 @@ forth_bye_code:
 # ---------- WRITE-FILE ----------
 # WRITE-FILE ( c-addr u fileid -- ior )
 # Write u bytes at c-addr to the file descriptor fileid. Returns ior: 0 on
-# success, else the positive errno. A single write() is issued (a partial
-# write on a pipe is reported as success); callers needing all-or-nothing can
-# loop. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
+# success, else the positive errno. Loops over write() until ALL u bytes are
+# written (a short write is not success), so a partial write can never silently
+# truncate output. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
 .global forth_write_file
 forth_write_file:
-    mov (%r15), %rdi                # fileid (fd)
-    mov CELL(%r15), %rdx            # u (length)
-    mov 2*CELL(%r15), %rsi          # c-addr (buffer)
-    add $2*CELL, %r15               # pop fileid + u; TOS slot now holds c-addr
+    push %rbx                       # callee-saved: loop state across the syscall
+    push %rbp
+    push %r14
+    mov (%r15), %r14                # fd
+    mov CELL(%r15), %rbp            # remaining = u
+    mov 2*CELL(%r15), %rbx          # ptr = c-addr
+    add $2*CELL, %r15               # pop fileid + u; TOS slot ← ior
+.Lwf_loop:
+    test %rbp, %rbp
+    jz .Lwf_ok                      # all bytes written
+    mov %r14, %rdi                  # fd
+    mov %rbx, %rsi                  # ptr
+    mov %rbp, %rdx                  # remaining
     call platform_write_fd          # RAX = bytes written or -errno
     test %rax, %rax
     js .Lwf_err                     # negative → error
+    jz .Lwf_zero                    # 0 bytes and no error → avoid spinning
+    add %rax, %rbx                  # ptr += n
+    sub %rax, %rbp                  # remaining -= n
+    jmp .Lwf_loop
+.Lwf_ok:
     movq $0, (%r15)                 # ior = 0 (success)
-    ret
+    jmp .Lwf_ret
+.Lwf_zero:
+    movq $5, (%r15)                 # ior = EIO (5): made no progress
+    jmp .Lwf_ret
 .Lwf_err:
     neg %rax                        # ior = errno (positive)
     mov %rax, (%r15)
+.Lwf_ret:
+    pop %r14
+    pop %rbp
+    pop %rbx
     ret
 
 # ---------- File access (Phase 4) ----------
@@ -2918,6 +2939,24 @@ forth_file_size:
     movq $0, (%r15)                 # ud-hi = 0
     sub $CELL, %r15
     mov %rcx, (%r15)                # ior = errno
+    ret
+
+# RENAME-FILE ( c-addr1 u1 c-addr2 u2 -- ior )  rename file1 → file2 (atomic).
+.global forth_rename_file
+forth_rename_file:
+    mov 3*CELL(%r15), %rdi          # c-addr1 (old)
+    mov 2*CELL(%r15), %rsi          # u1
+    mov CELL(%r15), %rdx            # c-addr2 (new)
+    mov (%r15), %rcx                # u2
+    add $3*CELL, %r15               # pop 3 args; TOS slot ← ior
+    call platform_rename            # RAX = 0 or -errno
+    test %rax, %rax
+    js .Lrename_err
+    movq $0, (%r15)                 # ior = 0
+    ret
+.Lrename_err:
+    neg %rax
+    mov %rax, (%r15)                # ior = errno
     ret
 
 # ---------- Heap primitives (Phase 4) ----------
@@ -3920,7 +3959,8 @@ DEFWORD dict_create_file, "create-file",  forth_create_file, dict_open_file
 DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
-DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_file_size
+DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_munmap
 .global dict_include

@@ -469,15 +469,20 @@ create (nl) 10 c,                       \ a single newline byte
 
 \ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
 \ A no-op when nothing has been captured (e.g. capture wasn't active), so it
-\ never litters an empty session.fs.
+\ never litters an empty session.fs. Writes to session.fs.new first, then
+\ atomically renames it over session.fs, so a write failure can never destroy
+\ an existing session.fs.
 : save ( -- )
     (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    s" session.fs" w/o create-file      ( fileid ior )
-    abort" save: cannot open session.fs"   ( fileid )
+    s" session.fs.new" w/o create-file  ( fileid ior )
+    abort" save: cannot open session.fs.new"   ( fileid )
     >r
     (log) @ (log) cell+ @ r@ write-file ( ior )
     abort" save: write error"
-    r> close-file drop
+    r> close-file                       \ deferred write errors can surface here
+    abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
+    s" session.fs.new" s" session.fs" rename-file
+    abort" save: rename error"
     ." saved to session.fs" cr ;
 
 \ Initialize the buffers and register the hooks with the asm REPL.

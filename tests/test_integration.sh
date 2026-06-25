@@ -1357,6 +1357,15 @@ off_dir="$(mktemp -d)"
 ( cd "$off_dir" && printf ': zzz 9 ;\nsave\nbye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 [ -e "$off_dir/session.fs" ] && sv_off=made || sv_off=none
+# A failed save must not destroy an existing session.fs. Block the temp file by
+# pre-creating session.fs.new as a directory, so create-file on it fails.
+fail_dir="$(mktemp -d)"
+printf 'PRECIOUS\n' > "$fail_dir/session.fs"
+mkdir "$fail_dir/session.fs.new"
+( cd "$fail_dir" && printf ': c 3 ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+sv_safe=$(cat "$fail_dir/session.fs" 2>/dev/null)
+rm -rf "$fail_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1385,6 +1394,11 @@ if [[ "$sv_off" == "none" ]]; then
     printf "  ${GREEN}PASS${NC}  no capture / no session.fs when not interactive\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  unexpected session.fs created when session inactive\n"; ((failed++))
+fi
+if [[ "$sv_safe" == "PRECIOUS" ]]; then
+    printf "  ${GREEN}PASS${NC}  a failed save preserves the existing session.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a failed save destroyed session.fs\n    Got: %q\n" "$sv_safe"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)

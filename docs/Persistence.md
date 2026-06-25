@@ -114,4 +114,6 @@ and registered with the internal `(hook!)` primitive:
 - `(capture-reset)` — called at the top of the REPL loop; discards a pending
   partial definition left by a line error or fault.
 
-`save` writes the log to `session.fs` with the ordinary file-access words.
+`save` writes the log to a temporary `session.fs.new` and then `rename-file`s
+it over `session.fs` — an atomic replace, so a write failure (e.g. a full disk)
+leaves the existing `session.fs` untouched rather than truncating it.

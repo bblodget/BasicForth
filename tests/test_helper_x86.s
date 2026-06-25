@@ -124,6 +124,11 @@ platform_mmap_anon:
 platform_munmap:
     ret
 
+.global platform_rename
+platform_rename:
+    xor %eax, %eax              # return 0 (success)
+    ret
+
 .global platform_close_file
 platform_close_file:
     ret

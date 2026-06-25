@@ -5,7 +5,13 @@
 ### Session persistence — SAVE (Phase 4)
 - `save ( -- )` writes the words you define interactively to `session.fs` in the
   current directory; an interactive session auto-loads `session.fs` at startup
-  (after `core.fs`). Persistence is source-replay: it records the *source text*
+  (after `core.fs`). `save` writes a temporary file and atomically `rename-file`s
+  it into place, so a write failure can never destroy an existing `session.fs`.
+- New `rename-file ( c-addr1 u1 c-addr2 u2 -- ior )` (ANS FILE-EXT) and a
+  `platform_rename` syscall wrapper (`renameat`) on both architectures.
+- `write-file` (and thus `write-line`) now loops over `write(2)` until all bytes
+  are written; a short write is no longer reported as success, so output — and
+  the temp file `save` renames into place — can never be silently truncated. Persistence is source-replay: it records the *source text*
   of definitions, not a binary image. Capture excludes transient actions (only
   lines that advance the dictionary are kept), handles multi-line definitions,
   and discards a definition that errors partway. `save` is idempotent and

@@ -560,6 +560,8 @@ sigact:
 .align 3
 path_scratch:
     .space 256
+path_scratch2:
+    .space 256
 stat_buf:
     .space 144
 
@@ -571,6 +573,7 @@ stat_buf:
 .equ SYS_fstat,   80
 .equ SYS_mmap,    222
 .equ SYS_munmap,  215
+.equ SYS_renameat, 38
 
 .equ AT_FDCWD,    -100
 .equ O_RDONLY,    0
@@ -638,6 +641,53 @@ platform_create_file:
     ORR X2, X2, X9                 // flags = fam | O_CREAT | O_TRUNC
     MOV X3, #CREATE_MODE           // mode
     B platform_open_file_mode
+
+// platform_rename ( X0=old X1=old_len X2=new X3=new_len -- X0=0 or -errno )
+// Copies both paths into null-terminated scratch buffers, then renameat() —
+// an atomic replace, so it can't half-write the destination. Makes no calls,
+// so it needs no frame; clobbers only caller-saved temporaries.
+.global platform_rename
+platform_rename:
+    MOV X4, X2                      // save new ptr
+    MOV X5, X3                      // save new len
+    // copy old (X0,X1) → path_scratch, clamped to 255
+    ADR X9, path_scratch
+    MOV X10, X1
+    CMP X10, #255
+    B.LE .Lren_c1
+    MOV X10, #255
+.Lren_c1:
+    CBZ X10, .Lren_c1e
+.Lren_c1l:
+    LDRB W11, [X0], #1
+    STRB W11, [X9], #1
+    SUB X10, X10, #1
+    CBNZ X10, .Lren_c1l
+.Lren_c1e:
+    STRB WZR, [X9]                  // null terminate
+    // copy new (X4,X5) → path_scratch2, clamped to 255
+    ADR X9, path_scratch2
+    MOV X10, X5
+    CMP X10, #255
+    B.LE .Lren_c2
+    MOV X10, #255
+.Lren_c2:
+    CBZ X10, .Lren_c2e
+.Lren_c2l:
+    LDRB W11, [X4], #1
+    STRB W11, [X9], #1
+    SUB X10, X10, #1
+    CBNZ X10, .Lren_c2l
+.Lren_c2e:
+    STRB WZR, [X9]
+    // renameat(AT_FDCWD, path_scratch, AT_FDCWD, path_scratch2)
+    MOV X0, #AT_FDCWD
+    ADR X1, path_scratch
+    MOV X2, #AT_FDCWD
+    ADR X3, path_scratch2
+    MOV X8, #SYS_renameat
+    SVC #0
+    RET
 
 // platform_fstat ( X0=fd -- X0=size )
 // Returns file size via fstat, or a negative errno if the fstat syscall fails.

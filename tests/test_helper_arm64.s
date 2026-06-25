@@ -118,6 +118,11 @@ platform_mmap_anon:
 platform_munmap:
     RET
 
+.global platform_rename
+platform_rename:
+    MOV X0, #0                      // return 0 (success)
+    RET
+
 .global platform_close_file
 platform_close_file:
     RET

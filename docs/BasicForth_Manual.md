@@ -252,9 +252,9 @@ reports a problem without corrupting its stdout:
 
 (`S"` is compile-only, so build strings inside a definition as shown.)
 
-Note: `write-file`/`write-line` issue a single `write(2)`; a partial write on a
-pipe is reported as success. For ordinary stdout/stderr and file output this is
-not a concern.
+Note: `write-file`/`write-line` loop over `write(2)` until **all** the bytes are
+written, so a short write never silently truncates output; the `ior` is non-zero
+only on a real error.
 
 See `examples/lines.fs` for a small utility that writes its data to stdout and
 its diagnostics to stderr, so `./lines.fs a b > out` leaves clean data in `out`
@@ -276,6 +276,7 @@ the ANS File-Access wordset:
 | `read-file` | ( c-addr u1 fileid -- u2 ior ) | read up to u1 bytes; u2 = actual, 0 at end of file |
 | `read-line` | ( c-addr u1 fileid -- u2 flag ior ) | read one line (≤ u1 chars); newline not stored; flag false only at end of file |
 | `file-size` | ( fileid -- ud ior ) | size in bytes, as a double |
+| `rename-file` | ( c-addr1 u1 c-addr2 u2 -- ior ) | rename/replace file1 → file2 (atomic) |
 
 Every operation returns an `ior` (`0` success, else the positive `errno`).
 A typical read-a-whole-file-in-chunks loop (`S"` is compile-only, so build the

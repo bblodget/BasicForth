@@ -515,6 +515,8 @@ sigact:
 .align 8
 path_scratch:
     .space 256
+path_scratch2:
+    .space 256
 stat_buf:
     .space 144
 
@@ -526,6 +528,7 @@ stat_buf:
 .equ SYS_mmap,    9
 .equ SYS_munmap,  11
 .equ SYS_openat,  257
+.equ SYS_renameat, 264
 
 .equ AT_FDCWD,    -100
 .equ O_RDONLY,    0
@@ -585,6 +588,43 @@ platform_create_file:
     or $(O_CREAT | O_TRUNC), %r8
     mov $CREATE_MODE, %r9
     jmp platform_open_file_mode
+
+# platform_rename ( RDI=old RSI=old_len RDX=new RCX=new_len -- RAX=0 or -errno )
+# Copies both paths into null-terminated scratch buffers, then renameat() —
+# an atomic replace, so it can't half-write the destination.
+.global platform_rename
+platform_rename:
+    push %rdx                   # save new ptr
+    push %rcx                   # save new len
+    # copy old (RDI) → path_scratch, clamped to 255
+    mov %rsi, %rcx              # count = old_len
+    cmp $255, %rcx
+    jbe .Lren_c1
+    mov $255, %rcx
+.Lren_c1:
+    mov %rdi, %rsi             # src = old
+    lea path_scratch(%rip), %rdi
+    cld
+    rep movsb
+    movb $0, (%rdi)            # null terminate
+    # copy new → path_scratch2
+    pop %rcx                   # new len
+    pop %rsi                   # new ptr
+    cmp $255, %rcx
+    jbe .Lren_c2
+    mov $255, %rcx
+.Lren_c2:
+    lea path_scratch2(%rip), %rdi
+    rep movsb
+    movb $0, (%rdi)
+    # renameat(AT_FDCWD, path_scratch, AT_FDCWD, path_scratch2)
+    mov $SYS_renameat, %rax
+    mov $AT_FDCWD, %rdi
+    lea path_scratch(%rip), %rsi
+    mov $AT_FDCWD, %rdx
+    lea path_scratch2(%rip), %r10
+    syscall
+    ret
 
 # platform_fstat ( RDI=fd -- RAX=size )
 # Returns file size via fstat, or a negative errno if the fstat syscall fails.

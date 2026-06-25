@@ -3059,25 +3059,43 @@ forth_bye_code:
 // ---------- WRITE-FILE ----------
 // WRITE-FILE ( c-addr u fileid -- ior )
 // Write u bytes at c-addr to the file descriptor fileid. Returns ior: 0 on
-// success, else the positive errno. A single write() is issued (a partial
-// write on a pipe is reported as success); callers needing all-or-nothing can
-// loop. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
+// success, else the positive errno. Loops over write() until ALL u bytes are
+// written (a short write is not success), so a partial write can never silently
+// truncate output. fileid is a raw OS fd (stdin/stdout/stderr = 0/1/2).
 .global forth_write_file
 forth_write_file:
     STP X29, X30, [SP, #-16]!
-    LDR X0, [X19]                  // fileid (fd)
-    LDR X2, [X19, #CELL]           // u (length)
-    LDR X1, [X19, #2*CELL]         // c-addr (buffer)
-    ADD X19, X19, #2*CELL          // pop fileid + u; TOS slot now holds c-addr
+    STP X23, X24, [SP, #-16]!      // callee-saved: loop state across the syscall
+    STR X25, [SP, #-16]!
+    LDR X23, [X19]                 // fd
+    LDR X25, [X19, #CELL]          // remaining = u
+    LDR X24, [X19, #2*CELL]        // ptr = c-addr
+    ADD X19, X19, #2*CELL          // pop fileid + u; TOS slot ← ior
+.Lwf_loop:
+    CBZ X25, .Lwf_ok               // all bytes written
+    MOV X0, X23                    // fd
+    MOV X1, X24                    // ptr
+    MOV X2, X25                    // remaining
     BL platform_write_fd           // X0 = bytes written or -errno
     CMP X0, #0
-    B.GE .Lwf_ok                   // >= 0 → success
-    NEG X0, X0                     // ior = errno (positive)
-    STR X0, [X19]
-    LDP X29, X30, [SP], #16
-    RET
+    B.LT .Lwf_err                  // negative → error
+    B.EQ .Lwf_zero                 // 0 bytes and no error → avoid spinning
+    ADD X24, X24, X0               // ptr += n
+    SUB X25, X25, X0               // remaining -= n
+    B .Lwf_loop
 .Lwf_ok:
     STR XZR, [X19]                 // ior = 0 (success)
+    B .Lwf_ret
+.Lwf_zero:
+    MOV X0, #5                     // EIO (5): made no progress
+    STR X0, [X19]
+    B .Lwf_ret
+.Lwf_err:
+    NEG X0, X0                     // ior = errno (positive)
+    STR X0, [X19]
+.Lwf_ret:
+    LDR X25, [SP], #16
+    LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
 
@@ -3176,6 +3194,27 @@ forth_file_size:
     STR XZR, [X19]                  // ud-lo = 0
     STR XZR, [X19, #-CELL]!         // push ud-hi = 0
     STR X0, [X19, #-CELL]!          // push ior = errno
+    LDP X29, X30, [SP], #16
+    RET
+
+// RENAME-FILE ( c-addr1 u1 c-addr2 u2 -- ior )  rename file1 → file2 (atomic).
+.global forth_rename_file
+forth_rename_file:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19, #3*CELL]          // c-addr1 (old)
+    LDR X1, [X19, #2*CELL]          // u1
+    LDR X2, [X19, #CELL]            // c-addr2 (new)
+    LDR X3, [X19]                   // u2
+    ADD X19, X19, #3*CELL           // pop 3 args; TOS slot ← ior
+    BL platform_rename              // X0 = 0 or -errno
+    CMP X0, #0
+    B.LT .Lrename_err
+    STR XZR, [X19]                  // ior = 0
+    LDP X29, X30, [SP], #16
+    RET
+.Lrename_err:
+    NEG X0, X0
+    STR X0, [X19]                   // ior = errno
     LDP X29, X30, [SP], #16
     RET
 
@@ -4263,7 +4302,8 @@ DEFWORD dict_create_file, "create-file",  forth_create_file, dict_open_file
 DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
-DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_file_size
+DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_munmap
 .global dict_include

@@ -104,7 +104,7 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **Logic**: and, or, xor, invert
 - **Memory**: @, !, c@, c!
 - **I/O**: emit, key, accept, type, .", s", write-file
-- **File access**: open-file, create-file, close-file, read-file, read-line, file-size
+- **File access**: open-file, create-file, close-file, read-file, read-line, file-size, rename-file
 - **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
 - **Session persistence**: save (write interactive definitions to session.fs; auto-loaded at startup)
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
