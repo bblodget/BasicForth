@@ -1327,6 +1327,66 @@ if [ -w /dev/full ]; then
     fi
 fi
 
+# Session persistence (SAVE). Capture only runs in an interactive session, so
+# the tests force it on through a pipe with BASICFORTH_SESSION=1. session.fs is
+# written to the CWD, so each run is wrapped in a subshell that cd's to a tmpdir.
+sv_dir="$(mktemp -d)"
+# The harness is invoked with a relative binary path (./basicforth) from the
+# build dir; these subshells cd elsewhere, so resolve it to an absolute command.
+sv_forth="${FORTH/.\//$PWD/}"
+t0=$(date +%s.%N)
+# Session 1: a multi-line def, a one-liner, a transient action, and a bare ALLOT
+# (moves HERE but defines no word — must NOT be captured); then save.
+( cd "$sv_dir" && printf ': dbl dup + ;\n: tri\n  dup dup * *\n;\n42 .\n100 allot\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+sv_file=$(cat "$sv_dir/session.fs" 2>/dev/null)
+# Fresh process in the same dir: startup must auto-load the saved definitions.
+sv_reload=$( cd "$sv_dir" && printf '7 dbl . 3 tri . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+# Idempotent: reload, define nothing, save again → file unchanged.
+cp "$sv_dir/session.fs" "$sv_dir/before"
+( cd "$sv_dir" && printf 'save\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+diff -q "$sv_dir/before" "$sv_dir/session.fs" >/dev/null && sv_idem=ok || sv_idem=bad
+# Cumulative: a later session adds a word; the file keeps the old ones too.
+( cd "$sv_dir" && printf ': sq dup * ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+sv_cumul=$(cat "$sv_dir/session.fs")
+# Session OFF (no env, piped stdin is not a tty): save is a no-op, no file made.
+off_dir="$(mktemp -d)"
+( cd "$off_dir" && printf ': zzz 9 ;\nsave\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+[ -e "$off_dir/session.fs" ] && sv_off=made || sv_off=none
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
+rm -rf "$sv_dir" "$off_dir"
+
+if [[ "$sv_file" == *": dbl dup + ;"* && "$sv_file" == *"dup dup * *"* \
+      && "$sv_file" != *"42 ."* && "$sv_file" != *"100 allot"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SAVE captures definitions (multi-line), not transient actions or bare ALLOT\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SAVE captures definitions, not transient actions/ALLOT\n    Got: %q\n" "$sv_file"; ((failed++))
+fi
+if [[ "$sv_reload" == *"14"* && "$sv_reload" == *"27"* ]]; then
+    printf "  ${GREEN}PASS${NC}  startup reloads saved definitions\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  startup reloads saved definitions\n    Expected 14 and 27\n    Got: %q\n" "$sv_reload"; ((failed++))
+fi
+if [[ "$sv_idem" == "ok" ]]; then
+    printf "  ${GREEN}PASS${NC}  SAVE is idempotent (re-save unchanged)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SAVE is idempotent\n"; ((failed++))
+fi
+if [[ "$sv_cumul" == *": dbl dup + ;"* && "$sv_cumul" == *": sq dup * ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SAVE is cumulative across sessions\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SAVE is cumulative across sessions\n    Got: %q\n" "$sv_cumul"; ((failed++))
+fi
+if [[ "$sv_off" == "none" ]]; then
+    printf "  ${GREEN}PASS${NC}  no capture / no session.fs when not interactive\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unexpected session.fs created when session inactive\n"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

@@ -189,9 +189,21 @@ completed. See Planning.md for high-level vision and design decisions.
   screens are a historical storage model; BasicForth already loads source from
   files via `INCLUDE`/`INCLUDED`, and the Phase 4 file-access words cover real
   file I/O, so block storage adds little.
-- [ ] SAVE / persistence of user definitions (under discussion — leaning toward
-  source-replay: log accepted definition text, `SAVE` writes it, startup can
-  re-`INCLUDE` it)
+- [x] SAVE / persistence of user definitions — source-replay. `save` writes
+  interactively-defined words to `session.fs`; an interactive session auto-loads
+  it at startup (after core.fs). Capture excludes transient actions (HERE/STATE
+  delta), handles multi-line defs, discards errored defs; idempotent and
+  cumulative. Heap-backed log; REPL hooks `(session-seed)`/`(capture-line)`/
+  `(capture-reset)` registered via `(hook!)`; gated to interactive tty sessions
+  (`BASICFORTH_SESSION=1`/`0` overrides). See docs/Persistence.md.
+  - Known limitation: persists definitions, not runtime state (a `variable`
+    reloads uninitialized). Redefinitions accumulate in the file.
+- [ ] Bug: `INCLUDED`/`INCLUDE` called from inside a colon definition (e.g.
+  `: load s" foo.fs" included ;`) underflows the data stack — the per-line
+  `forth_interpret_line` re-enters unsafely when there's an enclosing Forth-word
+  frame. Works fine at the REPL and when nested in another included file.
+  Routed around for SAVE (session.fs is loaded in asm by main.s), but the
+  general case should be fixed.
 
 ---
 

@@ -371,3 +371,119 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
     then
     nip 2dup r> move                  ( a1 a2 )  \ copy payload into new block
     swap free ;                       ( a2 ior )  \ release old; ior from FREE
+
+\ ===== Session persistence (SAVE) =====
+\ Capture the source text of interactive definitions into a heap-backed log,
+\ which SAVE writes to session.fs. At startup an interactive session seeds the
+\ log from an existing session.fs and re-INCLUDEs it. The asm REPL drives this
+\ through three hook words registered with (hook!) (0=boot 1=line 2=reset).
+\
+\ A buffer is a 3-cell struct: [ addr  len  cap ]. addr is a heap block (0 until
+\ first use), len the bytes in use, cap the bytes allocated. It doubles on grow.
+
+64 constant (buf-min)
+variable (ap-len)                       \ scratch: byte count for (buf-append)
+
+: (buf-ensure) ( n buf -- )             \ ensure room for n more bytes
+    >r                                  ( n )                  \ R: buf
+    r@ cell+ @ +                        ( need = len + n )
+    r@ 2 cells + @                      ( need cap )
+    2dup u> 0= if  2drop r> drop exit  then    \ cap >= need → already room
+    drop                                ( need )
+    r@ 2 cells + @ 2* max               ( newcap )  \ = max of need and 2*cap
+    (buf-min) max                       ( newcap )
+    r@ @ 0= if                          \ no block yet → allocate
+        dup allocate  abort" SAVE: out of memory"   ( newcap a )
+        r@ !
+    else                                \ grow existing block
+        r@ @ over resize  abort" SAVE: out of memory"  ( newcap a2 )
+        r@ !
+    then
+    r@ 2 cells + !                      \ buf.cap = newcap
+    r> drop ;
+
+: (buf-append) ( c-addr u buf -- )      \ append u bytes to the buffer
+    >r                                  ( c-addr u )           \ R: buf
+    dup (ap-len) !                      \ remember u (move consumes it)
+    r@ (buf-ensure)                     ( c-addr )
+    r@ @ r@ cell+ @ +                   ( c-addr dest = addr+len )
+    (ap-len) @ move                     ( )
+    (ap-len) @ r@ cell+ +!             \ buf.len += u
+    r> drop ;
+
+: (buf-append-buf) ( src dst -- )       \ append all of src's bytes to dst
+    >r  dup @ swap cell+ @  r> (buf-append) ;
+
+: (buf-reset) ( buf -- )  0 swap cell+ ! ;   \ keep the allocation, length := 0
+
+\ The two live buffers and the capture bookkeeping.
+create (log)  3 cells allot             \ accumulated definitions (seed + session)
+create (pend) 3 cells allot             \ lines of the definition being entered
+variable (cap-latest)                   \ LATEST at the start of the pending group
+create (nl) 10 c,                       \ a single newline byte
+
+\ (capture-line): the asm REPL calls this after each successfully interpreted
+\ line, passing the current LATEST. Accumulate the line in (pend); when STATE
+\ returns to interpret, decide whether the group defined a word (LATEST advanced
+\ — a new header was linked) and flush it to the log, or was a transient action
+\ (LATEST unchanged) and discard it. Using LATEST, not HERE, means bare ALLOT /
+\ , / C, (which move HERE but define no word) are correctly not captured.
+: (capture-line) ( c-addr u latest -- )
+    >r                                  ( c-addr u )   \ R: latest
+    (pend) (buf-append)                 \ append the raw line...
+    (nl) 1 (pend) (buf-append)          \ ...plus a newline
+    state @ if  r> drop exit  then      \ still compiling → wait for more lines
+    r@ (cap-latest) @ <> if             \ LATEST advanced → a word was defined
+        (pend) (log) (buf-append-buf)    \ flush the group into the session log
+    then
+    (pend) (buf-reset)                  \ clear pending (flushed or transient)
+    r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
+
+\ (capture-reset): called at the top of the REPL loop with the current LATEST.
+\ Drops a pending partial definition left behind by a line error or fault (only
+\ when not compiling), and resyncs the LATEST baseline.
+: (capture-reset) ( latest -- )
+    state @ if  drop exit  then
+    (pend) cell+ @ if  (pend) (buf-reset)  then
+    (cap-latest) ! ;
+
+: (slurp-into-log) ( fileid -- )        \ append a whole file to the log
+    >r
+    begin
+        4096 (log) (buf-ensure)
+        (log) @ (log) cell+ @ +         ( dest = addr+len )
+        4096 r@ read-file               ( u2 ior )
+        abort" SAVE: read error"        ( u2 )
+        dup 0= if  drop r> drop exit  then    \ end of file
+        (log) cell+ +!                  \ log.len += u2
+    again ;
+
+\ (session-seed): copy an existing session.fs into the log so SAVE rewrites it
+\ cumulatively. main.s loads (INCLUDEs) session.fs itself, in asm — calling
+\ INCLUDED from inside a colon word re-enters the interpreter unsafely.
+: (session-seed) ( -- )
+    s" session.fs" r/o open-file        ( fileid ior )
+    if drop exit then                   \ no session.fs → nothing to restore
+    dup (slurp-into-log)                \ copy its text into the log (for rewrite)
+    close-file drop ;
+
+\ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
+\ A no-op when nothing has been captured (e.g. capture wasn't active), so it
+\ never litters an empty session.fs.
+: save ( -- )
+    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+    s" session.fs" w/o create-file      ( fileid ior )
+    abort" save: cannot open session.fs"   ( fileid )
+    >r
+    (log) @ (log) cell+ @ r@ write-file ( ior )
+    abort" save: write error"
+    r> close-file drop
+    ." saved to session.fs" cr ;
+
+\ Initialize the buffers and register the hooks with the asm REPL.
+(log)  3 cells erase
+(pend) 3 cells erase
+0 (cap-latest) !
+' (session-seed)  0 (hook!)
+' (capture-line)  1 (hook!)
+' (capture-reset) 2 (hook!)

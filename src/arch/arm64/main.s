@@ -74,12 +74,50 @@ _start:
     STR X2, [X9]
 .Lenv_done:
 
+    // Walk envp again for BASICFORTH_SESSION= (override the default isatty gate
+    // for the interactive session: =0 forces off, any other value forces on).
+    ADR X9, session_env
+    STR XZR, [X9]                   // 0 = unset (use default isatty gate)
+    LDR X0, [SP]                    // argc
+    ADD X0, X0, #2
+    LSL X0, X0, #3
+    ADD X0, SP, X0                  // &envp[0]
+.Lsenv_loop:
+    LDR X1, [X0]                    // envp[i]
+    CBZ X1, .Lsenv_done             // NULL = end of envp
+    ADR X2, sess_prefix
+    MOV X3, #sess_prefix_len
+.Lsenv_cmp:
+    CBZ X3, .Lsenv_found            // prefix matched
+    LDRB W4, [X1], #1
+    LDRB W5, [X2], #1
+    CMP W4, W5
+    B.NE .Lsenv_next
+    SUB X3, X3, #1
+    B .Lsenv_cmp
+.Lsenv_next:
+    ADD X0, X0, #8
+    B .Lsenv_loop
+.Lsenv_found:
+    LDRB W4, [X1]                   // first byte of the value
+    CMP W4, #'0'
+    B.EQ .Lsenv_off
+    MOV X9, #1                      // non-'0' → force on
+    ADR X10, session_env
+    STR X9, [X10]
+    B .Lsenv_done
+.Lsenv_off:
+    MOV X9, #2                      // '0' → force off
+    ADR X10, session_env
+    STR X9, [X10]
+.Lsenv_done:
+
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_munmap            // LATEST
+    ADR X22, dict_hook_store        // LATEST
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -150,6 +188,43 @@ _start:
     BL platform_write
 .Lno_banner:
 
+    // ---- Interactive session: auto-load session.fs + enable capture ----
+    // On only when no script argument was given AND (BASICFORTH_SESSION forces
+    // it on, or stdin is a terminal). Scripts/pipes never auto-session.
+    ADR X9, session_active
+    STR XZR, [X9]
+    ADR X9, start_argc
+    LDR X9, [X9]
+    CMP X9, #2
+    B.GE .Lsession_decided          // a script arg was given → no session
+    ADR X9, session_env
+    LDR X9, [X9]
+    CMP X9, #2
+    B.EQ .Lsession_decided          // BASICFORTH_SESSION=0 → forced off
+    CMP X9, #1
+    B.EQ .Lsession_on               // BASICFORTH_SESSION=1 → forced on
+    MOV X0, #0                      // else default: is stdin a terminal?
+    BL platform_isatty
+    CBZ X0, .Lsession_decided
+.Lsession_on:
+    MOV X9, #1
+    ADR X10, session_active
+    STR X9, [X10]
+    // Seed the in-memory log from an existing session.fs (registered hook).
+    ADR X9, session_hooks
+    LDR X10, [X9]                   // [0] = session-seed
+    CBZ X10, .Lsession_load
+    BLR X10
+.Lsession_load:
+    // Load session.fs the same way core.fs is loaded — in asm, so we don't call
+    // INCLUDED from inside a colon word. Silently skipped if not found.
+    ADR X9, session_fs_name
+    STR X9, [X19, #-CELL]!         // push c-addr
+    MOV X9, #session_fs_len
+    STR X9, [X19, #-CELL]!         // push length
+    BL forth_included
+.Lsession_decided:
+
 .global repl_loop
 repl_loop:
     // If a startup script faulted or ABORTed, recovery lands here with
@@ -169,6 +244,18 @@ repl_loop:
     STR X22, [X9]
     ADR X9, saved_here
     STR X21, [X9]
+
+    // Session capture: discard any pending partial definition left over from a
+    // prior line error or fault (the hook drops it only when STATE = interpret).
+    ADR X9, session_active
+    LDR X9, [X9]
+    CBZ X9, .Lno_reset
+    ADR X9, session_hooks
+    LDR X10, [X9, #16]             // [2] = capture-reset
+    CBZ X10, .Lno_reset
+    STR X22, [X19, #-CELL]!        // push LATEST ( latest -- )
+    BLR X10
+.Lno_reset:
 
     // Print prompt
     ADR X0, prompt_msg
@@ -190,6 +277,8 @@ repl_loop:
     LDR X9, [X19]                   // count
     ADR X10, source_len
     STR X9, [X10]
+    ADR X10, cap_line_len           // remember raw line length for session capture
+    STR X9, [X10]
     ADR X9, source_addr
     ADR X10, input_buf
     STR X10, [X9]
@@ -202,6 +291,22 @@ repl_loop:
     // Interpret the line
     BL forth_interpret_line
     CBNZ X0, repl_error
+
+    // Session capture: hand the raw line to (capture-line) ( c-addr u -- ).
+    ADR X9, session_active
+    LDR X9, [X9]
+    CBZ X9, .Lno_cap_line
+    ADR X9, session_hooks
+    LDR X10, [X9, #8]             // [1] = capture-line
+    CBZ X10, .Lno_cap_line
+    ADR X9, input_buf
+    STR X9, [X19, #-CELL]!         // push c-addr = input_buf
+    ADR X9, cap_line_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!         // push u = line length
+    STR X22, [X19, #-CELL]!        // push LATEST
+    BLR X10                        // (capture-line) ( c-addr u latest -- )
+.Lno_cap_line:
 
     // Success — print " ok\n"
     ADR X0, ok_msg
@@ -284,14 +389,27 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+session_fs_name: .ascii "session.fs"
+.equ session_fs_len, . - session_fs_name
 env_prefix:     .ascii "BASICFORTH_PATH="
 .equ env_prefix_len, . - env_prefix
+sess_prefix:    .ascii "BASICFORTH_SESSION="
+.equ sess_prefix_len, . - sess_prefix
 
 .data
 .align 3
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+// Interactive-session state. session_env: 0=unset, 1=force on, 2=force off (from
+// BASICFORTH_SESSION). session_active: resolved on/off. cap_line_len: length of
+// the current REPL line, saved for the capture hook.
+session_env:
+    .quad 0
+session_active:
+    .quad 0
+cap_line_len:
     .quad 0
 // Non-zero while the startup script (argv[1]) is executing; an error during
 // that window exits non-zero instead of dropping into the REPL. Only main.s

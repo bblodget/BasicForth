@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Session persistence — SAVE (Phase 4)
+- `save ( -- )` writes the words you define interactively to `session.fs` in the
+  current directory; an interactive session auto-loads `session.fs` at startup
+  (after `core.fs`). Persistence is source-replay: it records the *source text*
+  of definitions, not a binary image. Capture excludes transient actions (only
+  lines that advance the dictionary are kept), handles multi-line definitions,
+  and discards a definition that errors partway. `save` is idempotent and
+  cumulative, and a no-op when nothing was captured (no empty file).
+- Active only in an interactive terminal session (stdin is a TTY, no script
+  argument); `BASICFORTH_SESSION=1`/`0` forces it on/off. Scripts and pipes
+  never auto-load or capture.
+- The capture log is heap-backed (grows via `RESIZE`). The REPL drives three
+  `core.fs` hook words — `(session-seed)`, `(capture-line)`, `(capture-reset)` —
+  registered via a new `(hook!)` primitive; `session.fs` is loaded in asm by
+  `main.s` (like `core.fs`). New docs/Persistence.md.
+
 ### Dynamic memory — ANS MEMORY wordset (Phase 4)
 - `allocate ( u -- a-addr ior )`, `free ( a-addr -- ior )`, and
   `resize ( a-addr1 u -- a-addr2 ior )` provide a heap separate from the

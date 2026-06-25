@@ -3205,6 +3205,18 @@ forth_munmap:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- Session hook registration (Phase 4) ----------
+// (hook!) ( xt id -- )  register a session hook word by id: 0=session-seed,
+// 1=capture-line, 2=capture-reset. core.fs registers its hook words here so the
+// asm REPL/startup can call them; main.s reads session_hooks[id] and calls it.
+.global forth_hook_store
+forth_hook_store:
+    LDR X1, [X19], #CELL            // id, pop
+    LDR X0, [X19], #CELL            // xt, pop
+    ADR X2, session_hooks
+    STR X0, [X2, X1, LSL #3]        // session_hooks[id] = xt
+    RET
+
 // ---------- MS@ ----------
 // MS@ ( -- u )
 // Return current monotonic milliseconds.
@@ -4253,8 +4265,9 @@ DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
 DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_file_size
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
+DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_munmap
 .global dict_include
-.global dict_munmap
+.global dict_hook_store
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -4322,6 +4335,11 @@ saved_latest:                       // LATEST before current : for error recover
     .quad 0
 .global saved_here
 saved_here:                         // HERE before current : for error recovery
+    .quad 0
+.global session_hooks
+session_hooks:                      // [0]=session-seed [1]=capture-line [2]=capture-reset
+    .quad 0                         //   xts; 0 = not registered. Set by (hook!).
+    .quad 0
     .quad 0
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry

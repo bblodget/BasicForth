@@ -113,6 +113,7 @@ BASICFORTH_PATH=src/forth:examples src/arch/x86/basicforth snake.fs
 | Variable          | Description                                              |
 |-------------------|---------------------------------------------------------|
 | `BASICFORTH_PATH` | Colon-separated directories searched when a file is not found in CWD |
+| `BASICFORTH_SESSION` | `1` forces the interactive session (SAVE) on, `0` forces it off; unset = on at a terminal |
 
 When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
 a file in the current directory, BasicForth searches each directory in
@@ -351,6 +352,32 @@ worked example: a pipe's size is unknown, so it slurps stdin into an
 `allocate`d buffer that doubles with `resize` whenever it fills, then emits the
 lines back-to-front and `free`s it. It has no fixed input limit, in contrast to
 `sort.fs`, which relies on `file-size` and a fixed buffer.
+
+### Saving your work
+
+In an interactive session, the words you define are remembered across runs, like
+1980s BASIC. Define some words, type `save`, and they are written to
+`session.fs` in the current directory; the next interactive session in that
+directory loads them automatically at startup.
+
+```
+> : greet ." hello!" cr ;
+> : double dup + ;
+> save
+saved to session.fs
+> bye
+$ basicforth          # later, same directory
+> greet
+hello!
+```
+
+`save` records the *source* of your definitions (not a memory image), so
+`session.fs` is a readable, editable Forth file. Only definitions are captured —
+transient actions like `5 double .` are not — and saving is idempotent and
+cumulative. This is interactive-only: running a script or piping input never
+auto-loads or captures. See `docs/Persistence.md` for the full details and
+limitations (notably: variable/value *contents* are not persisted, only the
+definitions).
 
 ## The Prompt
 

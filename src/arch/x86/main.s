@@ -71,11 +71,45 @@ _start:
     mov %rax, basicforth_path_len(%rip)
 .Lenv_done:
 
+    # Walk envp again for BASICFORTH_SESSION= (override the default isatty gate
+    # for the interactive session: =0 forces off, any other value forces on).
+    movq $0, session_env(%rip)      # 0 = unset (use default isatty gate)
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rdi       # &envp[0]
+.Lsenv_loop:
+    mov (%rdi), %rsi                # envp[i]
+    test %rsi, %rsi
+    jz .Lsenv_done                  # NULL = end of envp
+    lea sess_prefix(%rip), %rdx
+    mov $sess_prefix_len, %ecx
+.Lsenv_cmp:
+    test %ecx, %ecx
+    jz .Lsenv_found                 # prefix matched
+    movzbl (%rsi), %eax
+    cmpb (%rdx), %al
+    jne .Lsenv_next
+    inc %rsi
+    inc %rdx
+    dec %ecx
+    jmp .Lsenv_cmp
+.Lsenv_next:
+    add $8, %rdi
+    jmp .Lsenv_loop
+.Lsenv_found:
+    movzbl (%rsi), %eax             # first byte of the value
+    cmpb $'0', %al
+    je .Lsenv_off
+    movq $1, session_env(%rip)      # non-'0' → force on
+    jmp .Lsenv_done
+.Lsenv_off:
+    movq $2, session_env(%rip)      # '0' → force off
+.Lsenv_done:
+
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_munmap(%rip), %r12  # LATEST
+    lea dict_hook_store(%rip), %r12  # LATEST
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -143,6 +177,39 @@ _start:
     call platform_write
 .Lno_banner:
 
+    # ---- Interactive session: auto-load session.fs + enable capture ----
+    # On only when no script argument was given AND (BASICFORTH_SESSION forces it
+    # on, or stdin is a terminal). Scripts/pipes never auto-session.
+    movq $0, session_active(%rip)
+    cmpq $2, start_argc(%rip)
+    jge .Lsession_decided           # a script arg was given → no session
+    cmpq $2, session_env(%rip)
+    je .Lsession_decided            # BASICFORTH_SESSION=0 → forced off
+    cmpq $1, session_env(%rip)
+    je .Lsession_on                 # BASICFORTH_SESSION=1 → forced on
+    xor %edi, %edi                  # else default: is stdin a terminal?
+    call platform_isatty
+    test %rax, %rax
+    jz .Lsession_decided
+.Lsession_on:
+    movq $1, session_active(%rip)
+    # Seed the in-memory log from an existing session.fs (registered Forth hook),
+    # so SAVE later rewrites it cumulatively. No-op if the file is absent.
+    mov session_hooks+0(%rip), %rax # [0] = session-seed
+    test %rax, %rax
+    jz .Lsession_load
+    call *%rax
+.Lsession_load:
+    # Load session.fs the same way core.fs is loaded — in asm, so we don't call
+    # INCLUDED from inside a colon word. Silently skipped if not found.
+    lea session_fs_name(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movq $session_fs_len, (%r15)    # push length
+    call forth_included
+.Lsession_decided:
+
 .global repl_loop
 repl_loop:
     # If a startup script faulted or ABORTed, recovery lands here with
@@ -157,6 +224,18 @@ repl_loop:
     # Save LATEST and HERE for guard page recovery
     mov %r12, saved_latest(%rip)
     mov %r13, saved_here(%rip)
+
+    # Session capture: discard any pending partial definition left over from a
+    # prior line error or fault (the hook drops it only when STATE = interpret).
+    cmpq $0, session_active(%rip)
+    je .Lno_reset
+    mov session_hooks+16(%rip), %rax   # [2] = capture-reset
+    test %rax, %rax
+    jz .Lno_reset
+    sub $CELL, %r15
+    mov %r12, (%r15)                   # push LATEST ( latest -- )
+    call *%rax
+.Lno_reset:
 
     # Print prompt
     lea prompt_msg(%rip), %rsi
@@ -179,6 +258,7 @@ repl_loop:
     # Set up source variables for PARSE-WORD
     mov (%r15), %rax                # count
     mov %rax, source_len(%rip)
+    mov %rax, cap_line_len(%rip)    # remember raw line length for session capture
     lea input_buf(%rip), %rax
     mov %rax, source_addr(%rip)
     movq $0, to_in(%rip)
@@ -190,6 +270,23 @@ repl_loop:
     call forth_interpret_line
     test %rax, %rax
     jnz repl_error
+
+    # Session capture: hand the raw line to (capture-line) ( c-addr u -- ).
+    cmpq $0, session_active(%rip)
+    je .Lno_cap_line
+    mov session_hooks+8(%rip), %rax    # [1] = capture-line
+    test %rax, %rax
+    jz .Lno_cap_line
+    lea input_buf(%rip), %rdx
+    sub $CELL, %r15
+    mov %rdx, (%r15)                    # push c-addr = input_buf
+    mov cap_line_len(%rip), %rdx
+    sub $CELL, %r15
+    mov %rdx, (%r15)                    # push u = line length
+    sub $CELL, %r15
+    mov %r12, (%r15)                    # push LATEST
+    call *%rax                          # (capture-line) ( c-addr u latest -- )
+.Lno_cap_line:
 
     # Success — print " ok\n"
     lea ok_msg(%rip), %rsi
@@ -263,14 +360,27 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+session_fs_name: .ascii "session.fs"
+.equ session_fs_len, . - session_fs_name
 env_prefix:     .ascii "BASICFORTH_PATH="
 .equ env_prefix_len, . - env_prefix
+sess_prefix:    .ascii "BASICFORTH_SESSION="
+.equ sess_prefix_len, . - sess_prefix
 
 .data
 .align 8
 start_argc:
     .quad 0
 start_argv1:
+    .quad 0
+# Interactive-session state. session_env: 0=unset, 1=force on, 2=force off (from
+# BASICFORTH_SESSION). session_active: resolved on/off for this run. cap_line_len:
+# length of the current REPL line, saved for the capture hook.
+session_env:
+    .quad 0
+session_active:
+    .quad 0
+cap_line_len:
     .quad 0
 # Non-zero while the startup script (argv[1]) is executing; an error during that
 # window exits non-zero instead of dropping into the REPL. Only main.s uses it.
