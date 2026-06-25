@@ -62,6 +62,40 @@ and Perl's POD. Open questions: where the help text lives (parsed into memory
 at load time vs. read on demand from the source files), and the markup for the
 doc blocks.
 
+I also think it would be useful if we can search and read the markdown files
+that are in the docs folder.  This would provide a way to access to
+BasicForth_Manual.md and read up on other topics.
+
+## Interactive Line Editor + EDIT (recall and re-edit definitions)
+
+Today `ACCEPT` only handles backspace and echo. The dream is a mini-readline:
+type a line, move the cursor with the arrow keys, insert/delete in the middle,
+and recall previous input with up/down — the way you edit in a modern shell.
+Built on top of that, an `EDIT <word>` that recalls a word's *last definition*
+back into the editable input line so you can tweak it and resubmit, instead of
+retyping it from scratch.
+
+This pairs naturally with SAVE/persistence and `SEE`: the session log already
+holds the source text of every definition (indexed by name at capture time), so
+`SEE <word>` (read-only display) is the cheap first step, and `EDIT <word>` is
+the same lookup piped into the line editor.
+
+Staging:
+
+- **Stage A — `SEE <word>`**: print the last captured source for a word.
+  Read-only; lands with / just after SAVE since it reuses the log.
+- **Stage B — line editor + history**: upgrade `ACCEPT` to parse arrow-key
+  escape sequences (`ESC [ C/D`, etc.), support mid-line insert/delete with
+  redraw, and keep an input-history ring (up/down recalls previous lines). We
+  are already in raw mode with `platform_key`, so the bytes are available; this
+  is the substantial piece and deserves its own design pass.
+- **Stage C — `EDIT <word>`**: recall a definition into the editable line.
+
+A nice simplification for Stage C: to Forth, newlines are just whitespace, so a
+multi-line `: … ;` can be recalled as a *single* (long) line and edited with the
+Stage-B editor — no true multi-line editing needed. The only cost is horizontal
+scrolling for long lines, a normal line-editor detail.
+
 ## Programming Adventures Youtube Channel
 
 This is not really a wild idea, but instead of having the Youtube channel
