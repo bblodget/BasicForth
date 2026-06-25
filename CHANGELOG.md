@@ -15,6 +15,10 @@
   `(mmap-anon)`/`(munmap)` primitives, with the length-header bookkeeping and a
   portable allocate-copy-free `RESIZE` in Forth — so the internals can later be
   re-backed by a finer-grained allocator behind the same interface.
+- New `examples/tac.fs` — the Unix `tac` (reverse the lines of stdin), the
+  heap showcase: stdin's size is unknown, so it slurps into an `ALLOCATE`d
+  buffer that doubles with `RESIZE` as it fills, then emits the lines in reverse
+  and `FREE`s it. No fixed input limit, unlike the fixed-buffer `sort.fs`.
 
 ### `read-line` — line-at-a-time file reading (Phase 4)
 - `read-line ( c-addr u1 fileid -- u2 flag ior )` returns exactly one line per

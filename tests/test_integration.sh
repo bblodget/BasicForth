@@ -1281,6 +1281,52 @@ else
     printf "  ${RED}FAIL${NC}  examples/sort.fs read error → non-zero, no output\n    Got:      exit %s, output-made=%s\n" "$sort_rderr" "$re_made"; ((failed++))
 fi
 
+# examples/tac.fs — the heap showcase. Reverses stdin's lines into a buffer
+# that grows via RESIZE (a pipe's size is unknown). Large input forces several
+# doublings from the 256-byte start, exercising ALLOCATE / RESIZE / FREE.
+tac_small=$(printf 'one\ntwo\nthree\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$REPO_ROOT/examples/tac.fs" 2>/dev/null)
+tac_nonl=$(printf 'a\nb\nc' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$REPO_ROOT/examples/tac.fs" 2>/dev/null)
+tac_dir="$(mktemp -d)"
+seq 1 2000 > "$tac_dir/big.txt"
+awk '{ a[NR]=$0 } END { for (i=NR; i>=1; i--) print a[i] }' "$tac_dir/big.txt" > "$tac_dir/ref.txt"
+t0=$(date +%s.%N)
+BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH "$REPO_ROOT/examples/tac.fs" < "$tac_dir/big.txt" > "$tac_dir/got.txt" 2>/dev/null
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/tac.fs"
+diff -q "$tac_dir/got.txt" "$tac_dir/ref.txt" >/dev/null && tac_big=ok || tac_big=bad
+tac_empty=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$REPO_ROOT/examples/tac.fs" 2>/dev/null; printf 'X%s' "$?")
+rm -rf "$tac_dir"
+
+if [[ "$tac_small" == $'three\ntwo\none' ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/tac.fs reverses lines\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/tac.fs reverses lines\n    Expected: three/two/one\n    Got:      %q\n" "$tac_small"; ((failed++))
+fi
+if [[ "$tac_nonl" == $'cb\na' ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/tac.fs no final newline (GNU semantics)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/tac.fs no final newline\n    Expected: cb<nl>a\n    Got:      %q\n" "$tac_nonl"; ((failed++))
+fi
+if [[ "$tac_big" == "ok" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/tac.fs large input (RESIZE growth)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/tac.fs large input (RESIZE growth)\n"; ((failed++))
+fi
+if [[ "$tac_empty" == "X0" ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/tac.fs empty input → empty, exit 0\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/tac.fs empty input → empty, exit 0\n    Got:      %q\n" "$tac_empty"; ((failed++))
+fi
+# A stdout write failure must fail loudly, not exit 0 with truncated output.
+# /dev/full always returns ENOSPC on write (Linux); skip where it is absent.
+if [ -w /dev/full ]; then
+    printf 'a\nb\nc\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$REPO_ROOT/examples/tac.fs" >/dev/full 2>/dev/null; tac_werr=$?
+    if [[ "$tac_werr" != "0" ]]; then
+        printf "  ${GREEN}PASS${NC}  examples/tac.fs write error → non-zero exit\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  examples/tac.fs write error → non-zero exit\n    Expected: non-zero\n    Got:      %s\n" "$tac_werr"; ((failed++))
+    fi
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

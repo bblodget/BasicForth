@@ -346,6 +346,12 @@ else ( a-addr )
 then
 ```
 
+`examples/tac.fs` (the Unix `tac` — print stdin's lines in reverse) is the
+worked example: a pipe's size is unknown, so it slurps stdin into an
+`allocate`d buffer that doubles with `resize` whenever it fills, then emits the
+lines back-to-front and `free`s it. It has no fixed input limit, in contrast to
+`sort.fs`, which relies on `file-size` and a fixed buffer.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:
