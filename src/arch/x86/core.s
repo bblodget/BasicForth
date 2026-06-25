@@ -3033,6 +3033,35 @@ forth_restore_dict:
     add $2*CELL, %r15             # pop both
     ret
 
+# (session-mark!) ( -- )  record the current HERE/LATEST as the session restore
+# point (set once at session startup, just past core.fs).
+.global forth_session_mark
+forth_session_mark:
+    mov %r13, session_mark_here(%rip)
+    mov %r12, session_mark_latest(%rip)
+    ret
+
+# (session-restore) ( -- )  rewind HERE/LATEST to the session restore point,
+# forgetting everything defined after it. No-op if no point was recorded.
+.global forth_session_restore
+forth_session_restore:
+    cmpq $0, session_mark_latest(%rip)
+    je .Lsr_done
+    mov session_mark_here(%rip), %r13
+    mov session_mark_latest(%rip), %r12
+.Lsr_done:
+    ret
+
+# (included?) ( c-addr u -- ior )  like INCLUDED, but leaves forth_included's
+# result on the stack: 0 = clean load, non-zero = a line errored. RELOAD uses it
+# to detect a bad session.fs (and skip re-syncing the log to a broken file).
+.global forth_included_ior
+forth_included_ior:
+    call forth_included            # consumes ( c-addr u ); RAX = 0 or 1
+    sub $CELL, %r15
+    mov %rax, (%r15)               # push ior
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -4009,7 +4038,10 @@ DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
 DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at
-DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_restore_dict
+DEFWORD dict_session_mark,"(session-mark!)",forth_session_mark,dict_restore_dict
+DEFWORD dict_session_restore,"(session-restore)",forth_session_restore,dict_session_mark
+DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_restore
+DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 .global dict_include
 .global dict_hook_store
 
@@ -4086,6 +4118,12 @@ saved_here:                         # HERE before current : for error recovery
 session_hooks:                      # [0]=session-boot [1]=capture-line [2]=capture-reset
     .quad 0                         #   xts; 0 = not registered. Set by (hook!).
     .quad 0
+    .quad 0
+.global session_mark_here
+session_mark_here:                  # session restore point (HERE) — 0 = unset
+    .quad 0
+.global session_mark_latest
+session_mark_latest:                # session restore point (LATEST) — 0 = unset
     .quad 0
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry

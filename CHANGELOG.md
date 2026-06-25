@@ -25,6 +25,22 @@
 - Bonus: tokens after `include <file>` on the same line now run correctly, and
   `reload` recovers cleanly from a `session.fs` with an error.
 
+### Session reload — edit/compile/run loop
+- `-session ( -- )` forgets everything defined since startup (the session
+  definitions and anything entered interactively), keeping `core.fs` and the
+  session words. `reload ( -- )` does `-session` then re-`include`s the
+  (possibly hand-edited) `session.fs`. Built on a restore point recorded just
+  past `core.fs` at startup (`(session-mark!)`/`(session-restore)` primitives,
+  both arches), so the file needs no marker header.
+- `session.fs` now stays *pure definitions*: capture is forward-only (a marker
+  run / `-session` moves `LATEST` backward and is not logged), and `reload`
+  suppresses its own line. After a clean reload the in-memory log is re-seeded
+  from the file, so a later `save` matches the edited file. If `session.fs` has
+  an error, `reload` reports it (`reload: …`), leaves the log untouched (so
+  `save` can't persist a broken file), and the REPL keeps running.
+- Clarified in TODO: `INCLUDED` from inside a colon word is **not** buggy; it is
+  `( c-addr u -- )` per ANS (the earlier "underflow" was a stray `included drop`).
+
 ### MARKER — dictionary restore points
 - `marker ( "name" -- )` defines a word that, when run, restores `HERE` and
   `LATEST` to their values from just before the marker — forgetting the marker

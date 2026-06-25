@@ -55,11 +55,11 @@ Markers nest naturally: running an *outer* marker also forgets any inner markers
 
 ## Relation to SAVE / sessions
 
-A marker at the top of a session file makes the file cleanly reloadable: re-run
-the marker to forget the old definitions, then re-`include` the (edited) file to
-load them fresh — no duplicate buildup, and deletions in the file take effect.
-See [Persistence.md](Persistence.md). (Weaving the marker into `SAVE`'s output is
-a planned follow-up.)
+The session system uses this idea for its edit/compile/run loop. Rather than
+writing a marker into `session.fs`, BasicForth records a restore point just past
+`core.fs` at startup; `-session` rewinds to it and `reload` does `-session` +
+re-`include session.fs`. So `session.fs` stays pure definitions and is cleanly
+reloadable after a hand-edit. See [Persistence.md](Persistence.md).
 
 ## How it works
 

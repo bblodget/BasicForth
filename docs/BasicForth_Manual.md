@@ -376,9 +376,14 @@ hello!
 `session.fs` is a readable, editable Forth file. Only definitions are captured —
 transient actions like `5 double .` are not — and saving is idempotent and
 cumulative. This is interactive-only: running a script or piping input never
-auto-loads or captures. See `docs/Persistence.md` for the full details and
-limitations (notably: variable/value *contents* are not persisted, only the
-definitions).
+auto-loads or captures.
+
+For an edit/compile/run loop, edit `session.fs` in another terminal and type
+`reload` to pull the changes in — it forgets the current session definitions
+(`-session`) and re-loads the file. `session.fs` stays pure definitions (the
+`-session`/`reload` words are never written into it). See `docs/Persistence.md`
+for the full details and limitations (notably: variable/value *contents* are not
+persisted, only the definitions).
 
 ### Forgetting definitions (`marker`)
 

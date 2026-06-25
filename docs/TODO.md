@@ -204,16 +204,22 @@ completed. See Planning.md for high-level vision and design decisions.
   marker, forgetting it and all later definitions. `CREATE ... DOES>` in core.fs
   over `(latest@)`/`(restore-dict)` primitives. See docs/Marker.md. (`FORGET`
   deferred — obsolescent, footgun-prone; BareMetalForth also did marker-only.)
-- [ ] Session integration for `MARKER`: have `save` emit a `marker -session`
-  header (kept out of the log; seed skips it) so session.fs is cleanly
-  reloadable, and design the in-REPL reload workflow (incl. suppressing capture
-  of the `-session`/`include` lines during a reload).
-- [ ] Bug: `INCLUDED`/`INCLUDE` called from inside a colon definition (e.g.
-  `: load s" foo.fs" included ;`) underflows the data stack — the per-line
-  `forth_interpret_line` re-enters unsafely when there's an enclosing Forth-word
-  frame. Works fine at the REPL and when nested in another included file.
-  Routed around for SAVE (session.fs is loaded in asm by main.s), but the
-  general case should be fixed.
+- [x] Session integration for `MARKER`: `-session` forgets the session
+  definitions (rewinds to a restore point recorded just past core.fs, so core.fs
+  and the session words survive) and `reload` does `-session` + re-`include`
+  session.fs — the edit/compile/run loop. session.fs stays *pure definitions*:
+  capture is forward-only (a marker run / `-session` moves LATEST backward and is
+  not logged) and `reload` sets a one-shot skip flag. Implemented with an
+  external restore point (`(session-mark!)`/`(session-restore)` globals) rather
+  than a marker-in-the-file, so the file needs no `marker -session` header. See
+  docs/Persistence.md.
+- [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
+  **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
+  the stack; errors are printed, not returned as an ior). The earlier "underflow"
+  was an erroneous `included drop` — the `drop` underflowed after the file
+  loaded. `: load s" foo.fs" included ;` (no `drop`) works fine, which is what
+  `reload` relies on. The SAVE startup still loads session.fs in asm, but that's
+  now just a convenience, not a workaround.
 - [x] **Fixed: `INCLUDE`/`INCLUDED` left the outer interpreter parsing a freed
   mmap.** `forth_included` overwrote `source_addr`/`source_len`/`to_in` with the
   file's lines but never restored the caller's values, then `munmap`ed the file.

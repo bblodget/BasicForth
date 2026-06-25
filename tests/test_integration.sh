@@ -1445,6 +1445,49 @@ empty_dir="$(mktemp -d)"
 sv_empty=$( cd "$empty_dir" && printf '3 4 + . bye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
 rm -rf "$empty_dir"
+# -session / reload loop. Even when a session uses -session and reload, the saved
+# file must stay PURE definitions (those lines are never captured).
+rl_dir="$(mktemp -d)"
+( cd "$rl_dir" && printf ': widget 100 ;\nsave\n-session\nreload\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+rl_pure=$(cat "$rl_dir/session.fs" 2>/dev/null)
+# In one session: word works, -session forgets it, reload brings it back.
+rl_loop=$( cd "$rl_dir" && printf 'widget .\n-session\nwidget\nreload\nwidget .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+# reload picks up an external edit to session.fs.
+printf ': widget 999 ;\n' > "$rl_dir/session.fs"
+rl_edit=$( cd "$rl_dir" && printf 'reload\nwidget . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+rm -rf "$rl_dir"
+# reload of a session.fs with a compile error must NOT wedge/crash the REPL
+# (regression: forth_included left the freed mmap as the source → segfault).
+bad_dir="$(mktemp -d)"
+printf ': good 1 ;\n: bad nosuchword ;\n' > "$bad_dir/session.fs"
+rl_bad=$( cd "$bad_dir" && printf 'reload\n5 6 + . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$bad_dir"
+# reload with NO session.fs must not destroy the live session or wipe the log:
+# define a word interactively, reload (file absent), the word must survive.
+miss_dir="$(mktemp -d)"
+rl_miss=$( cd "$miss_dir" && printf ': keepme 42 ;\nreload\nkeepme . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$miss_dir"
+# Persistence is interactive-only: reload from a NON-interactive run (no
+# BASICFORTH_SESSION, piped stdin) must NOT auto-load session.fs.
+scope_dir="$(mktemp -d)"
+printf ': secret 123 ;\n' > "$scope_dir/session.fs"
+rl_scope=$( cd "$scope_dir" && printf 'reload\nsecret . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$scope_dir"
+# A reload that faults mid-load (stack underflow in session.fs) must not leave
+# the one-shot (skip-capture) flag stuck — the next definition must still be
+# captured and saved.
+stuck_dir="$(mktemp -d)"
+printf ': keep 1 ;\ndrop\n' > "$stuck_dir/session.fs"   # 'drop' underflows on load
+( cd "$stuck_dir" && printf 'reload\n: persisted 42 ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+rl_stuck=$(cat "$stuck_dir/session.fs" 2>/dev/null)
+rm -rf "$stuck_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1483,6 +1526,41 @@ if [[ "$sv_empty" == *"7"* ]]; then
     printf "  ${GREEN}PASS${NC}  empty session.fs auto-loads without wedging the REPL\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  empty session.fs wedged the REPL\n    Expected 7\n    Got: %q\n" "$sv_empty"; ((failed++))
+fi
+if [[ "$rl_pure" == *": widget 100 ;"* && "$rl_pure" != *"-session"* && "$rl_pure" != *"reload"* ]]; then
+    printf "  ${GREEN}PASS${NC}  session.fs stays pure definitions (no -session/reload lines)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  session.fs polluted with -session/reload\n    Got: %q\n" "$rl_pure"; ((failed++))
+fi
+if [[ "$rl_loop" == *"100"*"100"* && "$rl_loop" == *"? widget"* ]]; then
+    printf "  ${GREEN}PASS${NC}  -session forgets, reload restores (edit/compile/run loop)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  -session/reload loop\n    Expected 100 ... ? widget ... 100\n    Got: %q\n" "$rl_loop"; ((failed++))
+fi
+if [[ "$rl_edit" == *"999"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload picks up an external edit to session.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload did not pick up the edit\n    Expected 999\n    Got: %q\n" "$rl_edit"; ((failed++))
+fi
+if [[ "$rl_bad" == *"reload:"* && "$rl_bad" == *"11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload of a bad session.fs warns and the REPL keeps going\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload of a bad session.fs\n    Expected a 'reload:' warning and 11\n    Got: %q\n" "$rl_bad"; ((failed++))
+fi
+if [[ "$rl_miss" == *"cannot read"* && "$rl_miss" == *"42"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload with no session.fs reports it and keeps the live session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload with missing session.fs lost the session\n    Expected 'cannot read' and 42\n    Got: %q\n" "$rl_miss"; ((failed++))
+fi
+if [[ "$rl_scope" == *"no active session"* && "$rl_scope" == *"? secret"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload is a no-op outside an interactive session (scope)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload auto-loaded session.fs outside an interactive session\n    Got: %q\n" "$rl_scope"; ((failed++))
+fi
+if [[ "$rl_stuck" == *"persisted"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a faulting reload does not leave skip-capture stuck\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)
