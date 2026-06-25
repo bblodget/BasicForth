@@ -1116,7 +1116,8 @@ forth_parse_word:
 .Lpw_empty:
     ADR X9, to_in
     STR X12, [X9]
-    // Push 0 0
+    // No word: return ( 0 0 ). u = 0 is the signal; the c-addr is a deliberate
+    // NULL — callers must check u before fetching (CHAR/[CHAR] do), never deref.
     STR XZR, [X19, #-CELL]!      // c-addr = 0
     STR XZR, [X19, #-CELL]!      // u = 0
     RET
@@ -3678,9 +3679,13 @@ forth_bracket_tick:
 forth_bracket_char:
     STP X29, X30, [SP, #-16]!
     BL forth_parse_word             // ( -- c-addr u )
+    LDR X10, [X19]                  // u (top)
     LDR X9, [X19, #CELL]           // c-addr (second item)
-    LDRB W0, [X9]                   // first character
     ADD X19, X19, #(2*CELL)         // drop c-addr and u
+    MOV W0, #0                      // default char = 0 (no word)
+    CBZ X10, .Lbc_compile           // u == 0 → compile 0, do NOT deref c-addr
+    LDRB W0, [X9]                   // first character
+.Lbc_compile:
     BL compile_literal
     LDP X29, X30, [SP], #16
     RET

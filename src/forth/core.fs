@@ -108,7 +108,10 @@
 : ALIGNED   7 + -8 and ;
 
 \ Character helpers
-: CHAR      parse-word drop c@ ;
+\ CHAR ( "name" -- c )  first character of the next word; 0 if there is no next
+\ word (so `char` with nothing after it does not fetch a stray address). Note:
+\ CHAR parses at run time — inside a definition use [CHAR] to bake in a literal.
+: CHAR      parse-word if c@ else drop 0 then ;
 
 \ System words
 : ENVIRONMENT?  ( c-addr u -- false ) 2drop false ;

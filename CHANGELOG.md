@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed: `char` / `[char]` could segfault on missing input
+- `parse-word` returns `( 0 0 )` when there is no next word; `char`
+  (`parse-word drop c@`) and `[char]` both fetched that `c-addr` *without
+  checking the length*, dereferencing a NULL (or, at the end of a page-sized
+  included file, an unmapped) address. So `: star char * emit ;` then `star` (a
+  misuse — `[char]` is the in-definition form), a bare `char`, or an `[char]` at
+  the very end of a file all crashed. Fix: the callers now check `u` before
+  fetching — `char` returns 0 when there is no word, and `[char]` compiles 0 —
+  so the invalid `c-addr` is never dereferenced. `[char] *` and interpret-time
+  `char *` are unchanged.
+
 ### Fixed: INCLUDE left the interpreter parsing a freed file mapping
 - `forth_included` set `source_addr`/`source_len`/`to_in` to the included file's
   lines but never restored the caller's values, then `munmap`ed the file — so

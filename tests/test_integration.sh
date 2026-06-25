@@ -374,6 +374,35 @@ assert_error "MARKER nested (outer forgets inner)" \
     "marker -a  : x1 1 ;  marker -b  : x2 2 ;  -a  -b"  "-b"
 
 # =========================================================================
+section "CHAR robustness"
+# =========================================================================
+# char is a parse-time word; misusing it inside a definition (should be [char])
+# left it parsing nothing at run time and dereferencing parse-word's NULL c-addr
+# → segfault. It must no longer crash; the REPL must survive the next line.
+char_safe=$(printf ': star char * emit ;\nstar\n4242 . bye\n' | timeout 5 $FORTH 2>&1)
+if [[ "$char_safe" == *"4242"* ]]; then
+    printf "  ${GREEN}PASS${NC}  char with no word does not segfault (REPL survives)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  char with no word crashed the REPL\n    Expected 4242\n    Got: %q\n" "$char_safe"; ((failed++))
+fi
+assert_output "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
+assert_output "char still works at interpret level"  'char * .'                      "42"
+# [char] with no word at the very end of a page-sized included file: the byte
+# after the mmap is an unmapped page, so dereferencing parse-word's (now NULL)
+# c-addr would fault. [char] must check the length and not dereference.
+pb_dir="$(mktemp -d)"
+{ printf ': foo '; printf '%4084s' ''; printf '[char]'; } > "$pb_dir/page.fs"  # exactly 4096 bytes
+pb_forth="${FORTH/.\//$PWD/}"
+pb_out=$( cd "$pb_dir" && printf 'include page.fs\n4242 . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $pb_forth 2>&1 )
+rm -rf "$pb_dir"
+if [[ "$pb_out" == *"4242"* ]]; then
+    printf "  ${GREEN}PASS${NC}  [char] at end of a page-sized file does not fault\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  [char] at a page boundary faulted\n    Expected 4242\n    Got: %q\n" "$pb_out"; ((failed++))
+fi
+
+# =========================================================================
 section "String Words"
 # =========================================================================
 

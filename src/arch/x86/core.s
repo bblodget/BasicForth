@@ -1053,7 +1053,8 @@ forth_parse_word:
 
 .Lpw_empty:
     mov %rdx, to_in(%rip)
-    # Push 0 0
+    # No word: return ( 0 0 ). u = 0 is the signal; the c-addr is a deliberate
+    # NULL — callers must check u before fetching (CHAR/[CHAR] do), never deref.
     sub $CELL, %r15
     movq $0, (%r15)               # c-addr = 0
     sub $CELL, %r15
@@ -3374,10 +3375,17 @@ forth_bracket_tick:
 .global forth_bracket_char
 forth_bracket_char:
     call forth_parse_word           # ( -- c-addr u )
+    mov (%r15), %rdx                # u (top)
     mov CELL(%r15), %rax            # c-addr
-    movzbl (%rax), %eax             # first character
     add $2*CELL, %r15               # drop c-addr and u
-    call compile_literal            # compile char as literal
+    test %rdx, %rdx
+    jz .Lbc_zero                    # no word → compile 0 (do NOT deref c-addr)
+    movzbl (%rax), %eax             # first character
+    jmp .Lbc_compile
+.Lbc_zero:
+    xor %eax, %eax
+.Lbc_compile:
+    call compile_literal            # compile char as literal (value in EAX)
     ret
 
 # EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
