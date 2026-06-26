@@ -563,3 +563,200 @@ create (nl) 10 c,                       \ a single newline byte
 ' (session-init)  0 (hook!)
 ' (capture-line)  1 (hook!)
 ' (capture-reset) 2 (hook!)
+
+\ ===== Help system: docs browser (man / topics / apropos) =====
+\ Reads the docs/*.md files in the colon-separated directories named by
+\ BASICFORTH_DOCS. Directory listing uses (getdents); files are read on demand.
+
+variable (gd)                            \ getdents record buffer (heap, lazy)
+4096 constant (gd-size)
+: (gd@) ( -- a )                         \ allocate the buffer once, return it
+    (gd) @ ?dup if exit then
+    (gd-size) allocate abort" help: out of memory" dup (gd) ! ;
+
+\ linux_dirent64 record: d_reclen at +16 (16-bit LE), d_name at +19 (asciiz).
+: (de-reclen) ( ptr -- u )  dup 16 + c@ swap 17 + c@ 8 lshift or ;
+: (de-name)   ( ptr -- c-addr )  19 + ;
+: (cstr-len)  ( c-addr -- u )  0 begin 2dup + c@ while 1+ repeat nip ;
+: (ends-md?)  ( c-addr u -- f )          \ does the name end in ".md"?
+    dup 3 < if 2drop false exit then
+    + 3 -                                ( p )   \ start of the last 3 chars
+    dup    c@ [char] . =
+    over 1+ c@ [char] m = and
+    swap 2 + c@ [char] d = and ;
+
+\ Iterate the BASICFORTH_DOCS dirs, calling an xt with ( dir-addr dir-u ).
+variable (dd-xt)  variable (dd-cur)  variable (dd-rem)
+: (index-of) ( c-addr u ch -- n )        \ first index of ch in the string, else u
+    >r over + over                       ( c-addr end cur )   \ R: ch
+    begin 2dup u> while
+        dup c@ r@ = if  nip swap -  r> drop exit  then
+        1+
+    repeat  drop swap -  r> drop ;
+: (each-dir) ( xt -- )
+    (dd-xt) !
+    (docs-path) (dd-rem) ! (dd-cur) !
+    begin (dd-rem) @ while
+        (dd-cur) @ (dd-rem) @ [char] : (index-of)   ( seglen )
+        dup if  (dd-cur) @ over (dd-xt) @ execute  then
+        dup (dd-rem) @ < if 1+ then                 ( advance )
+        dup (dd-cur) +!  (dd-rem) @ swap - (dd-rem) !
+    repeat ;
+
+\ TOPICS: list the available .md topics across the docs directories.
+: (topics-in) ( dir-addr dir-u -- )      \ list .md names (minus ".md") in one dir
+    r/o open-file if drop exit then       ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)     ( n )
+        dup 0> while                       ( n )
+        (gd@) +  (gd@)                     ( end ptr )
+        begin 2dup u> while                ( end ptr )
+            dup (de-name) dup (cstr-len)   ( end ptr name namelen )
+            2dup (ends-md?) if  3 - type space  else  2drop  then
+            dup (de-reclen) +              ( end nextptr )
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+: topics ( -- )
+    (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
+    ['] (topics-in) (each-dir) cr ;
+
+\ --- case-insensitive helpers ---
+: (lc) ( ch -- ch )  dup [char] A [char] Z 1+ within if 32 + then ;
+: (ci=) ( a1 u1 a2 u2 -- f )             \ case-insensitive string equal
+    rot 2dup = 0= if 2drop 2drop false exit then   ( a1 a2 u2 u1 )
+    drop >r 0                                        ( a1 a2 i )   \ R: len
+    begin dup r@ < while
+        2 pick over + c@ (lc)
+        2 pick 2 pick + c@ (lc)
+        <> if r> drop drop drop drop false exit then
+        1+
+    repeat r> drop drop drop drop true ;
+
+\ --- pager: print a file fd, pausing each screenful ---
+256 constant (pg-bufsz)
+variable (pg-buf)                        \ line buffer (heap, lazy)
+variable (pg-row)                        \ lines shown since last pause
+variable (pg-quit)                       \ true once the user pressed q
+: (pg-buf@) ( -- a )
+    (pg-buf) @ ?dup if exit then
+    (pg-bufsz) allocate abort" help: out of memory" dup (pg-buf) ! ;
+: (pg-prompt) ( -- )
+    ." -- more (space=page, q=quit) --" key cr
+    dup [char] q = swap [char] Q = or if  true (pg-quit) !  then
+    0 (pg-row) ! ;
+: (pg-line) ( c-addr u -- )
+    type cr  1 (pg-row) +!
+    (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
+: page-file ( fileid -- )
+    0 (pg-row) ! false (pg-quit) !
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        if  2drop  r> close-file drop exit  then
+        if  (pg-buf@) swap (pg-line)
+        else  drop  r> close-file drop exit  then
+        (pg-quit) @ if  r> close-file drop exit  then
+    again ;
+
+\ --- MAN: find <topic>.md (case-insensitive) in the docs dirs and page it ---
+512 constant (mpath-sz)
+create (mpath) (mpath-sz) allot          \ "<dir>/<name>" scratch path
+variable (md-dir)  variable (md-dirn)    \ current dir for (build-path)
+variable (mn-t)    variable (mn-tn)      \ requested topic
+variable (mn-found)
+: (build-path) ( name namelen -- c-addr u )   \ "<dir>/<name>" in (mpath); u=0 if too long
+    \ Bail out (empty, unopenable path) rather than overrun (mpath) when the
+    \ docs dir + filename won't fit — guards against long BASICFORTH_DOCS values.
+    dup (md-dirn) @ + 1+  (mpath-sz) > if  2drop (mpath) 0 exit  then
+    >r                                          ( name )   \ R: namelen
+    (md-dir) @ (mpath) (md-dirn) @ cmove
+    [char] / (mpath) (md-dirn) @ + c!
+    (mpath) (md-dirn) @ + 1+  r@  cmove
+    (mpath)  (md-dirn) @ 1+ r> + ;
+: (man-in) ( dir-addr dir-u -- )
+    (mn-found) @ if 2drop exit then
+    (md-dirn) ! (md-dir) !
+    (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)            ( n )
+        dup 0> while
+        (gd@) + (gd@)                            ( end ptr )
+        begin 2dup u> while                      ( end ptr )
+            dup (de-name) dup (cstr-len)         ( end ptr name namelen )
+            2dup (ends-md?) if
+                2dup 3 - (mn-t) @ (mn-tn) @ (ci=) if
+                    (build-path) r/o open-file
+                    if drop else page-file true (mn-found) ! then
+                    2drop r> close-file drop exit
+                then
+            then
+            2drop  dup (de-reclen) +
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+: man ( "topic" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if 2drop ." usage: man <topic>" cr exit then
+    (mn-tn) ! (mn-t) !  false (mn-found) !
+    (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
+    ['] (man-in) (each-dir)
+    (mn-found) @ 0= if
+        ." no help for " (mn-t) @ (mn-tn) @ type ."  (try TOPICS)" cr
+    then ;
+
+\ --- APROPOS: list topics whose file contains <keyword> (case-insensitive) ---
+variable (akw)  variable (akn)           \ requested keyword
+variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
+: (ci-at?) ( pos -- f )                  \ keyword matches line at byte offset pos?
+    0
+    begin dup (ap-kn) @ < while
+        2dup + (ap-l) @ + c@ (lc)
+        over (ap-k) @ + c@ (lc)
+        <> if 2drop false exit then
+        1+
+    repeat 2drop true ;
+: (ci-has?) ( line u kw ku -- f )        \ does line contain kw (case-insensitive)?
+    (ap-kn) ! (ap-k) ! (ap-ln) ! (ap-l) !
+    (ap-kn) @ 0= if true exit then
+    (ap-ln) @ (ap-kn) @ < if false exit then
+    (ap-ln) @ (ap-kn) @ -                ( lastpos )
+    0 begin 2dup < 0= while              ( last i )
+        dup (ci-at?) if 2drop true exit then
+        1+
+    repeat 2drop false ;
+: (file-has-kw?) ( name namelen -- f )   \ open <dir>/<name>, true if any line has kw
+    (build-path) r/o open-file if drop false exit then   ( fileid )
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        if  2drop r> close-file drop false exit  then
+        if  (pg-buf@) swap (akw) @ (akn) @ (ci-has?)
+            if  r> close-file drop true exit  then
+        else  drop r> close-file drop false exit  then
+    again ;
+: (apropos-in) ( dir-addr dir-u -- )
+    (md-dirn) ! (md-dir) !
+    (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)            ( n )
+        dup 0> while
+        (gd@) + (gd@)                            ( end ptr )
+        begin 2dup u> while                      ( end ptr )
+            dup (de-name) dup (cstr-len)         ( end ptr name namelen )
+            2dup (ends-md?) if
+                2dup (file-has-kw?) if  2dup 3 - type space  then
+            then
+            2drop  dup (de-reclen) +
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+: apropos ( "keyword" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if 2drop ." usage: apropos <keyword>" cr exit then
+    (akn) ! (akw) !
+    (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
+    ['] (apropos-in) (each-dir) cr ;

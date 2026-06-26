@@ -114,6 +114,7 @@ BASICFORTH_PATH=src/forth:examples src/arch/x86/basicforth snake.fs
 |-------------------|---------------------------------------------------------|
 | `BASICFORTH_PATH` | Colon-separated directories searched when a file is not found in CWD |
 | `BASICFORTH_SESSION` | `1` forces the interactive session (SAVE) on, `0` forces it off; unset = on at a terminal |
+| `BASICFORTH_DOCS` | Colon-separated directories of `*.md` topics for the `man` / `topics` / `apropos` help words |
 
 When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
 a file in the current directory, BasicForth searches each directory in
@@ -404,6 +405,33 @@ edit/compile/run loop.
 
 By convention marker names start with `-`. See `docs/Marker.md` for details
 (nesting, what is and isn't reclaimed, and the planned tie-in with sessions).
+
+## Built-in Help
+
+BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
+more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
+
+```
+$ BASICFORTH_DOCS=docs ./basicforth
+> topics                         \ list the available topics
+Marker Persistence Dictionary ...
+> man persistence                \ page a topic (case-insensitive, .md added)
+# Session Persistence
+...
+-- more (space=page, q=quit) --
+> apropos marker                 \ which topics mention "marker"?
+Marker Persistence
+```
+
+- `topics` lists every `*.md` file in the docs directories (without the
+  extension).
+- `man <topic>` finds `<topic>.md` (case-insensitive) and pages it one screenful
+  at a time — press space for the next page or `q` to stop.
+- `apropos <keyword>` lists the topics whose file contains `<keyword>`
+  (case-insensitive substring match).
+
+If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
+See `docs/Help_System.md` for details.
 
 ## The Prompt
 

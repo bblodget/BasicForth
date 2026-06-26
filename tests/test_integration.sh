@@ -1568,6 +1568,93 @@ assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   
 
 
 # =========================================================================
+section "Help system (man / topics / apropos)"
+# =========================================================================
+
+# Build a throwaway docs directory with two .md topics plus a non-.md file
+# that must be ignored.
+docs_dir="$(mktemp -d)"
+printf '# Widgets\nThe widget subsystem and its gears.\n' > "$docs_dir/Widgets.md"
+printf '# Sound\nNothing relevant in this one.\n'         > "$docs_dir/Sound.md"
+printf 'ignore me\n'                                      > "$docs_dir/notes.txt"
+
+# docs_check NAME INPUT EXPECTED — run with BASICFORTH_DOCS pointed at docs_dir
+docs_check() {
+    local name="$1" input="$2" expected="$3"
+    local t0 t1 ms output
+    t0=$(date +%s.%N)
+    output=$(printf '%s\n' "$input" | BASICFORTH_PATH="$FORTH_LIB" \
+        BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+    t1=$(date +%s.%N)
+    ms=$(elapsed_ms "$t0" "$t1")
+    update_slowest "$ms" "$name"
+    if [[ "$output" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:    %s\n" "$input"
+        printf "    Expected: %s\n" "$expected"
+        printf "    Got:      %s\n" "$(echo "$output" | head -5)"
+        ((failed++))
+    fi
+}
+
+docs_check "topics lists .md topics"       "topics" "Widgets"
+docs_check "topics ignores non-.md"        "topics" "Sound"
+docs_check "man pages a topic"             "man Widgets" "widget subsystem and its gears"
+docs_check "man is case-insensitive"       "man widgets" "widget subsystem and its gears"
+docs_check "man on missing topic"          "man nope" "no help for nope"
+docs_check "apropos finds a match"         "apropos gears" "Widgets"
+docs_check "apropos is case-insensitive"   "apropos GEARS" "Widgets"
+
+# notes.txt is not a topic
+notes_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$notes_out" != *"notes"* ]]; then
+    printf "  ${GREEN}PASS${NC}  topics excludes notes.txt\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  topics excludes notes.txt\n"; ((failed++))
+fi
+
+# apropos must not list a file that lacks the keyword
+ap_out=$(printf 'apropos gears\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$ap_out" != *"Sound"* ]]; then
+    printf "  ${GREEN}PASS${NC}  apropos omits non-matching topic\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  apropos omits non-matching topic\n"; ((failed++))
+fi
+
+# Unset BASICFORTH_DOCS — every command reports it gracefully
+unset_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    env -u BASICFORTH_DOCS timeout 2 $FORTH 2>&1)
+if [[ "$unset_out" == *"BASICFORTH_DOCS not set"* ]]; then
+    printf "  ${GREEN}PASS${NC}  topics with no BASICFORTH_DOCS\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  topics with no BASICFORTH_DOCS\n"
+    printf "    Got:      %s\n" "$(echo "$unset_out" | head -3)"; ((failed++))
+fi
+
+# Long docs path must not overflow the internal path buffer. Pad the directory
+# with resolvable "/." segments so the directory still opens (the kernel/open
+# clamp keeps it valid) while the segment length exceeds the path-build buffer.
+# Before the bounds check this corrupted the dictionary; now man/apropos just
+# find nothing and the REPL stays alive.
+long_docs="$docs_dir"
+while [ "${#long_docs}" -lt 600 ]; do long_docs="$long_docs/."; done
+long_out=$(printf 'man Widgets\napropos gears\n42 .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$long_docs" timeout 2 $FORTH 2>&1)
+long_status=$?
+if [ "$long_status" -eq 0 ] && [[ "$long_out" == *"42"* ]] && [[ "$long_out" == *"Goodbye!"* ]]; then
+    printf "  ${GREEN}PASS${NC}  long docs path does not corrupt memory\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  long docs path does not corrupt memory\n"
+    printf "    exit %s, output: %s\n" "$long_status" "$(echo "$long_out" | head -3)"; ((failed++))
+fi
+
+rm -rf "$docs_dir"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 
