@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added: warn when `core.fs` is not found
+- The `basicforth` binary holds only the assembly primitives; everything else
+  lives in `core.fs`, loaded at startup from CWD or `BASICFORTH_PATH`. Previously,
+  if `core.fs` was reachable nowhere the load was *silently* skipped, leaving a
+  baffling REPL with no `cr`/`.`/`if`/`marker`/etc. and no explanation. BasicForth
+  now prints a one-line warning to **stderr** in that case, naming the cause and
+  the fix (`set BASICFORTH_PATH`). `forth_included` returns 0 for a not-found file
+  (silent skip), so detection uses a new `incl_opened` flag it sets only when it
+  actually opens a file — an empty or comment-only `core.fs` opens and so does not
+  warn. Both architectures; the warning goes to stderr so it never pollutes
+  output.
+
 ### Added: interactive help system (`man` / `topics` / `apropos`)
 - A docs browser reads the `docs/*.md` files in the colon-separated directories
   named by the `BASICFORTH_DOCS` environment variable (same convention as

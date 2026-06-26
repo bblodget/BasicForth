@@ -161,12 +161,27 @@ _start:
     mov %rsp, rp0(%rip)
 
     # Try to load core.fs (silent skip if not found)
+    movq $0, incl_opened(%rip)      # forth_included sets this to 1 iff it opens a file
     lea core_fs_name(%rip), %rax
     sub $CELL, %r15
     mov %rax, (%r15)                # push c-addr
     sub $CELL, %r15
     movq $core_fs_len, (%r15)       # push length
     call forth_included
+
+    # Warn (to stderr) if core.fs was not found. forth_included returns 0 for a
+    # not-found file (silent skip), so the return value can't tell us — but it
+    # sets incl_opened only when it actually opens a file. If it's still 0, core.fs
+    # was reachable nowhere (CWD or BASICFORTH_PATH), so the user has only the
+    # assembly primitives (no CR, IF, ., etc.) — surface it instead of failing
+    # mysteriously. (An empty/comment-only core.fs still opens, so it won't warn.)
+    cmpq $0, incl_opened(%rip)
+    jne .Lcore_loaded
+    mov $2, %rdi                    # fd 2 = stderr
+    lea warn_no_core(%rip), %rsi
+    mov $warn_no_core_len, %rdx
+    call platform_write_fd
+.Lcore_loaded:
 
     # If argv[1] was given, load it as a Forth source file
     cmpq $2, start_argc(%rip)
@@ -397,6 +412,8 @@ msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
+warn_no_core:   .ascii "basicforth: core.fs not found - only built-in primitives are available.\n  Set BASICFORTH_PATH to the directory containing core.fs.\n"
+.equ warn_no_core_len, . - warn_no_core
 session_fs_name: .ascii "session.fs"
 .equ session_fs_len, . - session_fs_name
 env_prefix:     .ascii "BASICFORTH_PATH="

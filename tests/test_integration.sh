@@ -1568,6 +1568,48 @@ assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   
 
 
 # =========================================================================
+section "Startup: core.fs-not-found warning"
+# =========================================================================
+# The binary holds only the asm primitives; everything else is in core.fs, found
+# via CWD then BASICFORTH_PATH. If it's reachable nowhere, the load is silently
+# skipped — so warn on stderr instead of leaving a mysteriously crippled REPL.
+# Resolve the binary to an absolute command (FORTH is "./basicforth" or
+# "qemu-... ./basicforth"); these subshells cd into a tmpdir with no core.fs.
+warn_forth="${FORTH/.\//$PWD/}"
+warn_dir="$(mktemp -d)"
+# No core.fs reachable (empty CWD, BASICFORTH_PATH unset) → warning on stderr.
+# `2>&1 1>/dev/null` keeps stderr only, so the banner/ok (stdout) can't match.
+warn_missing=$( cd "$warn_dir" && printf 'bye\n' \
+    | env -u BASICFORTH_PATH timeout 5 $warn_forth 2>&1 1>/dev/null )
+# core.fs found via BASICFORTH_PATH → no warning on stderr.
+warn_found=$( cd "$warn_dir" && printf 'bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $warn_forth 2>&1 1>/dev/null )
+# An empty core.fs in CWD opens but defines nothing — it was FOUND, so no warning
+# (detection keys off the file being opened, not off any word being defined).
+warn_empty_dir="$(mktemp -d)"
+: > "$warn_empty_dir/core.fs"
+warn_empty=$( cd "$warn_empty_dir" && printf 'bye\n' \
+    | env -u BASICFORTH_PATH timeout 5 $warn_forth 2>&1 1>/dev/null )
+rm -rf "$warn_dir" "$warn_empty_dir"
+
+if [[ "$warn_missing" == *"core.fs not found"* && "$warn_missing" == *"BASICFORTH_PATH"* ]]; then
+    printf "  ${GREEN}PASS${NC}  warns on stderr when core.fs is not found\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  expected a core.fs-not-found warning on stderr\n    Got: %q\n" "$warn_missing"; ((failed++))
+fi
+if [[ -z "$warn_found" ]]; then
+    printf "  ${GREEN}PASS${NC}  no warning when core.fs is found\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  spurious stderr when core.fs present\n    Got: %q\n" "$warn_found"; ((failed++))
+fi
+if [[ -z "$warn_empty" ]]; then
+    printf "  ${GREEN}PASS${NC}  no warning when core.fs is empty (found, defines nothing)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  spurious warning for an empty but present core.fs\n    Got: %q\n" "$warn_empty"; ((failed++))
+fi
+
+
+# =========================================================================
 section "Help system (man / topics / apropos)"
 # =========================================================================
 

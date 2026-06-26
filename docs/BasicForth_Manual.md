@@ -108,6 +108,20 @@ BASICFORTH_PATH=src/forth src/arch/x86/basicforth
 BASICFORTH_PATH=src/forth:examples src/arch/x86/basicforth snake.fs
 ```
 
+The `basicforth` binary contains only the assembly primitives; everything else
+(`cr`, `.`, `if`, `marker`, `save`, the help words, …) lives in `core.fs`, loaded
+at startup. If `core.fs` is found neither in the current directory nor via
+`BASICFORTH_PATH`, BasicForth prints a warning to **stderr** and comes up with
+only the primitives:
+
+```
+basicforth: core.fs not found - only built-in primitives are available.
+  Set BASICFORTH_PATH to the directory containing core.fs.
+```
+
+If you see that, point `BASICFORTH_PATH` at the directory holding `core.fs`
+(typically `…/src/forth`).
+
 ### Environment Variables
 
 | Variable          | Description                                              |
