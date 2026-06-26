@@ -12,7 +12,7 @@ topic files.
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `topics` | ( -- ) | list the available topics, grouped under their section (directory) |
+| `topics` | ( -- ) | list the available topics, grouped under their section (directory) and sorted alphabetically |
 | `man` | ( "topic" -- ) | find `<topic>.md` (case-insensitive) and page it a screenful at a time |
 | `apropos` | ( "keyword" -- ) | list the topics whose file contains `<keyword>` (case-insensitive), each labelled with its section |
 
@@ -79,9 +79,11 @@ case-insensitive substring and prints each matching topic with its section.
   value of `BASICFORTH_DOCS` (address and length); `(each-dir)` splits it on `:`
   and runs a handler per directory.
 - **Section grouping** uses `(basename)` to take each directory's last path
-  component as the section name. `topics` prints it as a header lazily — only
-  once a `.md` file is actually found — so a directory with no topics adds no
-  header.
+  component as the section name. `topics` collects a directory's topic names into
+  a heap buffer (the getdents buffer is reused across reads, so name pointers into
+  it aren't stable), sorts them alphabetically, then prints the section header
+  followed by the sorted names — so a directory with no topics adds no header and
+  each section reads in order.
 - **Paging** reads the file with `read-line` and prints `screen-height - 1`
   lines before pausing for a key. The getdents buffer and the line buffer are
   allocated on the heap (`allocate`) on first use, so the feature adds very
