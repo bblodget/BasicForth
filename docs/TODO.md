@@ -230,9 +230,12 @@ completed. See Planning.md for high-level vision and design decisions.
   - Known MVP limitation: the seeded indexer recognises definitions by their
     defining word, so it does NOT cover words created by *user-defined* defining
     words (e.g. `5 my-const five`) — `see five` reports the honest "no source
-    captured". A post-load text parser can't reliably distinguish a definition
-    from a use (`FIND` only knows the live xt), so we keep the seeded indexer
-    simple rather than risk showing *wrong* source. Resolved properly by:
+    captured". And because a post-load text parser only knows a word's live xt
+    (not which of several same-named defs is in force), there is a rare wrong-
+    source edge: a built-in def *redefined* by a custom defining word
+    (`1 constant x` … `2 my-const x`) shows the shadowed `1 constant x`. Both are
+    the same attribution limit; common cases (incl. all-built-in redefinition)
+    are correct. Resolved properly by:
   - Future: source-location metadata in the dictionary header → `see` for any
     file-loaded word (incl. `core.fs` and custom-defining-word words), primitives
     labelled, decompile far-future. See docs/WildIdeas.md.

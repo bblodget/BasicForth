@@ -112,20 +112,29 @@ to its live `xt`, so seeded records key the same way as captured ones.
 This is best-effort source listing: a mis-delimited group only makes `SEE` show
 slightly wrong text — it never touches the dictionary, `save`, or `reload`.
 
-**MVP limitation.** Because the seeded indexer recognises definitions by their
-*defining word*, it covers `:` and the built-in defining words above, but **not
-words created by your own defining words** (e.g. `: my-const create , does> @ ;`
-then `5 my-const five`). `see five` reports the honest *defined, but no source
-captured* rather than guessing. (A text parser can't reliably tell a definition
-from a use after the fact — `FIND` only knows the live `xt` — so the seeded
-indexer deliberately stays simple here rather than risk showing the *wrong*
-source. Words made interactively with a custom defining word *are* indexed, since
-capture keys off `LATEST` moving, not off a word list.)
+**MVP limitation — custom defining words.** The seeded indexer recognises
+definitions by their *defining word*, so it covers `:` and the built-in defining
+words above, but **not words created by your own defining words** (e.g.
+`: my-const create , does> @ ;` then `5 my-const five`). `see five` reports the
+honest *defined, but no source captured*. (Words made interactively with a custom
+defining word *are* indexed, since capture keys off `LATEST` moving, not off a
+word list — this gap is only for seeded/reloaded ones.)
+
+This is a fundamental limit of parsing the file *after* loading: `FIND` only
+knows a word's *live* `xt`, so the indexer can't always tell a definition from a
+use, or which of several same-named definitions is in force. In the common cases
+it is correct (a built-in redefinition like `1 constant x` / `2 constant x` shows
+the live `2 constant x`), but there is a rare **sharp edge**: if a name is first
+defined by a recognised defining word and then *redefined* by a custom one
+(`1 constant x` … `2 my-const x`), `see x` can show the earlier, now-shadowed
+source. Honest where it can be, occasionally wrong at this edge — the seeded
+indexer is best-effort.
 
 The real fix is the longer-term direction (recorded in WildIdeas): store each
-word's source location in its dictionary header, so `SEE` could show the source
-of *any* file-loaded word (including `core.fs` and words from custom defining
-words), with primitives labelled and decompilation as a far-future tier.
+word's source location in its dictionary header at compile time, so `SEE` reads
+the span straight from the file — covering *any* file-loaded word (including
+`core.fs` and custom-defining-word words) and resolving these attribution edges,
+with primitives labelled and decompilation as a far-future tier.
 
 All of this lives in `core.fs`; no new assembly primitive was needed (the header
 is read through the existing `(latest@)` view of the dictionary layout).
