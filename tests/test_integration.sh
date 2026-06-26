@@ -1652,6 +1652,45 @@ else
     printf "    exit %s, output: %s\n" "$long_status" "$(echo "$long_out" | head -3)"; ((failed++))
 fi
 
+# Section grouping: topics groups topics under their directory (section) name,
+# and apropos labels each hit with its section. Use two named subdirectories
+# plus an empty one (no .md → no header).
+sec_base="$(mktemp -d)"
+mkdir -p "$sec_base/RefSec" "$sec_base/TutSec" "$sec_base/EmptySec"
+printf '# Alpha\nwidget gear\n' > "$sec_base/RefSec/Alpha.md"
+printf '# Beta\nmore widget\n'  > "$sec_base/RefSec/Beta.md"
+printf '# Lesson\nnothing\n'    > "$sec_base/TutSec/Lesson.md"
+printf 'not a topic\n'          > "$sec_base/EmptySec/readme.txt"
+sec_docs="$sec_base/RefSec:$sec_base/TutSec:$sec_base/EmptySec"
+
+sec_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$sec_out" == *"RefSec"* ]] && [[ "$sec_out" == *"TutSec"* ]] \
+   && [[ "$sec_out" == *"Alpha"* ]] && [[ "$sec_out" == *"Lesson"* ]]; then
+    printf "  ${GREEN}PASS${NC}  topics groups under section headers\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  topics groups under section headers\n"
+    printf "    Got:      %s\n" "$(echo "$sec_out" | head -6)"; ((failed++))
+fi
+
+# An empty section (no .md) must not print a header
+if [[ "$sec_out" != *"EmptySec"* ]]; then
+    printf "  ${GREEN}PASS${NC}  topics omits empty section header\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  topics omits empty section header\n"; ((failed++))
+fi
+
+# apropos labels each hit with its section
+aps_out=$(printf 'apropos widget\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$aps_out" == *"Alpha (RefSec)"* ]] && [[ "$aps_out" == *"Beta (RefSec)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  apropos labels hits with section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  apropos labels hits with section\n"
+    printf "    Got:      %s\n" "$(echo "$aps_out" | head -4)"; ((failed++))
+fi
+rm -rf "$sec_base"
+
 rm -rf "$docs_dir"
 
 # =========================================================================

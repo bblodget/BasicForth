@@ -603,24 +603,45 @@ variable (dd-xt)  variable (dd-cur)  variable (dd-rem)
         dup (dd-cur) +!  (dd-rem) @ swap - (dd-rem) !
     repeat ;
 
-\ TOPICS: list the available .md topics across the docs directories.
-: (topics-in) ( dir-addr dir-u -- )      \ list .md names (minus ".md") in one dir
-    r/o open-file if drop exit then       ( fileid )
-    >r
+\ Last path component of a directory (the "section" name shown by topics).
+variable (bn-a)  variable (bn-u)
+: (basename) ( c-addr u -- ba bu )
+    dup 0= if exit then
+    2dup + 1- c@ [char] / = if 1- then        \ ignore one trailing '/'
+    (bn-u) ! (bn-a) !
+    0                                          ( start = index after last '/' )
+    (bn-u) @ 0 ?do
+        (bn-a) @ i + c@ [char] / = if drop i 1+ then
+    loop
+    (bn-a) @ over +  swap  (bn-u) @ swap - ;   ( ba bu )
+
+\ TOPICS: list the available .md topics, grouped under their section (the
+\ directory each topic lives in). The section header is printed lazily, so a
+\ directory with no .md files contributes nothing.
+variable (sec-a)  variable (sec-u)  variable (sec-shown)
+: (sec-header) ( -- )                    \ print "<section>\n  " once per directory
+    (sec-shown) @ if exit then
+    (sec-a) @ (sec-u) @ type cr  space space
+    true (sec-shown) ! ;
+: (topics-in) ( dir-addr dir-u -- )
+    2dup r/o open-file if drop 2drop exit then   ( dir-addr dir-u fileid )
+    >r                                            ( dir-addr dir-u )   \ R: fileid
+    (basename) (sec-u) ! (sec-a) !  false (sec-shown) !
     begin
         r@ (gd@) (gd-size) (getdents)     ( n )
         dup 0> while                       ( n )
         (gd@) +  (gd@)                     ( end ptr )
         begin 2dup u> while                ( end ptr )
             dup (de-name) dup (cstr-len)   ( end ptr name namelen )
-            2dup (ends-md?) if  3 - type space  else  2drop  then
+            2dup (ends-md?) if  (sec-header) 3 - type space  else  2drop  then
             dup (de-reclen) +              ( end nextptr )
         repeat 2drop
     repeat drop
-    r> close-file drop ;
+    r> close-file drop
+    (sec-shown) @ if cr then ;            \ close the indented topic line
 : topics ( -- )
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    ['] (topics-in) (each-dir) cr ;
+    ['] (topics-in) (each-dir) ;
 
 \ --- case-insensitive helpers ---
 : (lc) ( ch -- ch )  dup [char] A [char] Z 1+ within if 32 + then ;
@@ -748,7 +769,12 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
         begin 2dup u> while                      ( end ptr )
             dup (de-name) dup (cstr-len)         ( end ptr name namelen )
             2dup (ends-md?) if
-                2dup (file-has-kw?) if  2dup 3 - type space  then
+                2dup (file-has-kw?) if      \ print "topic (section)"
+                    2dup 3 - type
+                    space [char] ( emit
+                    (md-dir) @ (md-dirn) @ (basename) type
+                    [char] ) emit cr
+                then
             then
             2drop  dup (de-reclen) +
         repeat 2drop
@@ -759,4 +785,4 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     dup 0= if 2drop ." usage: apropos <keyword>" cr exit then
     (akn) ! (akw) !
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    ['] (apropos-in) (each-dir) cr ;
+    ['] (apropos-in) (each-dir) ;
