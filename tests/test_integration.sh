@@ -1592,6 +1592,15 @@ see_forgot_src=$(printf '%s\n' "$see_forgot" | grep '^: gone' || true)
 # (older, still-defined) version, not the forgotten redefinition.
 see_live=$( cd "$see_dir" && printf ': v 1 ;\nmarker -m\n: v 2 ;\n-m\nsee v\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: v ' )
+# Multiple definitions on one input line: SEE must find EACH word, not only the
+# last (regression — the capture index used to record only the final LATEST, so
+# SEE of the earlier word reported "not found"). m1 is the non-last definition.
+see_multi=$( cd "$see_dir" && printf ': m1 1 ;  : m2 2 ;\nsee m1\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: m1' )
+# A word in the dictionary but not in the capture index (a primitive/core word)
+# is reported as defined-without-source, distinct from "not found".
+see_nosrc=$( cd "$see_dir" && printf 'see dup\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
 # Using SEE must not capture itself into the saved file.
 ( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
@@ -1608,6 +1617,16 @@ if [[ "$see_redef" == ": w 2 ;" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE shows the most recent definition\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SEE shows the most recent definition\n    Expected ': w 2 ;'\n    Got: %q\n" "$see_redef"; ((failed++))
+fi
+if [[ "$see_multi" == ": m1 1 ;  : m2 2 ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE finds a non-last definition on a shared line\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE finds a non-last definition on a shared line\n    Expected ': m1 1 ;  : m2 2 ;'\n    Got: %q\n" "$see_multi"; ((failed++))
+fi
+if [[ "$see_nosrc" == *"defined, but no source captured"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE distinguishes defined-without-source from not-found\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE defined-without-source message\n    Expected 'defined, but no source captured'\n    Got: %q\n" "$see_nosrc"; ((failed++))
 fi
 if [[ "$see_const" == "42 constant answer" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE handles a non-colon defining word\n"; ((passed++))

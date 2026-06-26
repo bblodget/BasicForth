@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed: `see` missed words not defined last on their input line
+- The capture index recorded one record per input line, keyed to the final
+  `LATEST`, so a line that defined several words (`: a ;  : b ;`) indexed only
+  the last one — `see a` reported *not found* even though `a` was a valid
+  interactively-defined word. `(capture-line)` now walks the dictionary link
+  chain from the new `LATEST` back to the group's baseline and indexes every
+  word defined in the group (each sharing that line's captured source). New
+  internal word `(dir-add-group)`.
+- `see` of a word that is defined but has no captured source (a primitive, a
+  `core.fs` word, or one loaded from `session.fs`) now reports *defined, but no
+  source captured* rather than the misleading *not found*.
+
 ### Added: help-system sections (grouped `topics`, labelled `apropos`)
 - Each directory in `BASICFORTH_DOCS` is now treated as a named **section** (its
   last path component). `topics` groups its listing under one header per section
