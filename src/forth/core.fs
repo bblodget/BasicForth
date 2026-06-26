@@ -462,13 +462,28 @@ create (dir-rec) 3 cells allot          \ scratch: one record being built
 : (xt-of) ( entry -- xt )
     dup 8 + c@ 31 and  9 +  7 + -8 and  +  @ ;
 
-\ (dir-add): record one captured group. entry = LATEST (the header just linked).
+\ (dir-add): record one captured group. entry = a header just linked.
 : (dir-add) ( log-off log-len entry -- )
     (xt-of)                             ( log-off log-len xt )
     (dir-rec) 2 cells + !               \ rec[2] = xt
     (dir-rec) cell+ !                   \ rec[1] = log-len
     (dir-rec) !                         \ rec[0] = log-off
     (dir-rec) 3 cells (dir) (buf-append) ;  \ append the 24-byte record
+
+\ (dir-add-group): index EVERY word newly defined in this group, not just the
+\ last. Walk the dictionary link chain (link is the first cell of each header)
+\ from the new LATEST back to the group's baseline, adding a SEE record — sharing
+\ this group's log span — for each new header. Without this, a line that defines
+\ several words (": a ;  : b ;") would index only the final one, so SEE would
+\ miss the earlier, valid definitions.
+variable (dg-off)  variable (dg-len)  variable (dg-stop)
+: (dir-add-group) ( log-off log-len old-latest new-latest -- )
+    >r  (dg-stop) !  (dg-len) !  (dg-off) !   ( )   \ R: new-latest = walk cursor
+    r>
+    begin  dup (dg-stop) @ u>  while          ( entry )   \ newer than the baseline
+        (dg-off) @ (dg-len) @  2 pick (dir-add)
+        @                                      \ follow link to the previous header
+    repeat  drop ;
 
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
@@ -489,8 +504,8 @@ create (dir-rec) 3 cells allot          \ scratch: one record being built
     r@ (cap-latest) @ u> if             \ LATEST moved forward → a word was defined
         (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
-        r@ (dir-add)                     \ here aborts before any SEE record is written;
-    then                                \ only index source that is actually in the log
+        (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
+    then                                \ written; index every word now in the log
     (pend) (buf-reset)                  \ clear pending
     r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
 
@@ -608,7 +623,11 @@ variable (see-xt)                       \ the live word's xt SEE is matching
             then
             drop                        ( i )
         repeat
-        drop                            \ defined but no captured source (core/seeded)
+        drop                            \ in the dictionary, but not in the SEE index:
+        \ a primitive, a core.fs word, or a word loaded from session.fs (which is
+        \ editable on disk) — defined, just no captured source to show.
+        ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr
+        exit
     else                                ( a u )   \ not currently defined
         2drop
     then

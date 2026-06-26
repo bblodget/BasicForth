@@ -71,6 +71,13 @@ captured, an entry is appended to a small **directory** built alongside the log:
 from its header at `LATEST` (the CodePtr at `align8(9 + name-len)` past the
 entry, mirroring `FIND`'s own calculation).
 
+When a single input line defines **several** words (e.g. `: a ;  : b ;`), one
+record is added for *each* new word, found by walking the dictionary link chain
+from the new `LATEST` back to the group's baseline. Every record points at the
+same log slice — the whole line's source — so `see a` and `see b` each show that
+line. (Indexing only the final `LATEST` was a bug: `see` of any earlier word on
+the line reported *not found*.)
+
 `see name` resolves the name with `FIND` (case-insensitive, searching from
 `LATEST`):
 
@@ -78,6 +85,9 @@ entry, mirroring `FIND`'s own calculation).
   forgotten by `-session`/a marker — and `SEE` reports *not found*.
 - Otherwise it scans the directory **newest-first** for the record whose `xt`
   equals the live word's `xt`, and `type`s that slice of the log.
+- If the word is defined but no record matches — a primitive, a `core.fs` word,
+  or a word loaded from `session.fs` — `SEE` reports *defined, but no source
+  captured*, distinct from *not found*.
 
 Matching on the live `xt` (rather than the name) is what makes `SEE` immune to
 stale source: a forgotten definition's record can linger in the log, but its
