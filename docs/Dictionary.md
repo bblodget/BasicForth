@@ -106,7 +106,7 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **I/O**: emit, key, accept, type, .", s", write-file
 - **File access**: open-file, create-file, close-file, read-file, read-line, file-size, rename-file
 - **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
-- **Session persistence**: save (write definitions to session.fs; auto-loaded at startup), -session (forget session defs), reload (-session + re-include session.fs)
+- **Session persistence**: save (write definitions to session.fs; auto-loaded at startup), -session (forget session defs), reload (-session + re-include session.fs), see (print a word's most recent source from the session log)
 - **Help system**: topics (list docs topics), man (page a topic's .md file), apropos (search topics for a keyword) — docs found via BASICFORTH_DOCS
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
 - **Compiler**: :, ;, immediate, ', evaluate, included

@@ -444,6 +444,32 @@ variable (session-on)                   \ true only after (session-init) ran —
                                         \ an interactive session (scopes SAVE/RELOAD)
 create (nl) 10 c,                       \ a single newline byte
 
+\ SEE directory: an index over (log) so SEE can show a word's source. Each
+\ captured group adds one fixed 3-cell record — [log-off, log-len, xt] — to
+\ (dir), where xt is the execution token FIND returns for the just-defined word.
+\ SEE keys off the live word's xt (not its name), so it always shows the source
+\ of the definition that is actually in force: a redefinition shadows the older
+\ source, and a definition forgotten by -session or a marker — which restores an
+\ older same-named word — never matches, so no stale source is shown. (dir)
+\ tracks (log)'s lifecycle (reset together in (seed-log)), so SEE covers words
+\ defined interactively this session (seeded/reloaded definitions live in
+\ session.fs, editable on disk).
+create (dir)     3 cells allot          \ cell buffer: 3-cell records (see above)
+create (dir-rec) 3 cells allot          \ scratch: one record being built
+
+\ entry → the execution token FIND returns: load the CodePtr at the aligned
+\ offset align8(9 + name-len) past the entry. Mirrors FIND's xt calculation.
+: (xt-of) ( entry -- xt )
+    dup 8 + c@ 31 and  9 +  7 + -8 and  +  @ ;
+
+\ (dir-add): record one captured group. entry = LATEST (the header just linked).
+: (dir-add) ( log-off log-len entry -- )
+    (xt-of)                             ( log-off log-len xt )
+    (dir-rec) 2 cells + !               \ rec[2] = xt
+    (dir-rec) cell+ !                   \ rec[1] = log-len
+    (dir-rec) !                         \ rec[0] = log-off
+    (dir-rec) 3 cells (dir) (buf-append) ;  \ append the 24-byte record
+
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
@@ -461,8 +487,10 @@ create (nl) 10 c,                       \ a single newline byte
         (pend) (buf-reset)  r> (cap-latest) !  exit
     then
     r@ (cap-latest) @ u> if             \ LATEST moved forward → a word was defined
-        (pend) (log) (buf-append-buf)    \ flush the group into the session log
-    then                                \ backward (forget/-session) or same → discard
+        (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
+        (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
+        r@ (dir-add)                     \ here aborts before any SEE record is written;
+    then                                \ only index source that is actually in the log
     (pend) (buf-reset)                  \ clear pending
     r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
 
@@ -495,6 +523,7 @@ create (nl) 10 c,                       \ a single newline byte
 \ from a hand-edited file. No-op (empty log) when session.fs is absent.
 : (seed-log) ( -- )
     (log) (buf-reset)
+    (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
     s" session.fs" r/o open-file        ( fileid ior )
     if drop exit then                   \ no session.fs → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
@@ -556,9 +585,39 @@ create (nl) 10 c,                       \ a single newline byte
     if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
     (seed-log) ;
 
+\ SEE: print the source of a word's definition this session. A source lister,
+\ not a decompiler — it replays exactly what you typed (from the capture log), so
+\ it covers your own interactive definitions, not core.fs words. It resolves the
+\ name with FIND (case-insensitive, searches from LATEST) and shows the log slice
+\ for the matching xt — so it only ever shows a word that is currently defined,
+\ and shows the source of the definition actually in force.
+variable (see-a)  variable (see-u)      \ the name SEE is searching for (for messages)
+variable (see-xt)                       \ the live word's xt SEE is matching
+: see ( "name" -- )
+    parse-word dup 0= if  2drop ." see: needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ find ?dup if    ( xt flag )   \ currently defined
+        drop (see-xt) !                 ( )
+        (dir) cell+ @  3 cells /        ( count )   \ records, newest = highest index
+        begin  dup 0>  while
+            1-                          ( i )
+            dup 3 cells *  (dir) @ +    ( i rec )
+            dup 2 cells + @  (see-xt) @ = if         ( i rec )   \ this record's word
+                dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
+                drop exit
+            then
+            drop                        ( i )
+        repeat
+        drop                            \ defined but no captured source (core/seeded)
+    else                                ( a u )   \ not currently defined
+        2drop
+    then
+    ." see: " (see-a) @ (see-u) @ type ."  not found" cr ;
+
 \ Initialize the buffers and register the hooks with the asm REPL.
 (log)  3 cells erase
 (pend) 3 cells erase
+(dir)   3 cells erase
 0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !
 ' (session-init)  0 (hook!)
 ' (capture-line)  1 (hook!)
