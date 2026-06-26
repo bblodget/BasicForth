@@ -227,9 +227,15 @@ completed. See Planning.md for high-level vision and design decisions.
     indexes each, resolving names to their live xt via `FIND`. Runs on the first
     REPL tick at startup (deferred from `(session-init)` via `(seed-pending)`) and
     at the end of `reload`. So `see` now covers anything in `session.fs`.
+  - Known MVP limitation: the seeded indexer recognises definitions by their
+    defining word, so it does NOT cover words created by *user-defined* defining
+    words (e.g. `5 my-const five`) — `see five` reports the honest "no source
+    captured". A post-load text parser can't reliably distinguish a definition
+    from a use (`FIND` only knows the live xt), so we keep the seeded indexer
+    simple rather than risk showing *wrong* source. Resolved properly by:
   - Future: source-location metadata in the dictionary header → `see` for any
-    file-loaded word (incl. `core.fs`), primitives labelled, decompile far-future.
-    See docs/WildIdeas.md.
+    file-loaded word (incl. `core.fs` and custom-defining-word words), primitives
+    labelled, decompile far-future. See docs/WildIdeas.md.
 - [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
   **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
   the stack; errors are printed, not returned as an ior). The earlier "underflow"
