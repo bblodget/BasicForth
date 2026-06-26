@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `see` now covers definitions loaded from `session.fs`
+- `see` previously only showed words you defined *interactively* this session;
+  words loaded from `session.fs` (at startup or by `reload`) reported *defined,
+  but no source captured*. New `(index-seeded)` closes the gap: after the file
+  loads (first REPL tick at startup, end of `reload`) it parses the seeded log
+  into definition groups and indexes each, so `see` covers anything that can be
+  written to or loaded from `session.fs`.
+- The parser is comment/string aware (`\`, `( )`, `." "`/`s" "` are skipped, so a
+  `;` inside them doesn't end a definition) and handles `:` definitions plus the
+  single-line defining words `variable`/`constant`/`value`/`create`/`marker`/
+  `2variable`/`2constant`. Each name is resolved to its live `xt` via `FIND`, so
+  seeded records key the same way as captured ones. Best-effort: a mis-delimited
+  group only makes `see` show slightly wrong text — it never touches the
+  dictionary, `save`, or `reload`. See docs/See.md; long-term direction (source
+  metadata in the dictionary header) recorded in WildIdeas.
+
 ### Fixed: `see` missed words not defined last on their input line
 - The capture index recorded one record per input line, keyed to the final
   `LATEST`, so a line that defined several words (`: a ;  : b ;`) indexed only

@@ -41,15 +41,14 @@ Multi-line definitions and non-colon defining words come back whole:
 
 ## Scope
 
-`SEE` covers words you define **interactively this session**. It is part of the
+`SEE` covers your **session** definitions: both the words you define
+interactively *and* the words loaded from `session.fs` at startup or by `reload`
+— anything that can be written to or loaded from `session.fs`. It is part of the
 interactive session system, so it does nothing useful outside one (a script or a
 pipe captures nothing).
 
-Words loaded from `session.fs` at startup or by `reload` are **not** in the
-index — but that file is plain text you edit on disk, so its definitions are
-already in front of you. (Indexing seeded/reloaded definitions too is a planned
-follow-up.) `SEE` also does not cover `core.fs` words or assembly primitives,
-which have no captured source.
+`SEE` does **not** cover `core.fs` words or assembly primitives, which have no
+captured source — those report *defined, but no source captured*.
 
 `SEE` works for any defining word — `:`, `variable`, `constant`, `value`,
 `create`, `marker`. A redefinition shadows the earlier source, and — crucially —
@@ -93,6 +92,30 @@ Matching on the live `xt` (rather than the name) is what makes `SEE` immune to
 stale source: a forgotten definition's record can linger in the log, but its
 `xt` no longer matches anything `FIND` can return, so it is skipped. The
 directory shares the log's lifecycle — both are reset in `(seed-log)`.
+
+### Seeded definitions
+
+Words loaded from `session.fs` are defined by the asm file loader, which bypasses
+the capture hook — so their source is in the log (the byte-for-byte seed) but not
+yet in the directory. `(index-seeded)` closes that gap: after the file is loaded
+(on the first REPL tick at startup, and at the end of `reload`), it parses the
+seeded log into definition groups and adds a record for each.
+
+The parser walks the log token by token, comment/string aware (`\`, `( )`, and
+`." " / s" "`-style strings are skipped, so a `;` inside them doesn't end a
+definition). For a `:` group the name is the token after `:` and the span runs to
+the matching `;`; for a single-line defining word (`variable`, `constant`,
+`value`, `create`, `marker`, `2variable`, `2constant`) the name follows the
+defining word and the span is the whole line. Each name is resolved with `FIND`
+to its live `xt`, so seeded records key the same way as captured ones.
+
+This is best-effort source listing: a mis-delimited group only makes `SEE` show
+slightly wrong text — it never touches the dictionary, `save`, or `reload`.
+
+A longer-term direction (recorded in WildIdeas) is to store each word's source
+location in its dictionary header, so `SEE` could show the source of *any*
+file-loaded word (including `core.fs`), with primitives labelled and
+decompilation as a far-future tier.
 
 All of this lives in `core.fs`; no new assembly primitive was needed (the header
 is read through the existing `(latest@)` view of the dictionary layout).

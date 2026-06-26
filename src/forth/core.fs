@@ -485,6 +485,122 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         @                                      \ follow link to the previous header
     repeat  drop ;
 
+\ ---- SEE: index definitions seeded/reloaded from session.fs ----
+\ After session.fs loads, its definitions are in the dictionary but not in the
+\ SEE index (only interactive capture indexes). (index-seeded) parses the seeded
+\ log into definition groups and adds a SEE record for each, so SEE shows their
+\ source too. Best-effort: a mis-delimited group only makes SEE show slightly
+\ wrong text — it never affects the dictionary, save, or reload.
+variable (seed-pending)                 \ set at startup; first (capture-reset) indexes
+variable (ip)                           \ parse cursor: byte offset into (log)
+variable (iline)                        \ offset of the start of the cursor's line
+variable (id-off)                       \ current definition's start offset
+variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, length)
+
+\ Add a SEE record straight from an xt (vs (dir-add), which derives it from a header).
+: (dir-add-xt) ( log-off log-len xt -- )
+    (dir-rec) 2 cells + !  (dir-rec) cell+ !  (dir-rec) !
+    (dir-rec) 3 cells (dir) (buf-append) ;
+
+: (imore?) ( -- f )  (ip) @ (log) cell+ @ < ;   \ more bytes to read?
+: (ic) ( -- c )  (log) @ (ip) @ + c@ ;          \ byte at the cursor
+
+\ skip whitespace from the cursor, tracking the current line's start offset
+: (iskip-ws) ( -- )
+    begin  (imore?) if (ic) 33 < else false then  while
+        (ic) 10 = if  (ip) @ 1+ (iline) !  then
+        1 (ip) +!
+    repeat ;
+
+\ read the next whitespace-delimited token: ( -- off len ); len=0 at end of log
+: (itoken) ( -- off len )
+    (iskip-ws)  (ip) @
+    begin  (imore?) if (ic) 32 > else false then  while  1 (ip) +!  repeat
+    (ip) @  over - ;
+
+\ does the log token [off,len] equal the string c-addr,u ? (case-sensitive)
+: (tok=) ( off len c-addr u -- f )
+    >r >r  swap (log) @ + swap  r> r>  compare 0= ;
+
+\ advance the cursor just past the next byte equal to c (or to end of log)
+: (iskip-past) ( c -- )
+    begin
+        (imore?) 0= if  drop exit  then
+        (ic) over = if  1 (ip) +!  drop exit  then
+        1 (ip) +!
+    again ;
+
+: (itok-last) ( off len -- c )  +  1-  (log) @ +  c@ ;   \ last byte of a token
+
+\ if the token opens a comment/string, skip its body and return true. Heuristic:
+\ a token ending in " opens a string (." s" c" abort"); ending in ( opens a ( )
+\ comment ( ( and .( ); \ opens a line comment.
+: (iskip-comment?) ( off len -- f )
+    2dup (itok-last) [char] " = if  2drop [char] " (iskip-past)  true exit  then
+    2dup (itok-last) [char] ( = if  2drop [char] ) (iskip-past)  true exit  then
+    2dup s" \" (tok=)           if  2drop 10        (iskip-past)  true exit  then
+    2drop false ;
+
+\ FIND the current definition's recorded name; xt, or 0 if not currently defined
+: (id-find-xt) ( -- xt-or-0 )
+    (log) @ (id-noff) @ +  (id-nlen) @  find  ?dup if  drop  else  2drop 0  then ;
+
+\ record [ (id-off), span-len, xt ] when the name is currently defined
+: (id-record) ( span-len -- )
+    (id-find-xt) ?dup if  >r  (id-off) @ swap  r>  (dir-add-xt)  else  drop  then ;
+
+\ offset of the end of the cursor's line, including a trailing newline if present
+: (iline-end) ( -- off )
+    (ip) @
+    begin  dup (log) cell+ @ < if  dup (log) @ + c@ 10 <>  else false  then  while
+        1+
+    repeat
+    dup (log) cell+ @ < if 1+ then ;            \ include the newline byte itself
+
+\ token is a single-line defining word?
+: (defining?) ( off len -- f )
+    2dup s" variable"  (tok=) if 2drop true exit then
+    2dup s" constant"  (tok=) if 2drop true exit then
+    2dup s" 2variable" (tok=) if 2drop true exit then
+    2dup s" 2constant" (tok=) if 2drop true exit then
+    2dup s" value"     (tok=) if 2drop true exit then
+    2dup s" create"    (tok=) if 2drop true exit then
+    2dup s" marker"    (tok=) if 2drop true exit then
+    2drop false ;
+
+\ index a colon definition: cursor is just past the ':' token (at colon-off)
+: (index-colon) ( colon-off -- )
+    (id-off) !
+    (itoken) (id-nlen) ! (id-noff) !            \ the defined name
+    begin
+        (itoken)  dup 0= if                     \ end of log before ';'
+            2drop  (log) cell+ @ (id-off) @ -  (id-record)  exit
+        then
+        2dup (iskip-comment?) if  2drop
+        else  2dup s" ;" (tok=) if              \ end of the definition
+            2drop  (iline-end) (id-off) @ -  (id-record)  exit
+        else  2drop  then  then
+    again ;
+
+\ index a single-line defining word: cursor is just past the defining word; the
+\ name is the next token, the span is this whole line.
+: (index-line-def) ( -- )
+    (iline) @ (id-off) !
+    (itoken) (id-nlen) ! (id-noff) !
+    (iline-end) (id-off) @ -  (id-record) ;
+
+\ parse the seeded log and index every definition it contains
+: (index-seeded) ( -- )
+    (log) cell+ @ 0= if exit then
+    0 (ip) !  0 (iline) !
+    begin
+        (itoken)  dup 0=  0= while              ( off len )
+        2dup (iskip-comment?) if  2drop
+        else 2dup s" :" (tok=) if  drop (index-colon)
+        else 2dup (defining?) if  2drop (index-line-def)
+        else 2drop  then then then
+    repeat  2drop ;
+
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
@@ -517,6 +633,9 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ out-of-memory in seed-log) that never happens — so clear it here, else the
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
+    \ First REPL tick after startup load: index session.fs's seeded definitions
+    \ (deferred from (session-init), which runs before they are defined).
+    (seed-pending) @ if  false (seed-pending) !  (index-seeded)  then
     false (skip-capture) !
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -550,7 +669,8 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 : (session-init) ( -- )
     (session-mark!)
     true (session-on) !                 \ mark this run as an interactive session
-    (seed-log) ;
+    (seed-log)
+    true (seed-pending) ! ;             \ index the seed once session.fs has loaded
 
 \ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
 \ A no-op when nothing has been captured (e.g. capture wasn't active), so it
@@ -598,7 +718,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     -session
     s" session.fs" (included?)          ( ior )
     if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
-    (seed-log) ;
+    (seed-log)  (index-seeded) ;        \ re-index the reloaded definitions for SEE
 
 \ SEE: print the source of a word's definition this session. A source lister,
 \ not a decompiler — it replays exactly what you typed (from the capture log), so

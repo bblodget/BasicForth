@@ -96,6 +96,34 @@ multi-line `: … ;` can be recalled as a *single* (long) line and edited with t
 Stage-B editor — no true multi-line editing needed. The only cost is horizontal
 scrolling for long lines, a normal line-editor detail.
 
+## SEE for any word — source-location metadata in the dictionary
+
+Today `SEE` reads the *session* capture log, so it covers words you typed or
+loaded from `session.fs`, but not `core.fs` words, `include`d files, or
+primitives. The longer-term direction is to let `SEE` show the source of **any**
+word in the dictionary.
+
+The idea: give each compiled word's header a small record of where its source
+came from — `(source-id, offset, length)` — recorded at compile time (which file,
+and the byte span within it). `SEE` then reads that span straight from the source
+file. This generalises naturally:
+
+- Words from `core.fs` or any `include`d file → `SEE` opens the file and shows
+  the span. No session log needed for these.
+- **Primitives** (assembly, no source span) → report something like *primitive
+  (assembly)*.
+- A word typed at the REPL has **no file** until you `save` it, so the capture
+  log stays as the mechanism for unsaved interactive definitions. The two
+  coexist: the header metadata covers file-loaded words; the log covers
+  just-typed ones.
+- **Decompilation** is the far-future tier — reconstructing source from compiled
+  STC when no source file exists at all. Only worth it if we ever want `SEE` to
+  work with no source on disk.
+
+The current session-log `SEE` (including indexing seeded `session.fs`
+definitions) is a clean stepping stone: it finishes the session story and nothing
+about it blocks adding the header-metadata layer later.
+
 ## Programming Adventures Youtube Channel
 
 This is not really a wild idea, but instead of having the Youtube channel
