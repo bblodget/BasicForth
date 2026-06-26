@@ -2030,6 +2030,9 @@ forth_included:
     B.LT .Lincl_open_err
 
 .Lincl_open_ok:
+    MOV X9, #1                      // the file was found and opened
+    ADR X10, incl_opened
+    STR X9, [X10]
     MOV X23, X0                     // X23 = fd
 
     // Get file size
@@ -4501,6 +4504,9 @@ saved_latest:                       // LATEST before current : for error recover
 .global saved_here
 saved_here:                         // HERE before current : for error recovery
     .quad 0
+.global incl_opened
+incl_opened:                        // set to 1 by forth_included when it opens a file
+    .quad 0                         //   (lets main.s warn when core.fs is truly missing)
 .global session_hooks
 session_hooks:                      // [0]=session-seed [1]=capture-line [2]=capture-reset
     .quad 0                         //   xts; 0 = not registered. Set by (hook!).

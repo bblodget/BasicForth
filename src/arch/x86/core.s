@@ -1851,6 +1851,7 @@ forth_included:
     js .Lincl_open_err
 
 .Lincl_open_ok:
+    movq $1, incl_opened(%rip)      # the file was found and opened
     mov %rax, %rbx                  # RBX = fd
 
     # Get file size
@@ -4140,6 +4141,9 @@ saved_latest:                       # LATEST before current : for error recovery
 .global saved_here
 saved_here:                         # HERE before current : for error recovery
     .quad 0
+.global incl_opened
+incl_opened:                        # set to 1 by forth_included when it opens a file
+    .quad 0                         #   (lets main.s warn when core.fs is truly missing)
 .global session_hooks
 session_hooks:                      # [0]=session-boot [1]=capture-line [2]=capture-reset
     .quad 0                         #   xts; 0 = not registered. Set by (hook!).
