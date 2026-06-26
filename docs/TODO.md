@@ -213,6 +213,17 @@ completed. See Planning.md for high-level vision and design decisions.
   external restore point (`(session-mark!)`/`(session-restore)` globals) rather
   than a marker-in-the-file, so the file needs no `marker -session` header. See
   docs/Persistence.md.
+- [x] `SEE` — source lister over the session capture log. `see <name>` prints a
+  word's definition source (exactly as typed; multi-line and comments preserved).
+  Resolves the name with `FIND` and matches the live xt, so it shows the
+  definition currently in force and never stale source: a redefinition shadows the
+  older one, and a word forgotten by `-session`/a marker reports not found. Works
+  for any defining word; no new asm primitive. Small directory index (3-cell
+  records [log-off, log-len, xt]) reset alongside the log in `(seed-log)`. See
+  docs/See.md.
+  - Follow-up: index seeded/reloaded definitions too (those loaded from
+    `session.fs` at startup/`reload` are not in the directory yet — they live in
+    the editable file on disk). Would need to parse the seeded text into groups.
 - [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
   **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
   the stack; errors are printed, not returned as an ior). The earlier "underflow"

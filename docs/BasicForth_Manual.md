@@ -385,6 +385,21 @@ For an edit/compile/run loop, edit `session.fs` in another terminal and type
 for the full details and limitations (notably: variable/value *contents* are not
 persisted, only the definitions).
 
+### Looking at a definition (`see`)
+
+`see <name>` prints the source of a word's most recent definition — exactly what
+you typed, comments and all:
+
+```
+> : square dup * ;   \ a number times itself
+> see square
+: square dup * ;   \ a number times itself
+```
+
+It covers words you define interactively this session (it reads the same capture
+log as `save`). A redefinition shadows the earlier one, and `see` works for any
+defining word, not just `:`. See `docs/See.md`.
+
 ### Forgetting definitions (`marker`)
 
 `marker <name>` sets a restore point in the dictionary. Running `<name>` later

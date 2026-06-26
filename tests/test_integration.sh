@@ -1563,6 +1563,83 @@ else
     printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
 fi
 
+# SEE — a source lister over the session capture log (interactive scope). The
+# REPL echoes input as '> ...', so the SEE-printed source is isolated with
+# grep '^...': echoed lines carry the '> ' prefix, SEE's output does not.
+see_dir="$(mktemp -d)"
+t0=$(date +%s.%N)
+# Basic: SEE prints a word's source.
+see_basic=$( cd "$see_dir" && printf ': dbl dup + ;\nsee dbl\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: dbl' )
+# Redefinition: SEE shows the MOST RECENT definition.
+see_redef=$( cd "$see_dir" && printf ': w 1 ;\n: w 2 ;\nsee w\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: w ' )
+# Non-colon defining word: the name comes from the header, so the whole line shows.
+see_const=$( cd "$see_dir" && printf '42 constant answer\nsee answer\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^42 constant' )
+# Unknown word and missing argument are reported, not crashed.
+see_unknown=$( cd "$see_dir" && printf 'see nope\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+see_noarg=$( cd "$see_dir" && printf 'see\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+# A word forgotten by -session must NOT show stale source (SEE matches the live
+# xt via FIND, so a rewound word is gone). grep '^: gone' isolates any printed
+# source; it must be empty, and the message must say not found.
+see_forgot=$( cd "$see_dir" && printf ': gone 7 ;\n-session\nsee gone\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+see_forgot_src=$(printf '%s\n' "$see_forgot" | grep '^: gone' || true)
+# Redefine inside a marker scope, then forget the latest: SEE must show the LIVE
+# (older, still-defined) version, not the forgotten redefinition.
+see_live=$( cd "$see_dir" && printf ': v 1 ;\nmarker -m\n: v 2 ;\n-m\nsee v\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: v ' )
+# Using SEE must not capture itself into the saved file.
+( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+see_pure=$(cat "$see_dir/session.fs" 2>/dev/null)
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "SEE"
+rm -rf "$see_dir"
+
+if [[ "$see_basic" == ": dbl dup + ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE prints a word's source\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE prints a word's source\n    Expected ': dbl dup + ;'\n    Got: %q\n" "$see_basic"; ((failed++))
+fi
+if [[ "$see_redef" == ": w 2 ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows the most recent definition\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE shows the most recent definition\n    Expected ': w 2 ;'\n    Got: %q\n" "$see_redef"; ((failed++))
+fi
+if [[ "$see_const" == "42 constant answer" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE handles a non-colon defining word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE handles a non-colon defining word\n    Expected '42 constant answer'\n    Got: %q\n" "$see_const"; ((failed++))
+fi
+if [[ "$see_unknown" == *"not found"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE of an unknown word reports not found\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE of an unknown word\n    Expected 'not found'\n    Got: %q\n" "$see_unknown"; ((failed++))
+fi
+if [[ "$see_noarg" == *"needs a word name"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE with no argument reports it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE with no argument\n    Expected 'needs a word name'\n    Got: %q\n" "$see_noarg"; ((failed++))
+fi
+if [[ "$see_pure" == *": keep 5 ;"* && "$see_pure" != *"see"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE does not capture itself into session.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE leaked into session.fs\n    Got: %q\n" "$see_pure"; ((failed++))
+fi
+if [[ -z "$see_forgot_src" && "$see_forgot" == *"not found"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows no stale source for a forgotten word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE showed stale source after the word was forgotten\n    Got: %q\n" "$see_forgot"; ((failed++))
+fi
+if [[ "$see_live" == ": v 1 ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows the live definition, not a forgotten redefinition\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE showed a forgotten redefinition instead of the live word\n    Expected ': v 1 ;'\n    Got: %q\n" "$see_live"; ((failed++))
+fi
+
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

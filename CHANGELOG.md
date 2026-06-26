@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### `see` — show a word's source
+- `see <name>` prints the source of a word's definition — exactly what you typed
+  (spacing, comments, multiple lines), since it reads the session capture log
+  rather than decompiling. Covers words defined interactively this session and
+  works for any defining word (`:`, `variable`, `constant`, `value`, `create`,
+  `marker`).
+- `see` resolves the name with `FIND` and matches the **live execution token**,
+  so it only ever shows the definition currently in force: a redefinition shadows
+  the older source, and a word forgotten by `-session` or a marker (which can
+  restore an older same-named word) is reported *not found* rather than showing
+  stale source.
+- Built on a small directory index over the capture log (3-cell records:
+  log-offset, log-length, xt), reset alongside the log in `(seed-log)`. No new
+  assembly primitive — the header is read through the existing `(latest@)` view.
+  Words loaded from `session.fs` (startup/reload) are not indexed yet (they live
+  in the editable file on disk). See `docs/See.md`.
+
 ### Fixed: `char` / `[char]` could segfault on missing input
 - `parse-word` returns `( 0 0 )` when there is no next word; `char`
   (`parse-word drop c@`) and `[char]` both fetched that `c-addr` *without
