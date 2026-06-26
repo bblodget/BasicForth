@@ -441,23 +441,30 @@ BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
 more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
 
 ```
-$ BASICFORTH_DOCS=docs ./basicforth
-> topics                         \ list the available topics
-Marker Persistence Dictionary ...
-> man persistence                \ page a topic (case-insensitive, .md added)
-# Session Persistence
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+> topics                         \ list topics, grouped by section
+Language-Reference
+  Arithmetic  Comparison  Memory  Stack
+Tutorial
+  01-Getting-Started  02-The-Stack
+> man stack                      \ page a topic (case-insensitive, .md added)
+# Stack Manipulation
 ...
 -- more (space=page, q=quit) --
-> apropos marker                 \ which topics mention "marker"?
-Marker Persistence
+> apropos dup                    \ which topics mention "dup"?
+Stack (Language-Reference)
+01-Getting-Started (Tutorial)
 ```
 
-- `topics` lists every `*.md` file in the docs directories (without the
-  extension).
-- `man <topic>` finds `<topic>.md` (case-insensitive) and pages it one screenful
-  at a time — press space for the next page or `q` to stop.
+- Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
+  last path component (like the sections of the Unix `man` system, but named
+  rather than numbered).
+- `topics` lists every `*.md` file (without the extension), grouped under its
+  section.
+- `man <topic>` finds `<topic>.md` (case-insensitive) across all sections and
+  pages it one screenful at a time — press space for the next page or `q` to stop.
 - `apropos <keyword>` lists the topics whose file contains `<keyword>`
-  (case-insensitive substring match).
+  (case-insensitive substring match), each labelled with its section.
 
 If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
 See `docs/Help_System.md` for details.

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added: help-system sections (grouped `topics`, labelled `apropos`)
+- Each directory in `BASICFORTH_DOCS` is now treated as a named **section** (its
+  last path component). `topics` groups its listing under one header per section
+  instead of printing a flat list, and `apropos` tags each hit with its section
+  (e.g. `Stack (Language-Reference)`). `man` still searches across all sections.
+- A section header is printed lazily, so a directory with no `.md` files adds no
+  header. New internal word `(basename)` extracts the section name.
+- First user-facing docs landed under this scheme: `Language-Reference/Stack.md`
+  and `Tutorial/01-Getting-Started.md`.
+
 ### `see` — show a word's source
 - `see <name>` prints the source of a word's definition — exactly what you typed
   (spacing, comments, multiple lines), since it reads the session capture log

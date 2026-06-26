@@ -12,9 +12,24 @@ topic files.
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `topics` | ( -- ) | list the available topics (every `*.md`, extension stripped) |
+| `topics` | ( -- ) | list the available topics, grouped under their section (directory) |
 | `man` | ( "topic" -- ) | find `<topic>.md` (case-insensitive) and page it a screenful at a time |
-| `apropos` | ( "keyword" -- ) | list the topics whose file contains `<keyword>` (case-insensitive) |
+| `apropos` | ( "keyword" -- ) | list the topics whose file contains `<keyword>` (case-insensitive), each labelled with its section |
+
+## Sections
+
+Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
+last path component — much like the numbered sections of the Unix `man` system,
+but named rather than numbered. `topics` groups its listing under one header per
+section, and `apropos` tags each hit with the section it came from. `man` and
+`apropos` search *across* all sections (first match wins for `man`).
+
+A typical setup keeps user-facing material in its own sections, separate from
+the project's internal design docs:
+
+```
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+```
 
 ## Configuration
 
@@ -33,21 +48,25 @@ variable is unset, every help word prints `(BASICFORTH_DOCS not set)`.
 
 ```
 > topics
-Planning Marker Persistence Dictionary Help_System ...
-> man persistence
-# Session Persistence
+Language-Reference
+  Arithmetic  Comparison  Memory  Stack
+Tutorial
+  01-Getting-Started  02-The-Stack
+> man stack
+# Stack Manipulation
 ...
 -- more (space=page, q=quit) --      \ press space for the next page, q to stop
-> apropos marker
-Marker Persistence
+> apropos dup
+Stack (Language-Reference)
+01-Getting-Started (Tutorial)
 ```
 
-`man` matches case-insensitively and appends `.md`, so `man persistence`,
-`man Persistence`, and `man PERSISTENCE` all open `Persistence.md`. When no
-topic matches, it prints `no help for <topic> (try TOPICS)`.
+`man` matches case-insensitively and appends `.md`, so `man stack`,
+`man Stack`, and `man STACK` all open `Stack.md`. When no topic matches, it
+prints `no help for <topic> (try TOPICS)`.
 
 `apropos` scans each topic file line by line for the keyword as a
-case-insensitive substring and prints the matching topic names.
+case-insensitive substring and prints each matching topic with its section.
 
 ## How It Works
 
@@ -59,6 +78,10 @@ case-insensitive substring and prints the matching topic names.
 - **The docs path** comes from the `(docs-path)` primitive, which returns the
   value of `BASICFORTH_DOCS` (address and length); `(each-dir)` splits it on `:`
   and runs a handler per directory.
+- **Section grouping** uses `(basename)` to take each directory's last path
+  component as the section name. `topics` prints it as a header lazily — only
+  once a `.md` file is actually found — so a directory with no topics adds no
+  header.
 - **Paging** reads the file with `read-line` and prints `screen-height - 1`
   lines before pausing for a key. The getdents buffer and the line buffer are
   allocated on the heap (`allocate`) on first use, so the feature adds very
