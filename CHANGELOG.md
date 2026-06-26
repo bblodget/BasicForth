@@ -12,7 +12,8 @@
 - The parser is comment/string aware (`\`, `( )`, `." "`/`s" "` are skipped, so a
   `;` inside them doesn't end a definition) and handles `:` definitions plus the
   single-line defining words `variable`/`constant`/`value`/`create`/`marker`/
-  `2variable`/`2constant`. Each name is resolved to its live `xt` via `FIND`, so
+  `2variable`/`2constant` (matched case-insensitively, so an uppercase `VARIABLE`
+  in a hand-edited file still indexes). Each name is resolved to its live `xt` via `FIND`, so
   seeded records key the same way as captured ones. Best-effort: a mis-delimited
   group only makes `see` show slightly wrong text — it never touches the
   dictionary, `save`, or `reload`. See docs/See.md; long-term direction (source

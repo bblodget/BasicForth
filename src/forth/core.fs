@@ -518,9 +518,19 @@ variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, len
     begin  (imore?) if (ic) 32 > else false then  while  1 (ip) +!  repeat
     (ip) @  over - ;
 
-\ does the log token [off,len] equal the string c-addr,u ? (case-sensitive)
+: (lc) ( c -- c' )                      \ ASCII lowercase
+    dup [char] A < if exit then  dup [char] Z > if exit then  32 + ;
+
+: (ci=) ( a1 u1 a2 u2 -- f )            \ caseless string equality
+    >r swap r@ <> if  r> drop 2drop false exit  then   ( a1 a2 )   \ R: u2
+    r>  0 ?do
+        over i + c@ (lc)  over i + c@ (lc)  <> if  2drop false unloop exit  then
+    loop  2drop true ;
+
+\ does the log token [off,len] equal the string c-addr,u ? (case-insensitive, so
+\ an uppercase VARIABLE / CONSTANT in a hand-edited session.fs is still matched).
 : (tok=) ( off len c-addr u -- f )
-    >r >r  swap (log) @ + swap  r> r>  compare 0= ;
+    >r >r  swap (log) @ + swap  r> r>  (ci=) ;
 
 \ advance the cursor just past the next byte equal to c (or to end of log)
 : (iskip-past) ( c -- )

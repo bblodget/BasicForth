@@ -1624,6 +1624,10 @@ see_sstr=$( cd "$seed_dir" && printf 'see sstr\nbye\n' \
 printf ': sre 1 ;\n' > "$seed_dir/session.fs"
 see_sre=$( cd "$seed_dir" && printf 'reload\nsee sre\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sre' )
+# Case-insensitive defining words: an uppercase VARIABLE (valid Forth) must index.
+printf 'VARIABLE su\n' > "$seed_dir/session.fs"
+see_su=$( cd "$seed_dir" && printf 'see su\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^VARIABLE su' )
 rm -rf "$seed_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "SEE"
 rm -rf "$see_dir"
@@ -1702,6 +1706,11 @@ if [[ "$see_sre" == ": sre 1 ;" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE re-indexes seeded definitions after reload\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SEE lost seeded definitions after reload\n    Expected ': sre 1 ;'\n    Got: %q\n" "$see_sre"; ((failed++))
+fi
+if [[ "$see_su" == "VARIABLE su" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE indexes an uppercase defining word (case-insensitive)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE missed an uppercase defining word\n    Expected 'VARIABLE su'\n    Got: %q\n" "$see_su"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)
