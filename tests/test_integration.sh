@@ -1827,6 +1827,21 @@ else
     printf "  ${RED}FAIL${NC}  apropos labels hits with section\n"
     printf "    Got:      %s\n" "$(echo "$aps_out" | head -4)"; ((failed++))
 fi
+
+# topics sorts names alphabetically within a section, regardless of the order
+# the filesystem returns them. Create them out of order and expect them sorted.
+sort_base="$(mktemp -d)"
+for n in Zebra Apple Mango; do printf '# %s\n' "$n" > "$sort_base/$n.md"; done
+sort_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sort_base" timeout 2 $FORTH 2>&1)
+if [[ "$sort_out" == *"Apple Mango Zebra"* ]]; then
+    printf "  ${GREEN}PASS${NC}  topics sorts names within a section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  topics sorts names within a section\n"
+    printf "    Got:      %s\n" "$(echo "$sort_out" | head -4)"; ((failed++))
+fi
+rm -rf "$sort_base"
+
 rm -rf "$sec_base"
 
 rm -rf "$docs_dir"

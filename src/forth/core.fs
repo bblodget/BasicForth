@@ -694,29 +694,70 @@ variable (bn-a)  variable (bn-u)
     (bn-a) @ over +  swap  (bn-u) @ swap - ;   ( ba bu )
 
 \ TOPICS: list the available .md topics, grouped under their section (the
-\ directory each topic lives in). The section header is printed lazily, so a
-\ directory with no .md files contributes nothing.
-variable (sec-a)  variable (sec-u)  variable (sec-shown)
-: (sec-header) ( -- )                    \ print "<section>\n  " once per directory
-    (sec-shown) @ if exit then
-    (sec-a) @ (sec-u) @ type cr  space space
-    true (sec-shown) ! ;
+\ directory each topic lives in) and sorted alphabetically within each section.
+\ Names are copied into a heap buffer first — the getdents buffer is reused
+\ across reads, so a name pointer into it is not stable — then sorted and printed.
+variable (sec-a)  variable (sec-u)         \ current section name (a basename)
+variable (tn-buf)                          \ heap: names, each a counted string
+variable (tn-ptr)                          \ heap: array of pointers into (tn-buf)
+variable (tn-w)  variable (tn-n)  variable (tn-d)
+4096 constant (tn-bufsz)
+256  constant (tn-max)
+: (tn-buf@) ( -- a )
+    (tn-buf) @ ?dup if exit then
+    (tn-bufsz) allocate abort" topics: out of memory" dup (tn-buf) ! ;
+: (tn-ptr@) ( -- a )
+    (tn-ptr) @ ?dup if exit then
+    (tn-max) cells allocate abort" topics: out of memory" dup (tn-ptr) ! ;
+: (tn-ptr-at) ( i -- a-addr )  cells (tn-ptr@) + ;
+: (tn-collect) ( name u -- )               \ copy a display name into the buffer
+    (tn-n) @ (tn-max) < 0= if 2drop exit then
+    dup 255 > if 2drop exit then
+    dup (tn-w) @ + 1+ (tn-bufsz) > if 2drop exit then
+    (tn-buf@) (tn-w) @ + (tn-d) !          ( name u )   \ dest = buf + w
+    dup (tn-d) @ c!                        \ dest[0] = length
+    dup >r                                 ( name u )   \ R: u
+    (tn-d) @ 1+ swap cmove                 \ copy name bytes to dest+1
+    (tn-d) @ (tn-n) @ (tn-ptr-at) !        \ ptr[n] = dest
+    1 (tn-n) +!
+    r> 1+ (tn-w) +! ;                      \ advance write by 1 + u
+: (tn-cmp) ( cp1 cp2 -- n )                \ compare two counted strings
+    >r count r> count compare ;
+: (tn-sort) ( -- )                          \ insertion sort ptr[0..n) by name
+    (tn-n) @ 2 < if exit then
+    (tn-n) @ 1 ?do
+        i (tn-ptr-at) @  i 1-              ( key j )
+        begin
+            dup 0< if 0 else
+                dup (tn-ptr-at) @ 2 pick (tn-cmp) 0>
+            then
+        while                              ( key j )
+            dup (tn-ptr-at) @  over 1+ (tn-ptr-at) !   \ ptr[j+1] = ptr[j]
+            1-
+        repeat
+        1+ (tn-ptr-at) !                   \ ptr[j+1] = key
+    loop ;
 : (topics-in) ( dir-addr dir-u -- )
     2dup r/o open-file if drop 2drop exit then   ( dir-addr dir-u fileid )
     >r                                            ( dir-addr dir-u )   \ R: fileid
-    (basename) (sec-u) ! (sec-a) !  false (sec-shown) !
+    (basename) (sec-u) ! (sec-a) !
+    0 (tn-n) !  0 (tn-w) !
     begin
         r@ (gd@) (gd-size) (getdents)     ( n )
         dup 0> while                       ( n )
         (gd@) +  (gd@)                     ( end ptr )
         begin 2dup u> while                ( end ptr )
             dup (de-name) dup (cstr-len)   ( end ptr name namelen )
-            2dup (ends-md?) if  (sec-header) 3 - type space  else  2drop  then
+            2dup (ends-md?) if  3 - (tn-collect)  else  2drop  then
             dup (de-reclen) +              ( end nextptr )
         repeat 2drop
     repeat drop
     r> close-file drop
-    (sec-shown) @ if cr then ;            \ close the indented topic line
+    (tn-n) @ 0= if exit then               \ no topics here → no header
+    (tn-sort)
+    (sec-a) @ (sec-u) @ type cr  space space        \ section header
+    (tn-n) @ 0 ?do  i (tn-ptr-at) @ count type space  loop
+    cr ;
 : topics ( -- )
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
     ['] (topics-in) (each-dir) ;

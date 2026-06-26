@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed: `topics` lists each section's topics alphabetically
+- `topics` previously printed topic names in filesystem order (effectively
+  random). It now collects each section's `.md` names into a heap buffer (the
+  getdents buffer is reused across reads, so name pointers into it aren't
+  stable), sorts them, and prints them in alphabetical order — so the listing,
+  and especially numbered tutorial lessons (`01-…`, `02-…`), read in sequence.
+  New internal words `(tn-collect)`, `(tn-sort)`, `(tn-cmp)`.
+
 ### Fixed: `see` missed words not defined last on their input line
 - The capture index recorded one record per input line, keyed to the final
   `LATEST`, so a line that defined several words (`: a ;  : b ;`) indexed only
