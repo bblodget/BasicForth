@@ -16,6 +16,7 @@
 .equ SYS_write,          1
 .equ SYS_exit,           60
 .equ SYS_clock_gettime,  228
+.equ SYS_getdents64,     217
 
 .equ CLOCK_MONOTONIC, 1
 
@@ -691,6 +692,16 @@ platform_close_file:
 .global platform_read_file
 platform_read_file:
     mov $SYS_read, %rax
+    syscall
+    ret
+
+# platform_getdents ( RDI=fd RSI=buf RDX=count -- RAX=bytes or -errno )
+# getdents64: read directory entries (linux_dirent64 records) into buf. RAX is
+# the bytes filled, 0 at end of the directory, or a negative errno. The fd must
+# be a directory opened read-only (open-file with R/O works on Linux).
+.global platform_getdents
+platform_getdents:
+    mov $SYS_getdents64, %rax
     syscall
     ret
 

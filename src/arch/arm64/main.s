@@ -112,6 +112,42 @@ _start:
     STR X9, [X10]
 .Lsenv_done:
 
+    // Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories for
+    // the help system: man / topics / apropos). Same pattern as the PATH walk.
+    LDR X0, [SP]
+    ADD X0, X0, #2
+    LSL X0, X0, #3
+    ADD X0, SP, X0                  // &envp[0]
+.Ldenv_loop:
+    LDR X1, [X0]
+    CBZ X1, .Ldenv_done
+    ADR X2, docs_prefix
+    MOV X3, #docs_prefix_len
+.Ldenv_cmp:
+    CBZ X3, .Ldenv_found
+    LDRB W4, [X1], #1
+    LDRB W5, [X2], #1
+    CMP W4, W5
+    B.NE .Ldenv_next
+    SUB X3, X3, #1
+    B .Ldenv_cmp
+.Ldenv_next:
+    ADD X0, X0, #8
+    B .Ldenv_loop
+.Ldenv_found:
+    ADR X9, basicforth_docs
+    STR X1, [X9]                    // value (past "BASICFORTH_DOCS=")
+    MOV X2, #0
+.Ldenv_strlen:
+    LDRB W3, [X1, X2]
+    CBZ W3, .Ldenv_strlen_done
+    ADD X2, X2, #1
+    B .Ldenv_strlen
+.Ldenv_strlen_done:
+    ADR X9, basicforth_docs_len
+    STR X2, [X9]
+.Ldenv_done:
+
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
@@ -395,6 +431,8 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 .equ env_prefix_len, . - env_prefix
 sess_prefix:    .ascii "BASICFORTH_SESSION="
 .equ sess_prefix_len, . - sess_prefix
+docs_prefix:    .ascii "BASICFORTH_DOCS="
+.equ docs_prefix_len, . - docs_prefix
 
 .data
 .align 3
@@ -429,6 +467,13 @@ basicforth_path:
     .quad 0
 .global basicforth_path_len
 basicforth_path_len:
+    .quad 0
+// BASICFORTH_DOCS value pointer + length (the help system's docs search path).
+.global basicforth_docs
+basicforth_docs:
+    .quad 0
+.global basicforth_docs_len
+basicforth_docs_len:
     .quad 0
 
 .bss

@@ -99,6 +99,11 @@ platform_read_file:
     MOV X0, #0                      // return 0 (EOF)
     RET
 
+.global platform_getdents
+platform_getdents:
+    MOV X0, #0                      // return 0 (end of directory)
+    RET
+
 .global platform_fstat
 platform_fstat:
     MOV X0, #0
@@ -162,6 +167,12 @@ basicforth_path:
     .quad 0
 .global basicforth_path_len
 basicforth_path_len:
+    .quad 0
+.global basicforth_docs
+basicforth_docs:
+    .quad 0
+.global basicforth_docs_len
+basicforth_docs_len:
     .quad 0
 .global arg_count
 arg_count:

@@ -2939,6 +2939,30 @@ forth_read_file:
     mov %rax, (%r15)                # ior = errno
     ret
 
+# (getdents) ( fileid buf count -- n )  read directory entries into buf.
+# n = bytes filled, 0 at end of directory, or a negative errno. The dirent
+# records are parsed in core.fs; this is just the raw syscall.
+.global forth_getdents
+forth_getdents:
+    mov (%r15), %rdx                # count
+    mov CELL(%r15), %rsi            # buf
+    mov 2*CELL(%r15), %rdi          # fileid (fd)
+    add $2*CELL, %r15               # pop count + buf; TOS slot ← n
+    call platform_getdents          # RAX = bytes or -errno
+    mov %rax, (%r15)
+    ret
+
+# (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
+.global forth_docs_path
+forth_docs_path:
+    mov basicforth_docs(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # c-addr
+    mov basicforth_docs_len(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # u
+    ret
+
 # FILE-SIZE ( fileid -- ud ior )  file size as a double cell, via fstat
 .global forth_file_size
 forth_file_size:
@@ -4032,7 +4056,9 @@ DEFWORD dict_open_file,   "open-file",    forth_open_file,   dict_write_file
 DEFWORD dict_create_file, "create-file",  forth_create_file, dict_open_file
 DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
-DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_read_file
+DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
+DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
+DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon

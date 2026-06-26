@@ -231,6 +231,14 @@ completed. See Planning.md for high-level vision and design decisions.
   capture hooks were active. Fix: `forth_included` now saves the source pointers
   before the line loop and restores them on every loop-exit path (both arches).
   Bonus: tokens after `include <file>` on the same line now run correctly.
+- [x] **Help system — docs browser (`man` / `topics` / `apropos`).** Reads the
+  `*.md` topics in the colon-separated directories named by `BASICFORTH_DOCS`.
+  `topics` lists them, `man <topic>` finds `<topic>.md` (case-insensitive) and
+  pages it a screenful at a time, `apropos <keyword>` lists the topics whose file
+  contains the keyword. New primitives: `(getdents)` (wraps `getdents64` for
+  directory enumeration) and `(docs-path)` (exposes `BASICFORTH_DOCS`); getdents
+  and pager buffers are heap-allocated. See Help_System.md. (Per-word
+  `help <word>` is deferred to a later "Part A" — see WildIdeas.md.)
 
 ---
 

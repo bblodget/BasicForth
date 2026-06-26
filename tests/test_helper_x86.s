@@ -105,6 +105,11 @@ platform_read_file:
     xor %eax, %eax              # return 0 (EOF)
     ret
 
+.global platform_getdents
+platform_getdents:
+    xor %eax, %eax              # return 0 (end of directory)
+    ret
+
 .global platform_fstat
 platform_fstat:
     xor %eax, %eax
@@ -168,6 +173,12 @@ basicforth_path:
     .quad 0
 .global basicforth_path_len
 basicforth_path_len:
+    .quad 0
+.global basicforth_docs
+basicforth_docs:
+    .quad 0
+.global basicforth_docs_len
+basicforth_docs_len:
     .quad 0
 .global arg_count
 arg_count:

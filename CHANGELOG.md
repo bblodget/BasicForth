@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added: interactive help system (`man` / `topics` / `apropos`)
+- A docs browser reads the `docs/*.md` files in the colon-separated directories
+  named by the `BASICFORTH_DOCS` environment variable (same convention as
+  `BASICFORTH_PATH`). `topics` lists the available topics; `man <topic>` finds
+  `<topic>.md` (case-insensitive) and pages it a screenful at a time
+  (space = next page, q = quit); `apropos <keyword>` lists the topics whose file
+  contains the keyword (case-insensitive substring).
+- New primitives back the feature: `(getdents)` wraps the `getdents64` syscall
+  for directory enumeration, and `(docs-path)` exposes `BASICFORTH_DOCS`. The
+  getdents and pager line buffers live on the heap (`allocate`), so the feature
+  costs little dictionary space.
+- See docs/Help_System.md.
+
 ### Fixed: `char` / `[char]` could segfault on missing input
 - `parse-word` returns `( 0 0 )` when there is no next word; `char`
   (`parse-word drop c@`) and `[char]` both fetched that `c-addr` *without

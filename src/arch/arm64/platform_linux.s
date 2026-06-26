@@ -9,6 +9,7 @@
 .equ SYS_write,          64
 .equ SYS_exit,           93
 .equ SYS_clock_gettime,  113
+.equ SYS_getdents64,     61
 
 .equ CLOCK_MONOTONIC, 1
 
@@ -754,6 +755,16 @@ platform_close_file:
 .global platform_read_file
 platform_read_file:
     MOV X8, #SYS_read
+    SVC #0
+    RET
+
+// platform_getdents ( X0=fd X1=buf X2=count -- X0=bytes or -errno )
+// getdents64: read directory entries (linux_dirent64 records) into buf. X0 is
+// the bytes filled, 0 at end of the directory, or a negative errno. The fd must
+// be a directory opened read-only (open-file with R/O works on Linux).
+.global platform_getdents
+platform_getdents:
+    MOV X8, #SYS_getdents64
     SVC #0
     RET
 
