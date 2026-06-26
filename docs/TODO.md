@@ -221,9 +221,15 @@ completed. See Planning.md for high-level vision and design decisions.
   for any defining word; no new asm primitive. Small directory index (3-cell
   records [log-off, log-len, xt]) reset alongside the log in `(seed-log)`. See
   docs/See.md.
-  - Follow-up: index seeded/reloaded definitions too (those loaded from
-    `session.fs` at startup/`reload` are not in the directory yet — they live in
-    the editable file on disk). Would need to parse the seeded text into groups.
+  - [x] Index seeded/reloaded definitions too. `(index-seeded)` parses the seeded
+    log into definition groups (comment/string aware; `:` plus single-line
+    `variable`/`constant`/`value`/`create`/`marker`/`2variable`/`2constant`) and
+    indexes each, resolving names to their live xt via `FIND`. Runs on the first
+    REPL tick at startup (deferred from `(session-init)` via `(seed-pending)`) and
+    at the end of `reload`. So `see` now covers anything in `session.fs`.
+  - Future: source-location metadata in the dictionary header → `see` for any
+    file-loaded word (incl. `core.fs`), primitives labelled, decompile far-future.
+    See docs/WildIdeas.md.
 - [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
   **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
   the stack; errors are printed, not returned as an ior). The earlier "underflow"

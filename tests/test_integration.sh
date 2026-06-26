@@ -1605,6 +1605,26 @@ see_nosrc=$( cd "$see_dir" && printf 'see dup\nbye\n' \
 ( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 see_pure=$(cat "$see_dir/session.fs" 2>/dev/null)
+# Seeded definitions: SEE must also cover words loaded from session.fs at startup
+# (indexed by (index-seeded), not interactive capture). Separate dir with a
+# pre-existing session.fs; grep '^...' isolates SEE's printed source from echoes.
+seed_dir="$(mktemp -d)"
+printf ': sgreet ." hi" cr ;\nvariable sv\n7 constant sc\n' > "$seed_dir/session.fs"
+see_sc=$( cd "$seed_dir" && printf 'see sgreet\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sgreet' )
+see_sv=$( cd "$seed_dir" && printf 'see sv\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^variable sv' )
+see_sk=$( cd "$seed_dir" && printf 'see sc\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^7 constant sc' )
+# ';' inside a string must not truncate the seeded definition's span.
+printf ': sstr ." a; b" cr ;\n' > "$seed_dir/session.fs"
+see_sstr=$( cd "$seed_dir" && printf 'see sstr\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sstr' )
+# reload re-indexes: seeded words stay see-able after a reload.
+printf ': sre 1 ;\n' > "$seed_dir/session.fs"
+see_sre=$( cd "$seed_dir" && printf 'reload\nsee sre\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sre' )
+rm -rf "$seed_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "SEE"
 rm -rf "$see_dir"
 
@@ -1657,6 +1677,31 @@ if [[ "$see_live" == ": v 1 ;" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE shows the live definition, not a forgotten redefinition\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SEE showed a forgotten redefinition instead of the live word\n    Expected ': v 1 ;'\n    Got: %q\n" "$see_live"; ((failed++))
+fi
+if [[ "$see_sc" == ': sgreet ." hi" cr ;' ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows a seeded colon definition (loaded from session.fs)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE of a seeded colon definition\n    Got: %q\n" "$see_sc"; ((failed++))
+fi
+if [[ "$see_sv" == "variable sv" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows a seeded variable\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE of a seeded variable\n    Expected 'variable sv'\n    Got: %q\n" "$see_sv"; ((failed++))
+fi
+if [[ "$see_sk" == "7 constant sc" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows a seeded constant (with its value)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE of a seeded constant\n    Expected '7 constant sc'\n    Got: %q\n" "$see_sk"; ((failed++))
+fi
+if [[ "$see_sstr" == ': sstr ." a; b" cr ;' ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE seeded span is not truncated by a ';' inside a string\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE seeded span truncated at a ';' inside a string\n    Got: %q\n" "$see_sstr"; ((failed++))
+fi
+if [[ "$see_sre" == ": sre 1 ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE re-indexes seeded definitions after reload\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE lost seeded definitions after reload\n    Expected ': sre 1 ;'\n    Got: %q\n" "$see_sre"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)
