@@ -2216,6 +2216,28 @@ else
     printf "  ${RED}FAIL${NC}  pushd to a missing dir\n    Got: %q\n" "$ps_bad"; ((failed++))
 fi
 
+# popd must NOT lose the saved dir if the restore chdir fails. Deterministic via
+# a coproc: pushd, wait for its " ok", remove the saved dir, then popd — the
+# entry must survive (still listed by dirs after the failed restore). timeout
+# guards against a hang if " ok" never arrives.
+pp_from="$(mktemp -d)"; pp_to="$(mktemp -d)"
+# $sv_forth is the absolute binary command (the coproc cd's away, so ./basicforth
+# would not resolve); set earlier in the session-persistence section.
+coproc PP { cd "$pp_from" && BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1; }
+printf 'pushd %s\n' "$pp_to" >&"${PP[1]}"
+while IFS= read -r -u "${PP[0]}" pp_ln; do [[ "$pp_ln" == *" ok"* ]] && break; done
+rmdir "$pp_from"                                   # saved dir vanishes before popd
+printf 'dirs\npopd\ndirs\nbye\n' >&"${PP[1]}"
+pp_out=""; while IFS= read -r -u "${PP[0]}" pp_ln; do pp_out+="$pp_ln"$'\n'; done
+wait "$PP_PID" 2>/dev/null
+rm -rf "$pp_to"
+pp_after=${pp_out#*cannot restore directory}       # text printed after the failed popd
+if [[ "$pp_out" == *"cannot restore directory"* && "$pp_after" == *"$pp_from"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd keeps the saved dir when restore fails\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd lost the saved dir on restore failure\n    Got: %q\n" "$pp_out"; ((failed++))
+fi
+
 # =========================================================================
 section "Version"
 # =========================================================================

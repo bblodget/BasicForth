@@ -1083,8 +1083,11 @@ variable (ds-n)                            \ number of saved entries
     2drop  1 (ds-n) +! ;
 : popd ( -- )
     (ds-n) @ 0= if  ." popd: directory stack empty" cr abort  then
-    (ds-n) @ 1- dup (ds-n) !                ( idx )   \ pop the top entry
-    (ds-fetch) chdir if  ." popd: cannot restore directory" cr abort  then ;
+    \ Try the restore BEFORE popping, so a failed chdir (the saved dir vanished)
+    \ keeps the entry on the stack instead of silently losing it.
+    (ds-n) @ 1- (ds-fetch)                   ( c-addr u )   \ top entry; not popped yet
+    chdir if  ." popd: cannot restore directory" cr abort  then
+    -1 (ds-n) +! ;                           \ restored OK -> now pop the entry
 : dirs ( -- )                              \ current dir, then saved dirs top-first
     (cwd) type
     (ds-n) @ 0 ?do
