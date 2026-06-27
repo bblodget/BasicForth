@@ -88,8 +88,14 @@ create body-y MAX_LEN allot
 \ *** Update position words ***
 
 : update-food
-    WIDTH 4 - 2 / rnd 2 * 2 + fx !
-    HEIGHT 2 - rnd 1+ fy ! ;
+    \ Keep picking until the cell is empty, so food never lands on the snake (or
+    \ border). Otherwise food could sit on the tail, and eating there would slip
+    \ past the screen-based collision check (the tail has just vacated the cell).
+    begin
+        WIDTH 4 - 2 / rnd 2 * 2 + fx !
+        HEIGHT 2 - rnd 1+ fy !
+        fx @ fy @ screen@ bl =
+    until ;
 
 : update-head
     dir @ case

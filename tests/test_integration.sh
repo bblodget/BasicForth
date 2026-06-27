@@ -887,6 +887,21 @@ sm_collide "follow the vacating tail is legal"  '0 dx ! -1 dy !\n1 fx ! 1 fy !\n
 sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\ntick\n'  "-1"
 sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
 
+# examples/snake.fs (the fuller version) must never spawn food on the snake or
+# border: its collision is screen-based, so food on the just-vacated tail could
+# be eaten without being noticed. Occupy the top half, place food 300 times, and
+# confirm every placement lands on an empty cell.
+t0=$(date +%s.%N)
+sf_food=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\nvariable bad 0 bad !\n: occupy HEIGHT 2 / 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\noccupy\n: chk 300 0 do update-food fx @ fy @ screen@ bl <> if 1 bad +! then loop ;\nchk\n.( FOODBAD=) bad @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs food placement"
+if [[ "$sf_food" == *"FOODBAD=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs food never spawns on the snake\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs food never spawns on the snake\n"
+    printf "    Expected: FOODBAD=0\n    Got:      %s\n" "$(echo "$sf_food" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
+fi
+
 # BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
 t0=$(date +%s.%N)
 mv core.fs core.fs.bak 2>/dev/null
