@@ -207,14 +207,20 @@ because it revises the earlier "heap" wording.
    `core.fs` words → `srcid=1` with correct `off`/`len` and an absolute path;
    primitives → `PRIM`; REPL words → `srcid=0`; seeded `session.fs` words →
    their own id (the case the text-parse MVP couldn't do).
-3. **[NEXT] `see` read path.** Branch on source-id: primitive label / log
-   fallback (srcid 0) / file span (srcid ≥ 1, via `(source-path)` + read). `see`
-   then works for `core.fs`, includes, and custom-defining-word words.
-4. **Docs + tests.** Update [See.md](See.md) (drop the MVP-limitation caveats),
-   integration tests (`see` a `core.fs` word, an `include`d word, a
-   custom-defining-word word, a primitive), and this doc → "implemented."
-5. **(Optional, later)** Retire `(index-seeded)` and the seeded path once file
-   metadata is proven to cover those words.
+3. **[DONE] `see` read path.** `see` (in core.fs) reads `(find-meta)` and
+   branches on source-id: not found / primitive label / capture-log scan
+   (srcid 0) / file span (srcid ≥ 1, via `(source-path)` → open → read
+   `[off, off+len)`). `(see-file)` reads the span from offset 0 with a
+   short-read loop (no seek primitive needed). Verified both arches: `core.fs`,
+   primitive, REPL, seeded `session.fs`, and **custom-defining-word** words.
+4. **[DONE] Docs + tests.** Rewrote [See.md](See.md) for the metadata model
+   (dropped the MVP-limitation caveats); CHANGELOG headline entry; integration
+   tests added (`see` a `core.fs` word, a primitive label, a custom-defining-word
+   word loaded from `session.fs`) and the stale "no source captured" test updated
+   to the new primitive label. 408 integration green both arches.
+5. **(Optional, later)** Retire `(index-seeded)` and the seeded capture path now
+   that file metadata covers those words (it still runs but `see` no longer
+   relies on it for file-loaded words).
 
 ## Risks / notes
 

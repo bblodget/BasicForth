@@ -737,31 +737,84 @@ variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, len
 \ for the matching xt — so it only ever shows a word that is currently defined,
 \ and shows the source of the definition actually in force.
 variable (see-a)  variable (see-u)      \ the name SEE is searching for (for messages)
-variable (see-xt)                       \ the live word's xt SEE is matching
+variable (see-xt)                       \ the live word's xt (for the REPL session-log path)
+
+\ --- file-source reader: print [off, off+len) of a source file by source-id ---
+variable (sf-fid)  variable (sf-buf)
+variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
+
+\ Read (sf-need) bytes from the start of (sf-fid) into (sf-buf); set (sf-got).
+\ Loops over short reads; stops early at EOF or a read error.
+: (sf-read) ( -- )
+    0 (sf-got) !
+    begin  (sf-got) @ (sf-need) @ <  while
+        (sf-buf) @ (sf-got) @ +              ( dest )
+        (sf-need) @ (sf-got) @ -             ( dest remaining )
+        (sf-fid) @ read-file                 ( u2 ior )
+        if  drop exit  then                  \ read error → stop with what we have
+        dup 0= if  drop exit  then           \ EOF (0 bytes) → stop
+        (sf-got) +!
+    repeat ;
+
+\ Open the source file for `srcid` and TYPE its [off, off+len) byte span.
+: (see-file) ( off len srcid -- )
+    (source-path)                            ( off len c-addr u )
+    r/o open-file if                         ( off len fileid )
+        drop 2drop ." see: cannot open source file" cr exit
+    then  (sf-fid) !                         ( off len )
+    (sf-len) !  (sf-off) !
+    (sf-off) @ (sf-len) @ +  (sf-need) !
+    (sf-need) @ allocate if                  ( a-addr )   \ ior nonzero → failure
+        drop  (sf-fid) @ close-file drop
+        ." see: out of memory" cr exit
+    then  (sf-buf) !
+    (sf-read)
+    (sf-got) @ (sf-off) @ > if               \ type [off, min(off+len, got))
+        (sf-buf) @ (sf-off) @ +
+        (sf-got) @ (sf-off) @ -  (sf-len) @ min
+        type
+    then
+    (sf-buf) @ free drop
+    (sf-fid) @ close-file drop ;
+
+\ Print a REPL-typed word's source from the session capture log (matched by xt).
+: (see-from-log) ( -- )
+    (dir) cell+ @  3 cells /                 ( count )   \ records, newest = highest index
+    begin  dup 0>  while
+        1-                                   ( i )
+        dup 3 cells *  (dir) @ +             ( i rec )
+        dup 2 cells + @  (see-xt) @ = if      ( i rec )   \ this record's word
+            dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
+            drop exit
+        then
+        drop                                 ( i )
+    repeat
+    drop
+    ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
+
+\ SEE shows the source of the definition currently in force. It reads the
+\ per-word source metadata (find-meta): a file-loaded word (core.fs, session.fs,
+\ or any included file) is shown straight from its source file; a word typed at
+\ the REPL this session comes from the capture log; an assembly primitive is
+\ labelled as such. The live xt is matched, so a redefined or forgotten word
+\ shows what is actually in force (or reports "not found").
 : see ( "name" -- )
     parse-word dup 0= if  2drop ." see: needs a word name" cr exit  then
     (see-u) !  (see-a) !
-    (see-a) @ (see-u) @ find ?dup if    ( xt flag )   \ currently defined
-        drop (see-xt) !                 ( )
-        (dir) cell+ @  3 cells /        ( count )   \ records, newest = highest index
-        begin  dup 0>  while
-            1-                          ( i )
-            dup 3 cells *  (dir) @ +    ( i rec )
-            dup 2 cells + @  (see-xt) @ = if         ( i rec )   \ this record's word
-                dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
-                drop exit
-            then
-            drop                        ( i )
-        repeat
-        drop                            \ in the dictionary, but not in the SEE index:
-        \ a primitive, a core.fs word, or a word loaded from session.fs (which is
-        \ editable on disk) — defined, just no captured source to show.
-        ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr
-        exit
-    else                                ( a u )   \ not currently defined
-        2drop
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop                       \ not currently defined
+        ." see: " (see-a) @ (see-u) @ type ."  not found" cr exit
     then
-    ." see: " (see-a) @ (see-u) @ type ."  not found" cr ;
+    dup 65535 = if                           ( xt off len srcid )   \ PRIM sentinel
+        2drop 2drop
+        ." see: " (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
+    then
+    dup 0= if                                \ srcid 0 → REPL word: use the capture log
+        drop  2drop  (see-xt) !
+        (see-from-log) exit
+    then
+    >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
+    (see-file) ;
 
 \ Initialize the buffers and register the hooks with the asm REPL.
 (log)  3 cells erase
