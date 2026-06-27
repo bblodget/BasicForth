@@ -1597,6 +1597,13 @@ pin_away="$(mktemp -d)"
 pin_home=$(cat "$pin_dir/session.fs" 2>/dev/null)
 [ -e "$pin_away/session.fs" ] && pin_away_made=yes || pin_away_made=no
 rm -rf "$pin_dir" "$pin_away"
+# Graceful degradation when boot-time getcwd fails (startup dir removed out from
+# under the process): (startup-dir) is empty, so the session paths fall back to
+# the bare relative name instead of an absolute "/session.fs" that could pollute
+# the filesystem root. The REPL must keep working — confirm it still evaluates.
+gone_dir="$(mktemp -d)"
+gone_out=$( cd "$gone_dir" && rmdir "$gone_dir" && printf '3 4 + .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1675,6 +1682,11 @@ if [[ "$pin_home" == *": pinned 7 ;"* && "$pin_away_made" == "no" ]]; then
     printf "  ${GREEN}PASS${NC}  save pins session.fs to the startup dir across a cd\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  session.fs not pinned to startup dir after cd\n    home: %q / away-made: %s\n" "$pin_home" "$pin_away_made"; ((failed++))
+fi
+if [[ "$gone_out" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  REPL survives a failed boot-time getcwd (relative session.fs fallback)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The

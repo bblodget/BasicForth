@@ -544,6 +544,9 @@ variable (sp-end)                        \ write pointer while building a path
     dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
     r> (sp-end) +! ;
 : (sess-build) ( buf c-addr u -- path plen )  \ build "<startup>/<name>" into buf
+    (startup-dir) nip 0= if              \ getcwd failed at boot (startup-dir empty):
+        rot drop  exit                   \   fall back to the bare relative name, like
+    then                                 \   make_absolute keeps a path relative on failure
     >r >r                               ( buf )   \ R: u c-addr (the name)
     dup (sp-end) !                       \ write pointer := buf
     (startup-dir) (sp-add)               \ startup directory
