@@ -846,6 +846,25 @@ else
     ((failed++))
 fi
 
+# examples/snake-mini.fs (the Snake tutorial's finished program) must load and
+# its logic must work headlessly: start the snake, drop food one cell ahead of
+# the head, advance one frame, and confirm the snake ate and grew (len 3 -> 4).
+t0=$(date +%s.%N)
+sm_out=$(printf 'include %s/examples/snake-mini.fs\ninit-snake\n12 fx ! 8 fy !\ntick\n.( SNAKELEN=) len @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0')
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "examples/snake-mini.fs"
+if [[ "$sm_out" == *"SNAKELEN=4"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake-mini.fs loads and grows on food\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake-mini.fs loads and grows on food\n"
+    printf "    Expected: SNAKELEN=4\n"
+    printf "    Got:      %s\n" "$(echo "$sm_out" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
 t0=$(date +%s.%N)
 mv core.fs core.fs.bak 2>/dev/null

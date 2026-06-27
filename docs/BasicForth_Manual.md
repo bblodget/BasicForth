@@ -446,14 +446,14 @@ $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
 Language-Reference
   Arithmetic  Comparison  Memory  Stack
 Tutorial
-  Getting-Started
+  Snake
 > man stack                      \ page a topic (case-insensitive, .md added)
 # Stack Manipulation
 ...
 -- more (space=page, q=quit) --
 > apropos dup                    \ which topics mention "dup"?
 Stack (Language-Reference)
-Getting-Started (Tutorial)
+Snake (Tutorial)
 ```
 
 - Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
@@ -476,7 +476,7 @@ returns to the prompt after each step, so you can try the examples before moving
 on:
 
 ```
-> tutorial Getting-Started      \ start a lesson (name like man, case-insensitive)
+> tutorial Snake                \ start a lesson (name like man, case-insensitive)
 ...
 [ next = continue   back = previous   step 1 ]
 > next                          \ next step    (back = previous step)

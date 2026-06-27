@@ -40,14 +40,14 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 ## Using it
 
 ```
-> tutorial Getting-Started
-# Getting Started
+> tutorial Snake
+# Snake — Build Your First Game
 ...
 
 [ next = continue   back = previous   step 1 ]
  ok
 > next
-## The prompt
+## The stack — Forth's workspace
 ...
 
 [ next = continue   back = previous   step 2 ]
@@ -60,7 +60,7 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 ```
 
 The name is the file's base name without `.md` (what `topics` shows), matched
-case-insensitively — `tutorial Getting-Started`, `tutorial getting-started`.
+case-insensitively — `tutorial Snake`, `tutorial snake`.
 
 `back` stops at step 1 (it won't go below it). Stepping past the last step prints
 `-- end of '<name>' --` and leaves you on the last step, so `back` still works.

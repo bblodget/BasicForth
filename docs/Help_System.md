@@ -51,14 +51,14 @@ variable is unset, every help word prints `(BASICFORTH_DOCS not set)`.
 Language-Reference
   Arithmetic  Comparison  Memory  Stack
 Tutorial
-  Getting-Started
+  Snake
 > man stack
 # Stack Manipulation
 ...
 -- more (space=page, q=quit) --      \ press space for the next page, q to stop
 > apropos dup
 Stack (Language-Reference)
-Getting-Started (Tutorial)
+Snake (Tutorial)
 ```
 
 `man` matches case-insensitively and appends `.md`, so `man stack`,

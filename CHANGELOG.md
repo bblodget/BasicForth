@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added: "Snake" tutorial — build a game step by step
+- `docs/Tutorial/Snake.md`, the first interactive tutorial: walked with
+  `tutorial Snake`, it builds a playable terminal Snake game one word at a time,
+  touching nearly the whole language (stack, defining words, variables,
+  constants, arrays/`create`+`allot`, `if`/`case`, `do`/`begin` loops, the
+  keyboard, `at-xy` drawing, `ms` timing, `rnd`). Each step ends at the REPL so
+  the reader types and tests the piece they just learned.
+- The finished program ships as `examples/snake-mini.fs` (the tutorial's answer
+  key; a fuller version remains in `examples/snake.fs`). An integration test
+  loads it headlessly and verifies the eat-and-grow logic.
+- Replaces the thin `Getting-Started` pilot — the starting tutorial now builds
+  toward a real project. Tutorial files drop the numeric name prefix (it's
+  `tutorial Snake`, not `01-…`); each tutorial is a self-contained subject.
+
 ### Added: interactive tutorial (`tutorial` / `next` / `back`)
 - `tutorial <name>` walks one of the `BASICFORTH_DOCS` Markdown files **one step
   at a time**, returning to the REPL after each step so you can type the examples
