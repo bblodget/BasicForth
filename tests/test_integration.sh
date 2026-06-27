@@ -2082,6 +2082,37 @@ fi
 rm -rf "$tut_dir"
 
 # =========================================================================
+section "Version"
+# =========================================================================
+# -v / --version print the banner string to stdout and exit 0, before any
+# startup work — and unlike the interactive banner, they are NOT gated on a tty
+# (so the output is captured here through a pipe). The `version` word prints the
+# same string at the REPL.
+
+t0=$(date +%s.%N)
+v_out=$(printf '' | timeout 2 $FORTH -v 2>&1);        v_status=$?
+ver_out=$(printf '' | timeout 2 $FORTH --version 2>&1); ver_status=$?
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "version flags"
+
+# -v: prints the banner, exits 0, never shows a REPL prompt
+if [[ "$v_status" == "0" && "$v_out" == *"*** BasicForth"* && "$v_out" == *"***"* && "$v_out" != *"> "* ]]; then
+    printf "  ${GREEN}PASS${NC}  -v prints version, exit 0\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  -v prints version, exit 0\n"
+    printf "    Expected: '*** BasicForth ... ***', status 0, no prompt\n    Got:      status %s / %s\n" "$v_status" "$(echo "$v_out" | head -3)"; ((failed++))
+fi
+# --version: same behavior as -v
+if [[ "$ver_status" == "0" && "$ver_out" == *"*** BasicForth"* && "$ver_out" != *"> "* ]]; then
+    printf "  ${GREEN}PASS${NC}  --version prints version, exit 0\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  --version prints version, exit 0\n"
+    printf "    Expected: '*** BasicForth ...', status 0, no prompt\n    Got:      status %s / %s\n" "$ver_status" "$(echo "$ver_out" | head -3)"; ((failed++))
+fi
+
+# the `version` word prints the banner string at the REPL
+assert_output "version word"       "version"             "*** BasicForth"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

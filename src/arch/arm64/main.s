@@ -36,6 +36,31 @@ _start:
     STR X9, [X10]
 .Lno_argv1:
 
+    // -v / --version: print the version string to stdout and exit 0, before any
+    // startup work. An explicit request, so it is NOT gated on isatty (unlike the
+    // banner) — `basicforth --version | cat` still prints.
+    ADR X9, start_argc
+    LDR X9, [X9]
+    CMP X9, #2
+    B.LT .Lno_version_flag
+    ADR X9, start_argv1
+    LDR X0, [X9]
+    ADR X1, opt_v
+    BL cstr_eq
+    CBNZ X0, .Lprint_version
+    ADR X9, start_argv1
+    LDR X0, [X9]
+    ADR X1, opt_version
+    BL cstr_eq
+    CBZ X0, .Lno_version_flag
+.Lprint_version:
+    ADR X0, version_str
+    MOV X1, #version_len
+    BL platform_write               // stdout
+    MOV X0, #0                      // exit status 0
+    B platform_exit
+.Lno_version_flag:
+
     // Walk envp to find BASICFORTH_PATH=
     LDR X0, [SP]                    // argc
     ADD X0, X0, #2                  // skip argc + NULL terminator
@@ -153,7 +178,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_find_meta         // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_version_str       // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -402,6 +427,31 @@ repl_bye:
     MOV X0, #1
     B platform_exit
 
+// cstr_eq ( X0=a X1=b -- X0=1 if equal else 0 ) — compare null-terminated
+// strings byte for byte. Used to recognize the -v / --version option.
+cstr_eq:
+.Lce_loop:
+    LDRB W2, [X0], #1
+    LDRB W3, [X1], #1
+    CMP W2, W3
+    B.NE .Lce_ne
+    CBNZ W2, .Lce_loop              // not NUL yet → keep comparing
+    MOV X0, #1                      // both hit NUL together → equal
+    RET
+.Lce_ne:
+    MOV X0, #0
+    RET
+
+// (version-str) ( -- c-addr u ) — push the version/banner string. Backs the
+// Forth `version` word; defined here so it can see version_str/version_len.
+.global forth_version_str
+forth_version_str:
+    ADR X9, version_str
+    STR X9, [X19, #-CELL]!          // push c-addr
+    MOV X9, #version_len
+    STR X9, [X19, #-CELL]!          // push u
+    RET
+
 // ---------- Error Handlers ----------
 // Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 // in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -453,6 +503,8 @@ sess_prefix:    .ascii "BASICFORTH_SESSION="
 .equ sess_prefix_len, . - sess_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
+opt_v:          .asciz "-v"
+opt_version:    .asciz "--version"
 
 .data
 .align 3

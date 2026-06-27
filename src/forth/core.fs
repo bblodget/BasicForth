@@ -957,6 +957,10 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
     ['] (apropos-in) (each-dir) ;
 
+\ Print the version/banner string (same text shown at startup). The string is
+\ supplied by the (version-str) primitive so it always matches the build.
+: version ( -- )  (version-str) type ;
+
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.
 \ A tutorial is just a <name>.md file in the docs dirs (resolved like MAN); each

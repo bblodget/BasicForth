@@ -4380,9 +4380,11 @@ DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_resto
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
+DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
+.global dict_version_str
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
