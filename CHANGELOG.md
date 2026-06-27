@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — 2026-06-27
 
 ### `see` shows the source of any word via dictionary source-metadata
 - `see <word>` now shows the source of **any** word currently in force — from
