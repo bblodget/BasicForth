@@ -557,6 +557,11 @@ assert_output "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
 # MOVE
 assert_output "move non-overlap"  'create s 3 allot create d 3 allot s 3 65 fill s d 3 move d 3 type' "AAA"
 assert_output "move zero len"     '1 2 0 move 42 .' "42"
+# Overlapping MOVE must be memmove-safe (regression: the overlap copy direction
+# was inverted, smearing bytes — see TODO Known Bugs). Buffer holds "ABCDE".
+assert_output "move overlap right" 'create mr 6 allot 65 mr c! 66 mr 1+ c! 67 mr 2 + c! 68 mr 3 + c! 69 mr 4 + c! mr mr 1+ 4 move mr 5 type' "AABCD"
+assert_output "move overlap left"  'create ml 6 allot 65 ml c! 66 ml 1+ c! 67 ml 2 + c! 68 ml 3 + c! 69 ml 4 + c! ml 1+ ml 4 move ml 5 type' "BCDEE"
+assert_output "move zero balance"  'create mz 2 allot mz mz 1+ 0 move depth 0 = .' "-1"
 
 # ALIGN / ALIGNED
 assert_output "aligned"           '1 aligned .'                        "8"
@@ -716,8 +721,14 @@ assert_output "compare greater"      ': t s" abd" s" abc" compare . ; t'       "
 assert_output "compare shorter"      ': t s" abc" s" abcd" compare . ; t'      "-1"
 assert_output "compare longer"       ': t s" abcd" s" abc" compare . ; t'      "1"
 
-# CMOVE
+# CMOVE / CMOVE>
 assert_output "cmove"                'create s 65 c, 66 c, 67 c, create d 3 allot s d 3 cmove d c@ . d 1+ c@ . d 2 + c@ .'  "65 66 67"
+assert_output "cmove>"               'create cs 65 c, 66 c, 67 c, create cd 3 allot cs cd 3 cmove> cd c@ . cd 1+ c@ . cd 2 + c@ .'  "65 66 67"
+# Zero-count copies must leave a clean stack (regression: CMOVE> dropped only 2
+# of its 3 cells when u=0 — see TODO Known Bugs). depth 0 = . prints -1 only if
+# the stack is empty afterwards.
+assert_output "cmove> zero balance"  'create cz 2 allot cz cz 1+ 0 cmove> depth 0 = .' "-1"
+assert_output "cmove zero balance"   'create kz 2 allot kz kz 1+ 0 cmove depth 0 = .' "-1"
 
 # -TRAILING
 assert_output "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"

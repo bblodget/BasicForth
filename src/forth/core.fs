@@ -92,16 +92,16 @@
 : MOVE      ( addr1 addr2 u -- )
             dup 0 > if
                 >r 2dup u< if
-                    \ dest < src: copy forward
-                    r> 0 do over i + c@ over i + c! loop
-                else
-                    \ dest >= src: copy backward
+                    \ src < dest (shift right): copy backward, high to low
                     r> begin dup 0 > while
                         1- >r
                         over r@ + c@    ( src dest byte )
                         over r@ + c!    ( src dest )
                         r>
                     repeat drop
+                else
+                    \ src >= dest (shift left): copy forward, low to high
+                    r> 0 do over i + c@ over i + c! loop
                 then 2drop
             else drop 2drop then ;
 : ALIGN     here 7 + -8 and here - allot ;
@@ -187,8 +187,8 @@
             dup 0 > if
                 begin dup 0 > while
                     1- >r over r@ + c@ over r@ + c! r>
-                repeat drop
-            then 2drop ;
+                repeat drop 2drop
+            else drop 2drop then ;
 : -TRAILING ( c-addr u1 -- c-addr u2 )
             begin dup 0> while
                 2dup + 1- c@ 32 <> if exit then
