@@ -2139,6 +2139,9 @@ assert_output "cat dumps a file"         "cat $fw_dir/greet.txt"    "world"
 assert_output "more pages a file"        "more $fw_dir/greet.txt"   "hello"
 assert_output "cat missing file errors"  "cat $fw_dir/nope.txt"     "cat: cannot open file"
 assert_output "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot open directory"
+# cat on a directory: open() succeeds but read() fails (EISDIR). Must surface the
+# error, not silently stop and report success (a read error swallowed by the loop).
+assert_output "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read error"
 rm -rf "$fw_dir"
 
 # =========================================================================

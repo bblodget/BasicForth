@@ -868,7 +868,7 @@ variable (pg-quit)                       \ true once the user pressed q
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
-        if  2drop  r> close-file drop exit  then
+        if  2drop  ." (read error)" cr  r> close-file drop exit  then  \ surface I/O error
         if  (pg-buf@) swap (pg-line)
         else  drop  r> close-file drop exit  then
         (pg-quit) @ if  r> close-file drop exit  then
@@ -1008,6 +1008,7 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     >r
     begin
         r@ (gd@) (gd-size) (getdents)        ( n )
+        dup 0< if  ." ls: read error" cr  then  \ negative errno: report, then stop
         dup 0> while                          ( n )
         (gd@) +  (gd@)                         ( end ptr )
         begin 2dup u> while                    ( end ptr )
@@ -1028,9 +1029,13 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-file   ( u2 ior )
-        0= over 0> and                       ( u2 continue? )  \ stop on error or EOF
+        if  ." cat: read error" cr  drop  r> close-file drop exit  then   ( u2 )
+        dup 0>                               ( u2 f )   \ 0 bytes (no error) = EOF
     while                                    ( u2 )
-        (pg-buf@) swap type
+        \ Write to stdout via write-file (fd 1) rather than TYPE, so a write
+        \ failure (broken pipe, ENOSPC) is surfaced instead of silently ignored.
+        (pg-buf@) swap 1 write-file          ( ior )
+        if  ." cat: write error" cr  r> close-file drop exit  then
     repeat  drop
     r> close-file drop ;
 : more ( "file" -- )
