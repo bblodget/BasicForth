@@ -5,6 +5,27 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Known Bugs
+
+- [ ] **`MOVE` (core.fs) copies the wrong direction on overlap.** `MOVE
+  ( addr1 addr2 u )` must be overlap-safe (memmove semantics), but the current
+  definition picks the copy direction backwards: when `src < dest` (shift right)
+  it copies low→high and when `src > dest` (shift left) it copies high→low — both
+  clobber the overlap, producing a byte "smear" (e.g. shifting `abcd` left by one
+  yields `bccc`-style corruption). Latent because non-overlapping copies and
+  `u <= 1` are unaffected, which covers every current caller. Found 2026-06 while
+  building the line editor (which worked around it with its own shift loops, so
+  it does not use MOVE). Fix: swap the two branches; add a unit test that shifts
+  an overlapping region in both directions.
+- [ ] **`CMOVE>` (core.fs) unbalances the stack when `u = 0`.** The zero-length
+  path runs only `2drop`, but the stack still holds `( c-addr1 c-addr2 u )` (3
+  cells), so it leaves `c-addr1` behind and corrupts the caller. (`CMOVE` handles
+  `u = 0` correctly with `drop 2drop`.) Latent because no current caller passes
+  `u = 0`. Found 2026-06 (same investigation). Fix: drop all three cells on the
+  `u = 0` path; add a `0 CMOVE>` stack-depth test (and one for `0 CMOVE`).
+
+---
+
 ## Phase 1: Hello World — COMPLETE
 
 - [x] Minimal static ELF binary (ARM64)
