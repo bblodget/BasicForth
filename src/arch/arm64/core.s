@@ -23,13 +23,33 @@
 .equ DATA_STACK_SIZE, 4096      // 512 cells
 
 // ---------- Dictionary Entry Layout ----------
-// [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
+// [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]
+//
+// The trailing 8-byte source-metadata block records where a word's source came
+// from, for SEE — see docs/See_Metadata.md. It sits *after* CodePtr, so FIND and
+// xt derivation are unchanged; only the code-start cursor (CodeLen field + 4 + 8)
+// moves. Field sizes: SrcId u16 (source-table id), Len u16 (a single
+// definition's source span is never near 64 KB), Off u32 (byte offset into the
+// source file). SrcId = PRIM_SRCID for assembly primitives, 0 for REPL/no-file
+// words, or a source-table id (>=1) for file-loaded words.
 //
 // Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
 .equ F_IMMEDIATE,   0x80
 .equ F_HIDDEN,      0x40
 .equ F_COMPILE_ONLY,0x20
 .equ F_LENMASK,     0x1F
+
+// Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
+// SrcId sentinel for assembly primitives.
+.equ SRC_META_BYTES, 8
+.equ PRIM_SRCID,     0xFFFF
+
+// Source table: maps a source-id (>=1) to the absolute path of a file loaded by
+// forth_included, so SEE can re-open the file even if the CWD changes later.
+// Lives in .bss (out of the dict). id k -> slot k-1. id 0 = REPL/no file.
+.equ SRC_TABLE_MAX,  64             // max distinct source files per run
+.equ SRC_PATH_MAX,   1024           // max bytes per stored (absolutized) path
+.equ ABS_PATH_MAX,   1024           // getcwd + path build buffer size
 
 
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
@@ -62,6 +82,12 @@
     .quad \label
 \entry\()_codelen:
     .long 0
+\entry\()_srcid:
+    .hword PRIM_SRCID               // SrcId:2 — assembly primitive (no captured source)
+\entry\()_len:
+    .hword 0                        // Len:2
+\entry\()_off:
+    .long 0                         // Off:4
     .balign 4
 .text
 .endm
@@ -1492,6 +1518,253 @@ compile_branch_back:
     ADD X21, X21, #4
     RET
 
+// ---------- source-metadata helpers ----------
+
+// meta_from_entry: X10 = entry (header) -> X10 = address of its source-metadata
+// block [SrcId:2][Len:2][Off:4]. Clobbers X11. Leaf (no BL).
+meta_from_entry:
+    LDRB W11, [X10, #8]            // flags+len byte
+    AND W11, W11, #F_LENMASK       // name length
+    ADD X11, X11, #16             // + 9 + 7  (so (namelen+9+7)&~7 = align8(9+namelen))
+    AND X11, X11, #~7
+    ADD X10, X10, X11             // entry + align8(9+namelen) = CodePtr cell
+    ADD X10, X10, #12            // + CodePtr(8) + CodeLen(4) = metadata block
+    RET
+
+// src_register: X0 = path addr, X1 = path length -> X0 = source-id (>=1), or 0
+// if the table is full. Dedups by (len, bytes) so repeated loads of the same
+// file (e.g. reload) reuse one id. Clobbers X0-X3, X9-X15. Preserves X19-X28.
+src_register:
+    MOV X9, #0                     // X9 = slot index
+.Lsr_scan:
+    ADR X10, src_table_count
+    LDR X10, [X10]
+    CMP X9, X10
+    B.GE .Lsr_new                  // past end -> add a new slot
+    ADR X10, src_table_lens
+    LDR X11, [X10, X9, LSL #3]     // X11 = slot len
+    CMP X11, X1
+    B.NE .Lsr_scan_next            // length differs
+    MOV X12, #SRC_PATH_MAX
+    MUL X12, X9, X12
+    ADR X13, src_table_paths
+    ADD X13, X13, X12              // X13 = slot path addr
+    MOV X14, X0                    // input path
+    MOV X15, X1                    // compare count
+    CBZ X15, .Lsr_hit
+.Lsr_cmp:
+    LDRB W2, [X14], #1
+    LDRB W3, [X13], #1
+    CMP W2, W3
+    B.NE .Lsr_scan_next
+    SUB X15, X15, #1
+    CBNZ X15, .Lsr_cmp
+.Lsr_hit:
+    ADD X0, X9, #1                 // id = slot + 1
+    RET
+.Lsr_scan_next:
+    ADD X9, X9, #1
+    B .Lsr_scan
+.Lsr_new:
+    ADR X10, src_table_count
+    LDR X9, [X10]                  // new slot index
+    CMP X9, #SRC_TABLE_MAX
+    B.GE .Lsr_full
+    MOV X12, #SRC_PATH_MAX         // clamp length to slot size
+    CMP X1, X12
+    B.LS .Lsr_len_ok
+    MOV X1, X12
+.Lsr_len_ok:
+    ADR X10, src_table_lens
+    STR X1, [X10, X9, LSL #3]      // store length
+    MOV X12, #SRC_PATH_MAX
+    MUL X12, X9, X12
+    ADR X13, src_table_paths
+    ADD X13, X13, X12              // dest slot
+    MOV X14, X0
+    MOV X15, X1
+    CBZ X15, .Lsr_copied
+.Lsr_copy:
+    LDRB W2, [X14], #1
+    STRB W2, [X13], #1
+    SUB X15, X15, #1
+    CBNZ X15, .Lsr_copy
+.Lsr_copied:
+    ADD X0, X9, #1                 // id = ++count
+    ADR X10, src_table_count
+    STR X0, [X10]
+    RET
+.Lsr_full:
+    MOV X0, #0                     // table full -> 0 (word treated as no-source)
+    RET
+
+// make_absolute: X0 = path addr, X1 = path len -> X0 = path, X1 = len that SEE
+// can re-open regardless of a later CWD change. An already-absolute path
+// (leading '/') passes through unchanged. A relative path becomes
+// getcwd()+'/'+path in abs_path_buf; if getcwd fails or the result would
+// overflow, the original (relative) path is kept. Clobbers X0,X1,X9-X15.
+make_absolute:
+    STP X29, X30, [SP, #-16]!      // calls platform_getcwd via BL
+    LDRB W9, [X0]
+    CMP W9, #'/'
+    B.EQ .Lma_done                 // already absolute -> unchanged
+    STP X0, X1, [SP, #-16]!        // save rel addr/len across platform_getcwd
+    ADR X0, abs_path_buf
+    MOV X1, #ABS_PATH_MAX
+    BL platform_getcwd            // -> X0 = bytes incl NUL, or -errno
+    LDP X12, X13, [SP], #16       // X12 = rel addr, X13 = rel len
+    CMP X0, #0
+    B.LE .Lma_fail                // getcwd failed -> keep relative
+    SUB X0, X0, #1                // X0 = cwd string length (drop NUL)
+    ADD X9, X0, X13
+    ADD X9, X9, #1                // total = cwd_len + '/' + rel_len
+    CMP X9, #ABS_PATH_MAX
+    B.GE .Lma_fail                // would overflow -> keep relative
+    ADR X10, abs_path_buf
+    ADD X11, X10, X0             // X11 = end of cwd
+    MOV W9, #'/'
+    STRB W9, [X11], #1
+    MOV X14, X12                 // rel src
+    MOV X15, X13                 // count
+    CBZ X15, .Lma_built
+.Lma_copy:
+    LDRB W9, [X14], #1
+    STRB W9, [X11], #1
+    SUB X15, X15, #1
+    CBNZ X15, .Lma_copy
+.Lma_built:
+    ADD X1, X0, X13             // abs len = cwd_len + rel_len
+    ADD X1, X1, #1              //   + '/'
+    ADR X0, abs_path_buf        // X0 = absolute path
+    LDP X29, X30, [SP], #16
+    RET
+.Lma_fail:
+    MOV X0, X12                 // restore the relative path
+    MOV X1, X13
+    LDP X29, X30, [SP], #16
+    RET
+.Lma_done:
+    LDP X29, X30, [SP], #16
+    RET
+
+// src_finalize: X0 = end offset (next-line start within the current source).
+// Fill Len for definitions completed on the line(s) just interpreted (HIDDEN
+// defs are skipped, finalized on their own closing line; stops at a different
+// source or an already-filled Len). Clobbers X9-X15. Preserves X19-X28.
+src_finalize:
+    STP X29, X30, [SP, #-16]!      // meta_from_entry is reached via BL
+    MOV X12, X0                    // X12 = end
+    MOV X9, X22                    // X9 = walk pointer = LATEST
+.Lsf_loop:
+    CBZ X9, .Lsf_done
+    LDRB W10, [X9, #8]            // flags
+    TST W10, #F_HIDDEN
+    B.NE .Lsf_skip                // in-progress def -> leave for its closing line
+    MOV X10, X9
+    BL meta_from_entry            // X10 = meta (clobbers X11)
+    LDRH W11, [X10]              // SrcId
+    ADR X13, cur_source_id
+    LDR X13, [X13]
+    CMP X11, X13
+    B.NE .Lsf_done                // different source -> done
+    LDRH W11, [X10, #2]         // Len
+    CBNZ X11, .Lsf_done          // already finalized -> done
+    LDR W13, [X10, #4]          // Off (u32)
+    SUB W13, W12, W13           // end - Off
+    STRH W13, [X10, #2]         // store Len (u16)
+.Lsf_skip:
+    LDR X9, [X9]                  // follow link
+    B .Lsf_loop
+.Lsf_done:
+    LDP X29, X30, [SP], #16
+    RET
+
+// (source-path) ( id -- c-addr u )  Resolved path for a source-id, or 0 0.
+.global forth_source_path
+forth_source_path:
+    LDR X0, [X19]                  // id
+    CBZ X0, .Lsp_none
+    ADR X9, src_table_count
+    LDR X9, [X9]
+    CMP X0, X9
+    B.HI .Lsp_none                // id > count -> none
+    SUB X1, X0, #1                // slot = id - 1
+    MOV X9, #SRC_PATH_MAX
+    MUL X9, X1, X9
+    ADR X10, src_table_paths
+    ADD X9, X10, X9               // X9 = path addr
+    ADR X10, src_table_lens
+    LDR X10, [X10, X1, LSL #3]    // X10 = len
+    STR X9, [X19]                 // replace id with c-addr
+    STR X10, [X19, #-CELL]!       // push len
+    RET
+.Lsp_none:
+    STR XZR, [X19]               // c-addr = 0
+    STR XZR, [X19, #-CELL]!      // u = 0
+    RET
+
+// (find-meta) ( c-addr u -- xt off len srcid flag )
+// Look up name (case-insensitive, skipping hidden words) and return its source
+// metadata. flag = -1 found / 0 not found (other cells 0 when not found).
+.global forth_find_meta
+forth_find_meta:
+    STP X29, X30, [SP, #-16]!      // meta_from_entry is reached via BL
+    LDR X1, [X19]                  // X1 = u (name length)
+    LDR X0, [X19, #CELL]          // X0 = c-addr
+    ADD X19, X19, #2*CELL
+    MOV X9, X22                    // X9 = walk pointer = LATEST
+.Lfm_loop:
+    CBZ X9, .Lfm_notfound
+    LDRB W10, [X9, #8]
+    TST W10, #F_HIDDEN
+    B.NE .Lfm_next                // hidden -> skip
+    AND W10, W10, #F_LENMASK
+    CMP X10, X1
+    B.NE .Lfm_next                // length differs
+    ADD X11, X9, #9               // entry name start (already lowercase)
+    MOV X12, X0                    // input ptr
+    MOV X13, X1                    // count
+    CBZ X13, .Lfm_match
+.Lfm_cmp:
+    LDRB W14, [X12], #1          // input char
+    CMP W14, #'A'
+    B.LO .Lfm_nolc
+    CMP W14, #'Z'
+    B.HI .Lfm_nolc
+    ADD W14, W14, #0x20         // lowercase the input char
+.Lfm_nolc:
+    LDRB W15, [X11], #1
+    CMP W14, W15
+    B.NE .Lfm_next
+    SUB X13, X13, #1
+    CBNZ X13, .Lfm_cmp
+.Lfm_match:
+    MOV X10, X9
+    BL meta_from_entry            // X10 = meta (clobbers X11)
+    LDUR X9, [X10, #-12]         // xt = CodePtr value (meta - 12)
+    STR X9, [X19, #-CELL]!        // xt
+    LDR W9, [X10, #4]           // off (u32)
+    STR X9, [X19, #-CELL]!        // off
+    LDRH W9, [X10, #2]          // len (u16)
+    STR X9, [X19, #-CELL]!        // len
+    LDRH W9, [X10]              // srcid (u16)
+    STR X9, [X19, #-CELL]!        // srcid
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!        // flag = found
+    LDP X29, X30, [SP], #16
+    RET
+.Lfm_next:
+    LDR X9, [X9]                  // follow link
+    B .Lfm_loop
+.Lfm_notfound:
+    STR XZR, [X19, #-CELL]!       // xt
+    STR XZR, [X19, #-CELL]!       // off
+    STR XZR, [X19, #-CELL]!       // len
+    STR XZR, [X19, #-CELL]!       // srcid
+    STR XZR, [X19, #-CELL]!       // flag = not found
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- build_header (internal helper) ----------
 // Parse the next word and create a dictionary header at HERE.
 // Saves LATEST/HERE for error recovery, updates LATEST to new entry.
@@ -1565,8 +1838,8 @@ build_header:
     ADD X21, X21, #7
     AND X21, X21, #~7
 
-    // Write code pointer
-    ADD X9, X21, #12               // code starts after CodePtr(8)+CodeLen(4)
+    // Write code pointer — points past CodePtr(8)+CodeLen(4)+SrcMeta(8)
+    ADD X9, X21, #20
     STR X9, [X21]
     ADD X21, X21, #CELL
 
@@ -1574,7 +1847,19 @@ build_header:
     ADR X9, colon_code_len_addr
     STR X21, [X9]
     STR WZR, [X21]
-    ADD X21, X21, #4               // HERE now at code area
+    ADD X21, X21, #4               // past CodeLen
+
+    // Write source metadata: SrcId/Off from the current source context (set by
+    // forth_included; 0/0 at the REPL). Len stays 0 until the definition's span
+    // is finalized at end of line.
+    ADR X9, cur_source_id
+    LDR X9, [X9]
+    STRH W9, [X21]                 // SrcId:2
+    STRH WZR, [X21, #2]           // Len:2 (filled at finalize)
+    ADR X9, cur_line_off
+    LDR X9, [X9]
+    STR W9, [X21, #4]            // Off:4
+    ADD X21, X21, #SRC_META_BYTES  // HERE now at code area
 
     // Update LATEST
     MOV X22, X25                   // LATEST = new entry (still HIDDEN)
@@ -1650,7 +1935,7 @@ forth_semicolon:
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                    // X9 = code_len field address
     CBZ X9, .Lsemi_noname           // :NONAME has no code_len field
-    ADD X10, X9, #4                 // X10 = code start (right after field)
+    ADD X10, X9, #12                // X10 = code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10               // X11 = code length
     STR W11, [X9]                   // write code_len (32-bit)
 
@@ -2012,6 +2297,13 @@ forth_included:
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
     STP X27, X28, [SP, #-16]!
+    // Save the source context (restored in .Lincl_pop_regs) so nested includes
+    // don't clobber the parent's.
+    ADR X9, cur_source_id
+    LDR X10, [X9]
+    ADR X9, cur_line_off
+    LDR X11, [X9]
+    STP X10, X11, [SP, #-16]!
 
     // Pop c-addr and u from data stack
     LDR X1, [X19]                   // X1 = u (filename length)
@@ -2024,6 +2316,13 @@ forth_included:
     ADR X9, file_name_len
     STR X1, [X9]
 
+    // Default resolved path = the as-typed name (CWD hit). The BASICFORTH_PATH
+    // fallback overrides this if a prefixed path opens the file instead.
+    ADR X9, incl_resolved_addr
+    STR X0, [X9]
+    ADR X9, incl_resolved_len
+    STR X1, [X9]
+
     // Open file (X0=path, X1=len)
     BL platform_open_file           // -> X0=fd
     CMP X0, #0
@@ -2034,6 +2333,20 @@ forth_included:
     ADR X10, incl_opened
     STR X9, [X10]
     MOV X23, X0                     // X23 = fd
+
+    // Register the resolved path -> source-id and set the current source context
+    // so build_header stamps file-loaded words with it. (src_register dedups, so
+    // a reload of the same file reuses one id.)
+    ADR X9, incl_resolved_addr
+    LDR X0, [X9]
+    ADR X9, incl_resolved_len
+    LDR X1, [X9]
+    BL make_absolute                // X0/X1 -> CWD-independent absolute path
+    BL src_register                 // -> X0 = id (preserves X23)
+    ADR X9, cur_source_id
+    STR X0, [X9]
+    ADR X9, cur_line_off
+    STR XZR, [X9]
 
     // Get file size
     MOV X0, X23
@@ -2135,6 +2448,9 @@ forth_included:
     ADR X11, to_in
     STR XZR, [X11]
 
+    ADR X11, cur_line_off          // this line's byte offset (for source metadata)
+    STR X26, [X11]
+
     // Save error-reporting globals across the call: a nested INCLUDE/INCLUDED
     // would otherwise overwrite them and leave our own errors pointing at the
     // wrong file and line. X0 (the result) is preserved across the restore.
@@ -2157,6 +2473,10 @@ forth_included:
     STR X11, [X12]
 
     CBNZ X0, .Lincl_error
+
+    // Finalize source spans for any definitions completed on this line.
+    MOV X0, X28                     // end = next-line start offset
+    BL src_finalize
 
 .Lincl_next_line:
     MOV X26, X28                    // advance to next line
@@ -2188,6 +2508,11 @@ forth_included:
 // Shared register epilogue (no source restore — for paths that never ran the
 // line loop, so never saved the source pointers).
 .Lincl_pop_regs:
+    LDP X10, X11, [SP], #16         // restore source context saved at entry
+    ADR X9, cur_source_id
+    STR X10, [X9]
+    ADR X9, cur_line_off
+    STR X11, [X9]
     LDP X27, X28, [SP], #16
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
@@ -2327,7 +2652,18 @@ forth_included:
     B.LT .Lincl_seg_next           // failed → try next segment
     // Found. Keep the original filename for error reporting — incl_path_buf is
     // scratch only, so a nested INCLUDE that reuses it can't corrupt our error
-    // context.
+    // context. But record incl_path_buf as the *resolved* path so SEE can
+    // re-open the file. Don't touch X0 — .Lincl_open_ok consumes it as the fd.
+    ADR X9, incl_path_buf
+    ADR X10, incl_resolved_addr
+    STR X9, [X10]
+    MOV X9, X25                     // segment length
+    ADR X10, file_name_len
+    LDR X10, [X10]
+    ADD X9, X9, X10                 // + filename
+    ADD X9, X9, #1                  // + '/'
+    ADR X10, incl_resolved_len
+    STR X9, [X10]
     B .Lincl_open_ok
 .Lincl_seg_next:
     // Advance past this segment, then skip the ':' delimiter if present
@@ -2705,12 +3041,12 @@ forth_value:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]
-    ADD X10, X9, #4
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10
     STR W11, [X9]
 
     // Flush I-cache
-    ADD X0, X9, #4
+    ADD X0, X9, #12               // start = code start
     MOV X1, X21
     BL platform_flush_icache
 
@@ -3479,12 +3815,12 @@ forth_create:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                   // X9 = code_len field address
-    ADD X10, X9, #4                // code start
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X24, X10              // code length (up to code end, before padding)
     STR W11, [X9]
 
     // Flush I-cache for compiled code
-    ADD X0, X9, #4                 // start = code start
+    ADD X0, X9, #12                // start = code start
     MOV X1, X24                    // end = code end
     BL platform_flush_icache
 
@@ -3525,12 +3861,12 @@ forth_constant:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]
-    ADD X10, X9, #4
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10
     STR W11, [X9]
 
     // Flush I-cache
-    ADD X0, X9, #4
+    ADD X0, X9, #12               // start = code start
     MOV X1, X21
     BL platform_flush_icache
 
@@ -3567,7 +3903,7 @@ forth_does_runtime:
     // Get CREATE'd word's code start from colon_code_len_addr
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                    // X9 = code_len field address
-    ADD X24, X9, #4                 // X24 = code_start
+    ADD X24, X9, #12                // X24 = code_start (past CodeLen + 8-byte SrcMeta)
     // Patch: replace RET at offset 20 with B does_body
     ADD X10, X24, #20              // X10 = address of RET instruction
     SUB X11, X23, X10              // byte offset = does_body - patch_addr
@@ -4434,8 +4770,11 @@ DEFWORD dict_session_mark,"(session-mark!)",forth_session_mark,dict_restore_dict
 DEFWORD dict_session_restore,"(session-restore)",forth_session_restore,dict_session_mark
 DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_restore
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
+DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
+DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 .global dict_include
 .global dict_hook_store
+.global dict_find_meta
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -4449,6 +4788,17 @@ DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 .align 3
 incl_path_buf:
     .space 512
+
+// Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.
+.align 3
+abs_path_buf:                       // scratch for getcwd()+'/'+path absolutization
+    .space ABS_PATH_MAX
+.global src_table_lens
+src_table_lens:                     // length of each registered path (u64)
+    .space SRC_TABLE_MAX * 8
+.global src_table_paths
+src_table_paths:                    // registered absolute path strings (SRC_PATH_MAX each)
+    .space SRC_TABLE_MAX * SRC_PATH_MAX
 
 .balign 4096
 .global guard_page_overflow
@@ -4464,7 +4814,7 @@ guard_page_underflow:
     .space 4096
 
 // ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 65536     // 64KB
+.equ DICT_SPACE_SIZE, 262144    // 256KB
 .balign 8
 .global dict_space
 dict_space:
@@ -4535,6 +4885,21 @@ file_name_addr:                     // Filename for INCLUDED error reporting
     .quad 0
 .global file_name_len
 file_name_len:
+    .quad 0
+.global cur_source_id
+cur_source_id:                      // source-id being compiled from (0 = REPL/no file)
+    .quad 0
+.global cur_line_off
+cur_line_off:                       // byte offset of the current line within cur source file
+    .quad 0
+.global incl_resolved_addr
+incl_resolved_addr:                 // resolved path that actually opened the current file
+    .quad 0
+.global incl_resolved_len
+incl_resolved_len:
+    .quad 0
+.global src_table_count
+src_table_count:                    // number of registered source files (id = index + 1)
     .quad 0
 .global file_line_num
 file_line_num:                      // Line number for INCLUDED error reporting

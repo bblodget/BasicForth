@@ -2,7 +2,29 @@
 
 ## Unreleased
 
+### `see` shows the source of any word via dictionary source-metadata
+- `see <word>` now shows the source of **any** word currently in force — from
+  `core.fs`, any `include`d file, `session.fs`, or your interactive session —
+  read straight from the word's source file. Assembly primitives are labelled
+  *`<name>` is a primitive (assembly)*; an unknown word reports *not found*.
+- Every compiled word's dictionary header gains a small 8-byte source-metadata
+  block `(source-id, offset, length)`, stamped at **compile time** by the file
+  loader (`forth_included` → `build_header`). It sits past `CodePtr`, so `FIND`
+  and xt derivation are unchanged. A source-id table (in `.bss`, out of the
+  dictionary) maps ids to **absolute** file paths — absolutized at load time via
+  a new `getcwd` so `see` re-opens files even if the working directory changes.
+- This covers what the interim text-parsing seeded indexer could not — in
+  particular words created by **custom defining words** loaded from a file
+  (`: my-const create , does> @ ;` then `5 my-const x`). Interactive (unsaved)
+  words are still shown from the session capture log. New internal words
+  `(find-meta)`, `(source-path)`; new platform call `getcwd`. The dictionary
+  arena is also enlarged 64 KB → 256 KB. See docs/See.md and docs/See_Metadata.md.
+
 ### `see` now covers definitions loaded from `session.fs`
+*(Superseded by the source-metadata `see` above. The interim text-parsing
+indexer — `(index-seeded)` and its ~20 helper words — has now been removed; `see`
+relies entirely on the per-word file metadata for `session.fs`/file-loaded words.
+The interactive capture path below is unchanged.)*
 - `see` previously only showed words you defined *interactively* this session;
   words loaded from `session.fs` (at startup or by `reload`) reported *defined,
   but no source captured*. New `(index-seeded)` closes the gap: after the file

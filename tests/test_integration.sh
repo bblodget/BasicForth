@@ -1597,10 +1597,13 @@ see_live=$( cd "$see_dir" && printf ': v 1 ;\nmarker -m\n: v 2 ;\n-m\nsee v\nbye
 # SEE of the earlier word reported "not found"). m1 is the non-last definition.
 see_multi=$( cd "$see_dir" && printf ': m1 1 ;  : m2 2 ;\nsee m1\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: m1' )
-# A word in the dictionary but not in the capture index (a primitive/core word)
-# is reported as defined-without-source, distinct from "not found".
-see_nosrc=$( cd "$see_dir" && printf 'see dup\nbye\n' \
+# An assembly primitive (no source span in its metadata) is labelled as such,
+# distinct from "not found".
+see_prim=$( cd "$see_dir" && printf 'see dup\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+# A core.fs word is now shown straight from its source file (source metadata).
+see_core=$( cd "$see_dir" && printf 'see spaces\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: SPACES' )
 # Using SEE must not capture itself into the saved file.
 ( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
@@ -1628,6 +1631,12 @@ see_sre=$( cd "$seed_dir" && printf 'reload\nsee sre\nbye\n' \
 printf 'VARIABLE su\n' > "$seed_dir/session.fs"
 see_su=$( cd "$seed_dir" && printf 'see su\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^VARIABLE su' )
+# Custom defining words: a word made by a *user-defined* defining word, loaded
+# from session.fs, is now see-able via source metadata — the case the text-parse
+# seeded-SEE MVP could not handle.
+printf ': mk create , does> @ ;\n5 mk five\n' > "$seed_dir/session.fs"
+see_cdw=$( cd "$seed_dir" && printf 'see five\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^5 mk five' )
 rm -rf "$seed_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "SEE"
 rm -rf "$see_dir"
@@ -1647,10 +1656,15 @@ if [[ "$see_multi" == ": m1 1 ;  : m2 2 ;" ]]; then
 else
     printf "  ${RED}FAIL${NC}  SEE finds a non-last definition on a shared line\n    Expected ': m1 1 ;  : m2 2 ;'\n    Got: %q\n" "$see_multi"; ((failed++))
 fi
-if [[ "$see_nosrc" == *"defined, but no source captured"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SEE distinguishes defined-without-source from not-found\n"; ((passed++))
+if [[ "$see_prim" == *"is a primitive (assembly)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SEE defined-without-source message\n    Expected 'defined, but no source captured'\n    Got: %q\n" "$see_nosrc"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)'\n    Got: %q\n" "$see_prim"; ((failed++))
+fi
+if [[ "$see_core" == ": SPACES"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows a core.fs word from its source file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE core.fs word\n    Expected a line starting ': SPACES'\n    Got: %q\n" "$see_core"; ((failed++))
 fi
 if [[ "$see_const" == "42 constant answer" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE handles a non-colon defining word\n"; ((passed++))
@@ -1711,6 +1725,11 @@ if [[ "$see_su" == "VARIABLE su" ]]; then
     printf "  ${GREEN}PASS${NC}  SEE indexes an uppercase defining word (case-insensitive)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SEE missed an uppercase defining word\n    Expected 'VARIABLE su'\n    Got: %q\n" "$see_su"; ((failed++))
+fi
+if [[ "$see_cdw" == "5 mk five" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows a custom-defining-word word from session.fs\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE custom-defining-word word\n    Expected '5 mk five'\n    Got: %q\n" "$see_cdw"; ((failed++))
 fi
 
 # Snake game words (test game helpers without loading the full file)

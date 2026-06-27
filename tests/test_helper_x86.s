@@ -115,6 +115,11 @@ platform_fstat:
     xor %eax, %eax
     ret
 
+.global platform_getcwd
+platform_getcwd:
+    mov $-1, %rax               # return error → make_absolute keeps relative path
+    ret
+
 .global platform_mmap_file
 platform_mmap_file:
     mov $-1, %rax               # return MAP_FAILED

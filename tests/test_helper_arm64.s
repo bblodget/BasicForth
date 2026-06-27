@@ -109,6 +109,11 @@ platform_fstat:
     MOV X0, #0
     RET
 
+.global platform_getcwd
+platform_getcwd:
+    MOV X0, #-1                     // return error → make_absolute keeps relative path
+    RET
+
 .global platform_mmap_file
 platform_mmap_file:
     MOV X0, #-1                     // return MAP_FAILED

@@ -485,132 +485,6 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         @                                      \ follow link to the previous header
     repeat  drop ;
 
-\ ---- SEE: index definitions seeded/reloaded from session.fs ----
-\ After session.fs loads, its definitions are in the dictionary but not in the
-\ SEE index (only interactive capture indexes). (index-seeded) parses the seeded
-\ log into definition groups and adds a SEE record for each, so SEE shows their
-\ source too. Best-effort: a mis-delimited group only makes SEE show slightly
-\ wrong text — it never affects the dictionary, save, or reload.
-variable (seed-pending)                 \ set at startup; first (capture-reset) indexes
-variable (ip)                           \ parse cursor: byte offset into (log)
-variable (iline)                        \ offset of the start of the cursor's line
-variable (id-off)                       \ current definition's start offset
-variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, length)
-
-\ Add a SEE record straight from an xt (vs (dir-add), which derives it from a header).
-: (dir-add-xt) ( log-off log-len xt -- )
-    (dir-rec) 2 cells + !  (dir-rec) cell+ !  (dir-rec) !
-    (dir-rec) 3 cells (dir) (buf-append) ;
-
-: (imore?) ( -- f )  (ip) @ (log) cell+ @ < ;   \ more bytes to read?
-: (ic) ( -- c )  (log) @ (ip) @ + c@ ;          \ byte at the cursor
-
-\ skip whitespace from the cursor, tracking the current line's start offset
-: (iskip-ws) ( -- )
-    begin  (imore?) if (ic) 33 < else false then  while
-        (ic) 10 = if  (ip) @ 1+ (iline) !  then
-        1 (ip) +!
-    repeat ;
-
-\ read the next whitespace-delimited token: ( -- off len ); len=0 at end of log
-: (itoken) ( -- off len )
-    (iskip-ws)  (ip) @
-    begin  (imore?) if (ic) 32 > else false then  while  1 (ip) +!  repeat
-    (ip) @  over - ;
-
-: (lc) ( c -- c' )                      \ ASCII lowercase
-    dup [char] A < if exit then  dup [char] Z > if exit then  32 + ;
-
-: (ci=) ( a1 u1 a2 u2 -- f )            \ caseless string equality
-    >r swap r@ <> if  r> drop 2drop false exit  then   ( a1 a2 )   \ R: u2
-    r>  0 ?do
-        over i + c@ (lc)  over i + c@ (lc)  <> if  2drop false unloop exit  then
-    loop  2drop true ;
-
-\ does the log token [off,len] equal the string c-addr,u ? (case-insensitive, so
-\ an uppercase VARIABLE / CONSTANT in a hand-edited session.fs is still matched).
-: (tok=) ( off len c-addr u -- f )
-    >r >r  swap (log) @ + swap  r> r>  (ci=) ;
-
-\ advance the cursor just past the next byte equal to c (or to end of log)
-: (iskip-past) ( c -- )
-    begin
-        (imore?) 0= if  drop exit  then
-        (ic) over = if  1 (ip) +!  drop exit  then
-        1 (ip) +!
-    again ;
-
-: (itok-last) ( off len -- c )  +  1-  (log) @ +  c@ ;   \ last byte of a token
-
-\ if the token opens a comment/string, skip its body and return true. Heuristic:
-\ a token ending in " opens a string (." s" c" abort"); ending in ( opens a ( )
-\ comment ( ( and .( ); \ opens a line comment.
-: (iskip-comment?) ( off len -- f )
-    2dup (itok-last) [char] " = if  2drop [char] " (iskip-past)  true exit  then
-    2dup (itok-last) [char] ( = if  2drop [char] ) (iskip-past)  true exit  then
-    2dup s" \" (tok=)           if  2drop 10        (iskip-past)  true exit  then
-    2drop false ;
-
-\ FIND the current definition's recorded name; xt, or 0 if not currently defined
-: (id-find-xt) ( -- xt-or-0 )
-    (log) @ (id-noff) @ +  (id-nlen) @  find  ?dup if  drop  else  2drop 0  then ;
-
-\ record [ (id-off), span-len, xt ] when the name is currently defined
-: (id-record) ( span-len -- )
-    (id-find-xt) ?dup if  >r  (id-off) @ swap  r>  (dir-add-xt)  else  drop  then ;
-
-\ offset of the end of the cursor's line, including a trailing newline if present
-: (iline-end) ( -- off )
-    (ip) @
-    begin  dup (log) cell+ @ < if  dup (log) @ + c@ 10 <>  else false  then  while
-        1+
-    repeat
-    dup (log) cell+ @ < if 1+ then ;            \ include the newline byte itself
-
-\ token is a single-line defining word?
-: (defining?) ( off len -- f )
-    2dup s" variable"  (tok=) if 2drop true exit then
-    2dup s" constant"  (tok=) if 2drop true exit then
-    2dup s" 2variable" (tok=) if 2drop true exit then
-    2dup s" 2constant" (tok=) if 2drop true exit then
-    2dup s" value"     (tok=) if 2drop true exit then
-    2dup s" create"    (tok=) if 2drop true exit then
-    2dup s" marker"    (tok=) if 2drop true exit then
-    2drop false ;
-
-\ index a colon definition: cursor is just past the ':' token (at colon-off)
-: (index-colon) ( colon-off -- )
-    (id-off) !
-    (itoken) (id-nlen) ! (id-noff) !            \ the defined name
-    begin
-        (itoken)  dup 0= if                     \ end of log before ';'
-            2drop  (log) cell+ @ (id-off) @ -  (id-record)  exit
-        then
-        2dup (iskip-comment?) if  2drop
-        else  2dup s" ;" (tok=) if              \ end of the definition
-            2drop  (iline-end) (id-off) @ -  (id-record)  exit
-        else  2drop  then  then
-    again ;
-
-\ index a single-line defining word: cursor is just past the defining word; the
-\ name is the next token, the span is this whole line.
-: (index-line-def) ( -- )
-    (iline) @ (id-off) !
-    (itoken) (id-nlen) ! (id-noff) !
-    (iline-end) (id-off) @ -  (id-record) ;
-
-\ parse the seeded log and index every definition it contains
-: (index-seeded) ( -- )
-    (log) cell+ @ 0= if exit then
-    0 (ip) !  0 (iline) !
-    begin
-        (itoken)  dup 0=  0= while              ( off len )
-        2dup (iskip-comment?) if  2drop
-        else 2dup s" :" (tok=) if  drop (index-colon)
-        else 2dup (defining?) if  2drop (index-line-def)
-        else 2drop  then then then
-    repeat  2drop ;
-
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
@@ -643,9 +517,6 @@ variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, len
 \ out-of-memory in seed-log) that never happens — so clear it here, else the
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
-    \ First REPL tick after startup load: index session.fs's seeded definitions
-    \ (deferred from (session-init), which runs before they are defined).
-    (seed-pending) @ if  false (seed-pending) !  (index-seeded)  then
     false (skip-capture) !
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -679,8 +550,7 @@ variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, len
 : (session-init) ( -- )
     (session-mark!)
     true (session-on) !                 \ mark this run as an interactive session
-    (seed-log)
-    true (seed-pending) ! ;             \ index the seed once session.fs has loaded
+    (seed-log) ;
 
 \ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
 \ A no-op when nothing has been captured (e.g. capture wasn't active), so it
@@ -728,40 +598,91 @@ variable (id-noff)  variable (id-nlen)  \ current definition's name (offset, len
     -session
     s" session.fs" (included?)          ( ior )
     if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
-    (seed-log)  (index-seeded) ;        \ re-index the reloaded definitions for SEE
+    (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
 
-\ SEE: print the source of a word's definition this session. A source lister,
-\ not a decompiler — it replays exactly what you typed (from the capture log), so
-\ it covers your own interactive definitions, not core.fs words. It resolves the
-\ name with FIND (case-insensitive, searches from LATEST) and shows the log slice
-\ for the matching xt — so it only ever shows a word that is currently defined,
-\ and shows the source of the definition actually in force.
+\ SEE: print the source of the definition currently in force. A source lister,
+\ not a decompiler. File-loaded words are read from their source file via the
+\ per-word metadata; REPL-typed words from the capture log; primitives are
+\ labelled. (See the dispatch in `see` below, and docs/See_Metadata.md.)
 variable (see-a)  variable (see-u)      \ the name SEE is searching for (for messages)
-variable (see-xt)                       \ the live word's xt SEE is matching
+variable (see-xt)                       \ the live word's xt (for the REPL session-log path)
+
+\ --- file-source reader: print [off, off+len) of a source file by source-id ---
+variable (sf-fid)  variable (sf-buf)
+variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
+
+\ Read (sf-need) bytes from the start of (sf-fid) into (sf-buf); set (sf-got).
+\ Loops over short reads; stops early at EOF or a read error.
+: (sf-read) ( -- )
+    0 (sf-got) !
+    begin  (sf-got) @ (sf-need) @ <  while
+        (sf-buf) @ (sf-got) @ +              ( dest )
+        (sf-need) @ (sf-got) @ -             ( dest remaining )
+        (sf-fid) @ read-file                 ( u2 ior )
+        if  drop exit  then                  \ read error → stop with what we have
+        dup 0= if  drop exit  then           \ EOF (0 bytes) → stop
+        (sf-got) +!
+    repeat ;
+
+\ Open the source file for `srcid` and TYPE its [off, off+len) byte span.
+: (see-file) ( off len srcid -- )
+    (source-path)                            ( off len c-addr u )
+    r/o open-file if                         ( off len fileid )
+        drop 2drop ." see: cannot open source file" cr exit
+    then  (sf-fid) !                         ( off len )
+    (sf-len) !  (sf-off) !
+    (sf-off) @ (sf-len) @ +  (sf-need) !
+    (sf-need) @ allocate if                  ( a-addr )   \ ior nonzero → failure
+        drop  (sf-fid) @ close-file drop
+        ." see: out of memory" cr exit
+    then  (sf-buf) !
+    (sf-read)
+    (sf-got) @ (sf-off) @ > if               \ type [off, min(off+len, got))
+        (sf-buf) @ (sf-off) @ +
+        (sf-got) @ (sf-off) @ -  (sf-len) @ min
+        type
+    then
+    (sf-buf) @ free drop
+    (sf-fid) @ close-file drop ;
+
+\ Print a REPL-typed word's source from the session capture log (matched by xt).
+: (see-from-log) ( -- )
+    (dir) cell+ @  3 cells /                 ( count )   \ records, newest = highest index
+    begin  dup 0>  while
+        1-                                   ( i )
+        dup 3 cells *  (dir) @ +             ( i rec )
+        dup 2 cells + @  (see-xt) @ = if      ( i rec )   \ this record's word
+            dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
+            drop exit
+        then
+        drop                                 ( i )
+    repeat
+    drop
+    ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
+
+\ SEE shows the source of the definition currently in force. It reads the
+\ per-word source metadata (find-meta): a file-loaded word (core.fs, session.fs,
+\ or any included file) is shown straight from its source file; a word typed at
+\ the REPL this session comes from the capture log; an assembly primitive is
+\ labelled as such. The live xt is matched, so a redefined or forgotten word
+\ shows what is actually in force (or reports "not found").
 : see ( "name" -- )
     parse-word dup 0= if  2drop ." see: needs a word name" cr exit  then
     (see-u) !  (see-a) !
-    (see-a) @ (see-u) @ find ?dup if    ( xt flag )   \ currently defined
-        drop (see-xt) !                 ( )
-        (dir) cell+ @  3 cells /        ( count )   \ records, newest = highest index
-        begin  dup 0>  while
-            1-                          ( i )
-            dup 3 cells *  (dir) @ +    ( i rec )
-            dup 2 cells + @  (see-xt) @ = if         ( i rec )   \ this record's word
-                dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
-                drop exit
-            then
-            drop                        ( i )
-        repeat
-        drop                            \ in the dictionary, but not in the SEE index:
-        \ a primitive, a core.fs word, or a word loaded from session.fs (which is
-        \ editable on disk) — defined, just no captured source to show.
-        ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr
-        exit
-    else                                ( a u )   \ not currently defined
-        2drop
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop                       \ not currently defined
+        ." see: " (see-a) @ (see-u) @ type ."  not found" cr exit
     then
-    ." see: " (see-a) @ (see-u) @ type ."  not found" cr ;
+    dup 65535 = if                           ( xt off len srcid )   \ PRIM sentinel
+        2drop 2drop
+        ." see: " (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
+    then
+    dup 0= if                                \ srcid 0 → REPL word: use the capture log
+        drop  2drop  (see-xt) !
+        (see-from-log) exit
+    then
+    >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
+    (see-file) ;
 
 \ Initialize the buffers and register the hooks with the asm REPL.
 (log)  3 cells erase
