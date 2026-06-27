@@ -961,6 +961,17 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 \ supplied by the (version-str) primitive so it always matches the build.
 : version ( -- )  (version-str) type ;
 
+\ --- SHELL-LIKE WORDS: navigate and inspect the filesystem from the REPL.
+\ `cd` changes the real process directory (so relative include/open agree with
+\ it); session.fs stays pinned to the startup directory. Path tokens come from
+\ parse-word, so they can't contain spaces yet.
+: pwd ( -- )  (cwd) type cr ;
+: cd ( "path" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if  2drop  (startup-dir)  then   \ bare cd -> startup (home) directory
+    2dup chdir                              ( c-addr u ior )
+    if  ." cd: cannot access " type cr  else  2drop  then ;
+
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.
 \ A tutorial is just a <name>.md file in the docs dirs (resolved like MAN); each

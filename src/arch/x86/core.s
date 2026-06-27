@@ -3297,6 +3297,27 @@ forth_startup_dir:
     mov %rax, (%r15)                # u
     ret
 
+# (cwd) ( -- c-addr u )  the current working directory, freshly read via getcwd
+# into a static buffer (u = 0 if getcwd fails). Backs `pwd`.
+.global forth_cwd
+forth_cwd:
+    lea cwd_buf(%rip), %rdi
+    mov $ABS_PATH_MAX, %rsi
+    call platform_getcwd            # RAX = bytes incl NUL, or -errno
+    test %rax, %rax
+    jg .Lcwd_ok
+    xor %eax, %eax                  # failure -> length 0
+    jmp .Lcwd_push
+.Lcwd_ok:
+    dec %rax                        # drop the trailing NUL
+.Lcwd_push:
+    lea cwd_buf(%rip), %rcx
+    sub $CELL, %r15
+    mov %rcx, (%r15)                # c-addr
+    sub $CELL, %r15
+    mov %rax, (%r15)                # u
+    ret
+
 # (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
 .global forth_docs_path
 forth_docs_path:
@@ -4418,11 +4439,13 @@ DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_version_str
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
+DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_startup_dir
+.global dict_cwd
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4443,6 +4466,11 @@ incl_path_buf:
 # NUL-terminated scratch path for chdir (the syscall needs a C string).
 .align 8
 chdir_buf:
+    .space ABS_PATH_MAX
+
+# Static buffer for (cwd)/pwd getcwd results.
+.align 8
+cwd_buf:
     .space ABS_PATH_MAX
 
 # Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.

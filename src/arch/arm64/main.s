@@ -192,7 +192,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_startup_dir       // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_cwd               // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest

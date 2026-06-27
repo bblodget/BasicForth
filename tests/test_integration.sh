@@ -2082,6 +2082,25 @@ fi
 rm -rf "$tut_dir"
 
 # =========================================================================
+section "Shell Words"
+# =========================================================================
+# pwd / cd navigate the real process directory. `cd` with no argument returns to
+# the startup directory (where BasicForth was launched), not $HOME. The startup
+# dir here is the directory the test runs in (its physical, symlink-resolved
+# path, to match what getcwd reports).
+shell_start=$(pwd -P)
+
+# pwd prints the current (startup) directory
+assert_output "pwd shows cwd"          "pwd"                              "$shell_start"
+# cd changes directory; pwd reflects it
+assert_output "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
+# a failed cd reports the offending path
+assert_output "cd bad path errors"     "cd /no/such/dir"                 "cd: cannot access /no/such/dir"
+# bare cd returns to the startup directory (proves cd state really changes:
+# shell_start is not present in the input, so this can't pass on echo alone)
+assert_output "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
+
+# =========================================================================
 section "Version"
 # =========================================================================
 # -v / --version print the banner string to stdout and exit 0, before any
