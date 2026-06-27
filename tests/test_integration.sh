@@ -865,6 +865,28 @@ else
     ((failed++))
 fi
 
+# Snake collision rules (regression guard). Build a length-4 snake coiled in a
+# 2x2 block: tail at (5,5), head at (5,6) pointing up toward the tail.
+#  - moving up onto the vacating tail cell is LEGAL (no game over)
+#  - but EATING onto that tail cell (food there) is a real overlap -> game over
+#  - running into a non-tail body segment is game over
+sm_setup="include $REPO_ROOT/examples/snake-mini.fs\ninit-snake\n4 len ! 3 hd !\n5 0 bx! 5 0 by!\n6 1 bx! 5 1 by!\n6 2 bx! 6 2 by!\n5 3 bx! 6 3 by!\n5 hx ! 6 hy !\n"
+sm_collide() {  # desc  extra-input  expected-OVER
+    local out
+    out=$(printf "${sm_setup}$2.( OVER=) gameover @ . cr\nbye\n" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+    if [[ "$out" == *"OVER=$3"* ]]; then
+        printf "  ${GREEN}PASS${NC}  snake collision: %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snake collision: %s\n" "$1"
+        printf "    Expected: OVER=%s\n    Got:      %s\n" "$3" "$(echo "$out" | tr -dc '[:print:]' | tail -c 50)"
+        ((failed++))
+    fi
+}
+sm_collide "follow the vacating tail is legal"  '0 dx ! -1 dy !\n1 fx ! 1 fy !\ntick\n'  "0"
+sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\ntick\n'  "-1"
+sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
+
 # BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
 t0=$(date +%s.%N)
 mv core.fs core.fs.bak 2>/dev/null

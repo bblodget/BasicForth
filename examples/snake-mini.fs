@@ -72,11 +72,13 @@ create by MAXLEN cells allot     \ body y positions (ring buffer)
     nx @ 1 <  nx @ W >  or
     ny @ 1 <  ny @ H >  or  or ;
 
-: hits-body? ( -- f )
-    \ Check every segment except the tail (len-1): the tail vacates its cell as
-    \ we move, so the head is allowed to follow into it.
-    false
-    len @ 1- 0 ?do
+: hits-body? ( keep-tail? -- f )
+    \ Is the next head cell on the body? As the snake advances its tail moves
+    \ away, so the head may follow into the tail's old cell -- unless we're
+    \ eating (then the snake grows and the tail stays put). keep-tail? true
+    \ checks the whole body (len); false skips the tail (len-1).
+    if len @ else len @ 1- then         ( count )
+    false swap 0 ?do
         hd @ i - MAXLEN + MAXLEN mod
         dup bx@ nx @ =  swap by@ ny @ =  and
         or
@@ -89,8 +91,9 @@ create by MAXLEN cells allot     \ body y positions (ring buffer)
 
 : tick
     ahead
-    wall? hits-body? or if  true gameover !  exit  then
-    nx @ fx @ =  ny @ fy @ =  and
+    nx @ fx @ =  ny @ fy @ =  and       ( eat? )
+    dup hits-body?  wall? or            ( eat? crash? )   \ keep the tail iff eating
+    if  drop  true gameover !  exit  then
     if    len @ 1+ MAXLEN min len !  place-food
     else  tail-i dup bx@ swap by@ bl draw
     then

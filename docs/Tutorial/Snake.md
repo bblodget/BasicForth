@@ -216,23 +216,26 @@ The game ends if the head leaves the board or runs into the snake's own body.
         nx @ 1 <  nx @ W >  or
         ny @ 1 <  ny @ H >  or  or ;
 
-`hits-body?` loops over the body segments, asking "is the next head position
-the same cell?" and `or`s the answers together. We skip the very last segment —
-the tail — because it moves out of the way as the snake advances, so the head is
-allowed to follow it (that's why the loop runs `len-1` times, not `len`):
+`hits-body?` asks "is the next head cell one of the body cells?" and `or`s the
+answers together. There's a subtlety: as the snake advances, its tail moves out
+of the way, so the head is *allowed* to follow into the tail's old cell — unless
+the snake is **eating**, because then it grows and the tail stays put. So
+`hits-body?` takes a flag, `keep-tail?`: true checks the whole body (`len`
+segments), false skips the tail (`len-1`):
 
-    : hits-body? ( -- f )
-        false
-        len @ 1- 0 ?do
+    : hits-body? ( keep-tail? -- f )
+        if len @ else len @ 1- then
+        false swap 0 ?do
             hd @ i - MAXLEN + MAXLEN mod
             dup bx@ nx @ =  swap by@ ny @ =  and
             or
         loop ;
 
-Test the wall check:
+Test the checks (the snake from the last step is moving right):
 
-    init-snake  ahead  wall? .     \ 0  (false — still on the board)
-    0 nx !  wall? .                \ -1 (true — off the left edge)
+    init-snake  ahead  wall? .              \ 0   still on the board
+    0 nx !  wall? .                         \ -1  off the left edge
+    init-snake  ahead  false hits-body? .   \ 0   the cell ahead is empty
 
 ## One turn of the game
 
@@ -247,15 +250,18 @@ the head:
 
     : tick
         ahead
-        wall? hits-body? or if  true gameover !  exit  then
-        nx @ fx @ =  ny @ fy @ =  and
+        nx @ fx @ =  ny @ fy @ =  and       \ are we eating this move?
+        dup hits-body?  wall? or            \ keep the tail in the check iff eating
+        if  drop  true gameover !  exit  then
         if    len @ 1+ MAXLEN min len !  place-food
         else  tail-i dup bx@ swap by@ bl draw
         then
         advance-head
         nx @ ny @ [char] O draw ;
 
-If the head reaches the food, the snake grows and new food appears; otherwise
+`tick` first works out whether this move lands on the food, and reuses that
+answer twice: it tells `hits-body?` whether the tail counts, and it decides what
+happens next. If we're eating, the snake grows and new food appears; otherwise
 we erase the old tail (drawing a `bl`, a blank) so the snake appears to slither.
 
 ## Drawing the snake and timing the frame
