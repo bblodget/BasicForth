@@ -868,7 +868,7 @@ variable (pg-quit)                       \ true once the user pressed q
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
-        if  2drop  ." (read error)" cr  r> close-file drop exit  then  \ surface I/O error
+        if  2drop  ." (read error)" cr  r> close-file drop abort  then  \ surface I/O error
         if  (pg-buf@) swap (pg-line)
         else  drop  r> close-file drop exit  then
         (pg-quit) @ if  r> close-file drop exit  then
@@ -993,7 +993,7 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     parse-word                              ( c-addr u )
     dup 0= if  2drop  (startup-dir)  then   \ bare cd -> startup (home) directory
     2dup chdir                              ( c-addr u ior )
-    if  ." cd: cannot access " type cr  else  2drop  then ;
+    if  ." cd: cannot access " type cr  abort  else  2drop  then ;
 
 \ ls: list a directory (the current one by default), one entry per line, using
 \ the same getdents machinery as the help browser. "." and ".." are skipped.
@@ -1004,11 +1004,11 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 : ls ( "[dir]" -- )
     parse-word                              ( c-addr u )
     dup 0= if  2drop s" ."  then            \ no argument -> current directory
-    r/o open-file if  drop ." ls: cannot open directory" cr exit  then  ( fileid )
+    r/o open-file if  drop ." ls: cannot open directory" cr abort  then  ( fileid )
     >r
     begin
         r@ (gd@) (gd-size) (getdents)        ( n )
-        dup 0< if  ." ls: read error" cr  then  \ negative errno: report, then stop
+        dup 0< if  ." ls: read error" cr  r> close-file drop abort  then  \ negative errno
         dup 0> while                          ( n )
         (gd@) +  (gd@)                         ( end ptr )
         begin 2dup u> while                    ( end ptr )
@@ -1022,26 +1022,28 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 \ cat: dump a file to stdout (no paging). Reuses the pager's line buffer for
 \ chunked reads. more: page a file a screenful at a time (built on page-file).
 \ (`page` already means clear-screen, so the paged viewer is `more`.)
+\ Error paths ABORT after reporting (closing any open file first), so the REPL
+\ shows the message and no " ok" — a failed command must not look like success.
 : cat ( "file" -- )
     parse-word                              ( c-addr u )
-    dup 0= if  2drop ." usage: cat <file>" cr exit  then
-    r/o open-file if  drop ." cat: cannot open file" cr exit  then  ( fileid )
+    dup 0= if  2drop ." usage: cat <file>" cr abort  then
+    r/o open-file if  drop ." cat: cannot open file" cr abort  then  ( fileid )
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-file   ( u2 ior )
-        if  ." cat: read error" cr  drop  r> close-file drop exit  then   ( u2 )
+        if  ." cat: read error" cr  drop  r> close-file drop abort  then   ( u2 )
         dup 0>                               ( u2 f )   \ 0 bytes (no error) = EOF
     while                                    ( u2 )
         \ Write to stdout via write-file (fd 1) rather than TYPE, so a write
         \ failure (broken pipe, ENOSPC) is surfaced instead of silently ignored.
         (pg-buf@) swap 1 write-file          ( ior )
-        if  ." cat: write error" cr  r> close-file drop exit  then
+        if  ." cat: write error" cr  r> close-file drop abort  then
     repeat  drop
     r> close-file drop ;
 : more ( "file" -- )
     parse-word                              ( c-addr u )
-    dup 0= if  2drop ." usage: more <file>" cr exit  then
-    r/o open-file if  drop ." more: cannot open file" cr exit  then  ( fileid )
+    dup 0= if  2drop ." usage: more <file>" cr abort  then
+    r/o open-file if  drop ." more: cannot open file" cr abort  then  ( fileid )
     page-file ;
 
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the

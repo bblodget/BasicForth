@@ -2142,7 +2142,29 @@ assert_output "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot 
 # cat on a directory: open() succeeds but read() fails (EISDIR). Must surface the
 # error, not silently stop and report success (a read error swallowed by the loop).
 assert_output "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read error"
+
+# Error paths must ABORT (signal failure to the REPL), not print " ok" as if the
+# command succeeded. Check the message IS shown and " ok" is NOT, while a
+# successful command still prints " ok" (control).
+ab_cat=$(run_forth "cat $fw_dir/sub")        # cat a directory -> read error + abort
+ab_cd=$(run_forth "cd /no/such/dir")         # cd failure -> abort
+ab_ok=$(run_forth "ls $fw_dir")              # success still prints " ok"
 rm -rf "$fw_dir"
+if [[ "$ab_cat" == *"cat: read error"* && "$ab_cat" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cat error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cat error returned success to the REPL\n    Got: %q\n" "$ab_cat"; ((failed++))
+fi
+if [[ "$ab_cd" == *"cd: cannot access"* && "$ab_cd" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd error returned success to the REPL\n    Got: %q\n" "$ab_cd"; ((failed++))
+fi
+if [[ "$ab_ok" == *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  successful shell word still prints \" ok\"\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  success path lost its \" ok\"\n    Got: %q\n" "$ab_ok"; ((failed++))
+fi
 
 # =========================================================================
 section "Version"
