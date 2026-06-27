@@ -3568,6 +3568,49 @@ forth_getdents:
     LDP X29, X30, [SP], #16
     RET
 
+// chdir ( c-addr u -- ior )  change the CWD to the path; ior 0 = ok, else -errno.
+// The path is copied to a scratch buffer and NUL-terminated for the syscall.
+.global forth_chdir
+forth_chdir:
+    STP X29, X30, [SP, #-16]!
+    LDR X2, [X19]                   // u (length)
+    LDR X1, [X19, #CELL]            // c-addr
+    ADD X19, X19, #CELL             // pop u; TOS slot ← ior
+    CMP X2, #ABS_PATH_MAX
+    B.HS .Lchdir_toolong            // u >= ABS_PATH_MAX -> no room for path + NUL
+    ADR X3, chdir_buf
+    MOV X4, #0                      // copy index
+.Lchdir_copy:
+    CMP X4, X2
+    B.HS .Lchdir_copydone
+    LDRB W5, [X1, X4]
+    STRB W5, [X3, X4]
+    ADD X4, X4, #1
+    B .Lchdir_copy
+.Lchdir_copydone:
+    STRB WZR, [X3, X4]              // NUL-terminate
+    ADR X0, chdir_buf
+    BL platform_chdir               // X0 = 0 or -errno
+    STR X0, [X19]                   // ior
+    LDP X29, X30, [SP], #16
+    RET
+.Lchdir_toolong:
+    MOV X0, #-36                    // -ENAMETOOLONG
+    STR X0, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
+// (startup-dir) ( -- c-addr u )  absolute directory BasicForth was launched in
+// (u = 0 if getcwd failed at boot). Backs bare `cd` and session.fs pinning.
+.global forth_startup_dir
+forth_startup_dir:
+    ADR X9, startup_dir
+    STR X9, [X19, #-CELL]!          // c-addr
+    ADR X9, startup_dir_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // u
+    RET
+
 // (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
 .global forth_docs_path
 forth_docs_path:
@@ -4773,10 +4816,13 @@ DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
+DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_version_str
+DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
+.global dict_startup_dir
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -4790,6 +4836,11 @@ DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 .align 3
 incl_path_buf:
     .space 512
+
+// NUL-terminated scratch path for chdir (the syscall needs a C string).
+.align 3
+chdir_buf:
+    .space ABS_PATH_MAX
 
 // Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.
 .align 3

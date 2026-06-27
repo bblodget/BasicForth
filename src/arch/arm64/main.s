@@ -16,6 +16,7 @@
 
 .equ CELL, 8
 .equ INPUT_BUF_SIZE, 256
+.equ STARTUP_DIR_MAX, 1024          // buffer for the absolute startup directory
 
 _start:
     // Save argc and argv[1] before stack is used for anything else
@@ -173,12 +174,25 @@ _start:
     STR X2, [X9]
 .Ldenv_done:
 
+    // Capture the absolute startup directory, so `cd` with no argument can return
+    // here and session.fs stays pinned to it no matter where a later `cd` goes.
+    // Done before core.fs loads, while the CWD is still the launch directory.
+    ADR X0, startup_dir
+    MOV X1, #STARTUP_DIR_MAX
+    BL platform_getcwd              // X0 = bytes incl NUL, or -errno
+    CMP X0, #0
+    B.LE .Lno_startup_dir           // getcwd failed -> leave length 0
+    SUB X0, X0, #1                  // drop the trailing NUL
+    ADR X9, startup_dir_len
+    STR X0, [X9]
+.Lno_startup_dir:
+
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_version_str       // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_startup_dir       // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -547,8 +561,16 @@ basicforth_docs:
 .global basicforth_docs_len
 basicforth_docs_len:
     .quad 0
+// Length of the captured absolute startup directory (0 if getcwd failed at boot).
+.global startup_dir_len
+startup_dir_len:
+    .quad 0
 
 .bss
 .align 4
 input_buf:
     .space INPUT_BUF_SIZE
+// Absolute startup directory, captured once at boot (NUL-terminated by getcwd).
+.global startup_dir
+startup_dir:
+    .space STARTUP_DIR_MAX

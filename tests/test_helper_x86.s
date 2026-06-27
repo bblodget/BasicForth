@@ -170,6 +170,11 @@ platform_screen_height:
     mov $25, %eax
     ret
 
+.global platform_chdir
+platform_chdir:
+    xor %eax, %eax              # pretend success
+    ret
+
 # BASICFORTH_PATH variables (defined in main.s, needed by forth_included)
 .data
 .align 8
@@ -191,6 +196,12 @@ arg_count:
 .global arg_base
 arg_base:
     .quad 0
+.global startup_dir_len
+startup_dir_len:
+    .quad 0
+.global startup_dir
+startup_dir:
+    .space 1024
 
 .text
 .global platform_ms_get
