@@ -44,6 +44,14 @@
 .equ SRC_META_BYTES, 8
 .equ PRIM_SRCID,     0xFFFF
 
+# Source table: maps a source-id (>=1) to the absolute path of a file loaded by
+# forth_included, so SEE can re-open the file and show a word's span — even if
+# the CWD changes later. Lives in .bss (out of the dictionary). id k -> slot k-1.
+# id 0 = REPL/no file.
+.equ SRC_TABLE_MAX,  64             # max distinct source files per run
+.equ SRC_PATH_MAX,   1024           # max bytes per stored (absolutized) path
+.equ ABS_PATH_MAX,   1024           # getcwd + path build buffer size
+
 
 # CHECK_DICT n: verify HERE + n bytes fits in dict_space.
 # Always active — dictionary has no guard page.
@@ -1406,6 +1414,245 @@ compile_branch_back:
     add $5, %r13                   # advance HERE
     ret
 
+# ---------- source-metadata helpers ----------
+
+# meta_from_entry: RAX = entry (header) -> RAX = address of its source-metadata
+# block [SrcId:2][Len:2][Off:4]. Clobbers RCX.
+meta_from_entry:
+    movzbl 8(%rax), %ecx            # flags+len byte
+    and $F_LENMASK, %ecx            # name length
+    add $16, %rcx                   # + 9 + 7  (so (namelen+9+7)&~7 = align8(9+namelen))
+    and $~7, %rcx
+    add %rcx, %rax                  # entry + align8(9+namelen) = CodePtr cell
+    add $12, %rax                   # + CodePtr(8) + CodeLen(4) = metadata block
+    ret
+
+# src_register: RSI = path addr, RDX = path length -> RAX = source-id (>=1), or
+# 0 if the table is full. Dedups by (len, bytes) so repeated loads of the same
+# file (e.g. reload) reuse one id. Clobbers RAX,RCX,RSI,RDI,R9,R10,R11.
+src_register:
+    xor %r9, %r9                    # r9 = slot index
+.Lsr_scan:
+    cmp src_table_count(%rip), %r9
+    jae .Lsr_new                    # past end -> add a new slot
+    lea src_table_lens(%rip), %rax
+    mov (%rax,%r9,8), %rcx          # rcx = slot len
+    cmp %rcx, %rdx
+    jne .Lsr_scan_next              # length differs -> not this slot
+    mov %r9, %rax
+    imul $SRC_PATH_MAX, %rax, %rax
+    lea src_table_paths(%rip), %r10
+    add %rax, %r10                  # r10 = slot path addr
+    mov %rsi, %r11                  # r11 = input path
+    mov %rdx, %rcx                  # rcx = compare count
+    test %rcx, %rcx
+    jz .Lsr_hit                     # both empty -> match
+.Lsr_cmp:
+    mov (%r11), %al
+    cmp %al, (%r10)
+    jne .Lsr_scan_next
+    inc %r11
+    inc %r10
+    dec %rcx
+    jnz .Lsr_cmp
+.Lsr_hit:
+    lea 1(%r9), %rax                # id = slot + 1
+    ret
+.Lsr_scan_next:
+    inc %r9
+    jmp .Lsr_scan
+.Lsr_new:
+    mov src_table_count(%rip), %r9  # new slot index
+    cmp $SRC_TABLE_MAX, %r9
+    jae .Lsr_full
+    cmp $SRC_PATH_MAX, %rdx         # clamp length to the slot size
+    jbe .Lsr_len_ok
+    mov $SRC_PATH_MAX, %rdx
+.Lsr_len_ok:
+    lea src_table_lens(%rip), %rax
+    mov %rdx, (%rax,%r9,8)          # store length
+    mov %r9, %rax
+    imul $SRC_PATH_MAX, %rax, %rax
+    lea src_table_paths(%rip), %rdi
+    add %rax, %rdi                  # rdi = dest slot
+    mov %rdx, %rcx
+    cld
+    rep movsb                       # copy path bytes (clobbers RSI, RDI)
+    lea 1(%r9), %rax                # id = ++count
+    mov %rax, src_table_count(%rip)
+    ret
+.Lsr_full:
+    xor %rax, %rax                  # table full -> 0 (word treated as no-source)
+    ret
+
+# make_absolute: RSI = path addr, RDX = path len -> RSI = path, RDX = len that
+# SEE can re-open regardless of a later CWD change. An already-absolute path
+# (leading '/') passes through unchanged. A relative path becomes
+# getcwd()+'/'+path in abs_path_buf; if getcwd fails or the result would
+# overflow, the original (relative) path is kept. Clobbers RAX,RCX,RDI,RSI,RDX,
+# R8,R9,R10,R11.
+make_absolute:
+    cmpb $'/', (%rsi)
+    je .Lma_done                    # already absolute -> unchanged
+    push %rsi                       # save relative path addr
+    push %rdx                       #   and length (syscall clobbers RCX/R11)
+    lea abs_path_buf(%rip), %rdi
+    mov $ABS_PATH_MAX, %rsi
+    call platform_getcwd            # -> RAX = bytes incl NUL, or -errno
+    pop %r11                        # r11 = rel len
+    pop %r10                        # r10 = rel addr
+    test %rax, %rax
+    jle .Lma_fail                   # getcwd failed -> keep relative
+    dec %rax                        # RAX = cwd string length (drop NUL)
+    lea 1(%rax,%r11), %rcx          # total = cwd_len + '/' + rel_len
+    cmp $ABS_PATH_MAX, %rcx
+    jae .Lma_fail                   # would overflow -> keep relative
+    lea abs_path_buf(%rip), %rdi
+    add %rax, %rdi                  # rdi = end of cwd
+    movb $'/', (%rdi)
+    inc %rdi
+    mov %r10, %rsi                  # rel path
+    mov %r11, %rcx                  # rel len
+    cld
+    rep movsb                       # append rel path after "cwd/"
+    lea abs_path_buf(%rip), %rsi    # RSI = absolute path
+    lea 1(%rax,%r11), %rdx          # RDX = total length
+    ret
+.Lma_fail:
+    mov %r10, %rsi                  # restore the relative path
+    mov %r11, %rdx
+.Lma_done:
+    ret
+
+# src_finalize: RDI = end offset (next-line start within the current source).
+# Fill Len for definitions completed on the line(s) just interpreted: walk the
+# LATEST chain back, stamping each not-yet-finalized word of the current source
+# with Len = end - Off. Skips HIDDEN (still-compiling) defs so they are filled
+# on their own closing line; stops at a different source or an already-filled
+# Len (which bounds the walk to this file's newly added words).
+# Clobbers RAX,RCX,RDX,RSI,R9.
+src_finalize:
+    mov %r12, %r9                  # r9 = walk pointer = LATEST
+.Lsf_loop:
+    test %r9, %r9
+    jz .Lsf_done
+    testb $F_HIDDEN, 8(%r9)
+    jnz .Lsf_skip                   # in-progress def -> leave for its closing line
+    mov %r9, %rax
+    call meta_from_entry            # rax = meta (clobbers rcx)
+    movzwl (%rax), %ecx             # SrcId
+    cmp cur_source_id(%rip), %rcx
+    jne .Lsf_done                   # different source -> done
+    movzwl 2(%rax), %edx            # Len
+    test %edx, %edx
+    jnz .Lsf_done                   # already finalized -> done
+    mov 4(%rax), %esi               # Off (u32)
+    mov %edi, %edx                  # end
+    sub %esi, %edx                  # edx = end - Off
+    mov %dx, 2(%rax)                # store Len (u16)
+.Lsf_skip:
+    mov (%r9), %r9                  # follow link
+    jmp .Lsf_loop
+.Lsf_done:
+    ret
+
+# (source-path) ( id -- c-addr u )  Resolved path for a source-id, or 0 0.
+.global forth_source_path
+forth_source_path:
+    mov (%r15), %rax               # id
+    test %rax, %rax
+    jz .Lsp_none
+    cmp src_table_count(%rip), %rax
+    ja .Lsp_none                    # id > count -> none
+    dec %rax                        # slot = id - 1
+    mov %rax, %rcx                  # save slot
+    imul $SRC_PATH_MAX, %rax, %rax
+    lea src_table_paths(%rip), %rdx
+    add %rdx, %rax                  # rax = path addr
+    lea src_table_lens(%rip), %rdx
+    mov (%rdx,%rcx,8), %rcx         # rcx = len
+    mov %rax, (%r15)               # replace id with c-addr
+    sub $CELL, %r15
+    mov %rcx, (%r15)              # push len
+    ret
+.Lsp_none:
+    movq $0, (%r15)               # c-addr = 0
+    sub $CELL, %r15
+    movq $0, (%r15)               # u = 0
+    ret
+
+# (find-meta) ( c-addr u -- xt off len srcid flag )
+# Look up name (case-insensitive, skipping hidden words) and return its source
+# metadata. flag = -1 found / 0 not found (other cells 0 when not found).
+.global forth_find_meta
+forth_find_meta:
+    mov (%r15), %rdx               # rdx = u (name length)
+    mov CELL(%r15), %rsi           # rsi = c-addr
+    add $2*CELL, %r15
+    mov %r12, %r9                  # r9 = walk pointer = LATEST
+.Lfm_loop:
+    test %r9, %r9
+    jz .Lfm_notfound
+    testb $F_HIDDEN, 8(%r9)
+    jnz .Lfm_next                   # hidden -> skip
+    movzbl 8(%r9), %ecx
+    and $F_LENMASK, %ecx
+    cmp %rdx, %rcx
+    jne .Lfm_next                   # length differs
+    lea 9(%r9), %rdi               # entry name start (already lowercase)
+    mov %rsi, %r10                 # input ptr
+    mov %rdx, %rcx                 # count
+    test %rcx, %rcx
+    jz .Lfm_match
+.Lfm_cmp:
+    movzbl (%r10), %eax            # input char
+    cmp $'A', %al
+    jb .Lfm_nolc
+    cmp $'Z', %al
+    ja .Lfm_nolc
+    add $0x20, %al                 # lowercase the input char
+.Lfm_nolc:
+    cmp %al, (%rdi)
+    jne .Lfm_next
+    inc %r10
+    inc %rdi
+    dec %rcx
+    jnz .Lfm_cmp
+.Lfm_match:
+    mov %r9, %rax
+    call meta_from_entry           # rax = meta addr (clobbers rcx)
+    mov %rax, %r11                 # r11 = meta
+    mov -12(%r11), %rax            # xt = CodePtr value (meta - 12)
+    sub $CELL, %r15
+    mov %rax, (%r15)               # xt
+    movl 4(%r11), %eax             # off (u32)
+    sub $CELL, %r15
+    mov %rax, (%r15)               # off
+    movzwl 2(%r11), %eax           # len (u16)
+    sub $CELL, %r15
+    mov %rax, (%r15)               # len
+    movzwl (%r11), %eax            # srcid (u16)
+    sub $CELL, %r15
+    mov %rax, (%r15)               # srcid
+    sub $CELL, %r15
+    movq $-1, (%r15)               # flag = found
+    ret
+.Lfm_next:
+    mov (%r9), %r9                 # follow link
+    jmp .Lfm_loop
+.Lfm_notfound:
+    sub $CELL, %r15
+    movq $0, (%r15)                # xt
+    sub $CELL, %r15
+    movq $0, (%r15)                # off
+    sub $CELL, %r15
+    movq $0, (%r15)                # len
+    sub $CELL, %r15
+    movq $0, (%r15)                # srcid
+    sub $CELL, %r15
+    movq $0, (%r15)                # flag = not found
+    ret
+
 # ---------- build_header (internal helper) ----------
 # Parse the next word and create a dictionary header at HERE.
 # Saves LATEST/HERE for error recovery, updates LATEST to new entry.
@@ -1491,10 +1738,14 @@ build_header:
     movl $0, (%r13)
     add $4, %r13                    # past CodeLen
 
-    # Write source-metadata placeholder (SrcId=0, Len=0, Off=0). Inert for now —
-    # forth_included will stamp file-loaded words; REPL words stay SrcId 0.
-    movl $0, (%r13)                 # SrcId:2 + Len:2 (both 0)
-    movl $0, 4(%r13)               # Off:4
+    # Write source metadata: SrcId/Off from the current source context (set by
+    # forth_included; 0/0 at the REPL). Len stays 0 until the definition's span
+    # is finalized at end of line.
+    mov cur_source_id(%rip), %rax
+    mov %ax, (%r13)                 # SrcId:2
+    movw $0, 2(%r13)               # Len:2 (filled at finalize)
+    mov cur_line_off(%rip), %rax
+    mov %eax, 4(%r13)             # Off:4
     add $SRC_META_BYTES, %r13       # past metadata — HERE now at code area
 
     # Update LATEST
@@ -1860,6 +2111,8 @@ forth_included:
     push %rbp
     push %r14
     push %r8                        # for line_start scratch
+    pushq cur_source_id(%rip)       # save source context (restored in .Lincl_pop_regs)
+    pushq cur_line_off(%rip)        #   so nested includes don't clobber the parent's
 
     # Pop c-addr and u from data stack
     mov (%r15), %rdx                # RDX = u (filename length)
@@ -1870,6 +2123,11 @@ forth_included:
     mov %rsi, file_name_addr(%rip)
     mov %rdx, file_name_len(%rip)
 
+    # Default resolved path = the as-typed name (CWD hit). The BASICFORTH_PATH
+    # fallback overrides this if a prefixed path opens the file instead.
+    mov %rsi, incl_resolved_addr(%rip)
+    mov %rdx, incl_resolved_len(%rip)
+
     # Open file
     call platform_open_file         # RSI=path, RDX=len → RAX=fd
     test %rax, %rax
@@ -1878,6 +2136,16 @@ forth_included:
 .Lincl_open_ok:
     movq $1, incl_opened(%rip)      # the file was found and opened
     mov %rax, %rbx                  # RBX = fd
+
+    # Register the resolved path -> source-id and set the current source context
+    # so build_header stamps file-loaded words with it. (src_register dedups, so
+    # a reload of the same file reuses one id.)
+    mov incl_resolved_addr(%rip), %rsi
+    mov incl_resolved_len(%rip), %rdx
+    call make_absolute              # RSI/RDX -> CWD-independent absolute path
+    call src_register               # -> RAX = id (clobbers RSI,RDI,RCX,R8-R11)
+    mov %rax, cur_source_id(%rip)
+    movq $0, cur_line_off(%rip)
 
     # Get file size
     mov %rbx, %rdi
@@ -1967,6 +2235,8 @@ forth_included:
     mov %rcx, source_len(%rip)
     movq $0, to_in(%rip)
 
+    mov %r14, cur_line_off(%rip)    # this line's byte offset (for source metadata)
+
     # Save registers across call (RBX, RBP already callee-saved). Also save the
     # error-reporting globals: a nested INCLUDE/INCLUDED inside this line would
     # otherwise overwrite them and leave our own errors pointing at the wrong
@@ -1987,6 +2257,10 @@ forth_included:
 
     test %rax, %rax
     jnz .Lincl_error
+
+    # Finalize source spans for any definitions completed on this line.
+    mov %r8, %rdi                   # end = next-line start offset
+    call src_finalize
 
 .Lincl_next_line:
     mov %r8, %r14                   # advance to next line
@@ -2009,6 +2283,8 @@ forth_included:
 # Shared register epilogue (no source restore — for paths that never ran the
 # line loop, so never saved the source pointers).
 .Lincl_pop_regs:
+    popq cur_line_off(%rip)         # restore source context saved at entry
+    popq cur_source_id(%rip)
     pop %r8
     pop %r14
     pop %rbp
@@ -2118,7 +2394,15 @@ forth_included:
     js .Lincl_seg_next             # failed → try next segment
     # Found. Keep the original filename for error reporting — incl_path_buf is
     # scratch only, so a nested INCLUDE that reuses it can't corrupt our error
-    # context.
+    # context. But record incl_path_buf as the *resolved* path so SEE can
+    # re-open the file (the as-typed name alone wouldn't be found from the CWD).
+    # RAX holds the fd that .Lincl_open_ok consumes, so use RCX as scratch here.
+    lea incl_path_buf(%rip), %rcx
+    mov %rcx, incl_resolved_addr(%rip)
+    mov %rbx, %rcx                  # segment length
+    add file_name_len(%rip), %rcx   # + filename
+    inc %rcx                         # + '/'
+    mov %rcx, incl_resolved_len(%rip)
     jmp .Lincl_open_ok
 .Lincl_seg_next:
     # Advance past this segment, then skip the ':' delimiter if present
@@ -4094,8 +4378,11 @@ DEFWORD dict_session_mark,"(session-mark!)",forth_session_mark,dict_restore_dict
 DEFWORD dict_session_restore,"(session-restore)",forth_session_restore,dict_session_mark
 DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_restore
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
+DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
+DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 .global dict_include
 .global dict_hook_store
+.global dict_find_meta
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4112,6 +4399,17 @@ DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 .align 8
 incl_path_buf:
     .space 512
+
+# Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.
+.align 8
+abs_path_buf:                       # scratch for getcwd()+'/'+path absolutization
+    .space ABS_PATH_MAX
+.global src_table_lens
+src_table_lens:                     # length of each registered path (u64)
+    .space SRC_TABLE_MAX * 8
+.global src_table_paths
+src_table_paths:                    # registered absolute path strings (SRC_PATH_MAX each)
+    .space SRC_TABLE_MAX * SRC_PATH_MAX
 
 .balign 4096
 .global guard_page_overflow
@@ -4197,6 +4495,21 @@ file_name_addr:                     # Filename for INCLUDED error reporting
     .quad 0
 .global file_name_len
 file_name_len:
+    .quad 0
+.global cur_source_id
+cur_source_id:                      # source-id being compiled from (0 = REPL/no file)
+    .quad 0
+.global cur_line_off
+cur_line_off:                       # byte offset of the current line within cur source file
+    .quad 0
+.global incl_resolved_addr
+incl_resolved_addr:                 # resolved path that actually opened the current file
+    .quad 0
+.global incl_resolved_len
+incl_resolved_len:
+    .quad 0
+.global src_table_count
+src_table_count:                    # number of registered source files (id = index + 1)
     .quad 0
 .global file_line_num
 file_line_num:                      # Line number for INCLUDED error reporting

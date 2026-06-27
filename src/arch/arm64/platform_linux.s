@@ -574,6 +574,7 @@ stat_buf:
 .equ SYS_fstat,   80
 .equ SYS_mmap,    222
 .equ SYS_munmap,  215
+.equ SYS_getcwd,  17
 .equ SYS_renameat, 38
 
 .equ AT_FDCWD,    -100
@@ -704,6 +705,16 @@ platform_fstat:
     ADR X9, stat_buf
     LDR X0, [X9, #STAT_ST_SIZE]
 .Lfstat_done:
+    RET
+
+// platform_getcwd ( X0=buf X1=size -- X0=n )
+// Raw getcwd: fills buf with the absolute current working directory
+// (NUL-terminated). Returns the number of bytes written including the NUL, or a
+// negative errno on failure.
+.global platform_getcwd
+platform_getcwd:
+    MOV X8, #SYS_getcwd
+    SVC #0
     RET
 
 // platform_mmap_file ( X0=fd X1=size -- X0=addr )

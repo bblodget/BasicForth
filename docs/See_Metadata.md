@@ -192,17 +192,24 @@ because it revises the earlier "heap" wording.
 
 ## Implementation plan (phased, each step builds + tests green both arches)
 
-1. **Header field + primitives, inert.** Add the 3 fields to `DEFWORD` and
+1. **[DONE] Header field, inert.** Added the 8-byte block to `DEFWORD` and
    `build_header`/`;` (both arches); `PRIM` for primitives, `0/0/0` otherwise.
-   Add `(>entry)` and a metadata-read path. No behavior change yet (everything
-   reads as source-id 0 → log). Verify all tests still pass (layout change is
-   the riskiest bit — `FIND`, `>BODY`, `DOES>`, `marker`).
-2. **Source table + `forth_included` stamping.** `.bss` table, `cur_source_id`/
-   `cur_line_off`, register-on-open, per-line `Off`/`Len` finalize. Now
-   file-loaded words carry real spans. `(source-path)` primitive.
-3. **`see` read path.** Branch on source-id: primitive label / log fallback /
-   file span. `see` now works for `core.fs`, includes, and custom-defining-word
-   words.
+   No behavior change; full suite green (validated the layout change against
+   `FIND`/`>BODY`/`DOES>`/`marker`/`:NONAME`). Committed `29b4c4b`.
+2. **[DONE] Source table + `forth_included` stamping.** `.bss` table
+   (`src_register` with dedup, `(source-path)`), `cur_source_id`/`cur_line_off`
+   globals saved/restored across (nested) includes, register-on-open with the
+   **absolute** path (a new `platform_getcwd` + `make_absolute` turn a CWD- or
+   `BASICFORTH_PATH`-relative path into `getcwd()+'/'+path`, so `see` re-opens
+   correctly even if the CWD later changes — Bug 2), `build_header` stamps
+   `SrcId`/`Off`, and a per-line `src_finalize` (HIDDEN-based walk) fills `Len`.
+   Added `(find-meta)` to read a word's metadata. Verified on both arches:
+   `core.fs` words → `srcid=1` with correct `off`/`len` and an absolute path;
+   primitives → `PRIM`; REPL words → `srcid=0`; seeded `session.fs` words →
+   their own id (the case the text-parse MVP couldn't do).
+3. **[NEXT] `see` read path.** Branch on source-id: primitive label / log
+   fallback (srcid 0) / file span (srcid ≥ 1, via `(source-path)` + read). `see`
+   then works for `core.fs`, includes, and custom-defining-word words.
 4. **Docs + tests.** Update [See.md](See.md) (drop the MVP-limitation caveats),
    integration tests (`see` a `core.fs` word, an `include`d word, a
    custom-defining-word word, a primitive), and this doc → "implemented."
