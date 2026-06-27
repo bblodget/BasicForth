@@ -216,12 +216,14 @@ The game ends if the head leaves the board or runs into the snake's own body.
         nx @ 1 <  nx @ W >  or
         ny @ 1 <  ny @ H >  or  or ;
 
-`hits-body?` loops over every body segment, asking "is the next head position
-the same cell?" It `or`s the answers together:
+`hits-body?` loops over the body segments, asking "is the next head position
+the same cell?" and `or`s the answers together. We skip the very last segment —
+the tail — because it moves out of the way as the snake advances, so the head is
+allowed to follow it (that's why the loop runs `len-1` times, not `len`):
 
     : hits-body? ( -- f )
         false
-        len @ 0 ?do
+        len @ 1- 0 ?do
             hd @ i - MAXLEN + MAXLEN mod
             dup bx@ nx @ =  swap by@ ny @ =  and
             or

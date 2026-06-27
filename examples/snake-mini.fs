@@ -73,8 +73,10 @@ create by MAXLEN cells allot     \ body y positions (ring buffer)
     ny @ 1 <  ny @ H >  or  or ;
 
 : hits-body? ( -- f )
+    \ Check every segment except the tail (len-1): the tail vacates its cell as
+    \ we move, so the head is allowed to follow into it.
     false
-    len @ 0 ?do
+    len @ 1- 0 ?do
         hd @ i - MAXLEN + MAXLEN mod
         dup bx@ nx @ =  swap by@ ny @ =  and
         or
