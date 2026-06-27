@@ -4102,7 +4102,7 @@ guard_page_underflow:
     .space 4096
 
 # ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 65536     # 64KB
+.equ DICT_SPACE_SIZE, 262144    # 256KB
 .balign 8
 .global dict_space
 dict_space:

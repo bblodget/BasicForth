@@ -1901,6 +1901,69 @@ rm -rf "$sec_base"
 rm -rf "$docs_dir"
 
 # =========================================================================
+section "Interactive tutorial (tutorial / next / back)"
+# =========================================================================
+
+# A tutorial file is just a docs .md walked one "## " step at a time. Step 1 is
+# the title + intro before the first heading; each "## " starts a new step.
+tut_dir="$(mktemp -d)"
+printf '# Lesson One\nintro line about FOO\n## Step Two\ncontent TWO here\n## Step Three\ncontent THREE here\n' \
+    > "$tut_dir/Lesson.md"
+
+# tut_check NAME INPUT EXPECTED — run with BASICFORTH_DOCS pointed at tut_dir
+tut_check() {
+    local name="$1" input="$2" expected="$3"
+    local output
+    output=$(printf '%s\n' "$input" | BASICFORTH_PATH="$FORTH_LIB" \
+        BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+    if [[ "$output" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:    %s\n" "$input"
+        printf "    Expected: %s\n" "$expected"
+        printf "    Got:      %s\n" "$(echo "$output" | head -6)"; ((failed++))
+    fi
+}
+
+tut_check "tutorial shows step 1"          "tutorial Lesson"                 "intro line about FOO"
+tut_check "tutorial step 1 footer"         "tutorial Lesson"                 "step 1"
+tut_check "tutorial name is case-insens."  "tutorial lesson"                 "intro line about FOO"
+tut_check "next advances to step 2"        $'tutorial Lesson\nnext'          "content TWO here"
+tut_check "next twice reaches step 3"      $'tutorial Lesson\nnext\nnext'    "content THREE here"
+tut_check "next past end reports end"      $'tutorial Lesson\nnext\nnext\nnext' "end of 'Lesson'"
+tut_check "back returns to previous step"  $'tutorial Lesson\nnext\nback'    "intro line about FOO"
+# A heading line marks a boundary but is itself shown as that step's title
+tut_check "step heading is shown"          $'tutorial Lesson\nnext'          "## Step Two"
+# After a step the REPL is live again — a following command runs normally
+tut_check "REPL live between steps"        $'tutorial Lesson\n7 8 + .'       "15"
+tut_check "next before start hints"        "next"                            "start a tutorial first"
+tut_check "back before start hints"        "back"                            "start a tutorial first"
+tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+
+# back at step 1 stays at step 1 (does not underflow)
+tut_b1=$(printf 'tutorial Lesson\nback\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_b1" == *"step 1"* ]] && [[ "$tut_b1" != *"step 0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  back at step 1 stays at step 1\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  back at step 1 stays at step 1\n"
+    printf "    Got:      %s\n" "$(echo "$tut_b1" | head -4)"; ((failed++))
+fi
+
+# Unset BASICFORTH_DOCS — tutorial reports it gracefully
+tut_unset=$(printf 'tutorial Lesson\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    env -u BASICFORTH_DOCS timeout 2 $FORTH 2>&1)
+if [[ "$tut_unset" == *"BASICFORTH_DOCS not set"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorial with no BASICFORTH_DOCS\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorial with no BASICFORTH_DOCS\n"
+    printf "    Got:      %s\n" "$(echo "$tut_unset" | head -3)"; ((failed++))
+fi
+
+rm -rf "$tut_dir"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added: interactive tutorial (`tutorial` / `next` / `back`)
+- `tutorial <name>` walks one of the `BASICFORTH_DOCS` Markdown files **one step
+  at a time**, returning to the REPL after each step so you can type the examples
+  before advancing with `next` (or reviewing with `back`). Steps are split on the
+  file's `## ` headings — no special format, and the same file still reads under
+  `man`. The name resolves case-insensitively across the docs sections, exactly
+  like `man`.
+- `back` clamps at step 1; stepping past the last step prints `-- end of '<name>'
+  --` and stays on the last step. Typing `next`/`back` before starting, or naming
+  a non-existent tutorial, reports the problem instead of failing silently.
+- Built on the existing docs-browser machinery (`(each-dir)`, the `(getdents)`
+  scan, `(build-path)`, `read-line`, and the pager line-printer), so an over-long
+  step auto-pages. New internal words `(tut-go)`, `(print-step)`, `(tut-in)`,
+  `(tut-head?)`. See `docs/Tutorial_System.md`.
+
+### Changed: dictionary space raised from 64 KB to 256 KB
+- `DICT_SPACE_SIZE` (both arches) grew from 65536 to 262144 bytes. The dictionary
+  is shared by `core.fs` and everything loaded at runtime, and large examples
+  (e.g. `examples/sort.fs`, ~32 KB of fixed buffers) had nearly filled the old
+  64 KB. The region is BSS, so the on-disk binary is unchanged — only runtime
+  zero-page use grows. `unused` now reports ~226 KB free after `core.fs`.
+
 ### `see` now covers definitions loaded from `session.fs`
 - `see` previously only showed words you defined *interactively* this session;
   words loaded from `session.fs` (at startup or by `reload`) reported *defined,

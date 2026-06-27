@@ -51,14 +51,14 @@ variable is unset, every help word prints `(BASICFORTH_DOCS not set)`.
 Language-Reference
   Arithmetic  Comparison  Memory  Stack
 Tutorial
-  01-Getting-Started  02-The-Stack
+  Getting-Started
 > man stack
 # Stack Manipulation
 ...
 -- more (space=page, q=quit) --      \ press space for the next page, q to stop
 > apropos dup
 Stack (Language-Reference)
-01-Getting-Started (Tutorial)
+Getting-Started (Tutorial)
 ```
 
 `man` matches case-insensitively and appends `.md`, so `man stack`,
@@ -95,6 +95,8 @@ called directly.
 
 ## See Also
 
+- `docs/Tutorial_System.md` — `tutorial` / `next` / `back`, an interactive walk
+  through a docs file one `## ` step at a time, built on this same machinery.
 - `docs/BasicForth_Manual.md` — the "Built-in Help" section and the
   `BASICFORTH_DOCS` environment variable.
 - `docs/Outer_Interpreter.md` — `INCLUDED` and file loading, which share the

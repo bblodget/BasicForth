@@ -446,14 +446,14 @@ $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
 Language-Reference
   Arithmetic  Comparison  Memory  Stack
 Tutorial
-  01-Getting-Started  02-The-Stack
+  Getting-Started
 > man stack                      \ page a topic (case-insensitive, .md added)
 # Stack Manipulation
 ...
 -- more (space=page, q=quit) --
 > apropos dup                    \ which topics mention "dup"?
 Stack (Language-Reference)
-01-Getting-Started (Tutorial)
+Getting-Started (Tutorial)
 ```
 
 - Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
@@ -468,6 +468,22 @@ Stack (Language-Reference)
 
 If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
 See `docs/Help_System.md` for details.
+
+### Interactive tutorials
+
+Where `man` pages a whole file, `tutorial` walks one **one step at a time** and
+returns to the prompt after each step, so you can try the examples before moving
+on:
+
+```
+> tutorial Getting-Started      \ start a lesson (name like man, case-insensitive)
+...
+[ next = continue   back = previous   step 1 ]
+> next                          \ next step    (back = previous step)
+```
+
+Steps are split on the file's `## ` headings, so any docs file can be walked this
+way. See `docs/Tutorial_System.md`.
 
 ## The Prompt
 
