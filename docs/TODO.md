@@ -336,6 +336,39 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Shell-Like Words (pwd / cd / ls / cat / more) — NEXT
+
+Navigate and inspect the filesystem from the REPL — hop to another directory
+and list or read a file without leaving BasicForth. Most infrastructure already
+exists; only `chdir` is a new syscall. See `docs/WildIdeas.md` for the full
+write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
+`touch`) are deferred as a separate, riskier class.
+
+- [ ] `chdir` platform primitive
+  - New syscall wrapper: `SYS_chdir` (80 on x86-64, 49 on ARM64). Mirror both
+    arches; add `platform_chdir` stubs to `test_helper_*.s` if a core.s word
+    references it.
+- [ ] Capture the startup directory at boot
+  - At `_start`, `getcwd` into a buffer (we already `getcwd` for SEE metadata)
+    and keep the absolute startup path. Pin `session.fs` writes to it so
+    persistence never wanders after a `cd`.
+- [ ] `pwd ( -- )` — print the current working directory (← `platform_getcwd`).
+- [ ] `cd ( "path" -- )` — `chdir` to the parsed token.
+  - `cd` with no argument → return to the startup directory (session home base;
+    note this differs from a shell's bare `cd` → `$HOME`).
+  - `cd ~` → `$HOME` (optional `~` expansion via the `HOME` env var).
+- [ ] `ls ( -- )` — list the current directory (← `(getdents)` / `(each-dir)`,
+    reusing the help browser's directory walk). Optional `ls <dir>` arg later.
+- [ ] `cat ( "file" -- )` — dump a file to stdout (← `open-file` / `read-file`).
+- [ ] `more` / `page ( "file" -- )` — paged file view (← the man/tutorial pager:
+    `(pg-line)`, `screen-height`).
+- [ ] `pushd` / `popd` / `dirs` — a small fixed-depth directory stack.
+- [ ] Integration tests + docs (a `docs/Shell_Words.md` page + a short Manual
+    section). Limitation to document: `parse-word` path tokens can't contain
+    spaces in v1.
+
+---
+
 ## Unix `#!` Script Support
 
 Run a Forth file as an executable Unix script:
