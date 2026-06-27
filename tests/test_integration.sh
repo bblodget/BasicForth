@@ -692,6 +692,14 @@ assert_output "value unchanged"      '10 value x x . x .'                "10 10"
 assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"
 assert_output "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
 
+# DEFER / IS (vectored execution / late binding). Note: ' and ['] contain an
+# apostrophe, escaped as '\'' to survive the single-quoted shell argument.
+assert_output "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
+assert_output "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
+assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
+assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
+assert_error  "defer uninitialized"  'defer p p'                                             "uninitialized deferred word"
+
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
 assert_output "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"

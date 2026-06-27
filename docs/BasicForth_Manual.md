@@ -438,6 +438,28 @@ edit/compile/run loop.
 By convention marker names start with `-`. See `docs/Marker.md` for details
 (nesting, what is and isn't reclaimed, and the planned tie-in with sessions).
 
+### Deferred words (`defer` / `is`)
+
+`defer <name>` creates a word whose behavior you set — and can change — later
+with `is`. It lets you write the high-level structure first and fill in (or swap)
+the parts without recompiling the callers:
+
+```
+> defer play
+> : game  ." [" play ." ]" cr ;   \ compiles now; play is deferred
+> :noname ." stub" ; is play
+> game
+[stub]
+> : real  ." REAL" ;
+> ' real is play                  \ swap the action; game is NOT recompiled
+> game
+[REAL]
+```
+
+`is` is state-aware like `to`, so it works inside definitions too. An
+uninitialized deferred word aborts with a message if run. See
+`docs/Deferred_Words.md`, and `docs/Redo.md` for recompiling ordinary words.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

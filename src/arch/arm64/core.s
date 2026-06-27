@@ -1326,6 +1326,8 @@ cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
+msg_undef_defer: .ascii "uninitialized deferred word\n"
+.equ msg_undef_defer_len, . - msg_undef_defer
 .text
 
 // ---------- LIT (runtime) ----------
@@ -3121,6 +3123,62 @@ forth_to:
     LDP X29, X30, [SP], #16
     B .Lcf_abort
 
+// ---------- DEFER ----------
+// DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
+// xt stored in its inline cell (at xt+8: prolog 4 + BL forth_lit 4, same layout
+// VALUE uses); set that xt with IS. Initialized to forth_undef_defer, which
+// aborts if the word is executed before IS. Body: prolog ; BL forth_lit ; <xt> ;
+// BL forth_execute ; epilog — forth_lit pushes the stored xt, forth_execute runs it.
+.global forth_defer
+forth_defer:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+
+    BL build_header
+    CBNZ X0, .Ldefer_err
+
+    BL compile_prolog
+    ADR X0, forth_undef_defer       // initial action xt
+    BL compile_literal              // BL forth_lit + 8-byte action cell
+    ADR X0, forth_execute
+    BL compile_call                 // BL forth_execute
+    BL compile_ret
+
+    // Fill code_len (code starts past CodeLen + 8-byte SrcMeta = +12)
+    ADR X9, colon_code_len_addr
+    LDR X9, [X9]
+    ADD X10, X9, #12
+    SUB X11, X21, X10
+    STR W11, [X9]
+
+    // Flush I-cache over the compiled code
+    ADD X0, X9, #12
+    MOV X1, X21
+    BL platform_flush_icache
+
+    // Clear HIDDEN flag
+    LDRB W9, [X22, #8]
+    AND W9, W9, #~F_HIDDEN
+    STRB W9, [X22, #8]
+
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.Ldefer_err:
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// Initial action for a freshly DEFERed word: report and abort to the REPL.
+// Reached via forth_execute when an uninitialized deferred word is run.
+.global forth_undef_defer
+forth_undef_defer:
+    ADR X0, msg_undef_defer
+    MOV X1, #msg_undef_defer_len
+    BL platform_write
+    B forth_abort
+
 // ---------- :NONAME ----------
 // :NONAME ( -- xt )
 .global forth_noname
@@ -4773,10 +4831,13 @@ DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
+DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
+DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
+.global dict_is
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
