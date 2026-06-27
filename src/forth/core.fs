@@ -747,21 +747,95 @@ variable (el-pos)   \ cursor index, 0..len
 : (el-home)  ( -- )  begin (el-pos) @ 0>            while (el-left)  repeat ;
 : (el-end)   ( -- )  begin (el-pos) @ (el-len) @ <  while (el-right) repeat ;
 
+\ ----- Command history (up/down recall) -----
+\ A circular ring of recent submitted lines on the heap; each slot is a length
+\ cell followed by the line bytes. Within one edit, (el-hpos) browses 0..count:
+\ count = the (stashed) in-progress line, count-1 = newest entry, 0 = oldest.
+\ Up walks toward older, down toward newer/in-progress. If allocation fails,
+\ (hist-buf) stays 0 and history is silently disabled (editing still works).
+64  constant (hist-cap)               \ number of remembered lines
+256 constant (hist-wid)               \ line bytes per slot (= INPUT_BUF_SIZE)
+variable (hist-buf)                   \ heap base (0 until allocated)
+variable (hist-stash)                 \ in-progress line saved while browsing
+variable (hist-slen)                  \ stashed line length
+variable (hist-head)                  \ next slot to write (0..cap-1)
+variable (hist-count)                 \ live entries (0..cap)
+variable (el-hpos)                    \ browse cursor within one edit
+
+: (hist-stride) ( -- n )  (hist-wid) cell+ ;          \ bytes per slot
+: (hist-slot) ( i -- addr )  (hist-stride) *  (hist-buf) @ + ;
+: (hist-entry) ( hpos -- src u )      \ map a browse position to ( bytes len )
+    (hist-head) @ (hist-count) @ -  +  (hist-cap) +  (hist-cap) mod
+    (hist-slot)  dup cell+ swap @ ;
+: (hist-put) ( src u i -- )           \ store a line into slot i
+    (hist-slot) >r  dup r@ !  r> cell+ swap  cmove ;   \ len cell, then bytes
+
+: (el-stash-save) ( -- )              \ remember the in-progress line before browsing
+    (el-buf) @ (hist-stash) @ (el-len) @ cmove  (el-len) @ (hist-slen) ! ;
+: (el-blank) ( -- )                   \ erase the on-screen line, cursor back to home
+    (el-end)  (el-len) @ begin dup 0> while  8 emit 32 emit 8 emit  1- repeat drop ;
+: (el-show) ( src u -- )              \ load src/u into the buffer and display it
+    (el-max) @ min  dup (el-len) !  (el-buf) @ swap cmove
+    (el-buf) @ (el-len) @ type  (el-len) @ (el-pos) ! ;
+: (el-recall) ( src u -- )  (el-blank) (el-show) ;
+
+: (el-up) ( -- )                      \ recall an older line
+    (hist-count) @ 0= if  exit  then
+    (el-hpos) @ 0= if  exit  then                      \ already at the oldest
+    (el-hpos) @ (hist-count) @ = if  (el-stash-save)  then
+    -1 (el-hpos) +!
+    (el-hpos) @ (hist-entry) (el-recall) ;
+: (el-down) ( -- )                    \ move toward newer / the in-progress line
+    (hist-count) @ 0= if  exit  then
+    (el-hpos) @ (hist-count) @ = if  exit  then        \ already in-progress
+    1 (el-hpos) +!
+    (el-hpos) @ (hist-count) @ = if
+        (hist-stash) @ (hist-slen) @ (el-recall)       \ restore the typed line
+    else
+        (el-hpos) @ (hist-entry) (el-recall)
+    then ;
+
+: (hist-add) ( -- )                   \ append the just-submitted line as newest
+    (hist-buf) @ 0= if  exit  then     \ history disabled
+    (el-len) @ 0= if  exit  then       \ skip empty lines
+    (hist-count) @ 0> if               \ skip if identical to the newest entry
+        (hist-count) @ 1- (hist-entry)  (el-buf) @ (el-len) @  compare 0= if  exit  then
+    then
+    (el-buf) @ (el-len) @ (hist-head) @ (hist-put)
+    (hist-head) @ 1+ (hist-cap) mod (hist-head) !
+    (hist-count) @ (hist-cap) < if  1 (hist-count) +!  then ;
+
 : (edit-line) ( c-addr max -- count )
     (el-max) !  (el-buf) !  0 (el-len) !  0 (el-pos) !
+    (hist-count) @ (el-hpos) !
     begin
         key
-        dup 10 = if  drop  (el-end) 10 emit  (el-len) @ exit  then
+        dup 10 = if  drop  (el-end) 10 emit  (hist-add) (el-len) @ exit  then
         dup 8 = over 127 = or if  drop (el-back)  else
         dup 131 =             if  drop (el-right) else
         dup 132 =             if  drop (el-left)  else
         dup 1 =               if  drop (el-home)  else
         dup 5 =               if  drop (el-end)   else
+        dup 129 =             if  drop (el-up)    else
+        dup 130 =             if  drop (el-down)  else
         dup 32 <              if  drop            else   \ ignore other controls
-        dup 126 >             if  drop            else   \ ignore >126 (e.g. up/down)
+        dup 126 >             if  drop            else   \ ignore >126 (other escapes)
         (el-insert)
-        then then then then then then then
+        then then then then then then then then then
     again ;
+
+\ Allocate the history ring + stash buffer (best-effort; failure disables
+\ history). Both-or-nothing: (hist-buf) is the sentinel the rest of the code
+\ tests, so if the stash allocation fails we free the ring and leave (hist-buf)
+\ null — otherwise a partial success would let (el-stash-save) cmove into a null
+\ stash. Wrapped in a word because IF/THEN are compile-only (no top-level use).
+: (hist-init) ( -- )
+    0 (hist-buf) !  0 (hist-stash) !  0 (hist-head) !  0 (hist-count) !
+    (hist-cap) (hist-stride) *  allocate if  drop exit  then  (hist-buf) !
+    (hist-wid) allocate if                          \ stash failed:
+        drop  (hist-buf) @ free drop  0 (hist-buf) ! \ free ring, disable history
+    else  (hist-stash) !  then ;
+(hist-init)
 ' (edit-line)  3 (hook!)
 
 \ ===== Help system: docs browser (man / topics / apropos) =====
