@@ -684,6 +684,77 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file) ;
 
+\ ===== REDO: recompile a REPL-defined word from its captured source =====
+\ redo <name> re-evaluates a word's saved source, so callers that were compiled
+\ against an earlier version of a *leaf* it uses pick up the change (BasicForth is
+\ subroutine-threaded: redefining a word does not update already-compiled
+\ callers; recompiling them does). It is the REPL companion to editing a file and
+\ RELOAD-ing it, and to DEFER/IS (which avoids recompilation entirely at the
+\ seams you choose). v1 handles words defined at the REPL this session (source in
+\ the capture log); file-loaded words say to edit-and-reload, primitives decline.
+
+variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
+
+\ Index of the first byte == c in (rd-a)[0..(rd-u)), or (rd-u) if absent.
+: (rd-chpos) ( c -- n )
+    (rd-u) @ 0 ?do
+        dup (rd-a) @ i + c@ = if  drop i unloop exit  then
+    loop drop (rd-u) @ ;
+
+\ Interpret a multi-line source buffer one line at a time, the way INCLUDED does
+\ — NOT as a single EVALUATE, because a `\` comment would otherwise swallow the
+\ rest of the whole buffer (EVALUATE has no line boundaries). STATE persists
+\ across the per-line EVALUATEs, so a colon definition may span several lines.
+: (rd-eval-lines) ( c-addr u -- )
+    (rd-u) !  (rd-a) !
+    begin (rd-u) @ 0> while
+        10 (rd-chpos)                   ( idx-of-newline-or-len )
+        (rd-a) @ over evaluate          ( consumed-so-far = idx )
+        dup (rd-u) @ < if 1+ then       ( consumed, +1 for the newline if present )
+        dup (rd-a) +!
+        (rd-u) @ swap - (rd-u) !
+    repeat ;
+
+\ Find the newest capture-log directory record for (see-xt). ( -- rec true | false )
+: (rd-dir-find) ( -- rec true | false )
+    (dir) cell+ @  3 cells /            ( count )
+    begin dup 0> while
+        1-                              ( i )
+        dup 3 cells *  (dir) @ +        ( i rec )
+        dup 2 cells + @  (see-xt) @ = if  nip true exit  then
+        drop                            ( i )
+    repeat
+    drop false ;
+
+\ Recompile the REPL word whose old xt is in (see-xt), then repoint its log
+\ record at the new definition so SEE keeps working after the redefinition.
+: (redo-from-log) ( -- )
+    (rd-dir-find) 0= if
+        ." redo: " (see-a) @ (see-u) @ type ."  has no captured source" cr exit
+    then                                ( rec )
+    \ The recompile moves LATEST, so the REPL would otherwise log the `redo`
+    \ command line itself as the word's new source. Suppress that one capture
+    \ (same one-shot flag RELOAD uses); we repoint the existing record below.
+    true (skip-capture) !
+    dup @  (log) @ +                    ( rec src-addr )
+    over cell+ @                        ( rec src-addr src-len )
+    (rd-eval-lines)                     ( rec )
+    (see-a) @ (see-u) @ find            ( rec xt -1 | rec c-addr u 0 )
+    if  swap 2 cells + !  else  2drop drop  then ;
+
+: redo ( "name" -- )
+    parse-word dup 0= if  2drop ." redo: needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)     ( xt off len srcid flag )
+    0= if  2drop 2drop
+        ." redo: " (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        ." redo: " (see-a) @ (see-u) @ type ."  is a primitive (cannot redo)" cr exit  then
+    dup 0<> if  2drop 2drop             \ srcid >= 1 → loaded from a file
+        ." redo: " (see-a) @ (see-u) @ type ."  was loaded from a file; edit it and reload" cr exit  then
+    drop  2drop  (see-xt) !             \ srcid 0 → REPL word: old xt for the log lookup
+    (redo-from-log) ;
+
 \ Initialize the buffers and register the hooks with the asm REPL.
 (log)  3 cells erase
 (pend) 3 cells erase

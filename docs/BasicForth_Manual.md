@@ -460,6 +460,27 @@ the parts without recompiling the callers:
 uninitialized deferred word aborts with a message if run. See
 `docs/Deferred_Words.md`, and `docs/Redo.md` for recompiling ordinary words.
 
+### Recompiling a word (`redo`)
+
+Because compiled calls are baked in, redefining a leaf word does not change words
+already compiled to call it. `redo <name>` recompiles `<name>` from the source
+you typed, so it picks up the redefined leaf:
+
+```
+> : setup ." OLD" cr ;
+> : snake setup ;
+> : setup ." NEW" cr ;   \ improved leaf
+> snake
+OLD                       \ still the old setup
+> redo snake
+> snake
+NEW                       \ recompiled against the new setup
+```
+
+`redo` works on words defined at the REPL this session; for file-loaded words it
+points you to edit-and-`reload`, and primitives have no source. See
+`docs/Redo.md`.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
