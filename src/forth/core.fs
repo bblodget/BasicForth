@@ -695,10 +695,73 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 
 \ ===== Interactive line editor (REPL input hook, slot 3) =====
 \ Engaged only when stdin is an interactive terminal (main.s gates on isatty);
-\ piped/redirected input falls back to the asm forth_accept. Step 1 is a
-\ pass-through to ACCEPT that proves the hook path; later steps add cursor
-\ editing and history.
-: (edit-line) ( c-addr max -- count )  accept ;
+\ piped/redirected input falls back to the asm forth_accept. Provides in-line
+\ editing: type anywhere, move with the left/right arrows (Ctrl-A/Ctrl-E jump to
+\ start/end), and insert/delete mid-line. Echo is manual (raw mode clears ECHO);
+\ the screen is kept in sync by reprinting the tail and backing the cursor up.
+\ KEY already decodes arrows to 131 (right) / 132 (left); 129/130 (up/down) are
+\ ignored here and become history recall in a later step.
+variable (el-buf)   \ buffer base address
+variable (el-max)   \ capacity in chars
+variable (el-len)   \ current line length
+variable (el-pos)   \ cursor index, 0..len
+
+: (el-bsp) ( n -- )  \ emit n backspaces (move the cursor left n columns)
+    begin dup 0> while  8 emit  1- repeat  drop ;
+: (el-tail) ( -- )   \ reprint buf[pos..len) starting at the cursor
+    (el-buf) @ (el-pos) @ +  (el-len) @ (el-pos) @ -  type ;
+
+\ Self-contained byte shifts (not MOVE/CMOVE: those have overlap/zero-count bugs).
+: (el-open) ( -- )   \ open a 1-char gap at pos: copy buf[pos..len) up by 1, high→low
+    (el-len) @                                            \ i, from len down to pos+1
+    begin dup (el-pos) @ > while
+        1-  (el-buf) @ over +  dup c@ swap 1+ c!          \ buf[i+1] = buf[i]
+    repeat drop ;
+: (el-close) ( -- )  \ delete buf[pos-1]: copy buf[pos..len) down by 1, low→high
+    (el-pos) @                                            \ i, from pos up to len-1
+    begin dup (el-len) @ < while
+        (el-buf) @ over +  dup c@ swap 1- c!  1+          \ buf[i-1] = buf[i]
+    repeat drop ;
+
+: (el-insert) ( c -- )   \ insert char at the cursor, shifting the tail right
+    (el-len) @ (el-max) @ < 0= if  drop exit  then        \ buffer full: ignore
+    (el-open)
+    (el-buf) @ (el-pos) @ + c!
+    1 (el-len) +!
+    (el-tail)                                             \ echo new char + tail
+    (el-len) @ (el-pos) @ - 1- (el-bsp)                   \ back up to after it
+    1 (el-pos) +! ;
+
+: (el-back) ( -- )   \ delete the char before the cursor, shifting the tail left
+    (el-pos) @ 0= if  exit  then
+    (el-close)
+    -1 (el-len) +!  -1 (el-pos) +!
+    8 emit                                                \ left over deleted char
+    (el-tail)                                             \ reprint shifted tail
+    32 emit                                               \ erase the stale column
+    (el-len) @ (el-pos) @ - 1+ (el-bsp) ;                 \ reposition (tail+space)
+
+: (el-left)  ( -- )  (el-pos) @ 0= if  exit  then  8 emit  -1 (el-pos) +! ;
+: (el-right) ( -- )  (el-pos) @ (el-len) @ < 0= if  exit  then
+    (el-buf) @ (el-pos) @ + c@ emit  1 (el-pos) +! ;
+: (el-home)  ( -- )  begin (el-pos) @ 0>            while (el-left)  repeat ;
+: (el-end)   ( -- )  begin (el-pos) @ (el-len) @ <  while (el-right) repeat ;
+
+: (edit-line) ( c-addr max -- count )
+    (el-max) !  (el-buf) !  0 (el-len) !  0 (el-pos) !
+    begin
+        key
+        dup 10 = if  drop  (el-end) 10 emit  (el-len) @ exit  then
+        dup 8 = over 127 = or if  drop (el-back)  else
+        dup 131 =             if  drop (el-right) else
+        dup 132 =             if  drop (el-left)  else
+        dup 1 =               if  drop (el-home)  else
+        dup 5 =               if  drop (el-end)   else
+        dup 32 <              if  drop            else   \ ignore other controls
+        dup 126 >             if  drop            else   \ ignore >126 (e.g. up/down)
+        (el-insert)
+        then then then then then then then
+    again ;
 ' (edit-line)  3 (hook!)
 
 \ ===== Help system: docs browser (man / topics / apropos) =====
