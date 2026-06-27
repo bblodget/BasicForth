@@ -2043,6 +2043,19 @@ rm -rf "$sort_base"
 
 rm -rf "$sec_base"
 
+# A "topic" that is actually a directory: open() succeeds but read() returns
+# EISDIR. man must report it via page-file's "(read error)" and the REPL must
+# keep running afterward — a regression guard for page-file no longer aborting
+# through (man-in) (which would skip its directory-fd cleanup and leak it).
+mkdir "$docs_dir/Brokendir.md"
+brk_out=$(printf 'man Brokendir\n9 9 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$brk_out" == *"(read error)"* && "$brk_out" == *"18"* ]]; then
+    printf "  ${GREEN}PASS${NC}  man on a directory-topic reports read error, REPL survives\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  man on a directory-topic (page-file cleanup)\n    Got: %s\n" "$(echo "$brk_out" | head -5)"; ((failed++))
+fi
+
 rm -rf "$docs_dir"
 
 # =========================================================================
@@ -2148,12 +2161,18 @@ assert_output "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read e
 # successful command still prints " ok" (control).
 ab_cat=$(run_forth "cat $fw_dir/sub")        # cat a directory -> read error + abort
 ab_cd=$(run_forth "cd /no/such/dir")         # cd failure -> abort
+ab_more=$(run_forth "more $fw_dir/sub")      # more a directory -> page-file read error + abort
 ab_ok=$(run_forth "ls $fw_dir")              # success still prints " ok"
 rm -rf "$fw_dir"
 if [[ "$ab_cat" == *"cat: read error"* && "$ab_cat" != *" ok"* ]]; then
     printf "  ${GREEN}PASS${NC}  cat error aborts (no \" ok\")\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  cat error returned success to the REPL\n    Got: %q\n" "$ab_cat"; ((failed++))
+fi
+if [[ "$ab_more" == *"(read error)"* && "$ab_more" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  more error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  more error returned success to the REPL\n    Got: %q\n" "$ab_more"; ((failed++))
 fi
 if [[ "$ab_cd" == *"cd: cannot access"* && "$ab_cd" != *" ok"* ]]; then
     printf "  ${GREEN}PASS${NC}  cd error aborts (no \" ok\")\n"; ((passed++))

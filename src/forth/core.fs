@@ -863,15 +863,20 @@ variable (pg-quit)                       \ true once the user pressed q
 : (pg-line) ( c-addr u -- )
     type cr  1 (pg-row) +!
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
-: page-file ( fileid -- )
+\ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
+\ a read-error flag (true if read-line failed) rather than aborting — it is a
+\ shared helper called from contexts that hold their own resources (e.g. (man-in)
+\ keeps a directory fd open), so a non-local abort here would skip their cleanup.
+\ Each caller decides whether to abort.
+: page-file ( fileid -- read-error? )
     0 (pg-row) ! false (pg-quit) !
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
-        if  2drop  ." (read error)" cr  r> close-file drop abort  then  \ surface I/O error
+        if  2drop  ." (read error)" cr  r> close-file drop  true exit  then  \ I/O error
         if  (pg-buf@) swap (pg-line)
-        else  drop  r> close-file drop exit  then
-        (pg-quit) @ if  r> close-file drop exit  then
+        else  drop  r> close-file drop  false exit  then   \ EOF: done, no error
+        (pg-quit) @ if  r> close-file drop  false exit  then  \ user quit: not an error
     again ;
 
 \ --- MAN: find <topic>.md (case-insensitive) in the docs dirs and page it ---
@@ -903,7 +908,7 @@ variable (mn-found)
             2dup (ends-md?) if
                 2dup 3 - (mn-t) @ (mn-tn) @ (ci=) if
                     (build-path) r/o open-file
-                    if drop else page-file true (mn-found) ! then
+                    if drop else page-file drop true (mn-found) ! then  \ drop page-file's flag
                     2drop r> close-file drop exit
                 then
             then
@@ -1044,7 +1049,9 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     parse-word                              ( c-addr u )
     dup 0= if  2drop ." usage: more <file>" cr abort  then
     r/o open-file if  drop ." more: cannot open file" cr abort  then  ( fileid )
-    page-file ;
+    \ page-file closed the fd and reported any read error; abort so a failed
+    \ `more` doesn't return " ok". Safe here: top-level word, no fd held.
+    page-file if  abort  then ;
 
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.
