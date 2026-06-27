@@ -23,13 +23,26 @@
 .equ DATA_STACK_SIZE, 4096      # 512 cells
 
 # ---------- Dictionary Entry Layout ----------
-# [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
+# [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]
+#
+# The trailing 8-byte source-metadata block records where a word's source came
+# from, for SEE — see docs/See_Metadata.md. It sits *after* CodePtr, so FIND and
+# xt derivation are unchanged; only the code-start cursor (CodeLen field + 4 + 8)
+# moves. Field sizes: SrcId u16 (source-table id), Len u16 (a single
+# definition's source span is never near 64 KB), Off u32 (byte offset into the
+# source file). SrcId = PRIM_SRCID for assembly primitives, 0 for REPL/no-file
+# words, or a source-table id (>=1) for file-loaded words.
 #
 # Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
 .equ F_IMMEDIATE,   0x80
 .equ F_HIDDEN,      0x40
 .equ F_COMPILE_ONLY,0x20
 .equ F_LENMASK,     0x1F
+
+# Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
+# SrcId sentinel for assembly primitives.
+.equ SRC_META_BYTES, 8
+.equ PRIM_SRCID,     0xFFFF
 
 
 # CHECK_DICT n: verify HERE + n bytes fits in dict_space.
@@ -61,6 +74,12 @@
 \entry\()_xt:
     .quad \label
 \entry\()_codelen:
+    .long 0
+\entry\()_srcid:
+    .word PRIM_SRCID                 # assembly primitive — no captured source
+\entry\()_len:
+    .word 0
+\entry\()_off:
     .long 0
     .balign 4
 .text
@@ -1462,15 +1481,21 @@ build_header:
     add $7, %r13
     and $~7, %r13
 
-    # Write code pointer — will point just past code_len field
-    lea 12(%r13), %rax              # code starts after CodePtr(8)+CodeLen(4)
+    # Write code pointer — points past CodePtr(8)+CodeLen(4)+SrcMeta(8)
+    lea 20(%r13), %rax
     mov %rax, (%r13)
     add $CELL, %r13                 # past CodePtr
 
     # Write code_len placeholder (0), save its address
     mov %r13, colon_code_len_addr(%rip)
     movl $0, (%r13)
-    add $4, %r13                    # past CodeLen — HERE now at code area
+    add $4, %r13                    # past CodeLen
+
+    # Write source-metadata placeholder (SrcId=0, Len=0, Off=0). Inert for now —
+    # forth_included will stamp file-loaded words; REPL words stay SrcId 0.
+    movl $0, (%r13)                 # SrcId:2 + Len:2 (both 0)
+    movl $0, 4(%r13)               # Off:4
+    add $SRC_META_BYTES, %r13       # past metadata — HERE now at code area
 
     # Update LATEST
     mov %rbx, %r12                  # LATEST = new entry (still HIDDEN)
@@ -1531,7 +1556,7 @@ forth_semicolon:
     mov colon_code_len_addr(%rip), %rax   # RAX = code_len field address
     test %rax, %rax
     jz .Lsemi_noname                      # :NONAME has no code_len field
-    lea 4(%rax), %rcx                     # RCX = code start (right after field)
+    lea 12(%rax), %rcx                    # RCX = code start (past CodeLen + 8-byte SrcMeta)
     mov %r13, %rdx                        # RDX = HERE (right after compiled code)
     sub %rcx, %rdx                        # RDX = code length
     mov %edx, (%rax)                      # write code_len (32-bit)
@@ -2460,7 +2485,7 @@ forth_value:
 
     # Fill code_len
     mov colon_code_len_addr(%rip), %rax
-    lea 4(%rax), %rcx
+    lea 12(%rax), %rcx             # code start (past CodeLen + 8-byte SrcMeta)
     mov %r13, %rdx
     sub %rcx, %rdx
     mov %edx, (%rax)
@@ -3196,7 +3221,7 @@ forth_create:
 
     # Fill code_len (code = from code_start to just before alignment padding)
     mov colon_code_len_addr(%rip), %rax
-    lea 4(%rax), %rcx              # code start
+    lea 12(%rax), %rcx             # code start (past CodeLen + 8-byte SrcMeta)
     mov %rbx, %rdx                 # end of code = literal value addr
     add $8, %rdx                   # + 8 bytes for the value itself
     add $5, %rdx                   # + 5 bytes for RET + 4 NOPs
@@ -3235,7 +3260,7 @@ forth_constant:
 
     # Fill code_len
     mov colon_code_len_addr(%rip), %rax
-    lea 4(%rax), %rcx
+    lea 12(%rax), %rcx             # code start (past CodeLen + 8-byte SrcMeta)
     mov %r13, %rdx
     sub %rcx, %rdx
     mov %edx, (%rax)
@@ -3269,7 +3294,7 @@ forth_does_runtime:
     lea 1(%rax), %rbx              # RBX = does_body (skip the 1-byte RET)
     # Get CREATE'd word's code start from colon_code_len_addr
     mov colon_code_len_addr(%rip), %rax
-    lea 4(%rax), %rdi              # RDI = code_start
+    lea 12(%rax), %rdi             # RDI = code_start (past CodeLen + 8-byte SrcMeta)
     # Patch offset 13 (RET + NOPs) with JMP rel32 to does_body
     movb $0xE9, 13(%rdi)          # JMP opcode
     lea 18(%rdi), %rcx            # address after JMP (offset 13 + 5 = 18)
@@ -4102,7 +4127,7 @@ guard_page_underflow:
     .space 4096
 
 # ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 65536     # 64KB
+.equ DICT_SPACE_SIZE, 262144    # 256KB
 .balign 8
 .global dict_space
 dict_space:

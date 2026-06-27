@@ -23,13 +23,26 @@
 .equ DATA_STACK_SIZE, 4096      // 512 cells
 
 // ---------- Dictionary Entry Layout ----------
-// [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
+// [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]
+//
+// The trailing 8-byte source-metadata block records where a word's source came
+// from, for SEE — see docs/See_Metadata.md. It sits *after* CodePtr, so FIND and
+// xt derivation are unchanged; only the code-start cursor (CodeLen field + 4 + 8)
+// moves. Field sizes: SrcId u16 (source-table id), Len u16 (a single
+// definition's source span is never near 64 KB), Off u32 (byte offset into the
+// source file). SrcId = PRIM_SRCID for assembly primitives, 0 for REPL/no-file
+// words, or a source-table id (>=1) for file-loaded words.
 //
 // Flags byte: bit 7 = IMMEDIATE, bit 6 = HIDDEN, bits 0-5 = name length
 .equ F_IMMEDIATE,   0x80
 .equ F_HIDDEN,      0x40
 .equ F_COMPILE_ONLY,0x20
 .equ F_LENMASK,     0x1F
+
+// Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
+// SrcId sentinel for assembly primitives.
+.equ SRC_META_BYTES, 8
+.equ PRIM_SRCID,     0xFFFF
 
 
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
@@ -62,6 +75,12 @@
     .quad \label
 \entry\()_codelen:
     .long 0
+\entry\()_srcid:
+    .hword PRIM_SRCID               // SrcId:2 — assembly primitive (no captured source)
+\entry\()_len:
+    .hword 0                        // Len:2
+\entry\()_off:
+    .long 0                         // Off:4
     .balign 4
 .text
 .endm
@@ -1565,8 +1584,8 @@ build_header:
     ADD X21, X21, #7
     AND X21, X21, #~7
 
-    // Write code pointer
-    ADD X9, X21, #12               // code starts after CodePtr(8)+CodeLen(4)
+    // Write code pointer — points past CodePtr(8)+CodeLen(4)+SrcMeta(8)
+    ADD X9, X21, #20
     STR X9, [X21]
     ADD X21, X21, #CELL
 
@@ -1574,7 +1593,13 @@ build_header:
     ADR X9, colon_code_len_addr
     STR X21, [X9]
     STR WZR, [X21]
-    ADD X21, X21, #4               // HERE now at code area
+    ADD X21, X21, #4               // past CodeLen
+
+    // Write source-metadata placeholder (SrcId=0, Len=0, Off=0). Inert for now —
+    // forth_included will stamp file-loaded words; REPL words stay SrcId 0.
+    STR WZR, [X21]                 // SrcId:2 + Len:2 (both 0)
+    STR WZR, [X21, #4]             // Off:4
+    ADD X21, X21, #SRC_META_BYTES  // HERE now at code area
 
     // Update LATEST
     MOV X22, X25                   // LATEST = new entry (still HIDDEN)
@@ -1650,7 +1675,7 @@ forth_semicolon:
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                    // X9 = code_len field address
     CBZ X9, .Lsemi_noname           // :NONAME has no code_len field
-    ADD X10, X9, #4                 // X10 = code start (right after field)
+    ADD X10, X9, #12                // X10 = code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10               // X11 = code length
     STR W11, [X9]                   // write code_len (32-bit)
 
@@ -2705,12 +2730,12 @@ forth_value:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]
-    ADD X10, X9, #4
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10
     STR W11, [X9]
 
     // Flush I-cache
-    ADD X0, X9, #4
+    ADD X0, X9, #12               // start = code start
     MOV X1, X21
     BL platform_flush_icache
 
@@ -3479,12 +3504,12 @@ forth_create:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                   // X9 = code_len field address
-    ADD X10, X9, #4                // code start
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X24, X10              // code length (up to code end, before padding)
     STR W11, [X9]
 
     // Flush I-cache for compiled code
-    ADD X0, X9, #4                 // start = code start
+    ADD X0, X9, #12                // start = code start
     MOV X1, X24                    // end = code end
     BL platform_flush_icache
 
@@ -3525,12 +3550,12 @@ forth_constant:
     // Fill code_len
     ADR X9, colon_code_len_addr
     LDR X9, [X9]
-    ADD X10, X9, #4
+    ADD X10, X9, #12               // code start (past CodeLen + 8-byte SrcMeta)
     SUB X11, X21, X10
     STR W11, [X9]
 
     // Flush I-cache
-    ADD X0, X9, #4
+    ADD X0, X9, #12               // start = code start
     MOV X1, X21
     BL platform_flush_icache
 
@@ -3567,7 +3592,7 @@ forth_does_runtime:
     // Get CREATE'd word's code start from colon_code_len_addr
     ADR X9, colon_code_len_addr
     LDR X9, [X9]                    // X9 = code_len field address
-    ADD X24, X9, #4                 // X24 = code_start
+    ADD X24, X9, #12                // X24 = code_start (past CodeLen + 8-byte SrcMeta)
     // Patch: replace RET at offset 20 with B does_body
     ADD X10, X24, #20              // X10 = address of RET instruction
     SUB X11, X23, X10              // byte offset = does_body - patch_addr
@@ -4464,7 +4489,7 @@ guard_page_underflow:
     .space 4096
 
 // ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 65536     // 64KB
+.equ DICT_SPACE_SIZE, 262144    // 256KB
 .balign 8
 .global dict_space
 dict_space:
