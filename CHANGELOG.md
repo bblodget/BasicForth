@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Interactive line editor with command history
+- The REPL prompt is now an in-line editor at a terminal: move with the
+  left/right arrows, jump to the start/end with Ctrl-A/Ctrl-E, and insert or
+  delete (Backspace) anywhere in the line — not just at the end.
+- The up/down arrows recall previous lines from a command history (the most
+  recent 64 lines; consecutive duplicates are not stored). A recalled line can
+  be edited before submitting, and Down past the newest entry restores the line
+  you were typing. History is in-memory for the session.
+- The editor engages only when stdin is a terminal; piped/redirected input still
+  uses the plain `ACCEPT` reader, so scripts and the test suite are unchanged.
+  The new `BASICFORTH_EDITOR` environment variable overrides the check (`1` on,
+  `0` off). `ACCEPT` itself is unchanged.
+- Implemented in Forth in `core.fs` (shared by both architectures) behind a new
+  REPL input hook in `main.s`; arrow keys are decoded by the platform layer and
+  the history ring is heap-allocated. See docs/Line_Editor.md.
+
 ## v0.6.0 — 2026-06-27
 
 ### `see` shows the source of any word via dictionary source-metadata

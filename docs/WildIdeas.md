@@ -84,13 +84,15 @@ the same lookup piped into the line editor.
 Staging:
 
 - **Stage A — `SEE <word>`**: print the last captured source for a word.
-  Read-only; lands with / just after SAVE since it reuses the log.
-- **Stage B — line editor + history**: upgrade `ACCEPT` to parse arrow-key
-  escape sequences (`ESC [ C/D`, etc.), support mid-line insert/delete with
-  redraw, and keep an input-history ring (up/down recalls previous lines). We
-  are already in raw mode with `platform_key`, so the bytes are available; this
-  is the substantial piece and deserves its own design pass.
+  Read-only; lands with / just after SAVE since it reuses the log. **Done** (and
+  since generalised to any word via dictionary source metadata — see above).
+- **Stage B — line editor + history**: **Done.** The REPL prompt is now an
+  in-line editor (left/right arrows, Ctrl-A/Ctrl-E, mid-line insert/delete) with
+  an up/down command-history ring. Implemented in Forth in `core.fs` behind a
+  REPL input hook, arrow keys decoded by `platform_key`. See docs/Line_Editor.md.
 - **Stage C — `EDIT <word>`**: recall a definition into the editable line.
+  Still wanted — now that Stage B exists, this is `see`'s lookup fed into the
+  line editor as the starting text.
 
 A nice simplification for Stage C: to Forth, newlines are just whitespace, so a
 multi-line `: … ;` can be recalled as a *single* (long) line and edited with the

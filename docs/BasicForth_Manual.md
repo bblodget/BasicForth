@@ -128,6 +128,7 @@ If you see that, point `BASICFORTH_PATH` at the directory holding `core.fs`
 |-------------------|---------------------------------------------------------|
 | `BASICFORTH_PATH` | Colon-separated directories searched when a file is not found in CWD |
 | `BASICFORTH_SESSION` | `1` forces the interactive session (SAVE) on, `0` forces it off; unset = on at a terminal |
+| `BASICFORTH_EDITOR` | `1` forces the line editor on, `0` forces it off; unset = on when stdin is a terminal |
 | `BASICFORTH_DOCS` | Colon-separated directories of `*.md` topics for the `man` / `topics` / `apropos` help words |
 
 When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
@@ -494,6 +495,14 @@ BasicForth presents an interactive prompt:
 ```
 
 Type Forth expressions and press Enter. Type `bye` to exit.
+
+### Line Editing
+
+At a terminal the prompt is a small line editor: move the cursor with the
+**left/right arrows**, jump to the start/end with **Ctrl-A/Ctrl-E**, and
+insert or delete (Backspace) anywhere in the line. The **up/down arrows** recall
+previous lines from the command history, which you can edit before pressing
+Enter. See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

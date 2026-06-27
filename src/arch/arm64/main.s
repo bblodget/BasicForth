@@ -112,6 +112,44 @@ _start:
     STR X9, [X10]
 .Lsenv_done:
 
+    // Walk envp again for BASICFORTH_EDITOR= (override the default isatty gate for
+    // the line editor: =0 forces off, any other value forces on). Same pattern.
+    ADR X9, editor_env
+    STR XZR, [X9]                   // 0 = unset (use default isatty gate)
+    LDR X0, [SP]                    // argc
+    ADD X0, X0, #2
+    LSL X0, X0, #3
+    ADD X0, SP, X0                  // &envp[0]
+.Leenv_loop:
+    LDR X1, [X0]                    // envp[i]
+    CBZ X1, .Leenv_done             // NULL = end of envp
+    ADR X2, edit_prefix
+    MOV X3, #edit_prefix_len
+.Leenv_cmp:
+    CBZ X3, .Leenv_found            // prefix matched
+    LDRB W4, [X1], #1
+    LDRB W5, [X2], #1
+    CMP W4, W5
+    B.NE .Leenv_next
+    SUB X3, X3, #1
+    B .Leenv_cmp
+.Leenv_next:
+    ADD X0, X0, #8
+    B .Leenv_loop
+.Leenv_found:
+    LDRB W4, [X1]                   // first byte of the value
+    CMP W4, #'0'
+    B.EQ .Leenv_off
+    MOV X9, #1                      // non-'0' → force on
+    ADR X10, editor_env
+    STR X9, [X10]
+    B .Leenv_done
+.Leenv_off:
+    MOV X9, #2                      // '0' → force off
+    ADR X10, editor_env
+    STR X9, [X10]
+.Leenv_done:
+
     // Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories for
     // the help system: man / topics / apropos). Same pattern as the PATH walk.
     LDR X0, [SP]
@@ -279,13 +317,31 @@ _start:
     BL forth_included
 .Lsession_decided:
 
-    // Resolve once whether stdin is an interactive terminal. The line editor
-    // (REPL input hook) engages only then; piped/redirected stdin uses
-    // forth_accept so script loading and the integration tests are unchanged.
+    // Resolve once whether the line editor engages. BASICFORTH_EDITOR overrides
+    // the default: =0 forces off, any other value forces on; unset → the editor
+    // engages only when stdin is an interactive terminal (so piped/redirected
+    // stdin uses forth_accept and script loading / integration tests are
+    // unchanged).
+    ADR X9, editor_env
+    LDR X9, [X9]
+    CMP X9, #2
+    B.EQ .Linput_off
+    CMP X9, #1
+    B.EQ .Linput_on
     MOV X0, #0                      // STDIN
     BL platform_isatty
     ADR X9, input_interactive
     STR X0, [X9]
+    B .Linput_done
+.Linput_on:
+    MOV X9, #1
+    ADR X10, input_interactive
+    STR X9, [X10]
+    B .Linput_done
+.Linput_off:
+    ADR X10, input_interactive
+    STR XZR, [X10]
+.Linput_done:
 
 .global repl_loop
 repl_loop:
@@ -471,6 +527,8 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 .equ env_prefix_len, . - env_prefix
 sess_prefix:    .ascii "BASICFORTH_SESSION="
 .equ sess_prefix_len, . - sess_prefix
+edit_prefix:    .ascii "BASICFORTH_EDITOR="
+.equ edit_prefix_len, . - edit_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
 
@@ -484,6 +542,11 @@ start_argv1:
 // BASICFORTH_SESSION). session_active: resolved on/off. cap_line_len: length of
 // the current REPL line, saved for the capture hook.
 session_env:
+    .quad 0
+// Line-editor override: 0=unset (default isatty gate), 1=force on, 2=force off
+// (from BASICFORTH_EDITOR). Lets the integration suite drive the editor over a
+// pipe, where stdin is not a tty.
+editor_env:
     .quad 0
 session_active:
     .quad 0
