@@ -98,18 +98,18 @@ variable food-ok               \ did update-food find an empty cell?
     false food-ok !
     100 0 do
         food-ok @ 0= if
-            WIDTH 4 - 2 / rnd 2 * 2 + fx !
+            WIDTH 2 - 2 / rnd 2 * 2 + fx !
             HEIGHT 2 - rnd 1+ fy !
             fx @ fy @ screen@ bl = food-ok !
         then
     loop
     \ ...then fall back to a scan for any empty cell if the board is crowded.
-    \ Only even columns 2..WIDTH-4 are scanned: the snake moves in x by +-2 from
-    \ an even start, so odd columns (and the outer ones) are unreachable and must
-    \ not receive food.
+    \ Only the reachable cells are scanned: the snake moves in x by +-2 from an
+    \ even start, so food goes on even columns 2..WIDTH-2 (col WIDTH-1 is the
+    \ border) and rows 1..HEIGHT-2 -- odd/outer columns are unreachable.
     food-ok @ 0= if
         HEIGHT 1- 1 do
-            WIDTH 2 - 2 do
+            WIDTH 2 do
                 food-ok @ 0= if
                     i j screen@ bl = if  i fx !  j fy !  true food-ok !  then
                 then

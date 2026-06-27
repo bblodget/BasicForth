@@ -11,9 +11,10 @@
 - The placement search is bounded — a capped number of random tries, then a
   scan for an empty cell, and if no reachable cell is free the game ends (you
   won) — so it can never spin forever on a crowded/small board. Both the random
-  and scan paths use even columns only, matching where the snake can actually go
-  (it moves in x by ±2 from an even start), so food is never stranded on an
-  unreachable column.
+  and scan paths cover exactly the reachable cells — even columns `2..WIDTH-2`
+  (the snake moves in x by ±2 from an even start; `WIDTH-1` is the border) and
+  rows `1..HEIGHT-2` — so food is never stranded on an unreachable column nor
+  withheld from the last reachable one.
 
 ### Added: "Snake" tutorial — build a game step by step
 - `docs/Tutorial/Snake.md`, the first interactive tutorial: walked with

@@ -917,6 +917,20 @@ else
     printf "    Expected: ODDDONE=-1 and FXPAR=0\n    Got:      %s\n" "$(echo "$sf_odd" | tr -dc '[:print:]' | tail -c 60)"; ((failed++))
 fi
 
+# ...and conversely the last reachable column (even WIDTH-2, just inside the
+# right border) must still receive food. Occupy every reachable even column
+# except WIDTH-2; food must land there rather than the game giving up.
+t0=$(date +%s.%N)
+sf_edge=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\n: occ HEIGHT 1- 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\nocc\nfalse done ! update-food\n.( EDGEOK=) fx @ WIDTH 2 - = . .( EDGEDONE=) done @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs edge column"
+if [[ "$sf_edge" == *"EDGEOK=-1"* ]] && [[ "$sf_edge" == *"EDGEDONE=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs uses the last reachable column (WIDTH-2)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs uses the last reachable column (WIDTH-2)\n"
+    printf "    Expected: EDGEOK=-1 and EDGEDONE=0\n    Got:      %s\n" "$(echo "$sf_edge" | tr -dc '[:print:]' | tail -c 60)"; ((failed++))
+fi
+
 # ...and a completely full board must not hang update-food: it gives up the
 # random search, scans, finds nothing, and ends the game (you filled the board).
 # If it looped forever the timeout would kill it and FULLDONE would be missing.
