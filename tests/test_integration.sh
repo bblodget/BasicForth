@@ -902,6 +902,20 @@ else
     printf "    Expected: FOODBAD=0\n    Got:      %s\n" "$(echo "$sf_food" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
 fi
 
+# ...and a completely full board must not hang update-food: it gives up the
+# random search, scans, finds nothing, and ends the game (you filled the board).
+# If it looped forever the timeout would kill it and FULLDONE would be missing.
+t0=$(date +%s.%N)
+sf_full=$(printf 'include %s/examples/snake.fs\nreset-screen\n: fill HEIGHT 0 do WIDTH 0 do [char] o i j screen! loop loop ;\nfill\nfalse done !\nupdate-food\n.( FULLDONE=) done @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs full board"
+if [[ "$sf_full" == *"FULLDONE=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs full board ends instead of hanging\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs full board ends instead of hanging\n"
+    printf "    Expected: FULLDONE=-1\n    Got:      %s\n" "$(echo "$sf_full" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
+fi
+
 # BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
 t0=$(date +%s.%N)
 mv core.fs core.fs.bak 2>/dev/null

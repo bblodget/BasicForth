@@ -87,15 +87,34 @@ create body-y MAX_LEN allot
 
 \ *** Update position words ***
 
+variable food-ok               \ did update-food find an empty cell?
+
 : update-food
-    \ Keep picking until the cell is empty, so food never lands on the snake (or
-    \ border). Otherwise food could sit on the tail, and eating there would slip
-    \ past the screen-based collision check (the tail has just vacated the cell).
-    begin
-        WIDTH 4 - 2 / rnd 2 * 2 + fx !
-        HEIGHT 2 - rnd 1+ fy !
-        fx @ fy @ screen@ bl =
-    until ;
+    \ Place food on an empty cell, so it never lands on the snake (or border) --
+    \ otherwise food could sit on the tail, and eating there would slip past the
+    \ screen-based collision check (the tail has just vacated the cell).
+    \ Try random spots (bounded, so a near-full board can't spin forever);
+    \ once a spot is found the remaining iterations are no-ops.
+    false food-ok !
+    100 0 do
+        food-ok @ 0= if
+            WIDTH 4 - 2 / rnd 2 * 2 + fx !
+            HEIGHT 2 - rnd 1+ fy !
+            fx @ fy @ screen@ bl = food-ok !
+        then
+    loop
+    \ ...then fall back to a scan for any empty cell if the board is crowded...
+    food-ok @ 0= if
+        HEIGHT 1- 1 do
+            WIDTH 1- 1 do
+                food-ok @ 0= if
+                    i j screen@ bl = if  i fx !  j fy !  true food-ok !  then
+                then
+            loop
+        loop
+    then
+    \ ...and if the board is completely full, the player has won: end the game.
+    food-ok @ 0= if  true done !  then ;
 
 : update-head
     dir @ case

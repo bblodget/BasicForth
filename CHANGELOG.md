@@ -5,9 +5,12 @@
 ### Fixed: `examples/snake.fs` could spawn food on the snake
 - The fuller Snake example placed food at a random cell with no body check. Its
   collision test is screen-based, so food landing on the just-vacated tail could
-  be eaten without the overlap being noticed. `update-food` now re-rolls until
-  the cell is empty, so food never spawns on the snake or border. (The tutorial's
+  be eaten without the overlap being noticed. `update-food` now places food on an
+  empty cell, so food never spawns on the snake or border. (The tutorial's
   `examples/snake-mini.fs` handles the same case in its collision check.)
+- The placement search is bounded — a capped number of random tries, then a
+  scan for any empty cell, and if the board is completely full the game ends
+  (you won) — so it can never spin forever on a crowded/small board.
 
 ### Added: "Snake" tutorial — build a game step by step
 - `docs/Tutorial/Snake.md`, the first interactive tutorial: walked with
