@@ -213,32 +213,25 @@ completed. See Planning.md for high-level vision and design decisions.
   external restore point (`(session-mark!)`/`(session-restore)` globals) rather
   than a marker-in-the-file, so the file needs no `marker -session` header. See
   docs/Persistence.md.
-- [x] `SEE` — source lister over the session capture log. `see <name>` prints a
-  word's definition source (exactly as typed; multi-line and comments preserved).
-  Resolves the name with `FIND` and matches the live xt, so it shows the
-  definition currently in force and never stale source: a redefinition shadows the
-  older one, and a word forgotten by `-session`/a marker reports not found. Works
-  for any defining word; no new asm primitive. Small directory index (3-cell
-  records [log-off, log-len, xt]) reset alongside the log in `(seed-log)`. See
-  docs/See.md.
-  - [x] Index seeded/reloaded definitions too. `(index-seeded)` parses the seeded
-    log into definition groups (comment/string aware; `:` plus single-line
-    `variable`/`constant`/`value`/`create`/`marker`/`2variable`/`2constant`) and
-    indexes each, resolving names to their live xt via `FIND`. Runs on the first
-    REPL tick at startup (deferred from `(session-init)` via `(seed-pending)`) and
-    at the end of `reload`. So `see` now covers anything in `session.fs`.
-  - Known MVP limitation: the seeded indexer recognises definitions by their
-    defining word, so it does NOT cover words created by *user-defined* defining
-    words (e.g. `5 my-const five`) — `see five` reports the honest "no source
-    captured". And because a post-load text parser only knows a word's live xt
-    (not which of several same-named defs is in force), there is a rare wrong-
-    source edge: a built-in def *redefined* by a custom defining word
-    (`1 constant x` … `2 my-const x`) shows the shadowed `1 constant x`. Both are
-    the same attribution limit; common cases (incl. all-built-in redefinition)
-    are correct. Resolved properly by:
-  - Future: source-location metadata in the dictionary header → `see` for any
-    file-loaded word (incl. `core.fs` and custom-defining-word words), primitives
-    labelled, decompile far-future. See docs/WildIdeas.md.
+- [x] `SEE` — source lister. `see <name>` prints a word's definition source
+  (exactly as typed; multi-line and comments preserved). Resolves the name and
+  matches the live xt, so it shows the definition currently in force and never
+  stale source: a redefinition shadows the older one, and a word forgotten by
+  `-session`/a marker reports not found. Works for any defining word; no new asm
+  primitive. See docs/See.md.
+  - [x] **Dictionary source metadata → `see` for *any* word.** Each compiled
+    header carries an 8-byte `[SrcId:2][Len:2][Off:4]` record stamped at compile
+    time, and a `.bss` source table maps SrcId → absolute file path. `see`
+    dispatches on SrcId: `≥1` reads the byte span straight from the source file
+    (so `core.fs` and any `include`d file are covered, attributed by *file
+    position* not name — no wrong-source edge); `0xFFFF` reports *primitive
+    (assembly)*; `0` (typed at the REPL, no file) falls back to the session
+    capture log. New primitives `(find-meta)`/`(source-path)`; `platform_getcwd`
+    + `make_absolute` keep paths re-openable after a CWD change. This supersedes
+    and retired the old post-load seeded text-parser (which recognised
+    definitions by defining word and so missed custom-defining-word words and had
+    a rare redefinition wrong-source edge — both now gone). See
+    docs/See_Metadata.md. Shipped v0.6.0.
 - [~] ~~Bug: `INCLUDED` from inside a colon definition underflows the stack~~ —
   **not a bug.** `INCLUDED` is `( c-addr u -- )` per ANS (it leaves nothing on
   the stack; errors are printed, not returned as an ior). The earlier "underflow"

@@ -35,7 +35,8 @@ buffers for `SAVE`/persistence, help text, and text-processing scratch.
 
 What's still a wild idea is the harder, separate piece: *growing the dictionary
 itself* when it runs out of space (today it's one fixed `DICT_SPACE_SIZE` arena,
-~57 KB free after core.fs). Unlike the data heap, dictionary space must be
+256 KB total / ~226 KB free after core.fs). Unlike the data heap, dictionary
+space must be
 **executable** (compiled words run from it), so this needs a `PROT_EXEC`
 mapping — or `mprotect` to add exec, see Future/Hardening in TODO.md — plus a
 movable or chained `HERE` and guard-page handling. Could be a second mmap region
@@ -98,31 +99,17 @@ scrolling for long lines, a normal line-editor detail.
 
 ## SEE for any word — source-location metadata in the dictionary
 
-Today `SEE` reads the *session* capture log, so it covers words you typed or
-loaded from `session.fs`, but not `core.fs` words, `include`d files, or
-primitives. The longer-term direction is to let `SEE` show the source of **any**
-word in the dictionary.
+**Done (v0.6.0).** Each compiled word's header now carries an 8-byte
+`[SrcId:2][Len:2][Off:4]` record stamped at compile time, plus a `.bss` source
+table mapping SrcId → absolute file path. `SEE` dispatches on SrcId: file-loaded
+words (`core.fs` and any `include`d file) read their byte span straight from the
+source file; **primitives** report *primitive (assembly)*; a word typed at the
+REPL with no file falls back to the session capture log. See docs/See_Metadata.md
+and docs/See.md.
 
-The idea: give each compiled word's header a small record of where its source
-came from — `(source-id, offset, length)` — recorded at compile time (which file,
-and the byte span within it). `SEE` then reads that span straight from the source
-file. This generalises naturally:
-
-- Words from `core.fs` or any `include`d file → `SEE` opens the file and shows
-  the span. No session log needed for these.
-- **Primitives** (assembly, no source span) → report something like *primitive
-  (assembly)*.
-- A word typed at the REPL has **no file** until you `save` it, so the capture
-  log stays as the mechanism for unsaved interactive definitions. The two
-  coexist: the header metadata covers file-loaded words; the log covers
-  just-typed ones.
-- **Decompilation** is the far-future tier — reconstructing source from compiled
-  STC when no source file exists at all. Only worth it if we ever want `SEE` to
-  work with no source on disk.
-
-The current session-log `SEE` (including indexing seeded `session.fs`
-definitions) is a clean stepping stone: it finishes the session story and nothing
-about it blocks adding the header-metadata layer later.
+**Still far-future — decompilation.** Reconstructing source from compiled STC
+when no source file exists at all (and no capture-log entry). Only worth it if we
+ever want `SEE` to work with no source on disk.
 
 ## Programming Adventures Youtube Channel
 
