@@ -279,6 +279,14 @@ _start:
     BL forth_included
 .Lsession_decided:
 
+    // Resolve once whether stdin is an interactive terminal. The line editor
+    // (REPL input hook) engages only then; piped/redirected stdin uses
+    // forth_accept so script loading and the integration tests are unchanged.
+    MOV X0, #0                      // STDIN
+    BL platform_isatty
+    ADR X9, input_interactive
+    STR X0, [X9]
+
 .global repl_loop
 repl_loop:
     // If a startup script faulted or ABORTed, recovery lands here with
@@ -316,12 +324,24 @@ repl_loop:
     MOV X1, #prompt_len
     BL platform_write
 
-    // ACCEPT ( c-addr max -- count )
+    // Read a line ( c-addr max -- count ). When stdin is interactive and the
+    // line-editor hook (slot 3) is registered, use it; otherwise fall back to the
+    // plain asm forth_accept (piped input, and the window before core.fs runs).
     ADR X9, input_buf
     STR X9, [X19, #-CELL]!         // push c-addr
     MOV X9, #INPUT_BUF_SIZE
     STR X9, [X19, #-CELL]!         // push max
+    ADR X9, input_interactive
+    LDR X9, [X9]
+    CBZ X9, .Lrepl_accept
+    ADR X9, session_hooks
+    LDR X10, [X9, #24]            // [3] = line-editor (edit-line)
+    CBZ X10, .Lrepl_accept
+    BLR X10                        // ( c-addr max -- count )
+    B .Lrepl_have_line
+.Lrepl_accept:
     BL forth_accept                 // ( c-addr max -- count )
+.Lrepl_have_line:
 
     // Empty line → re-prompt (count == 0)
     LDR X9, [X19]
@@ -473,6 +493,11 @@ cap_line_len:
 // that window exits non-zero instead of dropping into the REPL. Only main.s
 // uses it.
 script_running:
+    .quad 0
+// Non-zero when stdin is an interactive terminal (resolved once at startup). The
+// REPL engages the line-editor hook (session_hooks[3]) only then; piped input
+// falls back to the plain forth_accept.
+input_interactive:
     .quad 0
 // Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
 // char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.

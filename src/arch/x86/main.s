@@ -262,6 +262,13 @@ _start:
     call forth_included
 .Lsession_decided:
 
+    # Resolve once whether stdin is an interactive terminal. The line editor
+    # (REPL input hook) engages only then; piped/redirected stdin uses
+    # forth_accept so script loading and the integration tests are unchanged.
+    xor %edi, %edi                  # STDIN
+    call platform_isatty
+    mov %rax, input_interactive(%rip)
+
 .global repl_loop
 repl_loop:
     # If a startup script faulted or ABORTed, recovery lands here with
@@ -294,13 +301,24 @@ repl_loop:
     mov $prompt_len, %rdx
     call platform_write
 
-    # ACCEPT ( c-addr max -- count )
+    # Read a line ( c-addr max -- count ). When stdin is interactive and the
+    # line-editor hook (slot 3) is registered, use it; otherwise fall back to the
+    # plain asm forth_accept (piped input, and the window before core.fs runs).
     lea input_buf(%rip), %rax
     sub $CELL, %r15
     mov %rax, (%r15)                # push c-addr
     sub $CELL, %r15
     movq $INPUT_BUF_SIZE, (%r15)    # push max
+    cmpq $0, input_interactive(%rip)
+    je .Lrepl_accept
+    mov session_hooks+24(%rip), %rax   # [3] = line-editor (edit-line)
+    test %rax, %rax
+    jz .Lrepl_accept
+    call *%rax                      # ( c-addr max -- count )
+    jmp .Lrepl_have_line
+.Lrepl_accept:
     call forth_accept               # ( c-addr max -- count )
+.Lrepl_have_line:
 
     # Empty line → re-prompt (count == 0)
     mov (%r15), %rax
@@ -441,6 +459,11 @@ cap_line_len:
 # Non-zero while the startup script (argv[1]) is executing; an error during that
 # window exits non-zero instead of dropping into the REPL. Only main.s uses it.
 script_running:
+    .quad 0
+# Non-zero when stdin is an interactive terminal (resolved once at startup). The
+# REPL engages the line-editor hook (session_hooks[3]) only then; piped input
+# falls back to the plain forth_accept.
+input_interactive:
     .quad 0
 # Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
 # char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.

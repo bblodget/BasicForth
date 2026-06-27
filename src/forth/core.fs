@@ -693,6 +693,14 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 ' (capture-line)  1 (hook!)
 ' (capture-reset) 2 (hook!)
 
+\ ===== Interactive line editor (REPL input hook, slot 3) =====
+\ Engaged only when stdin is an interactive terminal (main.s gates on isatty);
+\ piped/redirected input falls back to the asm forth_accept. Step 1 is a
+\ pass-through to ACCEPT that proves the hook path; later steps add cursor
+\ editing and history.
+: (edit-line) ( c-addr max -- count )  accept ;
+' (edit-line)  3 (hook!)
+
 \ ===== Help system: docs browser (man / topics / apropos) =====
 \ Reads the docs/*.md files in the colon-separated directories named by
 \ BASICFORTH_DOCS. Directory listing uses (getdents); files are read on demand.
