@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### `version` word and `-v` / `--version` flag
+- `basicforth -v` (or `--version`) prints the version/banner string to stdout
+  and exits 0, before any startup work. Unlike the interactive startup banner,
+  it is **not** gated on a tty, so `basicforth --version | cat` still prints.
+- New Forth word `version ( -- )` prints the same banner string at the REPL,
+  backed by a new `(version-str) ( -- c-addr u )` primitive so the text always
+  matches the build. The startup banner (shown only when entering the
+  interactive REPL on a terminal) is unchanged.
+
 ## v0.6.0 — 2026-06-27
 
 ### `see` shows the source of any word via dictionary source-metadata

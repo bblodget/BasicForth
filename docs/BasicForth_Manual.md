@@ -201,6 +201,9 @@ Notes:
   REPL (a script ending in `bye`/`bye-code` exits first) and only when stdout
   is a terminal, so a script run as a utility produces clean output whether its
   output goes to a terminal, a pipe, or a file.
+- `basicforth -v` (or `--version`) prints the version/banner string and exits
+  immediately. Unlike the startup banner it is not gated on a terminal, so it
+  works through a pipe. At the REPL, the `version` word prints the same string.
 
 ### Command-Line Arguments
 

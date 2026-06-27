@@ -32,6 +32,29 @@ _start:
     mov %rax, start_argv1(%rip)
 .Lno_argv1:
 
+    # -v / --version: print the version string to stdout and exit 0, before any
+    # startup work. An explicit request, so it is NOT gated on isatty (unlike the
+    # banner) — `basicforth --version | cat` still prints.
+    cmpq $2, start_argc(%rip)
+    jl .Lno_version_flag
+    mov start_argv1(%rip), %rdi
+    lea opt_v(%rip), %rsi
+    call cstr_eq
+    test %rax, %rax
+    jnz .Lprint_version
+    mov start_argv1(%rip), %rdi
+    lea opt_version(%rip), %rsi
+    call cstr_eq
+    test %rax, %rax
+    jz .Lno_version_flag
+.Lprint_version:
+    lea version_str(%rip), %rsi
+    mov $version_len, %rdx
+    call platform_write             # stdout
+    xor %edi, %edi                  # exit status 0
+    jmp platform_exit
+.Lno_version_flag:
+
     # Walk envp to find BASICFORTH_PATH=
     mov start_argc(%rip), %rcx
     lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
@@ -146,7 +169,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_find_meta(%rip), %r12  # LATEST (head of the built-in dictionary chain)
+    lea dict_version_str(%rip), %r12 # LATEST (head of the built-in dictionary chain)
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -377,6 +400,37 @@ repl_bye:
     mov $1, %rdi
     jmp platform_exit
 
+# cstr_eq ( RDI=a RSI=b -- RAX=1 if equal else 0 ) — compare null-terminated
+# strings byte for byte. Used to recognize the -v / --version option.
+cstr_eq:
+.Lce_loop:
+    movzbl (%rdi), %eax
+    movzbl (%rsi), %ecx
+    cmpb %cl, %al
+    jne .Lce_ne
+    testb %al, %al
+    jz .Lce_eq                      # both hit NUL at the same spot → equal
+    inc %rdi
+    inc %rsi
+    jmp .Lce_loop
+.Lce_eq:
+    mov $1, %eax
+    ret
+.Lce_ne:
+    xor %eax, %eax
+    ret
+
+# (version-str) ( -- c-addr u ) — push the version/banner string. Backs the
+# Forth `version` word; defined here so it can see version_str/version_len.
+.global forth_version_str
+forth_version_str:
+    lea version_str(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # c-addr
+    sub $CELL, %r15
+    movq $version_len, (%r15)       # u
+    ret
+
 # ---------- Error Handlers ----------
 # Stack underflow/overflow are caught by guard pages (SIGSEGV handler
 # in platform_linux.s). Only dict_full remains as an explicit handler.
@@ -422,6 +476,8 @@ sess_prefix:    .ascii "BASICFORTH_SESSION="
 .equ sess_prefix_len, . - sess_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
+opt_v:          .asciz "-v"
+opt_version:    .asciz "--version"
 
 .data
 .align 8

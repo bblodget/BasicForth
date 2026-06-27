@@ -252,3 +252,18 @@ dict_full:
 .global repl_loop
 repl_loop:
     ret
+
+# (version-str) lives in main.s (needs version.inc); stub it for the unit-test
+# link. Pushes a fixed test string so the data-stack discipline stays correct.
+.data
+hv_str: .ascii "BasicForth (test)\n"
+.equ hv_len, . - hv_str
+.text
+.global forth_version_str
+forth_version_str:
+    lea hv_str(%rip), %rax
+    sub $8, %r15
+    mov %rax, (%r15)
+    sub $8, %r15
+    movq $hv_len, (%r15)
+    ret
