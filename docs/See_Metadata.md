@@ -218,9 +218,12 @@ because it revises the earlier "heap" wording.
    tests added (`see` a `core.fs` word, a primitive label, a custom-defining-word
    word loaded from `session.fs`) and the stale "no source captured" test updated
    to the new primitive label. 408 integration green both arches.
-5. **(Optional, later)** Retire `(index-seeded)` and the seeded capture path now
-   that file metadata covers those words (it still runs but `see` no longer
-   relies on it for file-loaded words).
+5. **[DONE] Retired the seeded text-parser.** Removed `(index-seeded)` and its
+   ~20 helper words (the comment/string-aware `(itoken)`/`(tok=)`/`(defining?)`/
+   … parser) plus the `(seed-pending)` trigger, since file metadata now covers
+   `session.fs`/file-loaded words. The interactive capture path
+   (`(dir)`/`(log)`/`(capture-line)`) stays for REPL-typed words. Reclaimed
+   ~2.4 KB of dictionary; all seeded-`see` tests still green on both arches.
 
 ## Risks / notes
 

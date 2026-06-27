@@ -21,8 +21,10 @@
   arena is also enlarged 64 KB → 256 KB. See docs/See.md and docs/See_Metadata.md.
 
 ### `see` now covers definitions loaded from `session.fs`
-*(Superseded by the source-metadata `see` above; `(index-seeded)` is retained
-but is no longer what `see` relies on for file-loaded words.)*
+*(Superseded by the source-metadata `see` above. The interim text-parsing
+indexer — `(index-seeded)` and its ~20 helper words — has now been removed; `see`
+relies entirely on the per-word file metadata for `session.fs`/file-loaded words.
+The interactive capture path below is unchanged.)*
 - `see` previously only showed words you defined *interactively* this session;
   words loaded from `session.fs` (at startup or by `reload`) reported *defined,
   but no source captured*. New `(index-seeded)` closes the gap: after the file
