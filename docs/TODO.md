@@ -359,11 +359,11 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
     the offending path.
   - [ ] `cd ~` → `$HOME` (optional `~` expansion via the `HOME` env var) — not
     yet done; needs HOME captured at boot.
-- [ ] `ls ( -- )` — list the current directory (← `(getdents)` / `(each-dir)`,
-    reusing the help browser's directory walk). Optional `ls <dir>` arg later.
-- [ ] `cat ( "file" -- )` — dump a file to stdout (← `open-file` / `read-file`).
-- [ ] `more` / `page ( "file" -- )` — paged file view (← the man/tutorial pager:
-    `(pg-line)`, `screen-height`).
+- [x] `ls ( "[dir]" -- )` — list a directory (current by default; optional `<dir>`
+    arg supported), one entry per line, skipping `.`/`..` (← `(getdents)`).
+- [x] `cat ( "file" -- )` — dump a file to stdout (← chunked `read-file`).
+- [x] `more ( "file" -- )` — paged file view (← the existing `page-file` pager).
+    Named `more` because `page` already means clear-screen.
 - [ ] `pushd` / `popd` / `dirs` — a small fixed-depth directory stack.
 - [ ] Integration tests + docs (a `docs/Shell_Words.md` page + a short Manual
     section). Limitation to document: `parse-word` path tokens can't contain

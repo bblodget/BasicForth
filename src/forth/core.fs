@@ -995,6 +995,50 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     2dup chdir                              ( c-addr u ior )
     if  ." cd: cannot access " type cr  else  2drop  then ;
 
+\ ls: list a directory (the current one by default), one entry per line, using
+\ the same getdents machinery as the help browser. "." and ".." are skipped.
+: (dotdir?) ( c-addr u -- f )            \ is the name "." or ".."?
+    dup 1 = if  drop c@ [char] . =  exit  then
+    dup 2 = if  drop dup c@ [char] . = swap 1+ c@ [char] . = and  exit  then
+    2drop false ;
+: ls ( "[dir]" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if  2drop s" ."  then            \ no argument -> current directory
+    r/o open-file if  drop ." ls: cannot open directory" cr exit  then  ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)        ( n )
+        dup 0> while                          ( n )
+        (gd@) +  (gd@)                         ( end ptr )
+        begin 2dup u> while                    ( end ptr )
+            dup (de-name) dup (cstr-len)       ( end ptr name namelen )
+            2dup (dotdir?) 0= if  type cr  else  2drop  then   ( end ptr )
+            dup (de-reclen) +                  ( end nextptr )
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+
+\ cat: dump a file to stdout (no paging). Reuses the pager's line buffer for
+\ chunked reads. more: page a file a screenful at a time (built on page-file).
+\ (`page` already means clear-screen, so the paged viewer is `more`.)
+: cat ( "file" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if  2drop ." usage: cat <file>" cr exit  then
+    r/o open-file if  drop ." cat: cannot open file" cr exit  then  ( fileid )
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-file   ( u2 ior )
+        0= over 0> and                       ( u2 continue? )  \ stop on error or EOF
+    while                                    ( u2 )
+        (pg-buf@) swap type
+    repeat  drop
+    r> close-file drop ;
+: more ( "file" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if  2drop ." usage: more <file>" cr exit  then
+    r/o open-file if  drop ." more: cannot open file" cr exit  then  ( fileid )
+    page-file ;
+
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.
 \ A tutorial is just a <name>.md file in the docs dirs (resolved like MAN); each

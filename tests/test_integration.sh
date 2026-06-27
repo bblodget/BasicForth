@@ -2127,6 +2127,20 @@ assert_output "cd bad path errors"     "cd /no/such/dir"                 "cd: ca
 # shell_start is not present in the input, so this can't pass on echo alone)
 assert_output "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
 
+# ls / cat / more over a temp dir with known contents (absolute paths, so the
+# binary's own CWD doesn't matter). The expected strings are file *contents* or
+# entry names, none of which appear in the echoed input line.
+fw_dir="$(mktemp -d)"
+printf 'hello\nworld\n' > "$fw_dir/greet.txt"
+mkdir "$fw_dir/sub"
+assert_output "ls lists a directory"     "ls $fw_dir"               "greet.txt"
+assert_output "ls shows subdirectories"  "ls $fw_dir"               "sub"
+assert_output "cat dumps a file"         "cat $fw_dir/greet.txt"    "world"
+assert_output "more pages a file"        "more $fw_dir/greet.txt"   "hello"
+assert_output "cat missing file errors"  "cat $fw_dir/nope.txt"     "cat: cannot open file"
+assert_output "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot open directory"
+rm -rf "$fw_dir"
+
 # =========================================================================
 section "Version"
 # =========================================================================
