@@ -1500,7 +1500,8 @@ fi
 
 # Session persistence (SAVE). Capture only runs in an interactive session, so
 # the tests force it on through a pipe with BASICFORTH_SESSION=1. session.fs is
-# written to the CWD, so each run is wrapped in a subshell that cd's to a tmpdir.
+# written to the STARTUP directory (the launch CWD), so each run is wrapped in a
+# subshell that cd's to a tmpdir before launching the binary.
 sv_dir="$(mktemp -d)"
 # The harness is invoked with a relative binary path (./basicforth) from the
 # build dir; these subshells cd elsewhere, so resolve it to an absolute command.
@@ -1587,6 +1588,15 @@ printf ': keep 1 ;\ndrop\n' > "$stuck_dir/session.fs"   # 'drop' underflows on l
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 rl_stuck=$(cat "$stuck_dir/session.fs" 2>/dev/null)
 rm -rf "$stuck_dir"
+# session.fs is pinned to the STARTUP directory: after a `cd` away, save must
+# still write to the launch dir, not the new cwd.
+pin_dir="$(mktemp -d)"
+pin_away="$(mktemp -d)"
+( cd "$pin_dir" && printf ': pinned 7 ;\ncd %s\nsave\nbye\n' "$pin_away" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+pin_home=$(cat "$pin_dir/session.fs" 2>/dev/null)
+[ -e "$pin_away/session.fs" ] && pin_away_made=yes || pin_away_made=no
+rm -rf "$pin_dir" "$pin_away"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1660,6 +1670,11 @@ if [[ "$rl_stuck" == *"persisted"* ]]; then
     printf "  ${GREEN}PASS${NC}  a faulting reload does not leave skip-capture stuck\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
+fi
+if [[ "$pin_home" == *": pinned 7 ;"* && "$pin_away_made" == "no" ]]; then
+    printf "  ${GREEN}PASS${NC}  save pins session.fs to the startup dir across a cd\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  session.fs not pinned to startup dir after cd\n    home: %q / away-made: %s\n" "$pin_home" "$pin_away_made"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The

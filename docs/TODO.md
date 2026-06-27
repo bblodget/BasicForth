@@ -344,19 +344,21 @@ exists; only `chdir` is a new syscall. See `docs/WildIdeas.md` for the full
 write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
 `touch`) are deferred as a separate, riskier class.
 
-- [ ] `chdir` platform primitive
-  - New syscall wrapper: `SYS_chdir` (80 on x86-64, 49 on ARM64). Mirror both
-    arches; add `platform_chdir` stubs to `test_helper_*.s` if a core.s word
-    references it.
-- [ ] Capture the startup directory at boot
-  - At `_start`, `getcwd` into a buffer (we already `getcwd` for SEE metadata)
-    and keep the absolute startup path. Pin `session.fs` writes to it so
-    persistence never wanders after a `cd`.
-- [ ] `pwd ( -- )` — print the current working directory (← `platform_getcwd`).
-- [ ] `cd ( "path" -- )` — `chdir` to the parsed token.
-  - `cd` with no argument → return to the startup directory (session home base;
-    note this differs from a shell's bare `cd` → `$HOME`).
-  - `cd ~` → `$HOME` (optional `~` expansion via the `HOME` env var).
+- [x] `chdir` platform primitive
+  - New syscall wrapper: `SYS_chdir` (80 on x86-64, 49 on ARM64), stubbed in
+    both `test_helper_*.s`. Forth bridge `chdir ( c-addr u -- ior )` copies the
+    path to a NUL-terminated buffer (over-long → `-ENAMETOOLONG`).
+- [x] Capture the startup directory at boot
+  - `_start` `getcwd`s into `startup_dir` before `core.fs` loads. `(startup-dir)`
+    exposes it. `session.fs` is now pinned to it: `core.fs` builds absolute
+    `<startup>/session.fs(.new)` for seed-log / SAVE / RELOAD, so persistence
+    never wanders after a `cd`. Regression test guards it.
+- [x] `pwd ( -- )` — prints the cwd (← new `(cwd)` primitive over `getcwd`).
+- [x] `cd ( "path" -- )` — `chdir` to the parsed token.
+  - `cd` with no argument → returns to the startup directory; a failed cd reports
+    the offending path.
+  - [ ] `cd ~` → `$HOME` (optional `~` expansion via the `HOME` env var) — not
+    yet done; needs HOME captured at boot.
 - [ ] `ls ( -- )` — list the current directory (← `(getdents)` / `(each-dir)`,
     reusing the help browser's directory walk). Optional `ls <dir>` arg later.
 - [ ] `cat ( "file" -- )` — dump a file to stdout (← `open-file` / `read-file`).

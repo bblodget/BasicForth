@@ -533,13 +533,33 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ +!                  \ log.len += u2
     again ;
 
+\ Absolute session-file paths, pinned to the startup directory so SAVE/RELOAD
+\ always use the launch directory regardless of any later `cd`. Two separate
+\ buffers so "<startup>/session.fs.new" and "<startup>/session.fs" can coexist
+\ on the stack for the atomic rename in SAVE.
+create (sess-a) 1088 allot
+create (sess-b) 1088 allot
+variable (sp-end)                        \ write pointer while building a path
+: (sp-add) ( c-addr u -- )               \ append u bytes at (sp-end)
+    dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
+    r> (sp-end) +! ;
+: (sess-build) ( buf c-addr u -- path plen )  \ build "<startup>/<name>" into buf
+    >r >r                               ( buf )   \ R: u c-addr (the name)
+    dup (sp-end) !                       \ write pointer := buf
+    (startup-dir) (sp-add)               \ startup directory
+    s" /" (sp-add)                       \ separator
+    r> r> (sp-add)                       \ the name
+    (sp-end) @ over - ;                  ( buf len )
+: (session-path) ( -- c-addr u )  (sess-a) s" session.fs"     (sess-build) ;
+: (session-new)  ( -- c-addr u )  (sess-b) s" session.fs.new" (sess-build) ;
+
 \ (seed-log): reset the log and load the current session.fs's bytes into it, so
 \ SAVE rewrites the file's content (plus later additions) rather than drifting
 \ from a hand-edited file. No-op (empty log) when session.fs is absent.
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
-    s" session.fs" r/o open-file        ( fileid ior )
+    (session-path) r/o open-file        ( fileid ior )
     if drop exit then                   \ no session.fs → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
@@ -559,14 +579,14 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ an existing session.fs.
 : save ( -- )
     (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    s" session.fs.new" w/o create-file  ( fileid ior )
+    (session-new) w/o create-file       ( fileid ior )
     abort" save: cannot open session.fs.new"   ( fileid )
     >r
     (log) @ (log) cell+ @ r@ write-file ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
-    s" session.fs.new" s" session.fs" rename-file
+    (session-new) (session-path) rename-file
     abort" save: rename error"
     ." saved to session.fs" cr ;
 
@@ -591,12 +611,12 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     \ Verify session.fs is readable BEFORE destroying the live session — a
     \ missing or unreadable file must not forget the session or wipe the log
     \ (forth_included silently treats a missing file as a clean no-op).
-    s" session.fs" r/o open-file        ( fileid ior )
+    (session-path) r/o open-file        ( fileid ior )
     if  drop ." reload: cannot read session.fs" cr  exit  then
     close-file drop
     true (skip-capture) !
     -session
-    s" session.fs" (included?)          ( ior )
+    (session-path) (included?)          ( ior )
     if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
     (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
 
