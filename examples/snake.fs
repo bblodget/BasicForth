@@ -103,14 +103,17 @@ variable food-ok               \ did update-food find an empty cell?
             fx @ fy @ screen@ bl = food-ok !
         then
     loop
-    \ ...then fall back to a scan for any empty cell if the board is crowded...
+    \ ...then fall back to a scan for any empty cell if the board is crowded.
+    \ Only even columns 2..WIDTH-4 are scanned: the snake moves in x by +-2 from
+    \ an even start, so odd columns (and the outer ones) are unreachable and must
+    \ not receive food.
     food-ok @ 0= if
         HEIGHT 1- 1 do
-            WIDTH 1- 1 do
+            WIDTH 2 - 2 do
                 food-ok @ 0= if
                     i j screen@ bl = if  i fx !  j fy !  true food-ok !  then
                 then
-            loop
+            2 +loop
         loop
     then
     \ ...and if the board is completely full, the player has won: end the game.

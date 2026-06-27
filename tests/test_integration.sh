@@ -892,14 +892,29 @@ sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\n
 # be eaten without being noticed. Occupy the top half, place food 300 times, and
 # confirm every placement lands on an empty cell.
 t0=$(date +%s.%N)
-sf_food=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\nvariable bad 0 bad !\n: occupy HEIGHT 2 / 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\noccupy\n: chk 300 0 do update-food fx @ fy @ screen@ bl <> if 1 bad +! then loop ;\nchk\n.( FOODBAD=) bad @ . cr\nbye\n' "$REPO_ROOT" \
+sf_food=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\nvariable bad 0 bad !\n: occupy HEIGHT 2 / 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\noccupy\n: chk 300 0 do update-food fx @ fy @ screen@ bl <> if 1 bad +! then fx @ 2 mod if 1 bad +! then loop ;\nchk\n.( FOODBAD=) bad @ . cr\nbye\n' "$REPO_ROOT" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs food placement"
 if [[ "$sf_food" == *"FOODBAD=0"* ]]; then
-    printf "  ${GREEN}PASS${NC}  examples/snake.fs food never spawns on the snake\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs food spawns only on empty, even (reachable) cells\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  examples/snake.fs food never spawns on the snake\n"
+    printf "  ${RED}FAIL${NC}  examples/snake.fs food spawns only on empty, even (reachable) cells\n"
     printf "    Expected: FOODBAD=0\n    Got:      %s\n" "$(echo "$sf_food" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
+fi
+
+# ...and the fallback scan must not drop food on an unreachable (odd) column:
+# the snake only ever lands on even columns. Occupy every reachable even cell so
+# only odd columns remain free; update-food must end the game (no reachable cell)
+# rather than place food where the snake can never go.
+t0=$(date +%s.%N)
+sf_odd=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\n: occE HEIGHT 1- 1 do WIDTH 1- 2 do [char] o i j screen! 2 +loop loop ;\noccE\nfalse done !\nupdate-food\n.( ODDDONE=) done @ . .( FXPAR=) fx @ 2 mod . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs unreachable food"
+if [[ "$sf_odd" == *"ODDDONE=-1"* ]] && [[ "$sf_odd" == *"FXPAR=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs never places food on unreachable columns\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs never places food on unreachable columns\n"
+    printf "    Expected: ODDDONE=-1 and FXPAR=0\n    Got:      %s\n" "$(echo "$sf_odd" | tr -dc '[:print:]' | tail -c 60)"; ((failed++))
 fi
 
 # ...and a completely full board must not hang update-food: it gives up the
