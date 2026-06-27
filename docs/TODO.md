@@ -364,7 +364,9 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
 - [x] `cat ( "file" -- )` — dump a file to stdout (← chunked `read-file`).
 - [x] `more ( "file" -- )` — paged file view (← the existing `page-file` pager).
     Named `more` because `page` already means clear-screen.
-- [ ] `pushd` / `popd` / `dirs` — a small fixed-depth directory stack.
+- [x] `pushd` / `popd` / `dirs` — a fixed-depth (16) directory stack. `pushd <dir>`
+    saves the current dir (absolute) and cd's; `popd` returns to it; `dirs` lists
+    current + saved (top first). Stack buffer is heap-allocated lazily.
 - [ ] Integration tests + docs (a `docs/Shell_Words.md` page + a short Manual
     section). Limitation to document: `parse-word` path tokens can't contain
     spaces in v1.

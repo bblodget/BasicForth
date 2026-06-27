@@ -1053,6 +1053,44 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     \ `more` doesn't return " ok". Safe here: top-level word, no fd held.
     page-file if  abort  then ;
 
+\ Directory stack: pushd saves the current dir (absolute) and cd's to a new one;
+\ popd returns to the most recently saved dir; dirs lists current + saved (top
+\ first). Saved paths are absolute, so popd is correct across intervening cds.
+16   constant (ds-max)                     \ max directory-stack depth
+1024 constant (ds-slot)                    \ max bytes per saved path
+variable (ds-buf)                          \ heap: (ds-max)*(ds-slot) path bytes (lazy)
+create  (ds-len) (ds-max) cells allot      \ length of each saved path
+variable (ds-n)                            \ number of saved entries
+: (ds-buf@) ( -- a )
+    (ds-buf) @ ?dup if exit then
+    (ds-max) (ds-slot) * allocate abort" pushd: out of memory" dup (ds-buf) ! ;
+: (ds-slot-at) ( i -- a )  (ds-slot) * (ds-buf@) + ;
+: (ds-len-at)  ( i -- a )  cells (ds-len) + ;
+: (ds-store) ( c-addr u i -- )             \ save path (c-addr u) into slot i
+    >r
+    dup r@ (ds-len-at) !                    \ (ds-len)[i] := u
+    r> (ds-slot-at)  swap cmove ;           \ copy the bytes into slot i
+: (ds-fetch) ( i -- c-addr u )  dup (ds-slot-at) swap (ds-len-at) @ ;
+: pushd ( "dir" -- )
+    parse-word                              ( c-addr u )
+    dup 0= if  2drop ." usage: pushd <dir>" cr abort  then
+    (ds-n) @ (ds-max) < 0= if  2drop ." pushd: stack full" cr abort  then
+    \ save the current dir BEFORE cd (into slot n; commit n only if cd succeeds)
+    (cwd) dup (ds-slot) < 0= if             ( c-addr u cwd-a cwd-u )
+        2drop 2drop ." pushd: path too long" cr abort  then
+    (ds-n) @ (ds-store)                     ( c-addr u )
+    2dup chdir if  ." pushd: cannot access " type cr abort  then  ( c-addr u )
+    2drop  1 (ds-n) +! ;
+: popd ( -- )
+    (ds-n) @ 0= if  ." popd: directory stack empty" cr abort  then
+    (ds-n) @ 1- dup (ds-n) !                ( idx )   \ pop the top entry
+    (ds-fetch) chdir if  ." popd: cannot restore directory" cr abort  then ;
+: dirs ( -- )                              \ current dir, then saved dirs top-first
+    (cwd) type
+    (ds-n) @ 0 ?do
+        space  (ds-n) @ 1- i - (ds-fetch) type
+    loop  cr ;
+
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.
 \ A tutorial is just a <name>.md file in the docs dirs (resolved like MAN); each

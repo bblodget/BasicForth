@@ -2185,6 +2185,37 @@ else
     printf "  ${RED}FAIL${NC}  success path lost its \" ok\"\n    Got: %q\n" "$ab_ok"; ((failed++))
 fi
 
+# Directory stack: pushd <dir> records the current dir (absolute) and cd's there;
+# popd returns to it; dirs lists current + saved. shell_start is the startup dir
+# and never appears in the echoed input, so checking it proves the stack really
+# recorded/restored the old dir (not an echo artifact).
+ps_dir="$(mktemp -d)"
+ps_dirs=$(run_forth $'pushd '"$ps_dir"$'\ndirs')        # dirs must list the saved startup dir
+ps_pop=$(run_forth $'pushd '"$ps_dir"$'\npopd\npwd')    # popd returns to the startup dir
+ps_empty=$(run_forth "popd")                            # popd on empty stack -> abort
+ps_bad=$(run_forth "pushd /no/such/dir")                # pushd missing dir -> abort
+rm -rf "$ps_dir"
+if [[ "$ps_dirs" == *"$shell_start"* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd records dir, dirs lists it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  dirs did not list the pushed dir\n    Got: %q\n" "$ps_dirs"; ((failed++))
+fi
+if [[ "$ps_pop" == *"$shell_start"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd returns to the pushed-from dir\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd did not return home\n    Got: %q\n" "$ps_pop"; ((failed++))
+fi
+if [[ "$ps_empty" == *"directory stack empty"* && "$ps_empty" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd on empty stack aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd on empty stack\n    Got: %q\n" "$ps_empty"; ((failed++))
+fi
+if [[ "$ps_bad" == *"pushd: cannot access"* && "$ps_bad" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd to a missing dir aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pushd to a missing dir\n    Got: %q\n" "$ps_bad"; ((failed++))
+fi
+
 # =========================================================================
 section "Version"
 # =========================================================================
