@@ -265,6 +265,20 @@ completed. See Planning.md for high-level vision and design decisions.
   directory enumeration) and `(docs-path)` (exposes `BASICFORTH_DOCS`); getdents
   and pager buffers are heap-allocated. See Help_System.md. (Per-word
   `help <word>` is deferred to a later "Part A" — see WildIdeas.md.)
+- [x] **Interactive tutorial (`tutorial` / `next` / `back`).** Walks a
+  `BASICFORTH_DOCS` Markdown file one `## `-heading step at a time, returning to
+  the REPL after each step so the reader can type the examples. Reuses the
+  docs-browser machinery (file resolution, `read-line`, the pager line-printer).
+  See Tutorial_System.md.
+- [x] **First tutorial content: "Snake".** `docs/Tutorial/Snake.md` builds a
+  playable terminal Snake game step by step, exercising nearly the whole
+  language. Finished program in `examples/snake-mini.fs` (load-tested in the
+  integration suite). Tutorials are self-contained subjects with descriptive,
+  prefix-free names (`tutorial Snake`).
+- [x] **Dictionary space raised 64 KB → 256 KB** (`DICT_SPACE_SIZE`, both arches,
+  BSS only). The shared dictionary was nearly full once large examples
+  (`examples/sort.fs`) loaded alongside `core.fs`; `unused` now reports ~226 KB
+  free.
 
 ---
 

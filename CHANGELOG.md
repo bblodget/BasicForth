@@ -20,6 +20,49 @@
   `(find-meta)`, `(source-path)`; new platform call `getcwd`. The dictionary
   arena is also enlarged 64 KB → 256 KB. See docs/See.md and docs/See_Metadata.md.
 
+### Fixed: `examples/snake.fs` could spawn food on the snake
+- The fuller Snake example placed food at a random cell with no body check. Its
+  collision test is screen-based, so food landing on the just-vacated tail could
+  be eaten without the overlap being noticed. `update-food` now places food on an
+  empty cell, so food never spawns on the snake or border. (The tutorial's
+  `examples/snake-mini.fs` handles the same case in its collision check.)
+- The placement search is bounded — a capped number of random tries, then a
+  scan for an empty cell, and if no reachable cell is free the game ends (you
+  won) — so it can never spin forever on a crowded/small board. Both the random
+  and scan paths cover exactly the reachable cells — even columns `2..WIDTH-2`
+  (the snake moves in x by ±2 from an even start; `WIDTH-1` is the border) and
+  rows `1..HEIGHT-2` — so food is never stranded on an unreachable column nor
+  withheld from the last reachable one.
+
+### Added: "Snake" tutorial — build a game step by step
+- `docs/Tutorial/Snake.md`, the first interactive tutorial: walked with
+  `tutorial Snake`, it builds a playable terminal Snake game one word at a time,
+  touching nearly the whole language (stack, defining words, variables,
+  constants, arrays/`create`+`allot`, `if`/`case`, `do`/`begin` loops, the
+  keyboard, `at-xy` drawing, `ms` timing, `rnd`). Each step ends at the REPL so
+  the reader types and tests the piece they just learned.
+- The finished program ships as `examples/snake-mini.fs` (the tutorial's answer
+  key; a fuller version remains in `examples/snake.fs`). An integration test
+  loads it headlessly and verifies the eat-and-grow logic.
+- Replaces the thin `Getting-Started` pilot — the starting tutorial now builds
+  toward a real project. Tutorial files drop the numeric name prefix (it's
+  `tutorial Snake`, not `01-…`); each tutorial is a self-contained subject.
+
+### Added: interactive tutorial (`tutorial` / `next` / `back`)
+- `tutorial <name>` walks one of the `BASICFORTH_DOCS` Markdown files **one step
+  at a time**, returning to the REPL after each step so you can type the examples
+  before advancing with `next` (or reviewing with `back`). Steps are split on the
+  file's `## ` headings — no special format, and the same file still reads under
+  `man`. The name resolves case-insensitively across the docs sections, exactly
+  like `man`.
+- `back` clamps at step 1; stepping past the last step prints `-- end of '<name>'
+  --` and stays on the last step. Typing `next`/`back` before starting, or naming
+  a non-existent tutorial, reports the problem instead of failing silently.
+- Built on the existing docs-browser machinery (`(each-dir)`, the `(getdents)`
+  scan, `(build-path)`, `read-line`, and the pager line-printer), so an over-long
+  step auto-pages. New internal words `(tut-go)`, `(print-step)`, `(tut-in)`,
+  `(tut-head?)`. See `docs/Tutorial_System.md`.
+
 ### `see` now covers definitions loaded from `session.fs`
 *(Superseded by the source-metadata `see` above. The interim text-parsing
 indexer — `(index-seeded)` and its ~20 helper words — has now been removed; `see`

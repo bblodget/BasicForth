@@ -846,6 +846,105 @@ else
     ((failed++))
 fi
 
+# examples/snake-mini.fs (the Snake tutorial's finished program) must load and
+# its logic must work headlessly: start the snake, drop food one cell ahead of
+# the head, advance one frame, and confirm the snake ate and grew (len 3 -> 4).
+t0=$(date +%s.%N)
+sm_out=$(printf 'include %s/examples/snake-mini.fs\ninit-snake\n12 fx ! 8 fy !\ntick\n.( SNAKELEN=) len @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0')
+t1=$(date +%s.%N)
+ms=$(elapsed_ms "$t0" "$t1")
+update_slowest "$ms" "examples/snake-mini.fs"
+if [[ "$sm_out" == *"SNAKELEN=4"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake-mini.fs loads and grows on food\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake-mini.fs loads and grows on food\n"
+    printf "    Expected: SNAKELEN=4\n"
+    printf "    Got:      %s\n" "$(echo "$sm_out" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Snake collision rules (regression guard). Build a length-4 snake coiled in a
+# 2x2 block: tail at (5,5), head at (5,6) pointing up toward the tail.
+#  - moving up onto the vacating tail cell is LEGAL (no game over)
+#  - but EATING onto that tail cell (food there) is a real overlap -> game over
+#  - running into a non-tail body segment is game over
+sm_setup="include $REPO_ROOT/examples/snake-mini.fs\ninit-snake\n4 len ! 3 hd !\n5 0 bx! 5 0 by!\n6 1 bx! 5 1 by!\n6 2 bx! 6 2 by!\n5 3 bx! 6 3 by!\n5 hx ! 6 hy !\n"
+sm_collide() {  # desc  extra-input  expected-OVER
+    local out
+    out=$(printf "${sm_setup}$2.( OVER=) gameover @ . cr\nbye\n" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+    if [[ "$out" == *"OVER=$3"* ]]; then
+        printf "  ${GREEN}PASS${NC}  snake collision: %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snake collision: %s\n" "$1"
+        printf "    Expected: OVER=%s\n    Got:      %s\n" "$3" "$(echo "$out" | tr -dc '[:print:]' | tail -c 50)"
+        ((failed++))
+    fi
+}
+sm_collide "follow the vacating tail is legal"  '0 dx ! -1 dy !\n1 fx ! 1 fy !\ntick\n'  "0"
+sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\ntick\n'  "-1"
+sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
+
+# examples/snake.fs (the fuller version) must never spawn food on the snake or
+# border: its collision is screen-based, so food on the just-vacated tail could
+# be eaten without being noticed. Occupy the top half, place food 300 times, and
+# confirm every placement lands on an empty cell.
+t0=$(date +%s.%N)
+sf_food=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\nvariable bad 0 bad !\n: occupy HEIGHT 2 / 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\noccupy\n: chk 300 0 do update-food fx @ fy @ screen@ bl <> if 1 bad +! then fx @ 2 mod if 1 bad +! then loop ;\nchk\n.( FOODBAD=) bad @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs food placement"
+if [[ "$sf_food" == *"FOODBAD=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs food spawns only on empty, even (reachable) cells\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs food spawns only on empty, even (reachable) cells\n"
+    printf "    Expected: FOODBAD=0\n    Got:      %s\n" "$(echo "$sf_food" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
+fi
+
+# ...and the fallback scan must not drop food on an unreachable (odd) column:
+# the snake only ever lands on even columns. Occupy every reachable even cell so
+# only odd columns remain free; update-food must end the game (no reachable cell)
+# rather than place food where the snake can never go.
+t0=$(date +%s.%N)
+sf_odd=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\n: occE HEIGHT 1- 1 do WIDTH 1- 2 do [char] o i j screen! 2 +loop loop ;\noccE\nfalse done !\nupdate-food\n.( ODDDONE=) done @ . .( FXPAR=) fx @ 2 mod . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs unreachable food"
+if [[ "$sf_odd" == *"ODDDONE=-1"* ]] && [[ "$sf_odd" == *"FXPAR=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs never places food on unreachable columns\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs never places food on unreachable columns\n"
+    printf "    Expected: ODDDONE=-1 and FXPAR=0\n    Got:      %s\n" "$(echo "$sf_odd" | tr -dc '[:print:]' | tail -c 60)"; ((failed++))
+fi
+
+# ...and conversely the last reachable column (even WIDTH-2, just inside the
+# right border) must still receive food. Occupy every reachable even column
+# except WIDTH-2; food must land there rather than the game giving up.
+t0=$(date +%s.%N)
+sf_edge=$(printf 'include %s/examples/snake.fs\nreset-screen draw-border\n: occ HEIGHT 1- 1 do WIDTH 2 - 2 do [char] o i j screen! 2 +loop loop ;\nocc\nfalse done ! update-food\n.( EDGEOK=) fx @ WIDTH 2 - = . .( EDGEDONE=) done @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs edge column"
+if [[ "$sf_edge" == *"EDGEOK=-1"* ]] && [[ "$sf_edge" == *"EDGEDONE=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs uses the last reachable column (WIDTH-2)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs uses the last reachable column (WIDTH-2)\n"
+    printf "    Expected: EDGEOK=-1 and EDGEDONE=0\n    Got:      %s\n" "$(echo "$sf_edge" | tr -dc '[:print:]' | tail -c 60)"; ((failed++))
+fi
+
+# ...and a completely full board must not hang update-food: it gives up the
+# random search, scans, finds nothing, and ends the game (you filled the board).
+# If it looped forever the timeout would kill it and FULLDONE would be missing.
+t0=$(date +%s.%N)
+sf_full=$(printf 'include %s/examples/snake.fs\nreset-screen\n: fill HEIGHT 0 do WIDTH 0 do [char] o i j screen! loop loop ;\nfill\nfalse done !\nupdate-food\n.( FULLDONE=) done @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/snake.fs full board"
+if [[ "$sf_full" == *"FULLDONE=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/snake.fs full board ends instead of hanging\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/snake.fs full board ends instead of hanging\n"
+    printf "    Expected: FULLDONE=-1\n    Got:      %s\n" "$(echo "$sf_full" | tr -dc '[:print:]' | tail -c 50)"; ((failed++))
+fi
+
 # BASICFORTH_PATH multi-directory: match in a later segment (first miss skipped)
 t0=$(date +%s.%N)
 mv core.fs core.fs.bak 2>/dev/null
@@ -1918,6 +2017,69 @@ rm -rf "$sort_base"
 rm -rf "$sec_base"
 
 rm -rf "$docs_dir"
+
+# =========================================================================
+section "Interactive tutorial (tutorial / next / back)"
+# =========================================================================
+
+# A tutorial file is just a docs .md walked one "## " step at a time. Step 1 is
+# the title + intro before the first heading; each "## " starts a new step.
+tut_dir="$(mktemp -d)"
+printf '# Lesson One\nintro line about FOO\n## Step Two\ncontent TWO here\n## Step Three\ncontent THREE here\n' \
+    > "$tut_dir/Lesson.md"
+
+# tut_check NAME INPUT EXPECTED — run with BASICFORTH_DOCS pointed at tut_dir
+tut_check() {
+    local name="$1" input="$2" expected="$3"
+    local output
+    output=$(printf '%s\n' "$input" | BASICFORTH_PATH="$FORTH_LIB" \
+        BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+    if [[ "$output" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:    %s\n" "$input"
+        printf "    Expected: %s\n" "$expected"
+        printf "    Got:      %s\n" "$(echo "$output" | head -6)"; ((failed++))
+    fi
+}
+
+tut_check "tutorial shows step 1"          "tutorial Lesson"                 "intro line about FOO"
+tut_check "tutorial step 1 footer"         "tutorial Lesson"                 "step 1"
+tut_check "tutorial name is case-insens."  "tutorial lesson"                 "intro line about FOO"
+tut_check "next advances to step 2"        $'tutorial Lesson\nnext'          "content TWO here"
+tut_check "next twice reaches step 3"      $'tutorial Lesson\nnext\nnext'    "content THREE here"
+tut_check "next past end reports end"      $'tutorial Lesson\nnext\nnext\nnext' "end of 'Lesson'"
+tut_check "back returns to previous step"  $'tutorial Lesson\nnext\nback'    "intro line about FOO"
+# A heading line marks a boundary but is itself shown as that step's title
+tut_check "step heading is shown"          $'tutorial Lesson\nnext'          "## Step Two"
+# After a step the REPL is live again — a following command runs normally
+tut_check "REPL live between steps"        $'tutorial Lesson\n7 8 + .'       "15"
+tut_check "next before start hints"        "next"                            "start a tutorial first"
+tut_check "back before start hints"        "back"                            "start a tutorial first"
+tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+
+# back at step 1 stays at step 1 (does not underflow)
+tut_b1=$(printf 'tutorial Lesson\nback\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_b1" == *"step 1"* ]] && [[ "$tut_b1" != *"step 0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  back at step 1 stays at step 1\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  back at step 1 stays at step 1\n"
+    printf "    Got:      %s\n" "$(echo "$tut_b1" | head -4)"; ((failed++))
+fi
+
+# Unset BASICFORTH_DOCS — tutorial reports it gracefully
+tut_unset=$(printf 'tutorial Lesson\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    env -u BASICFORTH_DOCS timeout 2 $FORTH 2>&1)
+if [[ "$tut_unset" == *"BASICFORTH_DOCS not set"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorial with no BASICFORTH_DOCS\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorial with no BASICFORTH_DOCS\n"
+    printf "    Got:      %s\n" "$(echo "$tut_unset" | head -3)"; ((failed++))
+fi
+
+rm -rf "$tut_dir"
 
 # =========================================================================
 section "BYE"

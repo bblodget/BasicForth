@@ -956,3 +956,97 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     (akn) ! (akw) !
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
     ['] (apropos-in) (each-dir) ;
+
+\ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
+\ REPL after each step so you can type the examples, then  next / back  to move.
+\ A tutorial is just a <name>.md file in the docs dirs (resolved like MAN); each
+\ level-2 heading "## ..." starts a new step, and the title + intro before the
+\ first heading is step 1.
+80 constant (tut-max)
+create (tut-name) (tut-max) allot         \ stable copy of the current tutorial name
+variable (tut-nlen)                        \ its length (0 = no tutorial started)
+variable (tut-step)                        \ current step (1-based)
+variable (tut-found)                       \ matching file located this pass?
+variable (tut-existed)                     \ requested step existed in the file?
+variable (ts-want)                         \ step (print-step) should print
+variable (ts-cur)                          \ step counter while scanning
+variable (ts-any)                          \ printed any line of the wanted step?
+: (tut-head?) ( c-addr u -- f )            \ does the line begin with "## "?
+    3 u< if drop false exit then
+    dup c@ [char] # =
+    over 1+ c@ [char] # = and
+    swap 2 + c@ bl = and ;
+: (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
+    0 (pg-row) ! false (pg-quit) !
+    1 (ts-cur) !  false (ts-any) !
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-line  ( u flag ior )
+        if  2drop  r> close-file drop (ts-any) @ exit  then     \ I/O error
+        if                                 ( u )                \ got a line
+            (pg-buf@) over (tut-head?) if  \ heading: step boundary
+                1 (ts-cur) +!
+                (ts-cur) @ (ts-want) @ u> if
+                    drop r> close-file drop (ts-any) @ exit
+                then
+            then
+            (ts-cur) @ (ts-want) @ = if
+                (pg-buf@) swap (pg-line) true (ts-any) !
+            else drop then
+            (pg-quit) @ if r> close-file drop (ts-any) @ exit then
+        else  drop  r> close-file drop (ts-any) @ exit  then    \ EOF
+    again ;
+: (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
+    (tut-found) @ if 2drop exit then
+    (md-dirn) ! (md-dir) !
+    (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)           ( n )
+        dup 0> while
+        (gd@) + (gd@)                           ( end ptr )
+        begin 2dup u> while                     ( end ptr )
+            dup (de-name) dup (cstr-len)        ( end ptr name namelen )
+            2dup (ends-md?) if
+                2dup 3 - (tut-name) (tut-nlen) @ (ci=) if
+                    true (tut-found) !
+                    (build-path) r/o open-file  ( end ptr fileid ior )
+                    if drop else (print-step) (tut-existed) ! then
+                    2drop r> close-file drop exit
+                then
+            then
+            2drop  dup (de-reclen) +
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+: (tut-go) ( -- )                          \ show (tut-step) of the current tutorial
+    false (tut-found) !  false (tut-existed) !
+    (tut-step) @ (ts-want) !
+    (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
+    ['] (tut-in) (each-dir)
+    (tut-found) @ 0= if
+        ." no tutorial named " (tut-name) (tut-nlen) @ type ."  (try TOPICS)" cr
+        0 (tut-nlen) ! exit
+    then
+    (tut-existed) @ 0= if
+        ." -- end of '" (tut-name) (tut-nlen) @ type ." ' --" cr
+        ." Type  back  to review, or  tutorial <name>  to start another." cr
+        (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
+        exit
+    then
+    cr ." [ next = continue   back = previous   step " (tut-step) @ . ." ]" cr ;
+: tutorial ( "name" -- )
+    parse-word (tut-max) min                ( c-addr u )
+    dup 0= if 2drop
+        ." usage: tutorial <name>   then  next / back  to move" cr
+        topics exit
+    then
+    dup (tut-nlen) !                        ( c-addr u )
+    >r (tut-name) r> cmove
+    1 (tut-step) !  (tut-go) ;
+: next ( -- )
+    (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
+    1 (tut-step) +! (tut-go) ;
+: back ( -- )
+    (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
+    (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
