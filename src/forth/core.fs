@@ -635,6 +635,17 @@ variable (sp-end)                        \ write pointer while building a path
 variable (see-a)  variable (see-u)      \ the name SEE is searching for (for messages)
 variable (see-xt)                       \ the live word's xt (for the REPL session-log path)
 
+\ Message prefix ("see" / "edit") so the shared source helpers report under the
+\ command the user actually typed.
+variable (msg-a)  variable (msg-u)
+: (msg:) ( -- )  (msg-a) @ (msg-u) @ type ." : " ;
+
+\ Source sink: SEE types a word's source straight out; EDIT redirects it into the
+\ preload buffer instead. Both go through (see-emit) ( c-addr u -- ).
+variable (see-emit-xt)
+: (see-emit) ( c-addr u -- )  (see-emit-xt) @ execute ;
+' type (see-emit-xt) !
+
 \ --- file-source reader: print [off, off+len) of a source file by source-id ---
 variable (sf-fid)  variable (sf-buf)
 variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
@@ -656,19 +667,19 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 : (see-file) ( off len srcid -- )
     (source-path)                            ( off len c-addr u )
     r/o open-file if                         ( off len fileid )
-        drop 2drop ." see: cannot open source file" cr exit
+        drop 2drop (msg:) ." cannot open source file" cr exit
     then  (sf-fid) !                         ( off len )
     (sf-len) !  (sf-off) !
     (sf-off) @ (sf-len) @ +  (sf-need) !
     (sf-need) @ allocate if                  ( a-addr )   \ ior nonzero → failure
         drop  (sf-fid) @ close-file drop
-        ." see: out of memory" cr exit
+        (msg:) ." out of memory" cr exit
     then  (sf-buf) !
     (sf-read)
-    (sf-got) @ (sf-off) @ > if               \ type [off, min(off+len, got))
+    (sf-got) @ (sf-off) @ > if               \ emit [off, min(off+len, got))
         (sf-buf) @ (sf-off) @ +
         (sf-got) @ (sf-off) @ -  (sf-len) @ min
-        type
+        (see-emit)
     then
     (sf-buf) @ free drop
     (sf-fid) @ close-file drop ;
@@ -680,13 +691,13 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
         1-                                   ( i )
         dup 3 cells *  (dir) @ +             ( i rec )
         dup 2 cells + @  (see-xt) @ = if      ( i rec )   \ this record's word
-            dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
+            dup @  (log) @ +  swap cell+ @  (see-emit) ( i )  \ source ends in a newline
             drop exit
         then
         drop                                 ( i )
     repeat
     drop
-    ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
+    (msg:) (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
 
 \ SEE shows the source of the definition currently in force. It reads the
 \ per-word source metadata (find-meta): a file-loaded word (core.fs, session.fs,
@@ -695,15 +706,16 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 \ labelled as such. The live xt is matched, so a redefined or forgotten word
 \ shows what is actually in force (or reports "not found").
 : see ( "name" -- )
-    parse-word dup 0= if  2drop ." see: needs a word name" cr exit  then
+    s" see" (msg-u) ! (msg-a) !  ' type (see-emit-xt) !   \ report as `see`, type source
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
     0= if  2drop 2drop                       \ not currently defined
-        ." see: " (see-a) @ (see-u) @ type ."  not found" cr exit
+        (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit
     then
     dup 65535 = if                           ( xt off len srcid )   \ PRIM sentinel
         2drop 2drop
-        ." see: " (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
     then
     dup 0= if                                \ srcid 0 → REPL word: use the capture log
         drop  2drop  (see-xt) !
@@ -711,6 +723,44 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     then
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file) ;
+
+\ ===== EDIT: recall a word's source into the next editable prompt line =====
+\ edit <name> resolves the word's source the same way SEE does, but instead of
+\ printing it, captures it into a preload buffer that the line editor drops onto
+\ the next prompt (flattened to one line — newlines are whitespace to Forth — so
+\ you can tweak and resubmit it). v1 caps at one input line; longer definitions
+\ report and are left to edit-and-reload. (edit-line) consumes (el-pre-len).
+create (el-pre)  256 allot               \ preload text for the next (edit-line)
+variable (el-pre-len)  0 (el-pre-len) !  \ pending preload length; 0 = none
+
+\ Capture one source span into (el-pre): flatten CR/LF to spaces, drop a single
+\ trailing newline, and refuse (reporting) anything longer than one input line.
+: (edit-capture) ( c-addr u -- )
+    dup 0> if  2dup + 1- c@ 10 = if  1-  then  then        \ drop a trailing newline
+    dup 256 > if                                           \ too long for one line
+        2drop  0 (el-pre-len) !
+        (msg:) ." definition too long to edit inline" cr  exit
+    then
+    dup (el-pre-len) !                                     ( c-addr u' )
+    0 ?do
+        dup i + c@  dup 10 = over 13 = or if  drop 32  then  \ CR/LF → space
+        (el-pre) i + c!
+    loop  drop ;
+
+: edit ( "name" -- )
+    s" edit" (msg-u) ! (msg-a) !
+    0 (el-pre-len) !                         \ no stale preload survives any exit path
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop  (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit
+    then
+    ' (edit-capture) (see-emit-xt) !         \ redirect source into the preload buffer
+    dup 0= if  drop 2drop  (see-xt) !  (see-from-log)
+    else       >r rot drop r>  (see-file)  then
+    ' type (see-emit-xt) ! ;                 \ restore the default (type) sink
 
 \ ===== REDO: recompile a REPL-defined word from its captured source =====
 \ redo <name> re-evaluates a word's saved source, so callers that were compiled
@@ -908,6 +958,9 @@ variable (el-hpos)                    \ browse cursor within one edit
 : (edit-line) ( c-addr max -- count )
     (el-max) !  (el-buf) !  0 (el-len) !  0 (el-pos) !
     (hist-count) @ (el-hpos) !
+    (el-pre-len) @ if                                \ `edit` left text to pre-fill
+        (el-pre) (el-pre-len) @ (el-show)  0 (el-pre-len) !
+    then
     begin
         key
         dup 10 = if  drop  (el-end) 10 emit  (hist-add) (el-len) @ exit  then
