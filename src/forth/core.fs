@@ -846,19 +846,50 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 \ Engaged only when stdin is an interactive terminal (main.s gates on isatty);
 \ piped/redirected input falls back to the asm forth_accept. Provides in-line
 \ editing: type anywhere, move with the left/right arrows (Ctrl-A/Ctrl-E jump to
-\ start/end), and insert/delete mid-line. Echo is manual (raw mode clears ECHO);
-\ the screen is kept in sync by reprinting the tail and backing the cursor up.
-\ KEY already decodes arrows to 131 (right) / 132 (left); 129/130 (up/down) are
-\ ignored here and become history recall in a later step.
+\ start/end), and insert/delete mid-line. Echo is manual (raw mode clears ECHO).
+\ Each edit just mutates the buffer and calls (el-redraw), which paints a
+\ horizontally-scrolled one-row window onto the buffer (so a line wider than the
+\ terminal scrolls sideways instead of wrapping). KEY already decodes arrows to
+\ 131 (right) / 132 (left); 129/130 (up/down) drive history recall.
 variable (el-buf)   \ buffer base address
 variable (el-max)   \ capacity in chars
 variable (el-len)   \ current line length
 variable (el-pos)   \ cursor index, 0..len
 
-: (el-bsp) ( n -- )  \ emit n backspaces (move the cursor left n columns)
-    begin dup 0> while  8 emit  1- repeat  drop ;
-: (el-tail) ( -- )   \ reprint buf[pos..len) starting at the cursor
-    (el-buf) @ (el-pos) @ +  (el-len) @ (el-pos) @ -  type ;
+\ Horizontal-scroll state: the editable area shows a window buf[vstart..) that
+\ fits one terminal row. (el-scol) is the terminal cursor's column offset from
+\ the prompt margin; (el-vshown) the number of chars currently drawn there.
+2 constant (el-margin)             \ columns the REPL prompt ("> ") occupies
+variable (el-vstart)               \ leftmost visible buffer index (scroll offset)
+variable (el-scol)                 \ cursor column, as an offset from the margin
+variable (el-vshown)               \ chars currently drawn in the editable area
+variable (el-w)                    \ scratch: usable width during a redraw
+
+: (el-bsp)    ( n -- ) begin dup 0> while  8 emit  1- repeat  drop ;
+: (el-spaces) ( n -- ) begin dup 0> while 32 emit  1- repeat  drop ;
+: (el-width)  ( -- w ) \ usable editable columns (leave the last column free)
+    screen-width (el-margin) - 1 -  1 max ;
+
+\ Redraw the editable area as a horizontally-scrolled window onto the buffer,
+\ keeping the cursor visible, then leave the terminal cursor at the cursor
+\ column. Uses only backspace/space/printables (no escape sequences), so every
+\ edit op is just "mutate the buffer, then (el-redraw)".
+: (el-redraw) ( -- )
+    (el-width) (el-w) !
+    (el-pos) @ (el-vstart) @ < if  (el-pos) @ (el-vstart) !  then     \ scroll left
+    (el-pos) @ (el-vstart) @ -  (el-w) @ 1- > if                      \ scroll right
+        (el-pos) @ (el-w) @ 1- -  (el-vstart) !
+    then
+    \ never leave the window past the end of the line, or a recalled/shrunk
+    \ shorter line would render blank (vstart stale-high from a longer line)
+    (el-vstart) @  (el-len) @ (el-w) @ - 1+  0 max  min  (el-vstart) !
+    (el-scol) @ (el-bsp)                                 \ cursor back to the margin
+    (el-len) @ (el-vstart) @ -  (el-w) @ min             ( vlen )
+    (el-buf) @ (el-vstart) @ +  over  type               ( vlen )    \ draw the window
+    (el-vshown) @ over -  dup 0> if  dup (el-spaces) (el-bsp)  else drop then  ( vlen )
+    dup  (el-pos) @ (el-vstart) @ -  -  (el-bsp)          ( vlen )    \ back to cursor col
+    (el-vshown) !
+    (el-pos) @ (el-vstart) @ -  (el-scol) ! ;
 
 \ Self-contained byte shifts, kept independent of MOVE/CMOVE (simple and tested;
 \ they also predate the MOVE/CMOVE> overlap fix).
@@ -875,27 +906,17 @@ variable (el-pos)   \ cursor index, 0..len
 
 : (el-insert) ( c -- )   \ insert char at the cursor, shifting the tail right
     (el-len) @ (el-max) @ < 0= if  drop exit  then        \ buffer full: ignore
-    (el-open)
-    (el-buf) @ (el-pos) @ + c!
-    1 (el-len) +!
-    (el-tail)                                             \ echo new char + tail
-    (el-len) @ (el-pos) @ - 1- (el-bsp)                   \ back up to after it
-    1 (el-pos) +! ;
+    (el-open)  (el-buf) @ (el-pos) @ + c!
+    1 (el-len) +!  1 (el-pos) +!  (el-redraw) ;
 
 : (el-back) ( -- )   \ delete the char before the cursor, shifting the tail left
     (el-pos) @ 0= if  exit  then
-    (el-close)
-    -1 (el-len) +!  -1 (el-pos) +!
-    8 emit                                                \ left over deleted char
-    (el-tail)                                             \ reprint shifted tail
-    32 emit                                               \ erase the stale column
-    (el-len) @ (el-pos) @ - 1+ (el-bsp) ;                 \ reposition (tail+space)
+    (el-close)  -1 (el-len) +!  -1 (el-pos) +!  (el-redraw) ;
 
-: (el-left)  ( -- )  (el-pos) @ 0= if  exit  then  8 emit  -1 (el-pos) +! ;
-: (el-right) ( -- )  (el-pos) @ (el-len) @ < 0= if  exit  then
-    (el-buf) @ (el-pos) @ + c@ emit  1 (el-pos) +! ;
-: (el-home)  ( -- )  begin (el-pos) @ 0>            while (el-left)  repeat ;
-: (el-end)   ( -- )  begin (el-pos) @ (el-len) @ <  while (el-right) repeat ;
+: (el-left)  ( -- )  (el-pos) @ 0= if  exit  then  -1 (el-pos) +!  (el-redraw) ;
+: (el-right) ( -- )  (el-pos) @ (el-len) @ < 0= if  exit  then  1 (el-pos) +!  (el-redraw) ;
+: (el-home)  ( -- )  0 (el-pos) !  (el-redraw) ;
+: (el-end)   ( -- )  (el-len) @ (el-pos) !  (el-redraw) ;
 
 \ ----- Command history (up/down recall) -----
 \ A circular ring of recent submitted lines on the heap; each slot is a length
@@ -922,12 +943,10 @@ variable (el-hpos)                    \ browse cursor within one edit
 
 : (el-stash-save) ( -- )              \ remember the in-progress line before browsing
     (el-buf) @ (hist-stash) @ (el-len) @ cmove  (el-len) @ (hist-slen) ! ;
-: (el-blank) ( -- )                   \ erase the on-screen line, cursor back to home
-    (el-end)  (el-len) @ begin dup 0> while  8 emit 32 emit 8 emit  1- repeat drop ;
-: (el-show) ( src u -- )              \ load src/u into the buffer and display it
+: (el-show) ( src u -- )              \ load src/u into the buffer, cursor at end, redraw
     (el-max) @ min  dup (el-len) !  (el-buf) @ swap cmove
-    (el-buf) @ (el-len) @ type  (el-len) @ (el-pos) ! ;
-: (el-recall) ( src u -- )  (el-blank) (el-show) ;
+    (el-len) @ (el-pos) !  (el-redraw) ;
+: (el-recall) ( src u -- )  (el-show) ;   \ (el-redraw) erases any longer prior line
 
 : (el-up) ( -- )                      \ recall an older line
     (hist-count) @ 0= if  exit  then
@@ -957,6 +976,7 @@ variable (el-hpos)                    \ browse cursor within one edit
 
 : (edit-line) ( c-addr max -- count )
     (el-max) !  (el-buf) !  0 (el-len) !  0 (el-pos) !
+    0 (el-vstart) !  0 (el-scol) !  0 (el-vshown) !   \ fresh prompt: cursor at margin
     (hist-count) @ (el-hpos) !
     (el-pre-len) @ if                                \ `edit` left text to pre-fill
         (el-pre) (el-pre-len) @ (el-show)  0 (el-pre-len) !

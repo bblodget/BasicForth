@@ -15,7 +15,7 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test run run-test run-integration clean help FORCE
+.PHONY: all test run run-test run-integration run-pty clean help FORCE
 
 # Default: build binary only
 $(BIN): $(OBJS)
@@ -53,6 +53,10 @@ run-test: $(TEST_BIN)
 run-integration: $(BIN)
 	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	$(TEST_DIR)/test_integration.sh ./$(BIN)
+
+run-pty: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+	python3 $(TEST_DIR)/test_line_editor_pty.py ./$(BIN)
 
 clean:
 	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc core.fs
