@@ -39,9 +39,11 @@ matching how `see`'s path handling degrades.)
 
 Bare `cd` (no argument) returns to that startup directory — note this differs
 from a Unix shell, where a bare `cd` goes to `$HOME`; here the meaningful anchor
-is where you launched. To reach your home directory, use `cd ~`: a leading `~` in
-the path is expanded to `$HOME` (`cd ~` → `$HOME`, `cd ~/sub` → `$HOME/sub`). If
-`HOME` is unset, the `~` is left as-is and the `cd` reports `cannot access ~`.
+is where you launched. To reach your home directory, use `cd ~`: a leading `~` is
+expanded to `$HOME` for exactly `~` (`cd ~` → `$HOME`) or `~/…` (`cd ~/sub` →
+`$HOME/sub`). The `~user` form (another user's home) is **not** supported and is
+left unchanged. If `HOME` is unset, or the expanded path would be too long, the
+`~` is left as-is and the `cd` reports `cannot access ~…`.
 
 ## The directory stack
 

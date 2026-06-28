@@ -2157,6 +2157,23 @@ if [[ "$th_unset" == *"cd: cannot access ~"* && "$th_unset" != *" ok"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  cd ~ with HOME unset\n    Got: %q\n" "$th_unset"; ((failed++))
 fi
+# Only "~" / "~/..." expand. "~user" is a different, unsupported form: it must be
+# left UNCHANGED (not concatenated onto $HOME), so cd errors on the literal token.
+th_user=$(printf 'cd ~nobody\n' | HOME=/home/x BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_user" == *"cd: cannot access ~nobody"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~user is left unchanged (no \$HOME concatenation)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~user mis-expanded\n    Got: %q\n" "$th_user"; ((failed++))
+fi
+# A pathologically long $HOME must not overflow the expansion buffer: the
+# expansion is skipped and cd errors, and the REPL stays alive (prints 4 after).
+th_big_home=$(printf '/%.0s' {1..1500})
+th_big=$(printf 'cd ~\n2 2 + .\n' | HOME="$th_big_home" BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_big" == *"cannot access"* && "$th_big" == *"4"* ]]; then
+    printf "  ${GREEN}PASS${NC}  long \$HOME does not overflow ~ expansion\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  long \$HOME overflowed or crashed\n    Got: %q\n" "$th_big"; ((failed++))
+fi
 
 # ls / cat / more over a temp dir with known contents (absolute paths, so the
 # binary's own CWD doesn't matter). The expected strings are file *contents* or

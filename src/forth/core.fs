@@ -994,14 +994,22 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 \ it); session.fs stays pinned to the startup directory. Path tokens come from
 \ parse-word, so they can't contain spaces yet.
 : pwd ( -- )  (cwd) type cr ;
-\ Expand a leading ~ to $HOME: "~" -> HOME, "~/sub" -> HOME + "/sub". A token not
-\ starting with ~ (or with HOME unset) is returned unchanged. Reuses the (sp-add)
-\ append helper from the session-path builder.
-create (tilde-buf) 1088 allot
+\ Expand a leading ~ to $HOME: only "~" or "~/sub" expand ("~" -> HOME,
+\ "~/sub" -> HOME + "/sub"). "~user" is a different, unsupported form and is left
+\ unchanged, as is a token without a leading ~ or one where HOME is unset. The
+\ result is bounded by (tilde-sz): an over-long HOME+tail is left unexpanded
+\ rather than overrunning the buffer. Reuses (sp-add) from the session builder.
+1024 constant (tilde-sz)
+create (tilde-buf) (tilde-sz) allot
 : (tilde-expand) ( c-addr u -- c-addr2 u2 )
     dup 0= if exit then                        \ empty -> unchanged
-    over c@ [char] ~ = 0= if exit then         \ not "~..." -> unchanged
-    (home-dir) nip 0= if exit then             \ HOME unset -> leave ~ (chdir will error)
+    over c@ [char] ~ = 0= if exit then         \ no leading ~ -> unchanged
+    dup 1 > if                                 \ "~x...": only "~/..." expands
+        over 1+ c@ [char] / = 0= if exit then  \   "~user" is unsupported -> unchanged
+    then
+    (home-dir) nip 0= if exit then             \ HOME unset -> leave ~ (chdir errors)
+    (home-dir) nip  over 1- +                  ( c-addr u need )  \ HOME + (token past ~)
+    (tilde-sz) > if exit then                  \ would overflow (tilde-buf) -> unchanged
     (tilde-buf) (sp-end) !
     (home-dir) (sp-add)                        \ HOME
     1 /string (sp-add)                         \ the rest of the token after the ~
