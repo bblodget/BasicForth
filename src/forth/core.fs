@@ -1009,7 +1009,7 @@ create (tilde-buf) (tilde-sz) allot
     then
     (home-dir) nip 0= if exit then             \ HOME unset -> leave ~ (chdir errors)
     (home-dir) nip  over 1- +                  ( c-addr u need )  \ HOME + (token past ~)
-    (tilde-sz) > if exit then                  \ would overflow (tilde-buf) -> unchanged
+    (tilde-sz) 1- > if exit then               \ need >= buffer/chdir limit -> leave ~
     (tilde-buf) (sp-end) !
     (home-dir) (sp-add)                        \ HOME
     1 /string (sp-add)                         \ the rest of the token after the ~

@@ -2174,6 +2174,17 @@ if [[ "$th_big" == *"cannot access"* && "$th_big" == *"4"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  long \$HOME overflowed or crashed\n    Got: %q\n" "$th_big"; ((failed++))
 fi
+# Off-by-one boundary: the expanded path must fit chdir's buffer *with its NUL*,
+# so the usable max is one less than the buffer (1024). A $HOME of exactly 1024
+# must be rejected (~ left as-is -> "cannot access ~"), not expanded to a
+# 1024-char path. (1023 would expand; this guards the >= vs > boundary.)
+th_bound_home=$(printf 'Z%.0s' $(seq 1 1024))
+th_bound=$(printf 'cd ~\n' | HOME="$th_bound_home" BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_bound" == *"cannot access ~"* && "$th_bound" != *"ZZZ"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ rejects \$HOME at the length boundary (no off-by-one)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ boundary off-by-one\n    Got: %q\n" "$th_bound"; ((failed++))
+fi
 
 # ls / cat / more over a temp dir with known contents (absolute paths, so the
 # binary's own CWD doesn't matter). The expected strings are file *contents* or
