@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 — 2026-06-27
+
+### Shell-like words: `pwd` / `cd` / `ls` / `cat` / `more` / `pushd` / `popd` / `dirs`
+- Navigate and inspect the filesystem from the REPL. `cd` changes the real
+  working directory — relative, absolute, bare `cd` (returns to the startup
+  directory), and `~` / `~/sub` (expands to `$HOME`); `pwd` prints it; `ls [dir]`
+  lists a directory; `cat` dumps a file and `more` pages it; `pushd` / `popd` /
+  `dirs` are a directory stack.
+- `session.fs` is now pinned to the **startup directory**, so `save` / `reload`
+  always use the launch directory no matter where you `cd`.
+- New platform call `chdir`; primitives `chdir`, `(cwd)`, `(startup-dir)`,
+  `(home-dir)`. All path-taking words share one `~`-expanding parser. Error paths
+  abort, so a failed command shows its message and no `ok`. See
+  docs/Shell_Words.md.
 
 ### Interactive line editor with command history
 - The REPL prompt is now an in-line editor at a terminal: move with the
@@ -26,6 +39,28 @@
   backed by a new `(version-str) ( -- c-addr u )` primitive so the text always
   matches the build. The startup banner (shown only when entering the
   interactive REPL on a terminal) is unchanged.
+
+### `DEFER` / `IS` (vectored words) and `REDO` (recompile a definition)
+- `defer <name>` creates a word whose action is an execution token stored in a
+  cell; `is <name>` (state-aware, like `TO`) sets it. This gives late binding: a
+  high-level word can call deferred parts that are filled in or swapped later
+  without recompiling its callers. An unset deferred word aborts with
+  *uninitialized deferred word*. See docs/Deferred_Words.md.
+- `redo <name>` recompiles a REPL-defined word from its captured source, so
+  callers compiled against an earlier version of a leaf it uses pick up the change
+  — subroutine threading bakes call targets, so redefining a leaf alone doesn't
+  update existing callers. See docs/Redo.md.
+
+### Persist direct `to` / `is` assignments across `save` / `reload`
+- The session log previously captured only lines that defined a new word, so a
+  bare `to` on a value or `is` on a deferred word — which mutate an existing
+  word's cell rather than defining a word — were lost on `save` / `reload` (a
+  reloaded deferred word came back uninitialized). Those assignment lines are now
+  captured and replayed, via a new one-shot `(assign?)` primitive.
+
+### Fixed: `MOVE` overlap direction and `CMOVE>` zero-count
+- `MOVE` now copies in the correct direction for overlapping regions, and
+  `CMOVE>` no longer corrupts the stack on a zero count.
 
 ## v0.6.0 — 2026-06-27
 
