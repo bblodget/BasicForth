@@ -440,6 +440,7 @@ create (log)  3 cells allot             \ accumulated definitions (seed + sessio
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
 variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
+variable (cap-assign)                   \ this line ran a direct TO/IS (read from (assign?))
 variable (session-on)                   \ true only after (session-init) ran — i.e.
                                         \ an interactive session (scopes SAVE/RELOAD)
 create (nl) 10 c,                       \ a single newline byte
@@ -493,6 +494,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ marker runs / -session (which move LATEST *backward*) are all not captured.
 \ RELOAD sets (skip-capture) so its own line is never logged either.
 : (capture-line) ( c-addr u latest -- )
+    (assign?) (cap-assign) !            \ read+clear: did a direct TO/IS run this line?
     >r                                  ( c-addr u )   \ R: latest
     (pend) (buf-append)                 \ append the raw line...
     (nl) 1 (pend) (buf-append)          \ ...plus a newline
@@ -505,7 +507,9 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
-    then                                \ written; index every word now in the log
+    else (cap-assign) @ if              \ no new word, but a direct TO/IS ran:
+        (pend) (log) (buf-append-buf)    \ persist the assignment line (no SEE record)
+    then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
     r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
 
@@ -518,6 +522,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
     false (skip-capture) !
+    (assign?) drop                      \ clear a stale assign flag from an errored line
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
     (cap-latest) ! ;

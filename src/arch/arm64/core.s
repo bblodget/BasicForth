@@ -3096,6 +3096,9 @@ forth_to:
     // Interpret mode: pop x, store to value address
     LDR X9, [X19], #CELL
     STR X9, [X23]
+    MOV X9, #1                      // signal a direct TO/IS so the session log can
+    ADR X10, assign_flag            //   persist this line (read via (assign?))
+    STR X9, [X10]
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -3122,6 +3125,18 @@ forth_to:
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     B .Lcf_abort
+
+// ---------- (assign?) ----------
+// (assign?) ( -- flag )  Read and clear the one-shot "a direct TO/IS happened"
+// flag (set only by forth_to's interpret-mode store). Used by the session
+// capture to persist an assignment line that defined no new word.
+.global forth_assign_query
+forth_assign_query:
+    ADR X10, assign_flag
+    LDR X9, [X10]
+    STR XZR, [X10]
+    STR X9, [X19, #-CELL]!
+    RET
 
 // ---------- DEFER ----------
 // DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
@@ -4833,11 +4848,13 @@ DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
+DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_is
+.global dict_assign_query
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -4920,6 +4937,8 @@ saved_here:                         // HERE before current : for error recovery
 .global incl_opened
 incl_opened:                        // set to 1 by forth_included when it opens a file
     .quad 0                         //   (lets main.s warn when core.fs is truly missing)
+assign_flag:                        // one-shot: a direct (interpret-mode) TO/IS ran
+    .quad 0                         //   this line. Read+cleared by (assign?).
 .global session_hooks
 session_hooks:                      // [0]=session-seed [1]=capture-line [2]=capture-reset
     .quad 0                         //   xts; 0 = not registered. Set by (hook!).

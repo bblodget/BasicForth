@@ -197,18 +197,19 @@ completed. See Planning.md for high-level vision and design decisions.
   cumulative. Heap-backed log; REPL hooks `(session-seed)`/`(capture-line)`/
   `(capture-reset)` registered via `(hook!)`; gated to interactive tty sessions
   (`BASICFORTH_SESSION=1`/`0` overrides). See docs/Persistence.md.
-  - Known limitation: persists definitions, not runtime state (a `variable`
-    reloads uninitialized). Redefinitions accumulate in the file.
-  - [ ] Persist state-setting words across `save`/reload. Capture triggers only
-    on `LATEST` moving (a new named definition), so words that *mutate* an
-    existing cell are not saved: `to` on a `value`, and (added 2026-06)
-    **`is` on a `defer`**. A reloaded deferred word comes back uninitialized and
-    aborts if called; a reloaded `value` reverts to its initial value. Related:
-    `redo`'s recompilation isn't reflected on reload either (the log record is
-    repointed in place, and source-replay order doesn't encode the rebuild). Fix
-    idea: have the capture layer also record `is`/`to` assignments (detect cell
-    mutations, not just `LATEST` moves) and append them after the definitions.
-    See docs/Deferred_Words.md, docs/Redo.md.
+  - Persists definitions and direct `to`/`is` assignments (see below), but not
+    other runtime state: a `variable`'s contents reload uninitialized, and
+    assignments made *indirectly* (a `to`/`is` inside a called word) are not
+    saved. Redefinitions accumulate in the file.
+  - [x] Persist direct `to`/`is` assignments across `save`/reload. `forth_to`
+    (shared by `to` and `is`) sets a one-shot flag in its interpret-mode store
+    path; `(capture-line)` reads it via the new `(assign?)` primitive and logs
+    the line even though no new word was defined (no SEE record), and
+    `(capture-reset)` clears a stale flag from an errored line. A `to`/`is`
+    *inside* a called word compiles a store (not `forth_to`), so calling it is
+    not over-captured. Still not persisted: indirectly-set state, and `redo`'s
+    recompilation (the record is repointed in place; source-replay order doesn't
+    encode the rebuild) — both documented in docs/Deferred_Words.md, docs/Redo.md.
 - [x] `MARKER` — dictionary restore points (modern replacement for `FORGET`).
   `marker <name>` defines a word that rewinds `HERE`/`LATEST` to before the
   marker, forgetting it and all later definitions. `CREATE ... DOES>` in core.fs

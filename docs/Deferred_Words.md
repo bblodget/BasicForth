@@ -24,6 +24,13 @@ xt is name          \ interpret: set name's action now
 Until you set its action, executing a deferred word reports
 `uninitialized deferred word` and returns to the prompt.
 
+> **`is` and `to` are the same operation** — both store a cell into the named
+> word's data field — so they are interchangeable and **unchecked**. By
+> convention use `is` for deferred words and `to` for `value`s, but `5 is x`
+> (on a value) and `' w to d` (on a defer) also work. Beware the dangerous
+> direction: `5 to game` puts a plain number where a deferred word expects an
+> xt, so calling `game` would jump to that address and crash.
+
 ## Why: top-down development
 
 In Forth a colon definition resolves the names it calls *at compile time*, so
@@ -78,16 +85,16 @@ datum, so `is` is mechanically the same operation as `to` — it stores a cell i
 that slot. A freshly deferred word's cell points at an internal handler that
 prints `uninitialized deferred word` and aborts.
 
-## Persistence limitation
+## Persistence
 
-`save` records *definitions*, not state changes: it captures the `defer` line but
-**not** the `is` assignment (which mutates the action cell without creating a new
-named word — the same reason `to` on a `value` isn't saved). So after `save` and
-reload, a deferred word comes back **uninitialized** and aborts if called until
-something `is`-es it again. This is sharper than for a `value`, which at least
-reloads with its initial value. Until this is addressed (see `docs/TODO.md`), put
-the `is` assignments your program needs in a source file you `include`, rather
-than relying on the session capture.
+`save` records the `defer` declaration **and** any direct `is` assignment you
+type at the prompt, so a deferred word's action survives `save`/reload (the same
+now holds for `to` on a `value`). One nuance: only a *direct* `is`/`to` — one you
+type interactively — is captured. An `is` performed *inside* a word you then call
+is not saved, because at that point the assignment runs as compiled code, not as
+the interpreter word; the runtime effect happens but isn't logged. So set the
+actions your program needs with a direct `is` (or put them in a file you
+`include`), not by hiding them inside a helper you call.
 
 ## See also
 
