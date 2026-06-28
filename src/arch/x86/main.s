@@ -128,6 +128,40 @@ _start:
     movq $2, session_env(%rip)      # '0' → force off
 .Lsenv_done:
 
+    # Walk envp again for BASICFORTH_EDITOR= (override the default isatty gate for
+    # the line editor: =0 forces off, any other value forces on). Same pattern.
+    movq $0, editor_env(%rip)       # 0 = unset (use default isatty gate)
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rdi       # &envp[0]
+.Leenv_loop:
+    mov (%rdi), %rsi                # envp[i]
+    test %rsi, %rsi
+    jz .Leenv_done                  # NULL = end of envp
+    lea edit_prefix(%rip), %rdx
+    mov $edit_prefix_len, %ecx
+.Leenv_cmp:
+    test %ecx, %ecx
+    jz .Leenv_found                 # prefix matched
+    movzbl (%rsi), %eax
+    cmpb (%rdx), %al
+    jne .Leenv_next
+    inc %rsi
+    inc %rdx
+    dec %ecx
+    jmp .Leenv_cmp
+.Leenv_next:
+    add $8, %rdi
+    jmp .Leenv_loop
+.Leenv_found:
+    movzbl (%rsi), %eax             # first byte of the value
+    cmpb $'0', %al
+    je .Leenv_off
+    movq $1, editor_env(%rip)       # non-'0' → force on
+    jmp .Leenv_done
+.Leenv_off:
+    movq $2, editor_env(%rip)       # '0' → force off
+.Leenv_done:
+
     # Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories, used
     # by the help system: man / topics / apropos). Same pattern as the PATH walk.
     mov start_argc(%rip), %rcx
@@ -285,6 +319,26 @@ _start:
     call forth_included
 .Lsession_decided:
 
+    # Resolve once whether the line editor engages. BASICFORTH_EDITOR overrides
+    # the default: =0 forces off, any other value forces on; unset → the editor
+    # engages only when stdin is an interactive terminal (so piped/redirected
+    # stdin uses forth_accept and script loading / integration tests are
+    # unchanged).
+    cmpq $2, editor_env(%rip)
+    je .Linput_off
+    cmpq $1, editor_env(%rip)
+    je .Linput_on
+    xor %edi, %edi                  # STDIN
+    call platform_isatty
+    mov %rax, input_interactive(%rip)
+    jmp .Linput_done
+.Linput_on:
+    movq $1, input_interactive(%rip)
+    jmp .Linput_done
+.Linput_off:
+    movq $0, input_interactive(%rip)
+.Linput_done:
+
 .global repl_loop
 repl_loop:
     # If a startup script faulted or ABORTed, recovery lands here with
@@ -317,13 +371,24 @@ repl_loop:
     mov $prompt_len, %rdx
     call platform_write
 
-    # ACCEPT ( c-addr max -- count )
+    # Read a line ( c-addr max -- count ). When stdin is interactive and the
+    # line-editor hook (slot 3) is registered, use it; otherwise fall back to the
+    # plain asm forth_accept (piped input, and the window before core.fs runs).
     lea input_buf(%rip), %rax
     sub $CELL, %r15
     mov %rax, (%r15)                # push c-addr
     sub $CELL, %r15
     movq $INPUT_BUF_SIZE, (%r15)    # push max
+    cmpq $0, input_interactive(%rip)
+    je .Lrepl_accept
+    mov session_hooks+24(%rip), %rax   # [3] = line-editor (edit-line)
+    test %rax, %rax
+    jz .Lrepl_accept
+    call *%rax                      # ( c-addr max -- count )
+    jmp .Lrepl_have_line
+.Lrepl_accept:
     call forth_accept               # ( c-addr max -- count )
+.Lrepl_have_line:
 
     # Empty line → re-prompt (count == 0)
     mov (%r15), %rax
@@ -474,6 +539,8 @@ env_prefix:     .ascii "BASICFORTH_PATH="
 .equ env_prefix_len, . - env_prefix
 sess_prefix:    .ascii "BASICFORTH_SESSION="
 .equ sess_prefix_len, . - sess_prefix
+edit_prefix:    .ascii "BASICFORTH_EDITOR="
+.equ edit_prefix_len, . - edit_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
 opt_v:          .asciz "-v"
@@ -490,6 +557,11 @@ start_argv1:
 # length of the current REPL line, saved for the capture hook.
 session_env:
     .quad 0
+# Line-editor override: 0=unset (default isatty gate), 1=force on, 2=force off
+# (from BASICFORTH_EDITOR). Lets the integration suite drive the editor over a
+# pipe, where stdin is not a tty.
+editor_env:
+    .quad 0
 session_active:
     .quad 0
 cap_line_len:
@@ -497,6 +569,11 @@ cap_line_len:
 # Non-zero while the startup script (argv[1]) is executing; an error during that
 # window exits non-zero instead of dropping into the REPL. Only main.s uses it.
 script_running:
+    .quad 0
+# Non-zero when stdin is an interactive terminal (resolved once at startup). The
+# REPL engages the line-editor hook (session_hooks[3]) only then; piped input
+# falls back to the plain forth_accept.
+input_interactive:
     .quad 0
 # Mutable cells exposed to Forth as the ARGC and ARGV variables. arg_base is a
 # char** into the OS argv vector; NEXT-ARG / SHIFT-ARGS consume from the front.

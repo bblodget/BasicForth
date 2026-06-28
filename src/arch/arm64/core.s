@@ -3722,8 +3722,9 @@ forth_munmap:
 
 // ---------- Session hook registration (Phase 4) ----------
 // (hook!) ( xt id -- )  register a session hook word by id: 0=session-seed,
-// 1=capture-line, 2=capture-reset. core.fs registers its hook words here so the
-// asm REPL/startup can call them; main.s reads session_hooks[id] and calls it.
+// 1=capture-line, 2=capture-reset, 3=line-editor. core.fs registers its hook
+// words here so the asm REPL/startup can call them; main.s reads
+// session_hooks[id] and calls it.
 .global forth_hook_store
 forth_hook_store:
     LDR X1, [X19], #CELL            // id, pop
@@ -4941,7 +4942,8 @@ assign_flag:                        // one-shot: a direct (interpret-mode) TO/IS
     .quad 0                         //   this line. Read+cleared by (assign?).
 .global session_hooks
 session_hooks:                      // [0]=session-seed [1]=capture-line [2]=capture-reset
-    .quad 0                         //   xts; 0 = not registered. Set by (hook!).
+    .quad 0                         //   [3]=line-editor (edit-line). xts; 0 = not
+    .quad 0                         //   registered. Set by (hook!).
     .quad 0
     .quad 0
 .global session_mark_here

@@ -2250,6 +2250,56 @@ fi
 assert_output "version word"       "version"             "*** BasicForth"
 
 # =========================================================================
+section "Line Editor (BASICFORTH_EDITOR)"
+# =========================================================================
+# The interactive line editor only engages when stdin is a tty, so force it on
+# with BASICFORTH_EDITOR=1 and feed raw key bytes via printf escapes:
+#   \033[A up   \033[B down   \033[C right   \033[D left   \001 Ctrl-A (home)
+#   \005 Ctrl-E (end)   \177 backspace (DEL).
+
+# assert_editor: editor forced on; output must contain a fixed substring.
+assert_editor() {
+    local name="$1" input_fmt="$2" expected="$3"
+    local t0 t1 ms output
+    t0=$(date +%s.%N)
+    output=$(printf "$input_fmt" | BASICFORTH_EDITOR=1 timeout 2 $FORTH 2>&1)
+    t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "$name"
+    if [[ "$output" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Expected: %s\n" "$expected"
+        printf "    Got:      %s\n" "$(echo "$output" | head -5)"
+        ((failed++))
+    fi
+}
+
+# assert_editor_count: editor forced on; require exactly N occurrences of a
+# needle. Used for history recall, where re-executing the recalled line emits
+# its marker an extra time (the echoed command text never contains the marker).
+assert_editor_count() {
+    local name="$1" input_fmt="$2" needle="$3" want="$4"
+    local output n
+    output=$(printf "$input_fmt" | BASICFORTH_EDITOR=1 timeout 2 $FORTH 2>&1)
+    n=$(printf '%s' "$output" | grep -o -- "$needle" | wc -l | tr -d ' ')
+    if [ "$n" = "$want" ]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s (got %s, want %s)\n" "$name" "$n" "$want"
+        ((failed++))
+    fi
+}
+
+# Cursor editing: each line below must still parse to "1 2 + ." → 3.
+assert_editor "left-arrow + mid-line insert" '1 2 .\033[D+ \nbye\n'           "3  ok"
+assert_editor "backspace deletes at cursor"  '999\177\177\1771 2 + .\nbye\n'   "3  ok"
+assert_editor "Ctrl-A home then insert"      '2 + .\0011 \nbye\n'              "3  ok"
+assert_editor "Ctrl-E end after Ctrl-A"      '1 2 +\001\005 .\nbye\n'          "3  ok"
+# History: 88 emit prints 'X', 89 emit prints 'Y'; recall re-emits the marker.
+assert_editor_count "history up recalls prev"      '88 emit\n\033[A\nbye\n'                      'X' 2
+assert_editor_count "history up/up/down -> 89"     '88 emit\n89 emit\n\033[A\033[A\033[B\nbye\n' 'Y' 2
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 
