@@ -357,8 +357,8 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
 - [x] `cd ( "path" -- )` — `chdir` to the parsed token.
   - `cd` with no argument → returns to the startup directory; a failed cd reports
     the offending path.
-  - [ ] `cd ~` → `$HOME` (optional `~` expansion via the `HOME` env var) — not
-    yet done; needs HOME captured at boot.
+  - [x] `cd ~` → `$HOME` (`~` / `~/sub` expansion). HOME is captured at boot
+    (`(home-dir)`); a leading `~` is expanded in `cd`. HOME unset → `cannot access ~`.
 - [x] `ls ( "[dir]" -- )` — list a directory (current by default; optional `<dir>`
     arg supported), one entry per line, skipping `.`/`..` (← `(getdents)`).
 - [x] `cat ( "file" -- )` — dump a file to stdout (← chunked `read-file`).

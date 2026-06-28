@@ -3632,6 +3632,18 @@ forth_cwd:
     LDP X29, X30, [SP], #16
     RET
 
+// (home-dir) ( -- c-addr u )  the HOME environment value and length (0 0 if HOME
+// is unset). Backs `cd ~`.
+.global forth_home_dir
+forth_home_dir:
+    ADR X9, home_ptr
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // c-addr
+    ADR X9, home_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // u
+    RET
+
 // (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
 .global forth_docs_path
 forth_docs_path:
@@ -4840,12 +4852,14 @@ DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_version_str
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
 DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
+DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_startup_dir
 .global dict_cwd
+.global dict_home_dir
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

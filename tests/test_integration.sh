@@ -2140,6 +2140,24 @@ assert_output "cd bad path errors"     "cd /no/such/dir"                 "cd: ca
 # shell_start is not present in the input, so this can't pass on echo alone)
 assert_output "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
 
+# cd ~ expands to $HOME. Match $HOME + newline so it isn't satisfied by
+# shell_start (which lives *under* $HOME, i.e. contains it as a prefix). Use the
+# physical path to match what getcwd reports even if $HOME is a symlink.
+th_home=$(cd "$HOME" 2>/dev/null && pwd -P)
+th_tilde=$(run_forth $'cd ~\npwd')
+if [[ -n "$th_home" && "$th_tilde" == *"$th_home"$'\n'* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ expands to \$HOME\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ did not go to \$HOME (%s)\n    Got: %q\n" "$th_home" "$th_tilde"; ((failed++))
+fi
+# cd ~ with HOME unset: ~ is left as-is, chdir fails, and it aborts (no " ok").
+th_unset=$(printf 'cd ~\n' | env -u HOME BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_unset" == *"cd: cannot access ~"* && "$th_unset" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ with HOME unset errors gracefully\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ with HOME unset\n    Got: %q\n" "$th_unset"; ((failed++))
+fi
+
 # ls / cat / more over a temp dir with known contents (absolute paths, so the
 # binary's own CWD doesn't matter). The expected strings are file *contents* or
 # entry names, none of which appear in the echoed input line.

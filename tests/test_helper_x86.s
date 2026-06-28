@@ -202,6 +202,12 @@ startup_dir_len:
 .global startup_dir
 startup_dir:
     .space 1024
+.global home_ptr
+home_ptr:
+    .quad 0
+.global home_len
+home_len:
+    .quad 0
 
 .text
 .global platform_ms_get

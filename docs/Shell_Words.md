@@ -10,7 +10,7 @@ system's machinery; the only new syscall is `chdir`.
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
 | `pwd` | ( -- ) | print the current working directory |
-| `cd` | ( "dir" -- ) | change directory to `<dir>`; **bare `cd`** returns to the startup directory |
+| `cd` | ( "dir" -- ) | change directory to `<dir>`; **bare `cd`** returns to the startup directory; `cd ~` / `cd ~/sub` expand `~` to `$HOME` |
 | `ls` | ( "[dir]" -- ) | list a directory (the current one by default), one entry per line, skipping `.` and `..` |
 | `cat` | ( "file" -- ) | write a file to stdout |
 | `more` | ( "file" -- ) | page a file a screenful at a time (space = next page, `q` = quit) |
@@ -39,7 +39,9 @@ matching how `see`'s path handling degrades.)
 
 Bare `cd` (no argument) returns to that startup directory — note this differs
 from a Unix shell, where a bare `cd` goes to `$HOME`; here the meaningful anchor
-is where you launched. (`$HOME` expansion via `cd ~` is not implemented yet.)
+is where you launched. To reach your home directory, use `cd ~`: a leading `~` in
+the path is expanded to `$HOME` (`cd ~` → `$HOME`, `cd ~/sub` → `$HOME/sub`). If
+`HOME` is unset, the `~` is left as-is and the `cd` reports `cannot access ~`.
 
 ## The directory stack
 
@@ -87,7 +89,8 @@ directory-read (`getdents`) failure the same way.
 - **`cd`** is the Forth word; the primitive `chdir ( c-addr u -- ior )` copies
   the path to a NUL-terminated buffer and calls the new `platform_chdir` syscall
   wrapper (`chdir` = 80 on x86-64, 49 on ARM64). Over-long paths return
-  `-ENAMETOOLONG`.
+  `-ENAMETOOLONG`. A leading `~` is expanded against `(home-dir) ( -- c-addr u )`,
+  which returns the `HOME` env value (captured at boot, `0 0` if unset).
 - **`pwd`** is `(cwd) type cr`, where `(cwd) ( -- c-addr u )` reads the live
   directory with `getcwd`. The startup directory is exposed by
   `(startup-dir) ( -- c-addr u )`, captured once at boot and used for bare `cd`

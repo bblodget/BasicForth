@@ -507,7 +507,7 @@ remember to feed the snake
 | Word | Stack | Meaning |
 |------|-------|---------|
 | `pwd` | ( -- ) | print the current working directory |
-| `cd` | ( "dir" -- ) | change directory; **bare `cd`** returns to the startup directory |
+| `cd` | ( "dir" -- ) | change directory; **bare `cd`** returns to the startup directory; `cd ~` expands `~` to `$HOME` |
 | `ls` | ( "[dir]" -- ) | list a directory (current by default), one entry per line |
 | `cat` | ( "file" -- ) | write a file to stdout |
 | `more` | ( "file" -- ) | page a file a screenful at a time (`page` already means clear-screen) |

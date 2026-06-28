@@ -994,9 +994,22 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 \ it); session.fs stays pinned to the startup directory. Path tokens come from
 \ parse-word, so they can't contain spaces yet.
 : pwd ( -- )  (cwd) type cr ;
+\ Expand a leading ~ to $HOME: "~" -> HOME, "~/sub" -> HOME + "/sub". A token not
+\ starting with ~ (or with HOME unset) is returned unchanged. Reuses the (sp-add)
+\ append helper from the session-path builder.
+create (tilde-buf) 1088 allot
+: (tilde-expand) ( c-addr u -- c-addr2 u2 )
+    dup 0= if exit then                        \ empty -> unchanged
+    over c@ [char] ~ = 0= if exit then         \ not "~..." -> unchanged
+    (home-dir) nip 0= if exit then             \ HOME unset -> leave ~ (chdir will error)
+    (tilde-buf) (sp-end) !
+    (home-dir) (sp-add)                        \ HOME
+    1 /string (sp-add)                         \ the rest of the token after the ~
+    (tilde-buf) (sp-end) @ over - ;            \ ( c-addr2 u2 )
 : cd ( "path" -- )
     parse-word                              ( c-addr u )
-    dup 0= if  2drop  (startup-dir)  then   \ bare cd -> startup (home) directory
+    dup 0= if  2drop  (startup-dir)         \ bare cd -> startup (home) directory
+    else  (tilde-expand)  then              \ a token -> expand a leading ~ to $HOME
     2dup chdir                              ( c-addr u ior )
     if  ." cd: cannot access " type cr  abort  else  2drop  then ;
 
