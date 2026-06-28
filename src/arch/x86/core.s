@@ -2819,7 +2819,8 @@ forth_to:
     mov (%r15), %rax                # x
     add $CELL, %r15
     mov %rax, (%rbx)                # store x at value address
-    pop %rbx
+    movq $1, assign_flag(%rip)      # signal a direct TO/IS so the session log
+    pop %rbx                        #   can persist this line (read via (assign?))
     ret
 
 .Lto_compile:
@@ -2841,6 +2842,19 @@ forth_to:
     add $2*CELL, %r15
     pop %rbx
     jmp .Lcf_abort
+
+# ---------- (assign?) ----------
+# (assign?) ( -- flag )  Read and clear the one-shot "a direct TO/IS happened"
+# flag. The session capture (capture-line) uses it to persist an assignment line
+# that defined no new word; (capture-reset) clears a stale flag from an errored
+# line. Set only by forth_to's interpret-mode store (not the compiled path).
+.global forth_assign_query
+forth_assign_query:
+    mov assign_flag(%rip), %rax
+    movq $0, assign_flag(%rip)
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
 
 # ---------- DEFER ----------
 # DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
@@ -4432,11 +4446,13 @@ DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
+DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_is
+.global dict_assign_query
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4521,6 +4537,8 @@ saved_here:                         # HERE before current : for error recovery
 .global incl_opened
 incl_opened:                        # set to 1 by forth_included when it opens a file
     .quad 0                         #   (lets main.s warn when core.fs is truly missing)
+assign_flag:                        # one-shot: a direct (interpret-mode) TO/IS ran
+    .quad 0                         #   this line. Read+cleared by (assign?).
 .global session_hooks
 session_hooks:                      # [0]=session-boot [1]=capture-line [2]=capture-reset
     .quad 0                         #   xts; 0 = not registered. Set by (hook!).

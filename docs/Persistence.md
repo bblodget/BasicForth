@@ -56,15 +56,22 @@ clear the log, so nothing is lost.
 ## What gets captured
 
 While you type at the interactive prompt, BasicForth watches each line. A line
-(or group of lines) is captured **only if it adds to the dictionary** — i.e. it
-defines a word. Transient actions are *not* captured:
+(or group of lines) is captured if it **adds to the dictionary** (defines a word)
+or **performs a direct `to`/`is` assignment** (so a `value`'s contents and a
+deferred word's action persist). Other transient actions are *not* captured:
 
 ```
-> : double dup + ;      \ captured
+> : double dup + ;      \ captured (defines a word)
 > variable count        \ captured
+> 0 value hits          \ captured
+> 5 to hits             \ captured (a direct assignment)
 > 5 double .            \ NOT captured (just prints 10)
 > page                  \ NOT captured (just clears the screen)
 ```
+
+Only a *direct* assignment counts — a `to`/`is` performed inside a word you call
+runs as compiled code, not as the interpreter, so calling that word is not
+captured and its runtime effect is not saved.
 
 Multi-line definitions are captured as a unit:
 
@@ -110,9 +117,9 @@ You can override the default with the `BASICFORTH_SESSION` environment variable:
 
 ## Limitations
 
-Persistence saves **definitions, not runtime state**. A `variable` reloads
-*uninitialized*; a `value` reloads at its original literal, not its current
-contents:
+Persistence saves **definitions and direct `to`/`is` assignments**, but not other
+runtime state. A `variable`'s contents (set with `!`) are not captured, so a
+`variable` reloads *uninitialized*:
 
 ```
 > variable hits   10 hits !
@@ -120,8 +127,11 @@ contents:
 \ ...next session: `hits @` is 0, not 10
 ```
 
-Initialize such state inside a defining word (e.g. `10 value hits`) so the value
-is part of the definition.
+A `value` or deferred word *does* survive when you set it with a direct `to`/`is`
+at the prompt (`0 value hits` then `5 to hits` both persist). For other mutable
+state, prefer a `value` you assign with `to`, or initialize it inside a defining
+word. Note also that `redo`'s recompilation is not reflected on reload — see
+`docs/Redo.md`.
 
 Other notes:
 

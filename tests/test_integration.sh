@@ -1910,6 +1910,62 @@ else
 fi
 
 # =========================================================================
+section "Persistence of state-setting words (to / is)"
+# =========================================================================
+# save now records direct TO/IS assignments (not just definitions), so a value's
+# contents and a deferred word's action survive save+reload. Forced on with
+# BASICFORTH_SESSION=1 like the other persistence tests; each runs a session that
+# saves, then a fresh session that auto-loads the written session.fs.
+ps_dir="$(mktemp -d)"
+( cd "$ps_dir" && printf '0 value pv\n7 to pv\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+ps_to=$( cd "$ps_dir" && printf 'pv .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^7' )
+rm -rf "$ps_dir"
+ps_dir="$(mktemp -d)"
+( cd "$ps_dir" && printf 'defer pg\n: ph pg ;\n:noname 42 ; is pg\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+ps_is=$( cd "$ps_dir" && printf 'ph .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^42' )
+rm -rf "$ps_dir"
+# Over-capture guard: a TO *inside* a called word compiles a store (not forth_to),
+# so calling it neither logs a 'setpc' command line nor persists the runtime value.
+ps_dir="$(mktemp -d)"
+( cd "$ps_dir" && printf '0 value pc\n: setpc 9 to pc ;\nsetpc\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+ps_call_line=$(grep -c '^setpc$' "$ps_dir/session.fs")
+ps_reload=$( cd "$ps_dir" && printf 'pc .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^0' )
+rm -rf "$ps_dir"
+# Errored assignment must not leak: the following transient line is not captured.
+ps_dir="$(mktemp -d)"
+( cd "$ps_dir" && printf '0 value pe\n5 to pe zzz\n1 2 + .\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+ps_leak=$(grep -cE '1 2 \+|5 to pe' "$ps_dir/session.fs")
+rm -rf "$ps_dir"
+
+if [[ "$ps_to" == 7* ]]; then
+    printf "  ${GREEN}PASS${NC}  TO assignment persists across save/reload\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  TO did not persist\n    Expected '7...'\n    Got: %q\n" "$ps_to"; ((failed++))
+fi
+if [[ "$ps_is" == 42* ]]; then
+    printf "  ${GREEN}PASS${NC}  IS assignment (defer action) persists across save/reload\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  IS did not persist\n    Expected '42...'\n    Got: %q\n" "$ps_is"; ((failed++))
+fi
+if [[ "$ps_call_line" == "0" && "$ps_reload" == 0* ]]; then
+    printf "  ${GREEN}PASS${NC}  a TO inside a called word is not over-captured\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  over-capture guard\n    call-line count: %q  reload: %q\n" "$ps_call_line" "$ps_reload"; ((failed++))
+fi
+if [[ "$ps_leak" == "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  an errored assignment line does not leak into capture\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  errored-assignment leak\n    matched lines: %q\n" "$ps_leak"; ((failed++))
+fi
+
+# =========================================================================
 section "Snake Game Prerequisites (cont.)"
 # =========================================================================
 # Snake game words (test game helpers without loading the full file)
