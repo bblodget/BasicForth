@@ -69,12 +69,57 @@ unreasonably painful:
 | Terminal   | ioctl TCGETS/TCSETS      | —                        | Syscalls    |
 | Memory     | mmap                     | —                        | Syscalls    |
 | Files      | open/read/write/lseek    | —                        | Syscalls    |
-| Graphics   | /dev/fb0 or DRM/KMS ioctl | SDL2                    | TBD         |
+| Graphics   | DRM/KMS ioctl (2D)       | Vulkan (GPU/3D only)     | DRM first; Vulkan for GPU (see Graphics Direction) |
 | Sound      | ALSA ioctl               | libasound or PipeWire    | TBD         |
 | Threading  | clone() syscall          | pthread                  | TBD         |
 
 When we do use a library, switch from `ld` to `gcc -nostartfiles` to get
 dynamic linking while keeping our own `_start`.
+
+### Graphics Direction
+
+BasicForth is **"a BASIC for modern computers"** — keep BASIC's immediacy and
+directness, but point it at what the machine can actually do *today*. Modern
+hardware power is normally locked behind huge software stacks (X/Wayland,
+toolkits, GL, engines); the BasicForth thesis is to **cut straight through them**
+— an interactive Forth prompt talking to the kernel's real interfaces, nothing in
+between. The power is unlocked *because* you're direct.
+
+**The dependency boundary:** go direct via the Linux syscall interface for
+everything the kernel exposes; accept a library *only* where the hardware is
+sealed behind proprietary blobs. In practice that line is sharp — display
+mode-setting, every CPU core (threads), SIMD, and all IO are reachable directly;
+the **GPU 3D pipeline** is the one capability that genuinely requires a library.
+
+- **Display — DRM/KMS, direct (no library).** The *modern* kernel display
+  interface (not legacy `/dev/fb0`, not SDL): mode-setting, dumb buffers,
+  page-flip/vsync, multi-monitor — all via `ioctl` on `/dev/dri/cardN`. It owns
+  the screen with no compositor, which is exactly the boot-to-Forth appliance
+  model (Phase 7). BareMetalForth already explored this path.
+- **2D — software rendering on DRM (no library).** A pixel back-buffer plus
+  primitives (pixel/line/rect/blit/sprites/text) and `present`. Pure asm/Forth;
+  works with zero dependencies, and stays the always-available 2D/appliance path
+  even after the GPU backend exists. With threads + SIMD, software 2D (and modest
+  3D) is more capable than it sounds.
+- **3D / GPU — Vulkan (the one accepted library).** GPUs are behind proprietary
+  blobs, so direct access is impractical; Vulkan is the chosen exception. Picked
+  over OpenGL because it is lower-level and explicit (more Forth-spirited), and
+  `VK_KHR_display` renders directly to a display with **no X/Wayland**, preserving
+  the appliance model. Two consequences make this a *later* step, not the start:
+  it requires an **FFI** (C-ABI calls + by-hand struct marshalling — BasicForth
+  has none yet, and this unlocks *any* future library), and it pulls in **dynamic
+  linking** (the graphics build/mode stops being pure-static).
+
+**Architecture — backend-agnostic surface API.** Drawing words and the games
+written on them target an abstract *surface* (base, width, height, stride) plus a
+`present` operation; they don't care how a frame reaches the screen. Concrete
+backends sit behind that interface: **DRM software-2D first**, **Vulkan (GPU/3D)
+later**. Games never change when the backend does.
+
+**Roadmap:** DRM/KMS + software 2D + the surface/present API → FFI (C-ABI calling)
+→ Vulkan as the GPU/3D backend behind the same surface API. Build from the solid,
+visible, pure-asm end; reach the Vulkan cliff only once a display, an API, and an
+FFI are under us.
 
 ### Editor Strategy
 
@@ -301,9 +346,13 @@ keep the path open.
 - Remaining: SAVE / persistence of user definitions
 
 ### Phase 5: Graphics and Sound
-- Linux framebuffer (/dev/fb0), DRM/KMS, or SDL2
-- Font rendering
-- Sound output (ALSA or PipeWire)
+See **Graphics Direction** (Design Decisions) for the philosophy and roadmap.
+- DRM/KMS display via ioctl (mode-set, dumb buffers, page-flip) — direct, no library
+- Backend-agnostic surface API (back-buffer + `present`); software 2D primitives
+  (pixel/line/rect/blit/sprites), font rendering
+- FFI (C-ABI calling + struct marshalling) — prerequisite for any library
+- Vulkan GPU/3D backend behind the surface API (the one accepted dependency)
+- Sound output (ALSA ioctl, or PipeWire)
 - Game demos (snake, sprites)
 
 ### Phase 6: Robotics
@@ -328,12 +377,14 @@ keep the path open.
    that uses `CELL+` and `CELLS` instead of hardcoded sizes ports cleanly.
 5. **Comment style?** ARM64 uses `//`, x86 uses `#`. Both support `/* */`.
 6. **Editor?** Call out to `$EDITOR` via fork/exec rather than writing vi.fs.
+7. **Graphics approach?** Direct DRM/KMS + software 2D; Vulkan for GPU/3D only
+   (the sole accepted library, since GPUs are behind proprietary blobs). See
+   the Graphics Direction design decision. fbdev and SDL2 are rejected.
 
 ## Open Questions
 
 1. **License?** GPL v2 (same as BareMetalForth)?
-2. **Graphics approach?** Raw framebuffer, DRM/KMS, or SDL2?
-3. **Threading?** Raw clone() or pthread?
+2. **Threading?** Raw clone() or pthread?
 
 ## References
 
