@@ -692,6 +692,14 @@ assert_output "value unchanged"      '10 value x x . x .'                "10 10"
 assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"
 assert_output "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
 
+# DEFER / IS (vectored execution / late binding). Note: ' and ['] contain an
+# apostrophe, escaped as '\'' to survive the single-quoted shell argument.
+assert_output "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
+assert_output "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
+assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
+assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
+assert_error  "defer uninitialized"  'defer p p'                                             "uninitialized deferred word"
+
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
 assert_output "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
@@ -1842,6 +1850,68 @@ else
     printf "  ${RED}FAIL${NC}  SEE custom-defining-word word\n    Expected '5 mk five'\n    Got: %q\n" "$see_cdw"; ((failed++))
 fi
 
+# =========================================================================
+section "REDO (recompile a captured word from its source)"
+# =========================================================================
+# Capture is interactive-only, so force it on via BASICFORTH_SESSION=1 (as the
+# SEE/SAVE tests do). REDO re-evaluates a word's saved source so a caller picks
+# up a redefined leaf — subroutine threading bakes call targets, so the caller
+# would otherwise keep calling the old leaf.
+redo_dir="$(mktemp -d)"
+# A caller recompiled by REDO calls the NEW leaf (prints 9). Result lines have no
+# '> ' echo prefix, so '^9' isolates the printed value.
+redo_recompile=$( cd "$redo_dir" && printf ': lf 1 ;\n: cl lf ;\n: lf 9 ;\nredo cl\ncl .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^9' )
+# Baseline: without REDO the caller still calls the old leaf (prints 1).
+redo_stale=$( cd "$redo_dir" && printf ': lf 1 ;\n: cl lf ;\n: lf 9 ;\ncl .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^1' )
+# SEE still shows the source after REDO (log record repointed; the 'redo' line
+# itself is not captured as the new source).
+redo_see=$( cd "$redo_dir" && printf ': lf 1 ;\n: cl lf ;\nredo cl\nsee cl\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: cl' )
+# Decline paths: primitive, file-loaded word, unknown word.
+redo_prim=$( cd "$redo_dir" && printf 'redo dup\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+redo_file=$( cd "$redo_dir" && printf 'redo cr\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+redo_unknown=$( cd "$redo_dir" && printf 'redo nope\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+rm -rf "$redo_dir"
+
+if [[ "$redo_recompile" == 9* ]]; then
+    printf "  ${GREEN}PASS${NC}  REDO recompiles a caller against a redefined leaf\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REDO did not recompile the caller\n    Expected '9...'\n    Got: %q\n" "$redo_recompile"; ((failed++))
+fi
+if [[ "$redo_stale" == 1* ]]; then
+    printf "  ${GREEN}PASS${NC}  baseline: without REDO the caller keeps the old leaf\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stale-caller baseline\n    Got: %q\n" "$redo_stale"; ((failed++))
+fi
+if [[ "$redo_see" == ": cl lf ;" ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE shows the source after REDO\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  SEE source lost/corrupted after REDO\n    Expected ': cl lf ;'\n    Got: %q\n" "$redo_see"; ((failed++))
+fi
+if [[ "$redo_prim" == *"is a primitive"* ]]; then
+    printf "  ${GREEN}PASS${NC}  REDO declines a primitive\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REDO primitive decline\n    Got: %q\n" "$redo_prim"; ((failed++))
+fi
+if [[ "$redo_file" == *"loaded from a file"* ]]; then
+    printf "  ${GREEN}PASS${NC}  REDO declines a file-loaded word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REDO file-word decline\n    Got: %q\n" "$redo_file"; ((failed++))
+fi
+if [[ "$redo_unknown" == *"not found"* ]]; then
+    printf "  ${GREEN}PASS${NC}  REDO of an unknown word reports not found\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REDO unknown word\n    Got: %q\n" "$redo_unknown"; ((failed++))
+fi
+
+# =========================================================================
+section "Snake Game Prerequisites (cont.)"
+# =========================================================================
 # Snake game words (test game helpers without loading the full file)
 assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 

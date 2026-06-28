@@ -438,6 +438,49 @@ edit/compile/run loop.
 By convention marker names start with `-`. See `docs/Marker.md` for details
 (nesting, what is and isn't reclaimed, and the planned tie-in with sessions).
 
+### Deferred words (`defer` / `is`)
+
+`defer <name>` creates a word whose behavior you set — and can change — later
+with `is`. It lets you write the high-level structure first and fill in (or swap)
+the parts without recompiling the callers:
+
+```
+> defer play
+> : game  ." [" play ." ]" cr ;   \ compiles now; play is deferred
+> :noname ." stub" ; is play
+> game
+[stub]
+> : real  ." REAL" ;
+> ' real is play                  \ swap the action; game is NOT recompiled
+> game
+[REAL]
+```
+
+`is` is state-aware like `to`, so it works inside definitions too. An
+uninitialized deferred word aborts with a message if run. See
+`docs/Deferred_Words.md`, and `docs/Redo.md` for recompiling ordinary words.
+
+### Recompiling a word (`redo`)
+
+Because compiled calls are baked in, redefining a leaf word does not change words
+already compiled to call it. `redo <name>` recompiles `<name>` from the source
+you typed, so it picks up the redefined leaf:
+
+```
+> : setup ." OLD" cr ;
+> : snake setup ;
+> : setup ." NEW" cr ;   \ improved leaf
+> snake
+OLD                       \ still the old setup
+> redo snake
+> snake
+NEW                       \ recompiled against the new setup
+```
+
+`redo` works on words defined at the REPL this session; for file-loaded words it
+points you to edit-and-`reload`, and primitives have no source. See
+`docs/Redo.md`.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

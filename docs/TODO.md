@@ -199,6 +199,16 @@ completed. See Planning.md for high-level vision and design decisions.
   (`BASICFORTH_SESSION=1`/`0` overrides). See docs/Persistence.md.
   - Known limitation: persists definitions, not runtime state (a `variable`
     reloads uninitialized). Redefinitions accumulate in the file.
+  - [ ] Persist state-setting words across `save`/reload. Capture triggers only
+    on `LATEST` moving (a new named definition), so words that *mutate* an
+    existing cell are not saved: `to` on a `value`, and (added 2026-06)
+    **`is` on a `defer`**. A reloaded deferred word comes back uninitialized and
+    aborts if called; a reloaded `value` reverts to its initial value. Related:
+    `redo`'s recompilation isn't reflected on reload either (the log record is
+    repointed in place, and source-replay order doesn't encode the rebuild). Fix
+    idea: have the capture layer also record `is`/`to` assignments (detect cell
+    mutations, not just `LATEST` moves) and append them after the definitions.
+    See docs/Deferred_Words.md, docs/Redo.md.
 - [x] `MARKER` — dictionary restore points (modern replacement for `FORGET`).
   `marker <name>` defines a word that rewinds `HERE`/`LATEST` to before the
   marker, forgetting it and all later definitions. `CREATE ... DOES>` in core.fs

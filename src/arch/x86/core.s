@@ -1265,6 +1265,8 @@ cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
+msg_undef_defer: .ascii "uninitialized deferred word\n"
+.equ msg_undef_defer_len, . - msg_undef_defer
 .text
 
 # ---------- LIT (runtime) ----------
@@ -2840,6 +2842,53 @@ forth_to:
     pop %rbx
     jmp .Lcf_abort
 
+# ---------- DEFER ----------
+# DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
+# xt stored in its inline cell (at xt+5, the same layout VALUE uses); set that
+# xt with IS. The cell is initialized to forth_undef_defer, which aborts if the
+# word is executed before IS. Body compiled: CALL forth_lit ; <xt> ; CALL
+# forth_execute ; RET — forth_lit pushes the stored xt, forth_execute runs it.
+.global forth_defer
+forth_defer:
+    push %rbx
+    push %rbp
+
+    call build_header
+    jc .Ldefer_err
+
+    lea forth_undef_defer(%rip), %rax   # initial action xt
+    call compile_literal                # CALL forth_lit + 8-byte action cell
+    lea forth_execute(%rip), %rax
+    call compile_call                   # CALL forth_execute
+    call compile_ret                    # RET
+
+    # Fill code_len (code starts past CodeLen + 8-byte SrcMeta = +12)
+    mov colon_code_len_addr(%rip), %rax
+    lea 12(%rax), %rcx
+    mov %r13, %rdx
+    sub %rcx, %rdx
+    mov %edx, (%rax)
+
+    andb $~F_HIDDEN, 8(%r12)            # clear HIDDEN
+
+    pop %rbp
+    pop %rbx
+    ret
+
+.Ldefer_err:
+    pop %rbp
+    pop %rbx
+    ret
+
+# Initial action for a freshly DEFERed word: report and abort to the REPL.
+# Reached via forth_execute when an uninitialized deferred word is run.
+.global forth_undef_defer
+forth_undef_defer:
+    lea msg_undef_defer(%rip), %rsi
+    mov $msg_undef_defer_len, %rdx
+    call platform_write
+    jmp forth_abort
+
 # ---------- :NONAME ----------
 # :NONAME ( -- xt )
 # Begin an anonymous colon definition. Pushes the xt (HERE) to the data stack.
@@ -4381,10 +4430,13 @@ DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
+DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
+DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
+.global dict_is
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
