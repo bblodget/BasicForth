@@ -575,6 +575,7 @@ stat_buf:
 .equ SYS_mmap,    222
 .equ SYS_munmap,  215
 .equ SYS_getcwd,  17
+.equ SYS_chdir,   49
 .equ SYS_renameat, 38
 
 .equ AT_FDCWD,    -100
@@ -714,6 +715,14 @@ platform_fstat:
 .global platform_getcwd
 platform_getcwd:
     MOV X8, #SYS_getcwd
+    SVC #0
+    RET
+
+// platform_chdir ( X0=path -- X0=0 or -errno )
+// Raw chdir: path is a NUL-terminated absolute or relative directory path.
+.global platform_chdir
+platform_chdir:
+    MOV X8, #SYS_chdir
     SVC #0
     RET
 

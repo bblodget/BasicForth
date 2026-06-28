@@ -16,6 +16,7 @@
 
 .equ CELL, 8
 .equ INPUT_BUF_SIZE, 256
+.equ STARTUP_DIR_MAX, 1024          # buffer for the absolute startup directory
 
 _start:
     # Save argc and argv[1] before stack is used for anything else
@@ -199,11 +200,60 @@ _start:
     mov %rax, basicforth_docs_len(%rip)
 .Ldenv_done:
 
+    # Walk envp again for HOME= (used by `cd ~`). Same pattern as the DOCS walk;
+    # home_ptr points into the env string (valid for the process lifetime).
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
+.Lhenv_loop:
+    mov (%rdi), %rsi
+    test %rsi, %rsi
+    jz .Lhenv_done
+    lea home_prefix(%rip), %rdx
+    mov $home_prefix_len, %ecx
+.Lhenv_cmp:
+    test %ecx, %ecx
+    jz .Lhenv_found
+    movzbl (%rsi), %eax
+    cmpb (%rdx), %al
+    jne .Lhenv_next
+    inc %rsi
+    inc %rdx
+    dec %ecx
+    jmp .Lhenv_cmp
+.Lhenv_next:
+    add $8, %rdi
+    jmp .Lhenv_loop
+.Lhenv_found:
+    mov %rsi, home_ptr(%rip)        # value (past "HOME=")
+    mov %rsi, %rdi
+    xor %ecx, %ecx
+.Lhenv_strlen:
+    cmpb $0, (%rdi,%rcx)
+    je .Lhenv_strlen_done
+    inc %ecx
+    jmp .Lhenv_strlen
+.Lhenv_strlen_done:
+    movslq %ecx, %rax
+    mov %rax, home_len(%rip)
+.Lhenv_done:
+
+    # Capture the absolute startup directory, so `cd` with no argument can return
+    # here and session.fs stays pinned to it no matter where a later `cd` goes.
+    # Done before core.fs loads, while the CWD is still the launch directory.
+    lea startup_dir(%rip), %rdi
+    mov $STARTUP_DIR_MAX, %rsi
+    call platform_getcwd            # RAX = bytes incl NUL, or -errno
+    test %rax, %rax
+    jle .Lno_startup_dir            # getcwd failed -> leave length 0
+    dec %rax                        # drop the trailing NUL
+    mov %rax, startup_dir_len(%rip)
+.Lno_startup_dir:
+
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_assign_query(%rip), %r12 # LATEST (head of the built-in dictionary chain)
+    lea dict_home_dir(%rip), %r12   # LATEST (head of the built-in dictionary chain)
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -543,6 +593,8 @@ edit_prefix:    .ascii "BASICFORTH_EDITOR="
 .equ edit_prefix_len, . - edit_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
+home_prefix:    .ascii "HOME="
+.equ home_prefix_len, . - home_prefix
 opt_v:          .asciz "-v"
 opt_version:    .asciz "--version"
 
@@ -596,8 +648,23 @@ basicforth_docs:
 .global basicforth_docs_len
 basicforth_docs_len:
     .quad 0
+# Length of the captured absolute startup directory (0 if getcwd failed at boot).
+.global startup_dir_len
+startup_dir_len:
+    .quad 0
+# HOME environment value (pointer into envp) + its length, for `cd ~`. 0 = unset.
+.global home_ptr
+home_ptr:
+    .quad 0
+.global home_len
+home_len:
+    .quad 0
 
 .bss
 .align 8
 input_buf:
     .space INPUT_BUF_SIZE
+# Absolute startup directory, captured once at boot (NUL-terminated by getcwd).
+.global startup_dir
+startup_dir:
+    .space STARTUP_DIR_MAX

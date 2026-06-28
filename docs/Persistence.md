@@ -11,13 +11,18 @@ that happens to be written by the machine.
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `save` | ( -- ) | write the captured definitions to `session.fs` in the current directory |
+| `save` | ( -- ) | write the captured definitions to `session.fs` in the startup directory |
 | `-session` | ( -- ) | forget everything defined since startup (session words + interactive definitions) |
 | `reload` | ( -- ) | `-session`, then re-`include` the (possibly edited) `session.fs` |
 
 There is no separate "load" word: an interactive session **auto-loads**
-`session.fs` from the current directory at startup (if present), right after
-`core.fs`.
+`session.fs` at startup (if present), right after `core.fs`.
+
+`session.fs` lives in the **startup directory** — the directory BasicForth was
+launched in, captured once at boot. `save` and `reload` always use
+`<startup>/session.fs`, so the `cd` shell word can move the working directory
+without scattering your session across the tree (see `docs/Shell_Words.md`). If
+the boot-time `getcwd` fails, it falls back to a plain relative `session.fs`.
 
 ## The edit / compile / run loop
 

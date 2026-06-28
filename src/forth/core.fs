@@ -538,13 +538,36 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ +!                  \ log.len += u2
     again ;
 
+\ Absolute session-file paths, pinned to the startup directory so SAVE/RELOAD
+\ always use the launch directory regardless of any later `cd`. Two separate
+\ buffers so "<startup>/session.fs.new" and "<startup>/session.fs" can coexist
+\ on the stack for the atomic rename in SAVE.
+create (sess-a) 1088 allot
+create (sess-b) 1088 allot
+variable (sp-end)                        \ write pointer while building a path
+: (sp-add) ( c-addr u -- )               \ append u bytes at (sp-end)
+    dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
+    r> (sp-end) +! ;
+: (sess-build) ( buf c-addr u -- path plen )  \ build "<startup>/<name>" into buf
+    (startup-dir) nip 0= if              \ getcwd failed at boot (startup-dir empty):
+        rot drop  exit                   \   fall back to the bare relative name, like
+    then                                 \   make_absolute keeps a path relative on failure
+    >r >r                               ( buf )   \ R: u c-addr (the name)
+    dup (sp-end) !                       \ write pointer := buf
+    (startup-dir) (sp-add)               \ startup directory
+    s" /" (sp-add)                       \ separator
+    r> r> (sp-add)                       \ the name
+    (sp-end) @ over - ;                  ( buf len )
+: (session-path) ( -- c-addr u )  (sess-a) s" session.fs"     (sess-build) ;
+: (session-new)  ( -- c-addr u )  (sess-b) s" session.fs.new" (sess-build) ;
+
 \ (seed-log): reset the log and load the current session.fs's bytes into it, so
 \ SAVE rewrites the file's content (plus later additions) rather than drifting
 \ from a hand-edited file. No-op (empty log) when session.fs is absent.
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
-    s" session.fs" r/o open-file        ( fileid ior )
+    (session-path) r/o open-file        ( fileid ior )
     if drop exit then                   \ no session.fs → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
@@ -564,14 +587,14 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ an existing session.fs.
 : save ( -- )
     (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    s" session.fs.new" w/o create-file  ( fileid ior )
+    (session-new) w/o create-file       ( fileid ior )
     abort" save: cannot open session.fs.new"   ( fileid )
     >r
     (log) @ (log) cell+ @ r@ write-file ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
-    s" session.fs.new" s" session.fs" rename-file
+    (session-new) (session-path) rename-file
     abort" save: rename error"
     ." saved to session.fs" cr ;
 
@@ -596,12 +619,12 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     \ Verify session.fs is readable BEFORE destroying the live session — a
     \ missing or unreadable file must not forget the session or wipe the log
     \ (forth_included silently treats a missing file as a clean no-op).
-    s" session.fs" r/o open-file        ( fileid ior )
+    (session-path) r/o open-file        ( fileid ior )
     if  drop ." reload: cannot read session.fs" cr  exit  then
     close-file drop
     true (skip-capture) !
     -session
-    s" session.fs" (included?)          ( ior )
+    (session-path) (included?)          ( ior )
     if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
     (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
 
@@ -1062,15 +1085,20 @@ variable (pg-quit)                       \ true once the user pressed q
 : (pg-line) ( c-addr u -- )
     type cr  1 (pg-row) +!
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
-: page-file ( fileid -- )
+\ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
+\ a read-error flag (true if read-line failed) rather than aborting — it is a
+\ shared helper called from contexts that hold their own resources (e.g. (man-in)
+\ keeps a directory fd open), so a non-local abort here would skip their cleanup.
+\ Each caller decides whether to abort.
+: page-file ( fileid -- read-error? )
     0 (pg-row) ! false (pg-quit) !
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
-        if  2drop  r> close-file drop exit  then
+        if  2drop  ." (read error)" cr  r> close-file drop  true exit  then  \ I/O error
         if  (pg-buf@) swap (pg-line)
-        else  drop  r> close-file drop exit  then
-        (pg-quit) @ if  r> close-file drop exit  then
+        else  drop  r> close-file drop  false exit  then   \ EOF: done, no error
+        (pg-quit) @ if  r> close-file drop  false exit  then  \ user quit: not an error
     again ;
 
 \ --- MAN: find <topic>.md (case-insensitive) in the docs dirs and page it ---
@@ -1102,7 +1130,7 @@ variable (mn-found)
             2dup (ends-md?) if
                 2dup 3 - (mn-t) @ (mn-tn) @ (ci=) if
                     (build-path) r/o open-file
-                    if drop else page-file true (mn-found) ! then
+                    if drop else page-file drop true (mn-found) ! then  \ drop page-file's flag
                     2drop r> close-file drop exit
                 then
             then
@@ -1182,6 +1210,134 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
 \ Print the version/banner string (same text shown at startup). The string is
 \ supplied by the (version-str) primitive so it always matches the build.
 : version ( -- )  (version-str) type ;
+
+\ --- SHELL-LIKE WORDS: navigate and inspect the filesystem from the REPL.
+\ `cd` changes the real process directory (so relative include/open agree with
+\ it); session.fs stays pinned to the startup directory. Path tokens come from
+\ parse-word, so they can't contain spaces yet.
+: pwd ( -- )  (cwd) type cr ;
+\ Expand a leading ~ to $HOME: only "~" or "~/sub" expand ("~" -> HOME,
+\ "~/sub" -> HOME + "/sub"). "~user" is a different, unsupported form and is left
+\ unchanged, as is a token without a leading ~ or one where HOME is unset. The
+\ result is bounded by (tilde-sz): an over-long HOME+tail is left unexpanded
+\ rather than overrunning the buffer. Reuses (sp-add) from the session builder.
+1024 constant (tilde-sz)
+create (tilde-buf) (tilde-sz) allot
+: (tilde-expand) ( c-addr u -- c-addr2 u2 )
+    dup 0= if exit then                        \ empty -> unchanged
+    over c@ [char] ~ = 0= if exit then         \ no leading ~ -> unchanged
+    dup 1 > if                                 \ "~x...": only "~/..." expands
+        over 1+ c@ [char] / = 0= if exit then  \   "~user" is unsupported -> unchanged
+    then
+    (home-dir) nip 0= if exit then             \ HOME unset -> leave ~ (chdir errors)
+    (home-dir) nip  over 1- +                  ( c-addr u need )  \ HOME + (token past ~)
+    (tilde-sz) 1- > if exit then               \ need >= buffer/chdir limit -> leave ~
+    (tilde-buf) (sp-end) !
+    (home-dir) (sp-add)                        \ HOME
+    1 /string (sp-add)                         \ the rest of the token after the ~
+    (tilde-buf) (sp-end) @ over - ;            \ ( c-addr2 u2 )
+\ Parse the next token as a path, expanding a leading ~ to $HOME. Used by every
+\ path-taking shell word so ~ works uniformly (cd / pushd / ls / cat / more).
+: (parse-path) ( -- c-addr u )  parse-word (tilde-expand) ;
+: cd ( "path" -- )
+    (parse-path)                            ( c-addr u )   \ ~ already expanded
+    dup 0= if  2drop  (startup-dir)  then   \ bare cd -> startup (home) directory
+    2dup chdir                              ( c-addr u ior )
+    if  ." cd: cannot access " type cr  abort  else  2drop  then ;
+
+\ ls: list a directory (the current one by default), one entry per line, using
+\ the same getdents machinery as the help browser. "." and ".." are skipped.
+: (dotdir?) ( c-addr u -- f )            \ is the name "." or ".."?
+    dup 1 = if  drop c@ [char] . =  exit  then
+    dup 2 = if  drop dup c@ [char] . = swap 1+ c@ [char] . = and  exit  then
+    2drop false ;
+: ls ( "[dir]" -- )
+    (parse-path)                            ( c-addr u )
+    dup 0= if  2drop s" ."  then            \ no argument -> current directory
+    r/o open-file if  drop ." ls: cannot open directory" cr abort  then  ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)        ( n )
+        dup 0< if  ." ls: read error" cr  r> close-file drop abort  then  \ negative errno
+        dup 0> while                          ( n )
+        (gd@) +  (gd@)                         ( end ptr )
+        begin 2dup u> while                    ( end ptr )
+            dup (de-name) dup (cstr-len)       ( end ptr name namelen )
+            2dup (dotdir?) 0= if  type cr  else  2drop  then   ( end ptr )
+            dup (de-reclen) +                  ( end nextptr )
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+
+\ cat: dump a file to stdout (no paging). Reuses the pager's line buffer for
+\ chunked reads. more: page a file a screenful at a time (built on page-file).
+\ (`page` already means clear-screen, so the paged viewer is `more`.)
+\ Error paths ABORT after reporting (closing any open file first), so the REPL
+\ shows the message and no " ok" — a failed command must not look like success.
+: cat ( "file" -- )
+    (parse-path)                            ( c-addr u )
+    dup 0= if  2drop ." usage: cat <file>" cr abort  then
+    r/o open-file if  drop ." cat: cannot open file" cr abort  then  ( fileid )
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-file   ( u2 ior )
+        if  ." cat: read error" cr  drop  r> close-file drop abort  then   ( u2 )
+        dup 0>                               ( u2 f )   \ 0 bytes (no error) = EOF
+    while                                    ( u2 )
+        \ Write to stdout via write-file (fd 1) rather than TYPE, so a write
+        \ failure (broken pipe, ENOSPC) is surfaced instead of silently ignored.
+        (pg-buf@) swap 1 write-file          ( ior )
+        if  ." cat: write error" cr  r> close-file drop abort  then
+    repeat  drop
+    r> close-file drop ;
+: more ( "file" -- )
+    (parse-path)                            ( c-addr u )
+    dup 0= if  2drop ." usage: more <file>" cr abort  then
+    r/o open-file if  drop ." more: cannot open file" cr abort  then  ( fileid )
+    \ page-file closed the fd and reported any read error; abort so a failed
+    \ `more` doesn't return " ok". Safe here: top-level word, no fd held.
+    page-file if  abort  then ;
+
+\ Directory stack: pushd saves the current dir (absolute) and cd's to a new one;
+\ popd returns to the most recently saved dir; dirs lists current + saved (top
+\ first). Saved paths are absolute, so popd is correct across intervening cds.
+16   constant (ds-max)                     \ max directory-stack depth
+1024 constant (ds-slot)                    \ max bytes per saved path
+variable (ds-buf)                          \ heap: (ds-max)*(ds-slot) path bytes (lazy)
+create  (ds-len) (ds-max) cells allot      \ length of each saved path
+variable (ds-n)                            \ number of saved entries
+: (ds-buf@) ( -- a )
+    (ds-buf) @ ?dup if exit then
+    (ds-max) (ds-slot) * allocate abort" pushd: out of memory" dup (ds-buf) ! ;
+: (ds-slot-at) ( i -- a )  (ds-slot) * (ds-buf@) + ;
+: (ds-len-at)  ( i -- a )  cells (ds-len) + ;
+: (ds-store) ( c-addr u i -- )             \ save path (c-addr u) into slot i
+    >r
+    dup r@ (ds-len-at) !                    \ (ds-len)[i] := u
+    r> (ds-slot-at)  swap cmove ;           \ copy the bytes into slot i
+: (ds-fetch) ( i -- c-addr u )  dup (ds-slot-at) swap (ds-len-at) @ ;
+: pushd ( "dir" -- )
+    (parse-path)                            ( c-addr u )
+    dup 0= if  2drop ." usage: pushd <dir>" cr abort  then
+    (ds-n) @ (ds-max) < 0= if  2drop ." pushd: stack full" cr abort  then
+    \ save the current dir BEFORE cd (into slot n; commit n only if cd succeeds)
+    (cwd) dup (ds-slot) < 0= if             ( c-addr u cwd-a cwd-u )
+        2drop 2drop ." pushd: path too long" cr abort  then
+    (ds-n) @ (ds-store)                     ( c-addr u )
+    2dup chdir if  ." pushd: cannot access " type cr abort  then  ( c-addr u )
+    2drop  1 (ds-n) +! ;
+: popd ( -- )
+    (ds-n) @ 0= if  ." popd: directory stack empty" cr abort  then
+    \ Try the restore BEFORE popping, so a failed chdir (the saved dir vanished)
+    \ keeps the entry on the stack instead of silently losing it.
+    (ds-n) @ 1- (ds-fetch)                   ( c-addr u )   \ top entry; not popped yet
+    chdir if  ." popd: cannot restore directory" cr abort  then
+    -1 (ds-n) +! ;                           \ restored OK -> now pop the entry
+: dirs ( -- )                              \ current dir, then saved dirs top-first
+    (cwd) type
+    (ds-n) @ 0 ?do
+        space  (ds-n) @ 1- i - (ds-fetch) type
+    loop  cr ;
 
 \ --- TUTORIAL: walk a docs file one "## " step at a time, returning to the
 \ REPL after each step so you can type the examples, then  next / back  to move.

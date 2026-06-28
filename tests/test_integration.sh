@@ -1519,7 +1519,8 @@ fi
 
 # Session persistence (SAVE). Capture only runs in an interactive session, so
 # the tests force it on through a pipe with BASICFORTH_SESSION=1. session.fs is
-# written to the CWD, so each run is wrapped in a subshell that cd's to a tmpdir.
+# written to the STARTUP directory (the launch CWD), so each run is wrapped in a
+# subshell that cd's to a tmpdir before launching the binary.
 sv_dir="$(mktemp -d)"
 # The harness is invoked with a relative binary path (./basicforth) from the
 # build dir; these subshells cd elsewhere, so resolve it to an absolute command.
@@ -1606,6 +1607,22 @@ printf ': keep 1 ;\ndrop\n' > "$stuck_dir/session.fs"   # 'drop' underflows on l
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 rl_stuck=$(cat "$stuck_dir/session.fs" 2>/dev/null)
 rm -rf "$stuck_dir"
+# session.fs is pinned to the STARTUP directory: after a `cd` away, save must
+# still write to the launch dir, not the new cwd.
+pin_dir="$(mktemp -d)"
+pin_away="$(mktemp -d)"
+( cd "$pin_dir" && printf ': pinned 7 ;\ncd %s\nsave\nbye\n' "$pin_away" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+pin_home=$(cat "$pin_dir/session.fs" 2>/dev/null)
+[ -e "$pin_away/session.fs" ] && pin_away_made=yes || pin_away_made=no
+rm -rf "$pin_dir" "$pin_away"
+# Graceful degradation when boot-time getcwd fails (startup dir removed out from
+# under the process): (startup-dir) is empty, so the session paths fall back to
+# the bare relative name instead of an absolute "/session.fs" that could pollute
+# the filesystem root. The REPL must keep working — confirm it still evaluates.
+gone_dir="$(mktemp -d)"
+gone_out=$( cd "$gone_dir" && rmdir "$gone_dir" && printf '3 4 + .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
 rm -rf "$sv_dir" "$off_dir"
 
@@ -1679,6 +1696,16 @@ if [[ "$rl_stuck" == *"persisted"* ]]; then
     printf "  ${GREEN}PASS${NC}  a faulting reload does not leave skip-capture stuck\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
+fi
+if [[ "$pin_home" == *": pinned 7 ;"* && "$pin_away_made" == "no" ]]; then
+    printf "  ${GREEN}PASS${NC}  save pins session.fs to the startup dir across a cd\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  session.fs not pinned to startup dir after cd\n    home: %q / away-made: %s\n" "$pin_home" "$pin_away_made"; ((failed++))
+fi
+if [[ "$gone_out" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  REPL survives a failed boot-time getcwd (relative session.fs fallback)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
@@ -2153,6 +2180,19 @@ rm -rf "$sort_base"
 
 rm -rf "$sec_base"
 
+# A "topic" that is actually a directory: open() succeeds but read() returns
+# EISDIR. man must report it via page-file's "(read error)" and the REPL must
+# keep running afterward — a regression guard for page-file no longer aborting
+# through (man-in) (which would skip its directory-fd cleanup and leak it).
+mkdir "$docs_dir/Brokendir.md"
+brk_out=$(printf 'man Brokendir\n9 9 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$brk_out" == *"(read error)"* && "$brk_out" == *"18"* ]]; then
+    printf "  ${GREEN}PASS${NC}  man on a directory-topic reports read error, REPL survives\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  man on a directory-topic (page-file cleanup)\n    Got: %s\n" "$(echo "$brk_out" | head -5)"; ((failed++))
+fi
+
 rm -rf "$docs_dir"
 
 # =========================================================================
@@ -2217,6 +2257,185 @@ else
 fi
 
 rm -rf "$tut_dir"
+
+# =========================================================================
+section "Shell Words"
+# =========================================================================
+# pwd / cd navigate the real process directory. `cd` with no argument returns to
+# the startup directory (where BasicForth was launched), not $HOME. The startup
+# dir here is the directory the test runs in (its physical, symlink-resolved
+# path, to match what getcwd reports).
+shell_start=$(pwd -P)
+
+# pwd prints the current (startup) directory
+assert_output "pwd shows cwd"          "pwd"                              "$shell_start"
+# cd changes directory; pwd reflects it
+assert_output "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
+# a failed cd reports the offending path
+assert_output "cd bad path errors"     "cd /no/such/dir"                 "cd: cannot access /no/such/dir"
+# bare cd returns to the startup directory (proves cd state really changes:
+# shell_start is not present in the input, so this can't pass on echo alone)
+assert_output "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
+
+# cd ~ expands to $HOME. Match $HOME + newline so it isn't satisfied by
+# shell_start (which lives *under* $HOME, i.e. contains it as a prefix). Use the
+# physical path to match what getcwd reports even if $HOME is a symlink.
+th_home=$(cd "$HOME" 2>/dev/null && pwd -P)
+th_tilde=$(run_forth $'cd ~\npwd')
+if [[ -n "$th_home" && "$th_tilde" == *"$th_home"$'\n'* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ expands to \$HOME\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ did not go to \$HOME (%s)\n    Got: %q\n" "$th_home" "$th_tilde"; ((failed++))
+fi
+# cd ~ with HOME unset: ~ is left as-is, chdir fails, and it aborts (no " ok").
+th_unset=$(printf 'cd ~\n' | env -u HOME BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_unset" == *"cd: cannot access ~"* && "$th_unset" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ with HOME unset errors gracefully\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ with HOME unset\n    Got: %q\n" "$th_unset"; ((failed++))
+fi
+# Only "~" / "~/..." expand. "~user" is a different, unsupported form: it must be
+# left UNCHANGED (not concatenated onto $HOME), so cd errors on the literal token.
+th_user=$(printf 'cd ~nobody\n' | HOME=/home/x BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_user" == *"cd: cannot access ~nobody"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~user is left unchanged (no \$HOME concatenation)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~user mis-expanded\n    Got: %q\n" "$th_user"; ((failed++))
+fi
+# A pathologically long $HOME must not overflow the expansion buffer: the
+# expansion is skipped and cd errors, and the REPL stays alive (prints 4 after).
+th_big_home=$(printf '/%.0s' {1..1500})
+th_big=$(printf 'cd ~\n2 2 + .\n' | HOME="$th_big_home" BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_big" == *"cannot access"* && "$th_big" == *"4"* ]]; then
+    printf "  ${GREEN}PASS${NC}  long \$HOME does not overflow ~ expansion\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  long \$HOME overflowed or crashed\n    Got: %q\n" "$th_big"; ((failed++))
+fi
+# Off-by-one boundary: the expanded path must fit chdir's buffer *with its NUL*,
+# so the usable max is one less than the buffer (1024). A $HOME of exactly 1024
+# must be rejected (~ left as-is -> "cannot access ~"), not expanded to a
+# 1024-char path. (1023 would expand; this guards the >= vs > boundary.)
+th_bound_home=$(printf 'Z%.0s' $(seq 1 1024))
+th_bound=$(printf 'cd ~\n' | HOME="$th_bound_home" BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$th_bound" == *"cannot access ~"* && "$th_bound" != *"ZZZ"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd ~ rejects \$HOME at the length boundary (no off-by-one)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd ~ boundary off-by-one\n    Got: %q\n" "$th_bound"; ((failed++))
+fi
+# ~ expansion is uniform across the path-taking words, not just cd (regression:
+# only cd expanded ~, so `pushd ~`/`ls ~`/`cat ~` failed). pushd ~ -> $HOME; and
+# cat ~ expands to $HOME (a directory) so it reaches the read-error path -- an
+# UNexpanded "~" would instead be "cannot open file", so this proves expansion.
+ps_tilde=$(run_forth $'pushd ~\npwd')
+if [[ -n "$th_home" && "$ps_tilde" == *"$th_home"$'\n'* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd ~ expands to \$HOME\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pushd ~ did not expand\n    Got: %q\n" "$ps_tilde"; ((failed++))
+fi
+cat_tilde=$(run_forth "cat ~")
+if [[ "$cat_tilde" == *"cat: read error"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cat ~ expands (~ -> \$HOME dir, hits read error)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cat ~ did not expand\n    Got: %q\n" "$cat_tilde"; ((failed++))
+fi
+
+# ls / cat / more over a temp dir with known contents (absolute paths, so the
+# binary's own CWD doesn't matter). The expected strings are file *contents* or
+# entry names, none of which appear in the echoed input line.
+fw_dir="$(mktemp -d)"
+printf 'hello\nworld\n' > "$fw_dir/greet.txt"
+mkdir "$fw_dir/sub"
+assert_output "ls lists a directory"     "ls $fw_dir"               "greet.txt"
+assert_output "ls shows subdirectories"  "ls $fw_dir"               "sub"
+assert_output "cat dumps a file"         "cat $fw_dir/greet.txt"    "world"
+assert_output "more pages a file"        "more $fw_dir/greet.txt"   "hello"
+assert_output "cat missing file errors"  "cat $fw_dir/nope.txt"     "cat: cannot open file"
+assert_output "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot open directory"
+# cat on a directory: open() succeeds but read() fails (EISDIR). Must surface the
+# error, not silently stop and report success (a read error swallowed by the loop).
+assert_output "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read error"
+
+# Error paths must ABORT (signal failure to the REPL), not print " ok" as if the
+# command succeeded. Check the message IS shown and " ok" is NOT, while a
+# successful command still prints " ok" (control).
+ab_cat=$(run_forth "cat $fw_dir/sub")        # cat a directory -> read error + abort
+ab_cd=$(run_forth "cd /no/such/dir")         # cd failure -> abort
+ab_more=$(run_forth "more $fw_dir/sub")      # more a directory -> page-file read error + abort
+ab_ok=$(run_forth "ls $fw_dir")              # success still prints " ok"
+rm -rf "$fw_dir"
+if [[ "$ab_cat" == *"cat: read error"* && "$ab_cat" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cat error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cat error returned success to the REPL\n    Got: %q\n" "$ab_cat"; ((failed++))
+fi
+if [[ "$ab_more" == *"(read error)"* && "$ab_more" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  more error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  more error returned success to the REPL\n    Got: %q\n" "$ab_more"; ((failed++))
+fi
+if [[ "$ab_cd" == *"cd: cannot access"* && "$ab_cd" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cd error aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cd error returned success to the REPL\n    Got: %q\n" "$ab_cd"; ((failed++))
+fi
+if [[ "$ab_ok" == *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  successful shell word still prints \" ok\"\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  success path lost its \" ok\"\n    Got: %q\n" "$ab_ok"; ((failed++))
+fi
+
+# Directory stack: pushd <dir> records the current dir (absolute) and cd's there;
+# popd returns to it; dirs lists current + saved. shell_start is the startup dir
+# and never appears in the echoed input, so checking it proves the stack really
+# recorded/restored the old dir (not an echo artifact).
+ps_dir="$(mktemp -d)"
+ps_dirs=$(run_forth $'pushd '"$ps_dir"$'\ndirs')        # dirs must list the saved startup dir
+ps_pop=$(run_forth $'pushd '"$ps_dir"$'\npopd\npwd')    # popd returns to the startup dir
+ps_empty=$(run_forth "popd")                            # popd on empty stack -> abort
+ps_bad=$(run_forth "pushd /no/such/dir")                # pushd missing dir -> abort
+rm -rf "$ps_dir"
+if [[ "$ps_dirs" == *"$shell_start"* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd records dir, dirs lists it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  dirs did not list the pushed dir\n    Got: %q\n" "$ps_dirs"; ((failed++))
+fi
+if [[ "$ps_pop" == *"$shell_start"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd returns to the pushed-from dir\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd did not return home\n    Got: %q\n" "$ps_pop"; ((failed++))
+fi
+if [[ "$ps_empty" == *"directory stack empty"* && "$ps_empty" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd on empty stack aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd on empty stack\n    Got: %q\n" "$ps_empty"; ((failed++))
+fi
+if [[ "$ps_bad" == *"pushd: cannot access"* && "$ps_bad" != *" ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd to a missing dir aborts (no \" ok\")\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pushd to a missing dir\n    Got: %q\n" "$ps_bad"; ((failed++))
+fi
+
+# popd must NOT lose the saved dir if the restore chdir fails. Deterministic via
+# a coproc: pushd, wait for its " ok", remove the saved dir, then popd — the
+# entry must survive (still listed by dirs after the failed restore). timeout
+# guards against a hang if " ok" never arrives.
+pp_from="$(mktemp -d)"; pp_to="$(mktemp -d)"
+# $sv_forth is the absolute binary command (the coproc cd's away, so ./basicforth
+# would not resolve); set earlier in the session-persistence section.
+coproc PP { cd "$pp_from" && BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1; }
+printf 'pushd %s\n' "$pp_to" >&"${PP[1]}"
+while IFS= read -r -u "${PP[0]}" pp_ln; do [[ "$pp_ln" == *" ok"* ]] && break; done
+rmdir "$pp_from"                                   # saved dir vanishes before popd
+printf 'dirs\npopd\ndirs\nbye\n' >&"${PP[1]}"
+pp_out=""; while IFS= read -r -u "${PP[0]}" pp_ln; do pp_out+="$pp_ln"$'\n'; done
+wait "$PP_PID" 2>/dev/null
+rm -rf "$pp_to"
+pp_after=${pp_out#*cannot restore directory}       # text printed after the failed popd
+if [[ "$pp_out" == *"cannot restore directory"* && "$pp_after" == *"$pp_from"* ]]; then
+    printf "  ${GREEN}PASS${NC}  popd keeps the saved dir when restore fails\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  popd lost the saved dir on restore failure\n    Got: %q\n" "$pp_out"; ((failed++))
+fi
 
 # =========================================================================
 section "Version"

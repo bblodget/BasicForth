@@ -16,6 +16,7 @@
 
 .equ CELL, 8
 .equ INPUT_BUF_SIZE, 256
+.equ STARTUP_DIR_MAX, 1024          // buffer for the absolute startup directory
 
 _start:
     // Save argc and argv[1] before stack is used for anything else
@@ -211,12 +212,61 @@ _start:
     STR X2, [X9]
 .Ldenv_done:
 
+    // Walk envp again for HOME= (used by `cd ~`). Same pattern as the DOCS walk;
+    // home_ptr points into the env string (valid for the process lifetime).
+    LDR X0, [SP]
+    ADD X0, X0, #2
+    LSL X0, X0, #3
+    ADD X0, SP, X0                  // &envp[0]
+.Lhenv_loop:
+    LDR X1, [X0]
+    CBZ X1, .Lhenv_done
+    ADR X2, home_prefix
+    MOV X3, #home_prefix_len
+.Lhenv_cmp:
+    CBZ X3, .Lhenv_found
+    LDRB W4, [X1], #1
+    LDRB W5, [X2], #1
+    CMP W4, W5
+    B.NE .Lhenv_next
+    SUB X3, X3, #1
+    B .Lhenv_cmp
+.Lhenv_next:
+    ADD X0, X0, #8
+    B .Lhenv_loop
+.Lhenv_found:
+    ADR X9, home_ptr
+    STR X1, [X9]                    // value (past "HOME=")
+    MOV X2, #0
+.Lhenv_strlen:
+    LDRB W3, [X1, X2]
+    CBZ W3, .Lhenv_strlen_done
+    ADD X2, X2, #1
+    B .Lhenv_strlen
+.Lhenv_strlen_done:
+    ADR X9, home_len
+    STR X2, [X9]
+.Lhenv_done:
+
+    // Capture the absolute startup directory, so `cd` with no argument can return
+    // here and session.fs stays pinned to it no matter where a later `cd` goes.
+    // Done before core.fs loads, while the CWD is still the launch directory.
+    ADR X0, startup_dir
+    MOV X1, #STARTUP_DIR_MAX
+    BL platform_getcwd              // X0 = bytes incl NUL, or -errno
+    CMP X0, #0
+    B.LE .Lno_startup_dir           // getcwd failed -> leave length 0
+    SUB X0, X0, #1                  // drop the trailing NUL
+    ADR X9, startup_dir_len
+    STR X0, [X9]
+.Lno_startup_dir:
+
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_assign_query      // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_home_dir          // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -581,6 +631,8 @@ edit_prefix:    .ascii "BASICFORTH_EDITOR="
 .equ edit_prefix_len, . - edit_prefix
 docs_prefix:    .ascii "BASICFORTH_DOCS="
 .equ docs_prefix_len, . - docs_prefix
+home_prefix:    .ascii "HOME="
+.equ home_prefix_len, . - home_prefix
 opt_v:          .asciz "-v"
 opt_version:    .asciz "--version"
 
@@ -635,8 +687,23 @@ basicforth_docs:
 .global basicforth_docs_len
 basicforth_docs_len:
     .quad 0
+// Length of the captured absolute startup directory (0 if getcwd failed at boot).
+.global startup_dir_len
+startup_dir_len:
+    .quad 0
+// HOME environment value (pointer into envp) + its length, for `cd ~`. 0 = unset.
+.global home_ptr
+home_ptr:
+    .quad 0
+.global home_len
+home_len:
+    .quad 0
 
 .bss
 .align 4
 input_buf:
     .space INPUT_BUF_SIZE
+// Absolute startup directory, captured once at boot (NUL-terminated by getcwd).
+.global startup_dir
+startup_dir:
+    .space STARTUP_DIR_MAX

@@ -3641,6 +3641,82 @@ forth_getdents:
     LDP X29, X30, [SP], #16
     RET
 
+// chdir ( c-addr u -- ior )  change the CWD to the path; ior 0 = ok, else -errno.
+// The path is copied to a scratch buffer and NUL-terminated for the syscall.
+.global forth_chdir
+forth_chdir:
+    STP X29, X30, [SP, #-16]!
+    LDR X2, [X19]                   // u (length)
+    LDR X1, [X19, #CELL]            // c-addr
+    ADD X19, X19, #CELL             // pop u; TOS slot ← ior
+    CMP X2, #ABS_PATH_MAX
+    B.HS .Lchdir_toolong            // u >= ABS_PATH_MAX -> no room for path + NUL
+    ADR X3, chdir_buf
+    MOV X4, #0                      // copy index
+.Lchdir_copy:
+    CMP X4, X2
+    B.HS .Lchdir_copydone
+    LDRB W5, [X1, X4]
+    STRB W5, [X3, X4]
+    ADD X4, X4, #1
+    B .Lchdir_copy
+.Lchdir_copydone:
+    STRB WZR, [X3, X4]              // NUL-terminate
+    ADR X0, chdir_buf
+    BL platform_chdir               // X0 = 0 or -errno
+    STR X0, [X19]                   // ior
+    LDP X29, X30, [SP], #16
+    RET
+.Lchdir_toolong:
+    MOV X0, #-36                    // -ENAMETOOLONG
+    STR X0, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
+// (startup-dir) ( -- c-addr u )  absolute directory BasicForth was launched in
+// (u = 0 if getcwd failed at boot). Backs bare `cd` and session.fs pinning.
+.global forth_startup_dir
+forth_startup_dir:
+    ADR X9, startup_dir
+    STR X9, [X19, #-CELL]!          // c-addr
+    ADR X9, startup_dir_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // u
+    RET
+
+// (cwd) ( -- c-addr u )  the current working directory, freshly read via getcwd
+// into a static buffer (u = 0 if getcwd fails). Backs `pwd`.
+.global forth_cwd
+forth_cwd:
+    STP X29, X30, [SP, #-16]!
+    ADR X0, cwd_buf
+    MOV X1, #ABS_PATH_MAX
+    BL platform_getcwd              // X0 = bytes incl NUL, or -errno
+    CMP X0, #0
+    B.GT .Lcwd_ok
+    MOV X0, #0                      // failure -> length 0
+    B .Lcwd_push
+.Lcwd_ok:
+    SUB X0, X0, #1                  // drop the trailing NUL
+.Lcwd_push:
+    ADR X9, cwd_buf
+    STR X9, [X19, #-CELL]!          // c-addr
+    STR X0, [X19, #-CELL]!          // u
+    LDP X29, X30, [SP], #16
+    RET
+
+// (home-dir) ( -- c-addr u )  the HOME environment value and length (0 0 if HOME
+// is unset). Backs `cd ~`.
+.global forth_home_dir
+forth_home_dir:
+    ADR X9, home_ptr
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // c-addr
+    ADR X9, home_len
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!          // u
+    RET
+
 // (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
 .global forth_docs_path
 forth_docs_path:
@@ -4850,12 +4926,19 @@ DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
+DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
+DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
+DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
+DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_is
 .global dict_assign_query
+.global dict_startup_dir
+.global dict_cwd
+.global dict_home_dir
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -4869,6 +4952,16 @@ DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 .align 3
 incl_path_buf:
     .space 512
+
+// NUL-terminated scratch path for chdir (the syscall needs a C string).
+.align 3
+chdir_buf:
+    .space ABS_PATH_MAX
+
+// Static buffer for (cwd)/pwd getcwd results.
+.align 3
+cwd_buf:
+    .space ABS_PATH_MAX
 
 // Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.
 .align 3

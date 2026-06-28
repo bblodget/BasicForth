@@ -3325,6 +3325,74 @@ forth_getdents:
     mov %rax, (%r15)
     ret
 
+# chdir ( c-addr u -- ior )  change the CWD to the path; ior 0 = ok, else -errno.
+# The path is copied to a scratch buffer and NUL-terminated for the syscall.
+.global forth_chdir
+forth_chdir:
+    mov (%r15), %rdx                # u (length)
+    mov CELL(%r15), %rsi            # c-addr
+    add $CELL, %r15                 # pop u; TOS slot ← ior
+    cmp $ABS_PATH_MAX, %rdx
+    jae .Lchdir_toolong             # no room for path + NUL
+    lea chdir_buf(%rip), %rdi
+    push %rdi                       # save buffer start across the copy
+    mov %rdx, %rcx
+    cld
+    rep movsb                       # copy path bytes (RDI advances to the end)
+    movb $0, (%rdi)                 # NUL-terminate
+    pop %rdi                        # RDI = buffer start
+    call platform_chdir             # RAX = 0 or -errno
+    mov %rax, (%r15)                # ior
+    ret
+.Lchdir_toolong:
+    movq $-36, (%r15)               # -ENAMETOOLONG
+    ret
+
+# (startup-dir) ( -- c-addr u )  absolute directory BasicForth was launched in
+# (u = 0 if getcwd failed at boot). Backs bare `cd` and session.fs pinning.
+.global forth_startup_dir
+forth_startup_dir:
+    lea startup_dir(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # c-addr
+    mov startup_dir_len(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)                # u
+    ret
+
+# (cwd) ( -- c-addr u )  the current working directory, freshly read via getcwd
+# into a static buffer (u = 0 if getcwd fails). Backs `pwd`.
+.global forth_cwd
+forth_cwd:
+    lea cwd_buf(%rip), %rdi
+    mov $ABS_PATH_MAX, %rsi
+    call platform_getcwd            # RAX = bytes incl NUL, or -errno
+    test %rax, %rax
+    jg .Lcwd_ok
+    xor %eax, %eax                  # failure -> length 0
+    jmp .Lcwd_push
+.Lcwd_ok:
+    dec %rax                        # drop the trailing NUL
+.Lcwd_push:
+    lea cwd_buf(%rip), %rcx
+    sub $CELL, %r15
+    mov %rcx, (%r15)                # c-addr
+    sub $CELL, %r15
+    mov %rax, (%r15)                # u
+    ret
+
+# (home-dir) ( -- c-addr u )  the HOME environment value and length (0 0 if HOME
+# is unset). Backs `cd ~`.
+.global forth_home_dir
+forth_home_dir:
+    mov home_ptr(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # c-addr
+    mov home_len(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # u
+    ret
+
 # (docs-path) ( -- c-addr u )  the BASICFORTH_DOCS value and length (0 0 unset).
 .global forth_docs_path
 forth_docs_path:
@@ -4448,12 +4516,19 @@ DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
+DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
+DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
+DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
+DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
 .global dict_version_str
 .global dict_is
 .global dict_assign_query
+.global dict_startup_dir
+.global dict_cwd
+.global dict_home_dir
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4470,6 +4545,16 @@ DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 .align 8
 incl_path_buf:
     .space 512
+
+# NUL-terminated scratch path for chdir (the syscall needs a C string).
+.align 8
+chdir_buf:
+    .space ABS_PATH_MAX
+
+# Static buffer for (cwd)/pwd getcwd results.
+.align 8
+cwd_buf:
+    .space ABS_PATH_MAX
 
 # Source table (see SEE source-metadata). Parallel arrays indexed by slot = id-1.
 .align 8

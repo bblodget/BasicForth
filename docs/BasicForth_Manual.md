@@ -532,6 +532,44 @@ on:
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.
 
+## Shell-Like Words
+
+Navigate and inspect the filesystem from the REPL without leaving BasicForth:
+
+```
+> pwd                            \ print the current directory
+/home/you/project
+> ls                             \ list the current directory (or: ls <dir>)
+core.fs   notes.txt   src
+> cat notes.txt                  \ dump a file to stdout (more <file> to page it)
+remember to feed the snake
+> cd src                         \ change directory; bare `cd` returns to startup
+> pushd /tmp                     \ save the current dir and cd to another
+> popd                           \ return to the saved dir (dirs lists the stack)
+```
+
+| Word | Stack | Meaning |
+|------|-------|---------|
+| `pwd` | ( -- ) | print the current working directory |
+| `cd` | ( "dir" -- ) | change directory; **bare `cd`** returns to the startup directory; `cd ~` expands `~` to `$HOME` |
+| `ls` | ( "[dir]" -- ) | list a directory (current by default), one entry per line |
+| `cat` | ( "file" -- ) | write a file to stdout |
+| `more` | ( "file" -- ) | page a file a screenful at a time (`page` already means clear-screen) |
+| `pushd` | ( "dir" -- ) | save the current directory, then `cd` to `<dir>` |
+| `popd` | ( -- ) | return to the most recently `pushd`-ed directory |
+| `dirs` | ( -- ) | list the directory stack: current first, then saved (top first) |
+
+- `cd` changes the **real process directory**, so relative `include` and
+  `open-file` agree with it. **`session.fs` stays pinned to the startup
+  directory**, so `save` always writes where you launched, no matter where you
+  `cd`. Bare `cd` (no argument) returns there.
+- A failed command (missing file/directory, bad path) prints an error and
+  signals failure — the REPL shows the message and **no `ok`** — rather than
+  silently succeeding.
+- Paths come from the next word, so they cannot contain spaces yet.
+
+See `docs/Shell_Words.md` for details.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

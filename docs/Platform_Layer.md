@@ -335,6 +335,28 @@ Read up to `count` bytes from a file descriptor into a buffer. Backs
 | **Output**   | X0 = bytes read, or negative errno | RAX = bytes read, or negative errno |
 | **Syscall**  | read(fd, buf, count) #63           | read(fd, buf, count) #0           |
 
+### platform_getcwd
+
+Get the current working directory as a NUL-terminated absolute path. Backs the
+`(cwd)` primitive (`pwd`) and the startup-directory capture at boot.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = buf, X1 = size                | RDI = buf, RSI = size              |
+| **Output**   | X0 = bytes incl. NUL, or negative errno | RAX = bytes incl. NUL, or negative errno |
+| **Syscall**  | getcwd(buf, size) #17              | getcwd(buf, size) #79             |
+
+### platform_chdir
+
+Change the current working directory. Backs the `chdir` primitive (and thus
+`cd` / `pushd` / `popd`). The path must be NUL-terminated.
+
+|              | ARM64                              | x86-64                             |
+|--------------|------------------------------------|-------------------------------------|
+| **Input**    | X0 = path (asciiz)                 | RDI = path (asciiz)                |
+| **Output**   | X0 = 0, or negative errno          | RAX = 0, or negative errno         |
+| **Syscall**  | chdir(path) #49                    | chdir(path) #80                   |
+
 ### platform_flush_icache (ARM64 only)
 
 Flush the instruction cache for a range of addresses after writing

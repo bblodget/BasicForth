@@ -366,6 +366,44 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Shell-Like Words (pwd / cd / ls / cat / more) — NEXT
+
+Navigate and inspect the filesystem from the REPL — hop to another directory
+and list or read a file without leaving BasicForth. Most infrastructure already
+exists; only `chdir` is a new syscall. See `docs/WildIdeas.md` for the full
+write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
+`touch`) are deferred as a separate, riskier class.
+
+- [x] `chdir` platform primitive
+  - New syscall wrapper: `SYS_chdir` (80 on x86-64, 49 on ARM64), stubbed in
+    both `test_helper_*.s`. Forth bridge `chdir ( c-addr u -- ior )` copies the
+    path to a NUL-terminated buffer (over-long → `-ENAMETOOLONG`).
+- [x] Capture the startup directory at boot
+  - `_start` `getcwd`s into `startup_dir` before `core.fs` loads. `(startup-dir)`
+    exposes it. `session.fs` is now pinned to it: `core.fs` builds absolute
+    `<startup>/session.fs(.new)` for seed-log / SAVE / RELOAD, so persistence
+    never wanders after a `cd`. Regression test guards it.
+- [x] `pwd ( -- )` — prints the cwd (← new `(cwd)` primitive over `getcwd`).
+- [x] `cd ( "path" -- )` — `chdir` to the parsed token.
+  - `cd` with no argument → returns to the startup directory; a failed cd reports
+    the offending path.
+  - [x] `cd ~` → `$HOME` (`~` / `~/sub` expansion). HOME is captured at boot
+    (`(home-dir)`); a leading `~` is expanded in `cd`. HOME unset → `cannot access ~`.
+- [x] `ls ( "[dir]" -- )` — list a directory (current by default; optional `<dir>`
+    arg supported), one entry per line, skipping `.`/`..` (← `(getdents)`).
+- [x] `cat ( "file" -- )` — dump a file to stdout (← chunked `read-file`).
+- [x] `more ( "file" -- )` — paged file view (← the existing `page-file` pager).
+    Named `more` because `page` already means clear-screen.
+- [x] `pushd` / `popd` / `dirs` — a fixed-depth (16) directory stack. `pushd <dir>`
+    saves the current dir (absolute) and cd's; `popd` returns to it; `dirs` lists
+    current + saved (top first). Stack buffer is heap-allocated lazily.
+- [x] Integration tests + docs: `docs/Shell_Words.md` + a "Shell-Like Words"
+    Manual section; `platform_chdir`/`platform_getcwd` added to Platform_Layer.md;
+    Persistence.md updated for the session.fs startup-dir pin. Documented limit:
+    `parse-word` path tokens can't contain spaces in v1.
+
+---
+
 ## Unix `#!` Script Support
 
 Run a Forth file as an executable Unix script:
