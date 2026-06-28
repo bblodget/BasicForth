@@ -78,6 +78,17 @@ datum, so `is` is mechanically the same operation as `to` — it stores a cell i
 that slot. A freshly deferred word's cell points at an internal handler that
 prints `uninitialized deferred word` and aborts.
 
+## Persistence limitation
+
+`save` records *definitions*, not state changes: it captures the `defer` line but
+**not** the `is` assignment (which mutates the action cell without creating a new
+named word — the same reason `to` on a `value` isn't saved). So after `save` and
+reload, a deferred word comes back **uninitialized** and aborts if called until
+something `is`-es it again. This is sharper than for a `value`, which at least
+reloads with its initial value. Until this is addressed (see `docs/TODO.md`), put
+the `is` assignments your program needs in a source file you `include`, rather
+than relying on the session capture.
+
 ## See also
 
 - `docs/Redo.md` — recompile an ordinary word from its saved source.

@@ -72,6 +72,11 @@ Three tools, three scopes:
   want to reclaim the space.
 - `redo` replays the *saved* source; to change what a word does, retype its
   definition (which is recaptured) and then `redo` its callers.
+- `redo`'s effect is not persisted by `save`: the log record is repointed in
+  place rather than re-captured, and `save` replays definitions in capture order,
+  so a reloaded `session.fs` binds a caller to whatever leaf preceded it in the
+  file — not to the post-`redo` version. Treat `redo` as a live-session tool; for
+  durable changes edit the source and `reload`. See `docs/TODO.md`.
 
 ## See also
 
