@@ -367,9 +367,10 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
 - [x] `pushd` / `popd` / `dirs` — a fixed-depth (16) directory stack. `pushd <dir>`
     saves the current dir (absolute) and cd's; `popd` returns to it; `dirs` lists
     current + saved (top first). Stack buffer is heap-allocated lazily.
-- [ ] Integration tests + docs (a `docs/Shell_Words.md` page + a short Manual
-    section). Limitation to document: `parse-word` path tokens can't contain
-    spaces in v1.
+- [x] Integration tests + docs: `docs/Shell_Words.md` + a "Shell-Like Words"
+    Manual section; `platform_chdir`/`platform_getcwd` added to Platform_Layer.md;
+    Persistence.md updated for the session.fs startup-dir pin. Documented limit:
+    `parse-word` path tokens can't contain spaces in v1.
 
 ---
 
