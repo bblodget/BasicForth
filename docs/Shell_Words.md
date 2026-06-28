@@ -19,7 +19,9 @@ system's machinery; the only new syscall is `chdir`.
 | `dirs` | ( -- ) | list the directory stack: current first, then saved entries (top first) |
 
 The path/file argument is taken with `parse-word` — the next whitespace-delimited
-token — so **paths cannot contain spaces** yet.
+token — so **paths cannot contain spaces** yet. A leading `~` is expanded to
+`$HOME` for **every** word here (`cd ~`, `pushd ~`, `ls ~`, `cat ~/x`, `more ~/x`),
+via the shared `(parse-path)` helper.
 
 `page` is *not* one of these words: it already means "clear the screen", so the
 paged file viewer is named `more`.
@@ -91,8 +93,10 @@ directory-read (`getdents`) failure the same way.
 - **`cd`** is the Forth word; the primitive `chdir ( c-addr u -- ior )` copies
   the path to a NUL-terminated buffer and calls the new `platform_chdir` syscall
   wrapper (`chdir` = 80 on x86-64, 49 on ARM64). Over-long paths return
-  `-ENAMETOOLONG`. A leading `~` is expanded against `(home-dir) ( -- c-addr u )`,
-  which returns the `HOME` env value (captured at boot, `0 0` if unset).
+  `-ENAMETOOLONG`. Every path-taking word parses its argument through the shared
+  `(parse-path)` helper, which expands a leading `~` against
+  `(home-dir) ( -- c-addr u )` (the `HOME` env value, captured at boot, `0 0` if
+  unset) — so `~` works uniformly, not just in `cd`.
 - **`pwd`** is `(cwd) type cr`, where `(cwd) ( -- c-addr u )` reads the live
   directory with `getcwd`. The startup directory is exposed by
   `(startup-dir) ( -- c-addr u )`, captured once at boot and used for bare `cd`

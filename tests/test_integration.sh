@@ -2185,6 +2185,22 @@ if [[ "$th_bound" == *"cannot access ~"* && "$th_bound" != *"ZZZ"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  cd ~ boundary off-by-one\n    Got: %q\n" "$th_bound"; ((failed++))
 fi
+# ~ expansion is uniform across the path-taking words, not just cd (regression:
+# only cd expanded ~, so `pushd ~`/`ls ~`/`cat ~` failed). pushd ~ -> $HOME; and
+# cat ~ expands to $HOME (a directory) so it reaches the read-error path -- an
+# UNexpanded "~" would instead be "cannot open file", so this proves expansion.
+ps_tilde=$(run_forth $'pushd ~\npwd')
+if [[ -n "$th_home" && "$ps_tilde" == *"$th_home"$'\n'* ]]; then
+    printf "  ${GREEN}PASS${NC}  pushd ~ expands to \$HOME\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pushd ~ did not expand\n    Got: %q\n" "$ps_tilde"; ((failed++))
+fi
+cat_tilde=$(run_forth "cat ~")
+if [[ "$cat_tilde" == *"cat: read error"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cat ~ expands (~ -> \$HOME dir, hits read error)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cat ~ did not expand\n    Got: %q\n" "$cat_tilde"; ((failed++))
+fi
 
 # ls / cat / more over a temp dir with known contents (absolute paths, so the
 # binary's own CWD doesn't matter). The expected strings are file *contents* or

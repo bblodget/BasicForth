@@ -1014,10 +1014,12 @@ create (tilde-buf) (tilde-sz) allot
     (home-dir) (sp-add)                        \ HOME
     1 /string (sp-add)                         \ the rest of the token after the ~
     (tilde-buf) (sp-end) @ over - ;            \ ( c-addr2 u2 )
+\ Parse the next token as a path, expanding a leading ~ to $HOME. Used by every
+\ path-taking shell word so ~ works uniformly (cd / pushd / ls / cat / more).
+: (parse-path) ( -- c-addr u )  parse-word (tilde-expand) ;
 : cd ( "path" -- )
-    parse-word                              ( c-addr u )
-    dup 0= if  2drop  (startup-dir)         \ bare cd -> startup (home) directory
-    else  (tilde-expand)  then              \ a token -> expand a leading ~ to $HOME
+    (parse-path)                            ( c-addr u )   \ ~ already expanded
+    dup 0= if  2drop  (startup-dir)  then   \ bare cd -> startup (home) directory
     2dup chdir                              ( c-addr u ior )
     if  ." cd: cannot access " type cr  abort  else  2drop  then ;
 
@@ -1028,7 +1030,7 @@ create (tilde-buf) (tilde-sz) allot
     dup 2 = if  drop dup c@ [char] . = swap 1+ c@ [char] . = and  exit  then
     2drop false ;
 : ls ( "[dir]" -- )
-    parse-word                              ( c-addr u )
+    (parse-path)                            ( c-addr u )
     dup 0= if  2drop s" ."  then            \ no argument -> current directory
     r/o open-file if  drop ." ls: cannot open directory" cr abort  then  ( fileid )
     >r
@@ -1051,7 +1053,7 @@ create (tilde-buf) (tilde-sz) allot
 \ Error paths ABORT after reporting (closing any open file first), so the REPL
 \ shows the message and no " ok" — a failed command must not look like success.
 : cat ( "file" -- )
-    parse-word                              ( c-addr u )
+    (parse-path)                            ( c-addr u )
     dup 0= if  2drop ." usage: cat <file>" cr abort  then
     r/o open-file if  drop ." cat: cannot open file" cr abort  then  ( fileid )
     >r
@@ -1067,7 +1069,7 @@ create (tilde-buf) (tilde-sz) allot
     repeat  drop
     r> close-file drop ;
 : more ( "file" -- )
-    parse-word                              ( c-addr u )
+    (parse-path)                            ( c-addr u )
     dup 0= if  2drop ." usage: more <file>" cr abort  then
     r/o open-file if  drop ." more: cannot open file" cr abort  then  ( fileid )
     \ page-file closed the fd and reported any read error; abort so a failed
@@ -1093,7 +1095,7 @@ variable (ds-n)                            \ number of saved entries
     r> (ds-slot-at)  swap cmove ;           \ copy the bytes into slot i
 : (ds-fetch) ( i -- c-addr u )  dup (ds-slot-at) swap (ds-len-at) @ ;
 : pushd ( "dir" -- )
-    parse-word                              ( c-addr u )
+    (parse-path)                            ( c-addr u )
     dup 0= if  2drop ." usage: pushd <dir>" cr abort  then
     (ds-n) @ (ds-max) < 0= if  2drop ." pushd: stack full" cr abort  then
     \ save the current dir BEFORE cd (into slot n; commit n only if cd succeeds)
