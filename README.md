@@ -26,8 +26,6 @@ guiding ideas:
   linker, static ELF), but open to minimal libraries where going direct would be
   unreasonably painful (graphics, sound, threading). Engine registers follow each
   platform's C calling convention, keeping the door open to linking C/C++ later.
-- **Reuse the host's tools** — rather than reinventing everything, call out to
-  the user's `$EDITOR` for editing instead of shipping a from-scratch editor.
 - **Target applications** — video games and robotics on real ARM64 and x86-64
   hardware.
 
