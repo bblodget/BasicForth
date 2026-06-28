@@ -670,6 +670,40 @@ forth_cstore:
     add $2*CELL, %r15
     ret
 
+# W@ (16-bit fetch, zero-extended) ( addr -- u )
+.global forth_wfetch
+forth_wfetch:
+    mov (%r15), %rax
+    movzwl (%rax), %eax
+    mov %rax, (%r15)
+    ret
+
+# W! (16-bit store, low 16 bits) ( x addr -- )
+.global forth_wstore
+forth_wstore:
+    mov (%r15), %rax            # addr
+    mov CELL(%r15), %rcx        # x
+    movw %cx, (%rax)
+    add $2*CELL, %r15
+    ret
+
+# L@ (32-bit fetch, zero-extended) ( addr -- u )
+.global forth_lfetch
+forth_lfetch:
+    mov (%r15), %rax
+    movl (%rax), %eax           # 32-bit load zero-extends into rax
+    mov %rax, (%r15)
+    ret
+
+# L! (32-bit store, low 32 bits) ( x addr -- )
+.global forth_lstore
+forth_lstore:
+    mov (%r15), %rax            # addr
+    mov CELL(%r15), %rcx        # x
+    movl %ecx, (%rax)
+    add $2*CELL, %r15
+    ret
+
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
 .global forth_emit
@@ -4520,6 +4554,10 @@ DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
 DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
 DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
+DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
+DEFWORD dict_wstore,      "w!",           forth_wstore,      dict_wfetch
+DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
+DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4529,6 +4567,7 @@ DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 .global dict_startup_dir
 .global dict_cwd
 .global dict_home_dir
+.global dict_lstore
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

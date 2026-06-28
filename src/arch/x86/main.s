@@ -253,7 +253,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_home_dir(%rip), %r12   # LATEST (head of the built-in dictionary chain)
+    lea dict_lstore(%rip), %r12     # LATEST (head of the built-in dictionary chain)
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
