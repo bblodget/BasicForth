@@ -450,9 +450,19 @@ repl_loop:
     BLR X10
 .Lno_reset:
 
-    // Print prompt
+    // Print prompt — a continuation prompt ("... ") while a definition is open
+    // (STATE compiling), otherwise the normal "> ". The line editor's scroll
+    // margin tracks STATE the same way (so the two stay aligned).
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, .Lprompt_normal
+    ADR X0, cont_prompt_msg
+    MOV X1, #cont_prompt_len
+    B .Lprompt_show
+.Lprompt_normal:
     ADR X0, prompt_msg
     MOV X1, #prompt_len
+.Lprompt_show:
     BL platform_write
 
     // Read a line ( c-addr max -- count ). When stdin is interactive and the
@@ -611,6 +621,8 @@ dict_full:
 .section .rodata
 prompt_msg: .ascii "> "
 .equ prompt_len, . - prompt_msg
+cont_prompt_msg: .ascii "... "
+.equ cont_prompt_len, . - cont_prompt_msg
 ok_msg:     .ascii " ok\n"
 .equ ok_len, . - ok_msg
 err_msg:    .ascii "? "

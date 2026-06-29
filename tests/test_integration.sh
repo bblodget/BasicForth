@@ -2509,6 +2509,18 @@ assert_editor_count() {
     fi
 }
 
+# assert_editor_absent: editor forced on; the output must NOT contain a needle.
+assert_editor_absent() {
+    local name="$1" input_fmt="$2" needle="$3"
+    local output
+    output=$(printf "$input_fmt" | BASICFORTH_EDITOR=1 timeout 2 $FORTH 2>&1)
+    if [[ "$output" != *"$needle"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s (unexpected '%s')\n" "$name" "$needle"; ((failed++))
+    fi
+}
+
 # Cursor editing: each line below must still parse to "1 2 + ." → 3.
 assert_editor "left-arrow + mid-line insert" '1 2 .\033[D+ \nbye\n'           "3  ok"
 assert_editor "backspace deletes at cursor"  '999\177\177\1771 2 + .\nbye\n'   "3  ok"
@@ -2517,6 +2529,36 @@ assert_editor "Ctrl-E end after Ctrl-A"      '1 2 +\001\005 .\nbye\n'          "
 # History: 88 emit prints 'X', 89 emit prints 'Y'; recall re-emits the marker.
 assert_editor_count "history up recalls prev"      '88 emit\n\033[A\nbye\n'                      'X' 2
 assert_editor_count "history up/up/down -> 89"     '88 emit\n89 emit\n\033[A\033[A\033[B\nbye\n' 'Y' 2
+
+# `edit <word>` pre-fills the next line with the word's source.
+# Recall 0<> ( : 0<>   0= invert ; ), backspace the ';', append 'drop 99 ;' so it
+# now pushes 99; if the preload/edit worked, 5 0<> . prints 99 (vs -1 unedited).
+assert_editor "edit recalls + edits a word"  'edit 0<>\n\177drop 99 ;\n5 0<> .\nbye\n'  "99  ok"
+assert_editor "edit reports a primitive"     'edit dup\nbye\n'        "edit: dup is a primitive"
+assert_editor "edit reports not found"       'edit nosuchxyz\nbye\n'  "edit: nosuchxyz not found"
+assert_editor "edit refuses an over-long def" 'edit see\nbye\n'       "too long to edit inline"
+# A failing edit (here a primitive) must clear any preload a prior edit armed, so
+# the next prompt is not pre-filled with stale source.
+assert_editor_absent "edit error clears stale preload" 'edit 0<> edit dup\n\nbye\n'  "0= invert"
+
+# edit converts a `\` line comment to ( ) when flattening, so a multi-line
+# commented definition survives the round-trip (a `\` on one line would otherwise
+# swallow the rest). Load a commented word from a file, edit + resubmit as-is, and
+# confirm the comment became a ( ) and the word still works (5 dbl . -> 10).
+cc_dir=$(mktemp -d)
+cat > "$cc_dir/cc.fs" <<'FS'
+: dbl ( n -- n+n )
+\ doubles the input
+dup + ;
+FS
+cc_out=$(printf 'edit dbl\n\n5 dbl .\nbye\n' | BASICFORTH_EDITOR=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
+rm -rf "$cc_dir"
+if [[ "$cc_out" == *"( doubles the input )"* && "$cc_out" == *"10  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit converts a backslash comment to ( )\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit converts a backslash comment to ( )\n"
+    printf "    Got: %s\n" "$(echo "$cc_out" | head -5)"; ((failed++))
+fi
 
 # =========================================================================
 section "BYE"

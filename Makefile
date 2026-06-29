@@ -17,6 +17,7 @@ endif
         run run-x86 run-arm64 \
         run-test run-test-x86 run-test-arm64 \
         run-integration run-integration-x86 run-integration-arm64 \
+        run-pty run-pty-x86 run-pty-arm64 \
         clean help
 
 # Default: build native architecture
@@ -66,6 +67,15 @@ run-integration-arm64:
 run-integration:
 	$(MAKE) -C src/arch/$(NATIVE) run-integration
 
+run-pty-x86:
+	$(MAKE) -C src/arch/x86 run-pty
+
+run-pty-arm64:
+	$(MAKE) -C src/arch/arm64 run-pty
+
+run-pty:
+	$(MAKE) -C src/arch/$(NATIVE) run-pty
+
 clean:
 	@for dir in $(ARCH_DIRS); do $(MAKE) -C $$dir clean; done
 
@@ -91,6 +101,7 @@ help:
 	@echo "  make run-test-x86    Run x86-64 unit test"
 	@echo "  make run-test-arm64  Run ARM64 unit test"
 	@echo "  make run-integration Run integration tests for native arch"
+	@echo "  make run-pty         Run line-editor PTY tests (scrolling) for native arch"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean           Remove build artifacts for all architectures"

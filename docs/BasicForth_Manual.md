@@ -586,7 +586,12 @@ At a terminal the prompt is a small line editor: move the cursor with the
 **left/right arrows**, jump to the start/end with **Ctrl-A/Ctrl-E**, and
 insert or delete (Backspace) anywhere in the line. The **up/down arrows** recall
 previous lines from the command history, which you can edit before pressing
-Enter. See `docs/Line_Editor.md` for the full key list and details.
+Enter. A line wider than the terminal **scrolls sideways** instead of wrapping.
+
+A `:` definition can span several lines; while one is open the prompt becomes
+`... ` until `;` closes it. **`edit <word>`** recalls an existing definition onto
+the next prompt, pre-filled, so you can tweak and resubmit it instead of
+retyping. See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

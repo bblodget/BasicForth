@@ -635,6 +635,17 @@ variable (sp-end)                        \ write pointer while building a path
 variable (see-a)  variable (see-u)      \ the name SEE is searching for (for messages)
 variable (see-xt)                       \ the live word's xt (for the REPL session-log path)
 
+\ Message prefix ("see" / "edit") so the shared source helpers report under the
+\ command the user actually typed.
+variable (msg-a)  variable (msg-u)
+: (msg:) ( -- )  (msg-a) @ (msg-u) @ type ." : " ;
+
+\ Source sink: SEE types a word's source straight out; EDIT redirects it into the
+\ preload buffer instead. Both go through (see-emit) ( c-addr u -- ).
+variable (see-emit-xt)
+: (see-emit) ( c-addr u -- )  (see-emit-xt) @ execute ;
+' type (see-emit-xt) !
+
 \ --- file-source reader: print [off, off+len) of a source file by source-id ---
 variable (sf-fid)  variable (sf-buf)
 variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
@@ -656,19 +667,19 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 : (see-file) ( off len srcid -- )
     (source-path)                            ( off len c-addr u )
     r/o open-file if                         ( off len fileid )
-        drop 2drop ." see: cannot open source file" cr exit
+        drop 2drop (msg:) ." cannot open source file" cr exit
     then  (sf-fid) !                         ( off len )
     (sf-len) !  (sf-off) !
     (sf-off) @ (sf-len) @ +  (sf-need) !
     (sf-need) @ allocate if                  ( a-addr )   \ ior nonzero → failure
         drop  (sf-fid) @ close-file drop
-        ." see: out of memory" cr exit
+        (msg:) ." out of memory" cr exit
     then  (sf-buf) !
     (sf-read)
-    (sf-got) @ (sf-off) @ > if               \ type [off, min(off+len, got))
+    (sf-got) @ (sf-off) @ > if               \ emit [off, min(off+len, got))
         (sf-buf) @ (sf-off) @ +
         (sf-got) @ (sf-off) @ -  (sf-len) @ min
-        type
+        (see-emit)
     then
     (sf-buf) @ free drop
     (sf-fid) @ close-file drop ;
@@ -680,13 +691,13 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
         1-                                   ( i )
         dup 3 cells *  (dir) @ +             ( i rec )
         dup 2 cells + @  (see-xt) @ = if      ( i rec )   \ this record's word
-            dup @  (log) @ +  swap cell+ @  type ( i )   \ source ends in a newline
+            dup @  (log) @ +  swap cell+ @  (see-emit) ( i )  \ source ends in a newline
             drop exit
         then
         drop                                 ( i )
     repeat
     drop
-    ." see: " (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
+    (msg:) (see-a) @ (see-u) @ type ."  defined, but no source captured" cr ;
 
 \ SEE shows the source of the definition currently in force. It reads the
 \ per-word source metadata (find-meta): a file-loaded word (core.fs, session.fs,
@@ -695,15 +706,16 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 \ labelled as such. The live xt is matched, so a redefined or forgotten word
 \ shows what is actually in force (or reports "not found").
 : see ( "name" -- )
-    parse-word dup 0= if  2drop ." see: needs a word name" cr exit  then
+    s" see" (msg-u) ! (msg-a) !  ' type (see-emit-xt) !   \ report as `see`, type source
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
     0= if  2drop 2drop                       \ not currently defined
-        ." see: " (see-a) @ (see-u) @ type ."  not found" cr exit
+        (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit
     then
     dup 65535 = if                           ( xt off len srcid )   \ PRIM sentinel
         2drop 2drop
-        ." see: " (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
     then
     dup 0= if                                \ srcid 0 → REPL word: use the capture log
         drop  2drop  (see-xt) !
@@ -711,6 +723,93 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     then
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file) ;
+
+\ ===== EDIT: recall a word's source into the next editable prompt line =====
+\ edit <name> resolves the word's source the same way SEE does, but instead of
+\ printing it, captures it into a preload buffer that the line editor drops onto
+\ the next prompt so you can tweak and resubmit it. The source is flattened to a
+\ single line (newlines are whitespace to Forth), with one wrinkle: a `\` runs to
+\ end-of-line, so on one line it would swallow everything after it — therefore a
+\ `\ comment` is converted to a self-terminating `( comment )`. v1 caps at one
+\ input line; longer definitions report and are left to edit-and-reload.
+\ (Limitation: a literal backslash/paren/quote via `[char]`/`char` in code is not
+\ recognised as a non-comment token.) (edit-line) consumes (el-pre-len).
+create (el-pre)  256 allot               \ preload text for the next (edit-line)
+variable (el-pre-len)  0 (el-pre-len) !  \ pending preload length; 0 = none
+
+\ --- comment-aware flattener: source span -> one editable line in (el-pre) ---
+variable (fl-src)  variable (fl-u)  variable (fl-i)   \ source + read cursor
+variable (fl-out)  variable (fl-str)  variable (fl-par)  variable (fl-of)
+
+: (fl-emit) ( c -- )                     \ append to (el-pre); flag on overflow
+    (fl-out) @ 256 < if  (el-pre) (fl-out) @ + c!  1 (fl-out) +!
+    else  drop  true (fl-of) !  then ;
+: (fl-cur) ( -- c )  (fl-src) @ (fl-i) @ + c@ ;
+: (fl-delim?) ( c -- f )  dup 32 = swap 10 = or ;          \ space or newline
+: (fl-prev-delim?) ( -- f )                                \ char before cursor
+    (fl-i) @ 0= if  true exit  then
+    (fl-src) @ (fl-i) @ 1- + c@ (fl-delim?) ;
+: (fl-next-delim?) ( -- f )                                \ char after cursor
+    (fl-i) @ 1+ (fl-u) @ < 0= if  true exit  then
+    (fl-src) @ (fl-i) @ 1+ + c@ (fl-delim?) ;
+: (fl-more-line?) ( -- f )               \ not at end, and not on a newline
+    (fl-i) @ (fl-u) @ < if  (fl-cur) 10 <>  else  false  then ;
+
+\ At the backslash: emit the rest of the line as ( ... ), mapping ()->[] so the
+\ comment text can't close the wrapper early. Consumes the line and its newline.
+: (fl-comment) ( -- )
+    40 (fl-emit)  32 (fl-emit)  1 (fl-i) +!              \ "( ", past the backslash
+    (fl-i) @ (fl-u) @ < if  (fl-cur) 32 = if  1 (fl-i) +!  then  then  \ one space
+    begin  (fl-more-line?)  while
+        (fl-cur)  dup 40 = if drop 91 then  dup 41 = if drop 93 then  (fl-emit)
+        1 (fl-i) +!
+    repeat
+    32 (fl-emit)  41 (fl-emit)                            \ " )"
+    (fl-i) @ (fl-u) @ < if  1 (fl-i) +!  then  32 (fl-emit) ;  \ skip nl, separator
+
+: (edit-capture) ( c-addr u -- )
+    dup 0> if  2dup + 1- c@ 10 = if  1-  then  then        \ drop a trailing newline
+    (fl-u) !  (fl-src) !
+    0 (fl-out) !  0 (fl-i) !  false (fl-str) !  false (fl-par) !  false (fl-of) !
+    begin  (fl-i) @ (fl-u) @ <  while
+        (fl-cur)
+        (fl-str) @ if                                      \ inside a string
+            dup 10 = if  drop 32  then  dup (fl-emit)  34 = if  false (fl-str) !  then
+            1 (fl-i) +!
+        else (fl-par) @ if                                 \ inside a ( ) comment
+            dup 10 = if  drop 32  then  dup (fl-emit)  41 = if  false (fl-par) !  then
+            1 (fl-i) +!
+        else                                               \ code
+            dup 92 = (fl-prev-delim?) and (fl-next-delim?) and if
+                drop  (fl-comment)
+            else
+                dup 34 = if  true (fl-str) !  then          \ entering a string
+                dup 40 = if  true (fl-par) !  then          \ entering a ( ) comment
+                dup 10 = if  drop 32  then                  \ newline -> space
+                (fl-emit)  1 (fl-i) +!
+            then
+        then then
+    repeat
+    (fl-of) @ if                                           \ converted line too long
+        0 (el-pre-len) !
+        (msg:) ." definition too long to edit inline" cr  exit
+    then
+    (fl-out) @ (el-pre-len) ! ;
+
+: edit ( "name" -- )
+    s" edit" (msg-u) ! (msg-a) !
+    0 (el-pre-len) !                         \ no stale preload survives any exit path
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop  (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit
+    then
+    ' (edit-capture) (see-emit-xt) !         \ redirect source into the preload buffer
+    dup 0= if  drop 2drop  (see-xt) !  (see-from-log)
+    else       >r rot drop r>  (see-file)  then
+    ' type (see-emit-xt) ! ;                 \ restore the default (type) sink
 
 \ ===== REDO: recompile a REPL-defined word from its captured source =====
 \ redo <name> re-evaluates a word's saved source, so callers that were compiled
@@ -796,19 +895,51 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 \ Engaged only when stdin is an interactive terminal (main.s gates on isatty);
 \ piped/redirected input falls back to the asm forth_accept. Provides in-line
 \ editing: type anywhere, move with the left/right arrows (Ctrl-A/Ctrl-E jump to
-\ start/end), and insert/delete mid-line. Echo is manual (raw mode clears ECHO);
-\ the screen is kept in sync by reprinting the tail and backing the cursor up.
-\ KEY already decodes arrows to 131 (right) / 132 (left); 129/130 (up/down) are
-\ ignored here and become history recall in a later step.
+\ start/end), and insert/delete mid-line. Echo is manual (raw mode clears ECHO).
+\ Each edit just mutates the buffer and calls (el-redraw), which paints a
+\ horizontally-scrolled one-row window onto the buffer (so a line wider than the
+\ terminal scrolls sideways instead of wrapping). KEY already decodes arrows to
+\ 131 (right) / 132 (left); 129/130 (up/down) drive history recall.
 variable (el-buf)   \ buffer base address
 variable (el-max)   \ capacity in chars
 variable (el-len)   \ current line length
 variable (el-pos)   \ cursor index, 0..len
 
-: (el-bsp) ( n -- )  \ emit n backspaces (move the cursor left n columns)
-    begin dup 0> while  8 emit  1- repeat  drop ;
-: (el-tail) ( -- )   \ reprint buf[pos..len) starting at the cursor
-    (el-buf) @ (el-pos) @ +  (el-len) @ (el-pos) @ -  type ;
+\ Horizontal-scroll state: the editable area shows a window buf[vstart..) that
+\ fits one terminal row. (el-scol) is the terminal cursor's column offset from
+\ the prompt margin; (el-vshown) the number of chars currently drawn there.
+: (el-margin) ( -- n )  \ columns the REPL prompt occupies: "... " while a
+    state @ if  4  else  2  then ;  \ definition is open (main.s prints it), else "> "
+variable (el-vstart)               \ leftmost visible buffer index (scroll offset)
+variable (el-scol)                 \ cursor column, as an offset from the margin
+variable (el-vshown)               \ chars currently drawn in the editable area
+variable (el-w)                    \ scratch: usable width during a redraw
+
+: (el-bsp)    ( n -- ) begin dup 0> while  8 emit  1- repeat  drop ;
+: (el-spaces) ( n -- ) begin dup 0> while 32 emit  1- repeat  drop ;
+: (el-width)  ( -- w ) \ usable editable columns (leave the last column free)
+    screen-width (el-margin) - 1 -  1 max ;
+
+\ Redraw the editable area as a horizontally-scrolled window onto the buffer,
+\ keeping the cursor visible, then leave the terminal cursor at the cursor
+\ column. Uses only backspace/space/printables (no escape sequences), so every
+\ edit op is just "mutate the buffer, then (el-redraw)".
+: (el-redraw) ( -- )
+    (el-width) (el-w) !
+    (el-pos) @ (el-vstart) @ < if  (el-pos) @ (el-vstart) !  then     \ scroll left
+    (el-pos) @ (el-vstart) @ -  (el-w) @ 1- > if                      \ scroll right
+        (el-pos) @ (el-w) @ 1- -  (el-vstart) !
+    then
+    \ never leave the window past the end of the line, or a recalled/shrunk
+    \ shorter line would render blank (vstart stale-high from a longer line)
+    (el-vstart) @  (el-len) @ (el-w) @ - 1+  0 max  min  (el-vstart) !
+    (el-scol) @ (el-bsp)                                 \ cursor back to the margin
+    (el-len) @ (el-vstart) @ -  (el-w) @ min             ( vlen )
+    (el-buf) @ (el-vstart) @ +  over  type               ( vlen )    \ draw the window
+    (el-vshown) @ over -  dup 0> if  dup (el-spaces) (el-bsp)  else drop then  ( vlen )
+    dup  (el-pos) @ (el-vstart) @ -  -  (el-bsp)          ( vlen )    \ back to cursor col
+    (el-vshown) !
+    (el-pos) @ (el-vstart) @ -  (el-scol) ! ;
 
 \ Self-contained byte shifts, kept independent of MOVE/CMOVE (simple and tested;
 \ they also predate the MOVE/CMOVE> overlap fix).
@@ -825,27 +956,17 @@ variable (el-pos)   \ cursor index, 0..len
 
 : (el-insert) ( c -- )   \ insert char at the cursor, shifting the tail right
     (el-len) @ (el-max) @ < 0= if  drop exit  then        \ buffer full: ignore
-    (el-open)
-    (el-buf) @ (el-pos) @ + c!
-    1 (el-len) +!
-    (el-tail)                                             \ echo new char + tail
-    (el-len) @ (el-pos) @ - 1- (el-bsp)                   \ back up to after it
-    1 (el-pos) +! ;
+    (el-open)  (el-buf) @ (el-pos) @ + c!
+    1 (el-len) +!  1 (el-pos) +!  (el-redraw) ;
 
 : (el-back) ( -- )   \ delete the char before the cursor, shifting the tail left
     (el-pos) @ 0= if  exit  then
-    (el-close)
-    -1 (el-len) +!  -1 (el-pos) +!
-    8 emit                                                \ left over deleted char
-    (el-tail)                                             \ reprint shifted tail
-    32 emit                                               \ erase the stale column
-    (el-len) @ (el-pos) @ - 1+ (el-bsp) ;                 \ reposition (tail+space)
+    (el-close)  -1 (el-len) +!  -1 (el-pos) +!  (el-redraw) ;
 
-: (el-left)  ( -- )  (el-pos) @ 0= if  exit  then  8 emit  -1 (el-pos) +! ;
-: (el-right) ( -- )  (el-pos) @ (el-len) @ < 0= if  exit  then
-    (el-buf) @ (el-pos) @ + c@ emit  1 (el-pos) +! ;
-: (el-home)  ( -- )  begin (el-pos) @ 0>            while (el-left)  repeat ;
-: (el-end)   ( -- )  begin (el-pos) @ (el-len) @ <  while (el-right) repeat ;
+: (el-left)  ( -- )  (el-pos) @ 0= if  exit  then  -1 (el-pos) +!  (el-redraw) ;
+: (el-right) ( -- )  (el-pos) @ (el-len) @ < 0= if  exit  then  1 (el-pos) +!  (el-redraw) ;
+: (el-home)  ( -- )  0 (el-pos) !  (el-redraw) ;
+: (el-end)   ( -- )  (el-len) @ (el-pos) !  (el-redraw) ;
 
 \ ----- Command history (up/down recall) -----
 \ A circular ring of recent submitted lines on the heap; each slot is a length
@@ -872,12 +993,10 @@ variable (el-hpos)                    \ browse cursor within one edit
 
 : (el-stash-save) ( -- )              \ remember the in-progress line before browsing
     (el-buf) @ (hist-stash) @ (el-len) @ cmove  (el-len) @ (hist-slen) ! ;
-: (el-blank) ( -- )                   \ erase the on-screen line, cursor back to home
-    (el-end)  (el-len) @ begin dup 0> while  8 emit 32 emit 8 emit  1- repeat drop ;
-: (el-show) ( src u -- )              \ load src/u into the buffer and display it
+: (el-show) ( src u -- )              \ load src/u into the buffer, cursor at end, redraw
     (el-max) @ min  dup (el-len) !  (el-buf) @ swap cmove
-    (el-buf) @ (el-len) @ type  (el-len) @ (el-pos) ! ;
-: (el-recall) ( src u -- )  (el-blank) (el-show) ;
+    (el-len) @ (el-pos) !  (el-redraw) ;
+: (el-recall) ( src u -- )  (el-show) ;   \ (el-redraw) erases any longer prior line
 
 : (el-up) ( -- )                      \ recall an older line
     (hist-count) @ 0= if  exit  then
@@ -907,7 +1026,11 @@ variable (el-hpos)                    \ browse cursor within one edit
 
 : (edit-line) ( c-addr max -- count )
     (el-max) !  (el-buf) !  0 (el-len) !  0 (el-pos) !
+    0 (el-vstart) !  0 (el-scol) !  0 (el-vshown) !   \ fresh prompt: cursor at margin
     (hist-count) @ (el-hpos) !
+    (el-pre-len) @ if                                \ `edit` left text to pre-fill
+        (el-pre) (el-pre-len) @ (el-show)  0 (el-pre-len) !
+    then
     begin
         key
         dup 10 = if  drop  (el-end) 10 emit  (hist-add) (el-len) @ exit  then

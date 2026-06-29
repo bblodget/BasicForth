@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Line editor: `edit <word>`, horizontal scrolling, continuation prompt
+- **`edit <word>`** recalls a word's source onto the next prompt, pre-filled and
+  editable, so you can tweak and resubmit a definition instead of retyping it.
+  Works for words defined this session (capture log) and file-loaded words
+  (`core.fs` / `include`d, via the source metadata `see` uses); primitives and
+  unknown names report a short message. The source is flattened to one line, and
+  a `\` line comment is rewritten as a self-terminating `( comment )` so it does
+  not swallow the rest of the definition once everything is on one line.
+- **Horizontal scrolling**: a line wider than the terminal now scrolls sideways
+  instead of wrapping and scrambling the cursor. The editor paints a one-row
+  window onto the line, sliding it to keep the cursor visible.
+- **Continuation prompt**: while a `:` definition is open the REPL prompts with
+  `... ` instead of `> `, so multi-line definitions read clearly; it returns to
+  `> ` once `;` closes the definition.
+- All in the shared `core.fs` editor (`(edit-line)`), with the continuation
+  prompt printed by `main.s` on both architectures. New `tests/test_line_editor_pty.py`
+  (`make run-pty`) covers scrolling and the continuation prompt under a
+  pseudo-terminal. See docs/Line_Editor.md.
+
 ## v0.7.0 — 2026-06-27
 
 ### Shell-like words: `pwd` / `cd` / `ls` / `cat` / `more` / `pushd` / `popd` / `dirs`
