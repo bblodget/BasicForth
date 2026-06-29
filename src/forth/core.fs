@@ -1585,4 +1585,101 @@ variable (sw-mark)                          \ LATEST at end of core.fs (session 
     ."  defined this session (newest first):" cr
     (sw-list) ;
 
+\ ===== USES : which session words reference a given word =====
+\ `uses <word>` lists the session words whose source mentions <word> as a whole
+\ token (case-insensitive) — a grep over your own definitions, handy before
+\ renaming something. It searches the captured source of words defined
+\ interactively this session (the same log SEE reads); a word loaded from an
+\ INCLUDEd file has no captured source here and is skipped, as is <word>'s own
+\ defining line.
+variable (uses-xt)
+: (src-of) ( xt -- c-addr u true | false )  \ captured source span of xt, if any
+    (uses-xt) !
+    (dir) cell+ @ 3 cells /                 ( count )
+    begin dup 0> while
+        1-  dup 3 cells * (dir) @ +         ( i rec )       \ newest record first
+        dup 2 cells + @ (uses-xt) @ = if    ( i rec )       \ rec's xt == target?
+            dup @ (log) @ +  swap cell+ @   ( i c-addr u )
+            rot drop  true exit
+        then
+        drop                                ( i )
+    repeat
+    drop  false ;
+
+variable (u-src)   variable (u-srclen)
+variable (u-tgt)   variable (u-tgtlen)   variable (u-pos)
+: (u-ws?) ( i -- f )  (u-src) @ + c@ 33 < ;     \ char at offset i is a delimiter?
+: (word-in?) ( src u t tu -- f )            \ does src contain t as a whole token (ci)?
+    (u-tgtlen) !  (u-tgt) !  (u-srclen) !  (u-src) !
+    0 (u-pos) !
+    begin (u-pos) @ (u-srclen) @ < while
+        (u-pos) @ (u-ws?) if  1 (u-pos) +!
+        else
+            (u-pos) @                       ( tok-start )
+            begin (u-pos) @ (u-srclen) @ <  (u-pos) @ (u-ws?) 0=  and
+            while  1 (u-pos) +!  repeat
+            (u-src) @ over +  (u-pos) @ rot -   ( tok-addr tok-len )
+            (u-tgt) @ (u-tgtlen) @ (ci=) if  true exit  then
+        then
+    repeat
+    false ;
+
+\ Source of a FILE-loaded word (srcid >= 1): read its file once and index into
+\ it. (uf-buf) caches the most recently read file's whole contents, so a run of
+\ words from the same file — the common case — costs a single read. Reuses SEE's
+\ span reader ((sf-*)).
+variable (uf-srcid)  variable (uf-buf)  variable (uf-len)
+: (uf-free) ( -- )  (uf-buf) @ if  (uf-buf) @ free drop  0 (uf-buf) !  then  0 (uf-srcid) ! ;
+: (uf-want) ( srcid -- ok? )                \ ensure (uf-buf) holds this srcid's file
+    dup (uf-srcid) @ = if  drop  (uf-buf) @ 0<>  exit  then   \ already cached
+    (uf-free)
+    dup (source-path) dup 0= if  2drop drop  false exit  then  ( srcid c-addr u )
+    r/o open-file if  drop  false exit  then  ( srcid fileid )
+    (sf-fid) !                                ( srcid )
+    (sf-fid) @ file-size if                   ( srcid lo hi )
+        2drop  (sf-fid) @ close-file drop  drop  false exit  then
+    drop  dup (sf-need) !                     ( srcid size )
+    allocate if                               ( srcid a )
+        drop  (sf-fid) @ close-file drop  drop  false exit  then
+    dup (sf-buf) !  (uf-buf) !                ( srcid )
+    (sf-read)
+    (sf-got) @ (uf-len) !
+    (uf-srcid) !
+    (sf-fid) @ close-file drop
+    true ;
+: (file-span) ( off len srcid -- c-addr u true | false )
+    (uf-want) 0= if  2drop  false exit  then  ( off len )
+    over (uf-len) @ <  0= if  2drop false exit  then       \ off past EOF
+    over (uf-len) @ swap -  min               ( off u )    \ u = min(len, uf-len-off)
+    swap (uf-buf) @ +  swap  true ;
+
+variable (uses-t)  variable (uses-tu)  variable (uses-n)
+variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
+: (word-src) ( nt -- c-addr u true | false )  \ source of the in-force def named by nt
+    dup (sw-name) (find-meta)                 ( nt xt off len srcid flag )
+    0= if  2drop 2drop drop  false exit  then  \ name not currently defined
+    (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !   ( nt )
+    (xt-of) (uh-xt) @ <> if  false exit  then  \ a shadowed (not in-force) entry → skip
+    (uh-srcid) @ 65535 = if  false exit  then  \ primitive: no source
+    (uh-srcid) @ 0= if
+        (uh-xt) @ (src-of)                     \ REPL word: from the capture log
+    else
+        (uh-off) @ (uh-len) @ (uh-srcid) @ (file-span)   \ file word: from its source file
+    then ;
+: (uses-hit?) ( nt -- f )                   \ does this word reference the target?
+    dup (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own def
+    (word-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: uses ( "name" -- )
+    parse-word  dup 0= if  2drop  ." usage: uses <word>" cr  exit  then
+    (uses-tu) !  (uses-t) !
+    0 (uses-n) !
+    (uses-t) @ (uses-tu) @ type ."  is used by:"
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        @
+    repeat  drop
+    (uf-free)                                  \ release the cached source file
+    (uses-n) @ 0= if  ."  (none)"  then  cr ;
+
 (latest@) (sw-mark) !                       \ pin the session boundary (keep last!)

@@ -437,6 +437,23 @@ It's the BASIC `LIST` — *"what have I built so far?"* — and it counts every 
 of definition (`:`, `variable`, `constant`, `defer`, …). Anything you `include`
 or a reloaded `session.fs` counts as part of your session too.
 
+### Finding references (`uses`)
+
+Where `.session` lists your words and `see` shows one definition, `uses
+<word>` greps across them — it lists the session words whose source mentions
+`<word>` as a whole word (case-insensitive), so you can answer *"if I rename
+this, what do I touch?"*:
+
+```
+> uses score
+score is used by: tick
+```
+
+Like `see`, it finds each word's source either way — from the interactive
+capture log for words you typed, or from the file for words loaded as a startup
+argument, via `include`, or from `session.fs` — so it covers everything
+`.session` lists. It skips `<word>`'s own defining line.
+
 ### Forgetting definitions (`marker`)
 
 `marker <name>` sets a restore point in the dictionary. Running `<name>` later

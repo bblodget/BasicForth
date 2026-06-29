@@ -44,6 +44,18 @@ REPL), newest first, with a count. The BASIC `LIST`: *"what have I built?"*
     \ 2 words defined this session (newest first):
     \ n sq
 
+## uses ( "name" -- )
+List the session words whose source mentions `<name>` as a whole token
+(case-insensitive) — a grep over your own definitions, handy before renaming
+something. It reads each word's source the way `see` does — from the interactive
+capture log for words you typed, or from the file for words loaded via a startup
+argument, `include`, or `session.fs` — so it covers everything `.session` lists.
+`<name>`'s own defining line is not counted.
+
+    \ variable mcount  : step  mcount @ . ;  : tick  mcount 1+ . ;
+    \ uses mcount
+    \ mcount is used by: tick step
+
 ## marker ( "name" -- )
 Define a dictionary restore point (also a defining word — see
 `man defining-words` and `man marker`).

@@ -1974,6 +1974,54 @@ else
     printf "  ${RED}FAIL${NC}  SEE custom-defining-word word\n    Expected '5 mk five'\n    Got: %q\n" "$see_cdw"; ((failed++))
 fi
 
+# uses — list the session words that reference a given word (whole-word,
+# case-insensitive, over the interactive capture log like SEE). Forced on
+# through a pipe with BASICFORTH_SESSION=1.
+uses_dir="$(mktemp -d)"
+# Lists referencing words newest-first; excludes the target's own def and
+# words that don't reference it (c uses nothing).
+uses_basic=$( cd "$uses_dir" && printf 'variable mc\n: a mc @ . ;\n: b mc @ 1+ . ;\n: c 1 . ;\nuses mc\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Whole-word + case-insensitive: MC matches mc, but mcx (used by 'nope') does not.
+uses_word=$( cd "$uses_dir" && printf 'variable mc\nvariable mcx\n: nope mcx @ . ;\n: v mc @ . ;\nuses MC\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Nothing references it.
+uses_none=$( cd "$uses_dir" && printf ': a 1 . ;\nuses zzz\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Missing argument is reported, not crashed.
+uses_noarg=$( cd "$uses_dir" && printf 'uses\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+
+if [[ "$uses_basic" == *"mc is used by: b a"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses lists referencing words newest-first, excluding the target\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses basic\n    Expected 'mc is used by: b a'\n    Got: %q\n" "$uses_basic"; ((failed++))
+fi
+if [[ "$uses_word" == *"used by: v"* && "$uses_word" != *nope* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses matches whole words case-insensitively (mc, not mcx)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses whole-word/case\n    Expected 'used by: v' and no 'nope'\n    Got: %q\n" "$uses_word"; ((failed++))
+fi
+if [[ "$uses_none" == *"(none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses reports when nothing references the word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses none\n    Expected '(none)'\n    Got: %q\n" "$uses_none"; ((failed++))
+fi
+if [[ "$uses_noarg" == *"usage: uses"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses with no argument prints usage\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses no-arg\n    Expected 'usage: uses'\n    Got: %q\n" "$uses_noarg"; ((failed++))
+fi
+# FILE-loaded words: uses reads a word's source from its file (like SEE), so it
+# works on a program loaded as a startup argument — no capture/session needed.
+uses_file=$( printf 'uses mcount\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$REPO_ROOT/examples/chase.fs" 2>/dev/null | grep 'used by' )
+if [[ "$uses_file" == *step-monsters* && "$uses_file" == *draw-monsters* && "$uses_file" != *"(none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses searches file-loaded words (examples/chase.fs, no session)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses on a file-loaded program\n    Expected step-monsters + draw-monsters\n    Got: %q\n" "$uses_file"; ((failed++))
+fi
+
 # =========================================================================
 section "REDO (recompile a captured word from its source)"
 # =========================================================================

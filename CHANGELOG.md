@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `uses <word>` — find which session words reference a word
+- `uses <word>` lists the session words whose source mentions `<word>` as a
+  whole token (case-insensitive) — a grep over your own definitions, handy
+  before renaming something. It reads each word's source the way `see` does —
+  from the interactive capture log for words you typed, or from the source file
+  for words loaded as a startup argument, via `include`, or from `session.fs` —
+  so it covers everything `.session` lists, skipping only `<word>`'s own defining
+  line. Pure Forth (reuses the `see` capture log, per-word source metadata, and
+  file reader; reads each source file once); no assembly. See `man Tools`.
+
 ### New tutorial: `tutorial Chase` — top-down game design
 - A second interactive tutorial that teaches how to *design* a program from the
   top down with `defer`: write the whole game's shape first as deferred seams,
