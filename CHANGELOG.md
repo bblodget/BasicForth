@@ -21,6 +21,19 @@
   (`make run-pty`) covers scrolling and the continuation prompt under a
   pseudo-terminal. See docs/Line_Editor.md.
 
+### `.session` — list the words you've defined this session
+- `.session` lists just the words you've added on top of `core.fs` (interactive
+  definitions, a reloaded `session.fs`, or anything `INCLUDE`d), newest first,
+  with a count — the BASIC `LIST` to `WORDS`' full dump of ~330 built-ins. It
+  walks the dictionary chain back to a session boundary (`LATEST` captured on the
+  last line of `core.fs`), so it needs no assembly and lists no built-ins. See
+  docs/Dictionary.md and `man Tools`.
+
+### Docs
+- `man Defining-Words` now notes, at the `value` entry, that a `value` set with a
+  direct `to` persists across `save`/`reload` while a `variable`'s `!` contents do
+  not — a cross-reference to `man Persistence` at the point you choose between them.
+
 ## v0.7.0 — 2026-06-27
 
 ### Shell-like words: `pwd` / `cd` / `ls` / `cat` / `more` / `pushd` / `popd` / `dirs`

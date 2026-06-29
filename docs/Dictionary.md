@@ -172,3 +172,16 @@ compiled words, it will point to inline STC code in the dictionary space.
 
 To execute an xt: load it into a register and call it (`call *%rax` on
 x86-64, `BLR X9` on ARM64).
+
+## Walking the chain: WORDS and .session
+
+`WORDS` walks the chain from `LATEST` to the end (`link = 0`), printing each
+entry's name (offset 9, length from the low 5 bits at offset 8). `.session`
+walks the same chain but stops early, at a **session boundary** — the value of
+`LATEST` captured the moment `core.fs` finished loading. Everything newer than
+that boundary is what the user added on top of the core vocabulary (interactive
+definitions, a reloaded `session.fs`, or `INCLUDE`d files), so `.session` lists
+just those, sparing the reader the ~330 built-ins. The boundary is recorded in
+a plain Forth variable on the last line of `core.fs` (`(latest@) (sw-mark) !`),
+so `.session` and its helpers — defined just before it — fall below the mark and
+never list themselves.

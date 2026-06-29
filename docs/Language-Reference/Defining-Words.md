@@ -29,6 +29,9 @@ value.
 
     5 value count   count .       \ 5
 
+Unlike a `variable` (whose `!` contents aren't saved), a `value` set with a
+direct `to` at the prompt **persists across `save`/`reload`** — see `man Persistence`.
+
 ## to ( x "name" -- )
 Store a new value into a `value`.
 

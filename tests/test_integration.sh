@@ -374,6 +374,24 @@ assert_error "MARKER nested (outer forgets inner)" \
     "marker -a  : x1 1 ;  marker -b  : x2 2 ;  -a  -b"  "-b"
 
 # =========================================================================
+section ".session (list this session's words)"
+# =========================================================================
+# A fresh session has defined nothing on top of core.fs.
+assert_output ".session reports an empty session" \
+    ".session"  "No words defined yet"
+# Defining one word: the count is 1 (proves the ~330 core words are excluded —
+# if they leaked in the count would be hundreds), and the name is listed.
+assert_output ".session counts only your words" \
+    ": zonk ;  .session"  "1 word defined"
+assert_output ".session lists your word's name" \
+    ": zonk ;  .session"  "zonk"
+# Words of every kind count, newest-first (matching WORDS' chain order).
+assert_output ".session lists newest-first" \
+    ": a1 ;  : b2 ;  : c3 ;  .session"  "c3 b2 a1"
+assert_output ".session counts a mix of word kinds" \
+    "7 constant k  variable v  defer d  : w ;  .session"  "4 words defined"
+
+# =========================================================================
 section "CHAR robustness"
 # =========================================================================
 # char is a parse-time word; misusing it inside a definition (should be [char])
