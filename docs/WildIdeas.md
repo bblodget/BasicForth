@@ -90,14 +90,18 @@ Staging:
   in-line editor (left/right arrows, Ctrl-A/Ctrl-E, mid-line insert/delete) with
   an up/down command-history ring. Implemented in Forth in `core.fs` behind a
   REPL input hook, arrow keys decoded by `platform_key`. See docs/Line_Editor.md.
-- **Stage C — `EDIT <word>`**: recall a definition into the editable line.
-  Still wanted — now that Stage B exists, this is `see`'s lookup fed into the
-  line editor as the starting text.
+- **Stage C — `EDIT <word>`**: **Done.** `edit <word>` feeds `see`'s source
+  lookup into the line editor as the starting text. As anticipated, a multi-line
+  `: … ;` is recalled as a *single* (long) line (newlines are whitespace to
+  Forth) and edited with the Stage-B editor — no true multi-line editing needed —
+  with horizontal scrolling making the long line manageable and `\` line comments
+  converted to `( … )` so they stay terminated. See docs/Line_Editor.md.
 
-A nice simplification for Stage C: to Forth, newlines are just whitespace, so a
-multi-line `: … ;` can be recalled as a *single* (long) line and edited with the
-Stage-B editor — no true multi-line editing needed. The only cost is horizontal
-scrolling for long lines, a normal line-editor detail.
+Still open — a true **free-cursor multi-line editor** (see all the lines of a
+definition at once, move the cursor freely between rows, soft-enter to split):
+the line-by-line single-line editor covers most of the need, but a real
+multi-row text widget (2D cursor, multi-row redraw) would be the next level if
+recalling and editing big definitions in place becomes common.
 
 ## SEE for any word — source-location metadata in the dictionary
 
