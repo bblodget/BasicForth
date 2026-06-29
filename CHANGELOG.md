@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — 2026-06-29
 
 ### Line editor: `edit <word>`, horizontal scrolling, continuation prompt
 - **`edit <word>`** recalls a word's source onto the next prompt, pre-filled and

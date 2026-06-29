@@ -34,10 +34,13 @@ and project phases.
 
 ## Status
 
-**v0.7.0** — Interactive line editor with command history, shell-like words
-(`cd`/`ls`/`cat`/`pushd`/…), session persistence (`save`/`reload`), a built-in
-help system (`man`/`topics`/`apropos`), interactive tutorials, source viewing
-(`see`), file access and dynamic memory. 119 unit tests + 371 integration tests.
+**v0.8.0** — Library-free 2D graphics over DRM/KMS (Phase 5), `edit <word>` to
+recall and re-edit a definition (with horizontal scrolling and a continuation
+prompt), and `.session` to list this session's words. Builds on v0.7.0's
+interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
+persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
+tutorials, source viewing (`see`), file access, and dynamic memory.
+119 unit tests + 510 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -45,7 +48,9 @@ What works today:
 - **ANS Forth core word set** — all 133 required words from section 6.1
 - **Complete core extensions** — all commonly useful section 6.2 words
 - Interactive REPL with a full line editor: arrow-key cursor movement,
-  Ctrl-A/Ctrl-E, insert/delete anywhere, and up/down command history
+  Ctrl-A/Ctrl-E, insert/delete anywhere, up/down command history, horizontal
+  scrolling for long lines, and a `...` continuation prompt for open definitions
+- `EDIT <word>` recalls a definition onto the prompt, pre-filled and editable
 - Colon definitions (`: square dup * ;`) and anonymous (`:NONAME`)
 - Defining words: `CREATE`, `CONSTANT`, `VARIABLE`, `VALUE`/`TO`, `DOES>`
 - Late binding & redefinition: `DEFER`/`IS` (vectored words), `REDO`
@@ -67,7 +72,11 @@ What works today:
 - Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
-- Tools: `WORDS`, `DUMP`, `.S`, `VERSION` (also `basicforth -v`)
+- Graphics (Phase 5): library-free software 2D over DRM/KMS — `set-surface`,
+  `pixel`, `fill-rect`, `clear`, named colors (`graphics.fs`); `drm-open`/
+  `drm-show`/`drm-close` scan out to a real display with no libdrm/X/Wayland
+- Tools: `WORDS`, `.SESSION` (list this session's words), `DUMP`, `.S`,
+  `VERSION` (also `basicforth -v`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
   `BYE-CODE` (exit status), clean stdout for use as a pipe/utility
 - Game support: arrow key parsing, key constants, random number generator
@@ -79,8 +88,8 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: Phase 5 graphics and sound, locals word set, threading,
-more games.
+What's next: more Phase 5 — sound, a GPU (Vulkan) backend behind the surface
+API, font rendering — plus locals word set, threading, and more games.
 
 ## Building
 
@@ -212,9 +221,12 @@ BasicForth/
         Makefile
     forth/
       core.fs               Forth-defined words (loaded at startup)
+      graphics.fs           Software 2D surface API (on-demand)
+      drm.fs                DRM/KMS display backend (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (371 tests, piped I/O)
+    test_integration.sh     Integration tests (510 tests, piped I/O)
+    test_line_editor_pty.py Line-editor tests under a pseudo-terminal
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge
   examples/
