@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New tutorial: `tutorial Chase` — top-down game design
+- A second interactive tutorial that teaches how to *design* a program from the
+  top down with `defer`: write the whole game's shape first as deferred seams,
+  run the empty skeleton to prove the structure, then fill in the parts and give
+  each monster its own swappable brain via an execution-token table (the Pac-Man
+  trick). Builds a complete terminal chase game. Finished program:
+  `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+
 ## v0.8.0 — 2026-06-29
 
 ### Line editor: `edit <word>`, horizontal scrolling, continuation prompt

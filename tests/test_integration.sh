@@ -962,6 +962,47 @@ sm_collide "follow the vacating tail is legal"  '0 dx ! -1 dy !\n1 fx ! 1 fy !\n
 sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\ntick\n'  "-1"
 sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
 
+# examples/chase.fs (the Chase tutorial's finished program) must load and its
+# top-down design must work headlessly. The "hunt" brain steps a monster one
+# cell toward the player on each axis: monster at (5,5), player at (10,8) -> (6,6).
+t0=$(date +%s.%N)
+ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 px ! 8 py !\n0 hunt\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/chase.fs"
+if [[ "$ch_hunt" == *"CHX=6"* && "$ch_hunt" == *"CHY=6"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs loads and the hunt brain chases\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs loads and the hunt brain chases\n"
+    printf "    Expected: CHX=6 CHY=6\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Per-monster brains (the Pac-Man trick): init-game installs a different brain
+# token in each monster's slot, so step-monsters runs DIFFERENT minds per
+# monster. With the player at (20,10) heading right, two monsters sharing cell
+# (22,10) diverge: monster 0 (hunt) steps left toward the player -> x=21, while
+# monster 1 (ambush) aims 3 cells ahead of the player -> x=23.
+ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n1 pdx ! 0 pdy !\n22 0 mx! 10 0 my!\n22 1 mx! 10 1 my!\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_brains" == *"H0X=21"* && "$ch_brains" == *"A1X=23"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs runs a different brain per monster\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs runs a different brain per monster\n"
+    printf "    Expected: H0X=21 A1X=23\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# A monster reaching the player ends the game (collide? sets caught).
+ch_caught=$(printf 'include %s/examples/chase.fs\ninit-game\npx @ 0 mx! py @ 0 my!\nfalse caught !\ncollide?\n.( CAUGHT=) caught @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_caught" == *"CAUGHT=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs ends the game when a monster catches you\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs ends the game when a monster catches you\n"
+    printf "    Expected: CAUGHT=-1\n    Got:      %s\n" "$(echo "$ch_caught" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # examples/snake.fs (the fuller version) must never spawn food on the snake or
 # border: its collision is screen-based, so food on the just-vacated tail could
 # be eaten without being noticed. Occupy the top half, place food 300 times, and

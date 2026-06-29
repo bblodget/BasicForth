@@ -550,6 +550,14 @@ on:
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.
 
+Two tutorials ship today, each building a complete terminal game:
+
+- `tutorial Snake` — learn the language *bottom-up*, one small word at a time,
+  until the last word is the whole game. Finished program: `examples/snake-mini.fs`.
+- `tutorial Chase` — learn to *design* a game *top-down*: sketch the whole shape
+  first with `defer`, run the empty skeleton, then fill in the parts and give each
+  monster its own swappable brain. Finished program: `examples/chase.fs`.
+
 ## Shell-Like Words
 
 Navigate and inspect the filesystem from the REPL without leaving BasicForth:
