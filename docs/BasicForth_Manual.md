@@ -419,6 +419,24 @@ It covers words you define interactively this session (it reads the same capture
 log as `save`). A redefinition shadows the earlier one, and `see` works for any
 defining word, not just `:`. See `docs/See.md`.
 
+### Listing your words (`.session`)
+
+`words` lists the entire dictionary — every built-in plus your own, hundreds of
+names. Usually you only want to see *your* words, so `.session` lists just the
+ones you've defined on top of `core.fs` this session, newest first, with a
+count:
+
+```
+> 22 constant W   variable score   : tick  score @ 1+ score ! ;
+> .session
+3 words defined this session (newest first):
+tick score W
+```
+
+It's the BASIC `LIST` — *"what have I built so far?"* — and it counts every kind
+of definition (`:`, `variable`, `constant`, `defer`, …). Anything you `include`
+or a reloaded `session.fs` counts as part of your session too.
+
 ### Forgetting definitions (`marker`)
 
 `marker <name>` sets a restore point in the dictionary. Running `<name>` later

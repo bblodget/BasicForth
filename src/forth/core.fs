@@ -1432,3 +1432,34 @@ variable (ts-any)                          \ printed any line of the wanted step
 : back ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
+
+\ ===== .SESSION : the words you've defined this session =====
+\ WORDS dumps the whole dictionary (~330 built-ins); .SESSION shows just what
+\ YOU added on top of core.fs — the BASIC "LIST": "what have I built so far?".
+\ It walks the dictionary chain (newest-first: link at offset 0, flags+len at
+\ offset 8 with the length in the low 5 bits, name at offset 9) from LATEST back
+\ to (sw-mark) — the dictionary head captured when core.fs finished loading.
+\ Everything past that mark is the session (a reloaded session.fs or anything
+\ INCLUDEd at the REPL counts too).
+variable (sw-mark)                          \ LATEST at end of core.fs (session start)
+
+: (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
+    dup 9 +  swap 8 + c@ 31 and ;
+: (sw-end?) ( nt -- nt f )                  \ true when nt is the boundary or chain end
+    dup (sw-mark) @ =  over 0= or ;
+: (sw-count) ( -- n )
+    0 (latest@)
+    begin (sw-end?) 0= while  swap 1+ swap  @  repeat  drop ;
+: (sw-list) ( -- )
+    (latest@)
+    begin (sw-end?) 0= while  dup (sw-name) type space  @  repeat  drop  cr ;
+
+: .session ( -- )
+    (sw-count) ?dup 0= if
+        ." No words defined yet this session." cr exit
+    then
+    dup .  1 = if ." word" else ." words" then
+    ."  defined this session (newest first):" cr
+    (sw-list) ;
+
+(latest@) (sw-mark) !                       \ pin the session boundary (keep last!)

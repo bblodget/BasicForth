@@ -31,6 +31,19 @@ See `man see`.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;
 
+## words ( -- )
+List **every** word in the dictionary, newest first — the ~330 built-ins plus
+anything you've added. Handy for discovery, but a lot to scroll.
+
+## .session ( -- )
+List just the words **you** have defined this session — everything added on top
+of `core.fs` (including a reloaded `session.fs` or anything `include`d at the
+REPL), newest first, with a count. The BASIC `LIST`: *"what have I built?"*
+
+    \ : sq dup * ;   variable n   .session
+    \ 2 words defined this session (newest first):
+    \ n sq
+
 ## marker ( "name" -- )
 Define a dictionary restore point (also a defining word — see
 `man defining-words` and `man marker`).
