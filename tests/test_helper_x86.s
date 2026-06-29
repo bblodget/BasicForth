@@ -134,6 +134,16 @@ platform_mmap_anon:
 platform_munmap:
     ret
 
+.global platform_ioctl
+platform_ioctl:
+    mov $-1, %rax               # return error
+    ret
+
+.global platform_mmap_dev
+platform_mmap_dev:
+    mov $-1, %rax               # return MAP_FAILED
+    ret
+
 .global platform_rename
 platform_rename:
     xor %eax, %eax              # return 0 (success)

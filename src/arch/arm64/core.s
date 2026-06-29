@@ -784,6 +784,34 @@ forth_lstore:
     STR W10, [X9]
     RET
 
+// (ioctl) ( fd request argp -- ret )
+// Generic ioctl from Forth. ret = kernel result (negative errno on failure).
+.global forth_ioctl
+forth_ioctl:
+    LDR X2, [X19]            // argp (top)
+    LDR X1, [X19, #CELL]     // request
+    LDR X0, [X19, #(2*CELL)] // fd
+    ADD X19, X19, #(2*CELL)  // pop argp, request; result replaces fd slot
+    STP X29, X30, [SP, #-16]!
+    BL platform_ioctl
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
+// (mmap-dev) ( fd offset size -- addr )
+// Shared read/write mmap of a device fd at a byte offset (DRM dumb buffer).
+.global forth_mmap_dev
+forth_mmap_dev:
+    LDR X1, [X19]            // size (top)
+    LDR X2, [X19, #CELL]     // offset
+    LDR X0, [X19, #(2*CELL)] // fd
+    ADD X19, X19, #(2*CELL)
+    STP X29, X30, [SP, #-16]!
+    BL platform_mmap_dev
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 .global forth_emit
@@ -4966,6 +4994,8 @@ DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
 DEFWORD dict_wstore,      "w!",           forth_wstore,      dict_wfetch
 DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
+DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
+DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4976,6 +5006,7 @@ DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 .global dict_cwd
 .global dict_home_dir
 .global dict_lstore
+.global dict_mmap_dev
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

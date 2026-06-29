@@ -543,6 +543,7 @@ stat_buf:
 .equ PROT_READ,   1
 .equ PROT_WRITE,  2
 .equ MAP_PRIVATE, 2
+.equ MAP_SHARED,  1
 .equ MAP_ANONYMOUS, 0x20
 
 # st_size is at offset 48 in struct stat (x86-64)
@@ -674,6 +675,31 @@ platform_mmap_file:
     mov $PROT_READ, %edx        # arg3 = prot
     mov $MAP_PRIVATE, %r10d     # arg4 = flags
     xor %r9d, %r9d              # arg6 = offset = 0
+    syscall
+    ret
+
+# platform_ioctl ( RDI=fd RSI=request RDX=argp -- RAX=ret )
+# Generic ioctl passthrough. Returns the kernel result (0/positive on success,
+# negative errno on failure). The gateway for direct device control from Forth
+# (DRM/KMS now; GPIO/I2C/evdev later).
+.global platform_ioctl
+platform_ioctl:
+    mov $SYS_ioctl, %rax
+    syscall
+    ret
+
+# platform_mmap_dev ( RDI=fd RSI=size RDX=offset -- RAX=addr )
+# Shared read/write mapping of a device fd at a byte offset (e.g. a DRM dumb
+# buffer via the offset returned by MAP_DUMB). Returns addr or negative errno.
+.global platform_mmap_dev
+platform_mmap_dev:
+    mov %rdi, %r8               # arg5 = fd (before clobbering %rdi)
+    mov %rdx, %r9               # arg6 = offset (before clobbering %rdx)
+    # %rsi already = size (arg2 length)
+    xor %edi, %edi              # arg1 = addr = NULL
+    mov $(PROT_READ | PROT_WRITE), %edx   # arg3 = prot
+    mov $MAP_SHARED, %r10d      # arg4 = flags
+    mov $SYS_mmap, %rax
     syscall
     ret
 

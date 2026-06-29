@@ -133,6 +133,16 @@ platform_mmap_anon:
 platform_munmap:
     RET
 
+.global platform_ioctl
+platform_ioctl:
+    MOV X0, #-1                     // return error
+    RET
+
+.global platform_mmap_dev
+platform_mmap_dev:
+    MOV X0, #-1                     // return MAP_FAILED
+    RET
+
 .global platform_rename
 platform_rename:
     MOV X0, #0                      // return 0 (success)

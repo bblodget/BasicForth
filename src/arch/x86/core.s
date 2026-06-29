@@ -704,6 +704,32 @@ forth_lstore:
     add $2*CELL, %r15
     ret
 
+# (ioctl) ( fd request argp -- ret )
+# Generic ioctl from Forth. ret is the kernel result (0/positive ok, negative
+# errno). The direct device-control gateway (DRM/KMS, later GPIO/I2C/evdev).
+.global forth_ioctl
+forth_ioctl:
+    mov (%r15), %rdx            # argp (top)
+    mov CELL(%r15), %rsi        # request
+    mov 2*CELL(%r15), %rdi      # fd
+    add $2*CELL, %r15           # pop argp, request; result replaces fd slot
+    call platform_ioctl
+    mov %rax, (%r15)
+    ret
+
+# (mmap-dev) ( fd offset size -- addr )
+# Shared read/write mmap of a device fd at a byte offset (e.g. a DRM dumb buffer).
+# addr is the mapping base, or a negative errno on failure.
+.global forth_mmap_dev
+forth_mmap_dev:
+    mov (%r15), %rsi            # size (top)
+    mov CELL(%r15), %rdx        # offset
+    mov 2*CELL(%r15), %rdi      # fd
+    add $2*CELL, %r15
+    call platform_mmap_dev
+    mov %rax, (%r15)
+    ret
+
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
 .global forth_emit
@@ -4558,6 +4584,8 @@ DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
 DEFWORD dict_wstore,      "w!",           forth_wstore,      dict_wfetch
 DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
+DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
+DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4568,6 +4596,7 @@ DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 .global dict_cwd
 .global dict_home_dir
 .global dict_lstore
+.global dict_mmap_dev
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
