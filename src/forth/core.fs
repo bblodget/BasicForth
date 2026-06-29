@@ -727,25 +727,74 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
 \ ===== EDIT: recall a word's source into the next editable prompt line =====
 \ edit <name> resolves the word's source the same way SEE does, but instead of
 \ printing it, captures it into a preload buffer that the line editor drops onto
-\ the next prompt (flattened to one line — newlines are whitespace to Forth — so
-\ you can tweak and resubmit it). v1 caps at one input line; longer definitions
-\ report and are left to edit-and-reload. (edit-line) consumes (el-pre-len).
+\ the next prompt so you can tweak and resubmit it. The source is flattened to a
+\ single line (newlines are whitespace to Forth), with one wrinkle: a `\` runs to
+\ end-of-line, so on one line it would swallow everything after it — therefore a
+\ `\ comment` is converted to a self-terminating `( comment )`. v1 caps at one
+\ input line; longer definitions report and are left to edit-and-reload.
+\ (Limitation: a literal backslash/paren/quote via `[char]`/`char` in code is not
+\ recognised as a non-comment token.) (edit-line) consumes (el-pre-len).
 create (el-pre)  256 allot               \ preload text for the next (edit-line)
 variable (el-pre-len)  0 (el-pre-len) !  \ pending preload length; 0 = none
 
-\ Capture one source span into (el-pre): flatten CR/LF to spaces, drop a single
-\ trailing newline, and refuse (reporting) anything longer than one input line.
+\ --- comment-aware flattener: source span -> one editable line in (el-pre) ---
+variable (fl-src)  variable (fl-u)  variable (fl-i)   \ source + read cursor
+variable (fl-out)  variable (fl-str)  variable (fl-par)  variable (fl-of)
+
+: (fl-emit) ( c -- )                     \ append to (el-pre); flag on overflow
+    (fl-out) @ 256 < if  (el-pre) (fl-out) @ + c!  1 (fl-out) +!
+    else  drop  true (fl-of) !  then ;
+: (fl-cur) ( -- c )  (fl-src) @ (fl-i) @ + c@ ;
+: (fl-delim?) ( c -- f )  dup 32 = swap 10 = or ;          \ space or newline
+: (fl-prev-delim?) ( -- f )                                \ char before cursor
+    (fl-i) @ 0= if  true exit  then
+    (fl-src) @ (fl-i) @ 1- + c@ (fl-delim?) ;
+: (fl-next-delim?) ( -- f )                                \ char after cursor
+    (fl-i) @ 1+ (fl-u) @ < 0= if  true exit  then
+    (fl-src) @ (fl-i) @ 1+ + c@ (fl-delim?) ;
+: (fl-more-line?) ( -- f )               \ not at end, and not on a newline
+    (fl-i) @ (fl-u) @ < if  (fl-cur) 10 <>  else  false  then ;
+
+\ At the backslash: emit the rest of the line as ( ... ), mapping ()->[] so the
+\ comment text can't close the wrapper early. Consumes the line and its newline.
+: (fl-comment) ( -- )
+    40 (fl-emit)  32 (fl-emit)  1 (fl-i) +!              \ "( ", past the backslash
+    (fl-i) @ (fl-u) @ < if  (fl-cur) 32 = if  1 (fl-i) +!  then  then  \ one space
+    begin  (fl-more-line?)  while
+        (fl-cur)  dup 40 = if drop 91 then  dup 41 = if drop 93 then  (fl-emit)
+        1 (fl-i) +!
+    repeat
+    32 (fl-emit)  41 (fl-emit)                            \ " )"
+    (fl-i) @ (fl-u) @ < if  1 (fl-i) +!  then  32 (fl-emit) ;  \ skip nl, separator
+
 : (edit-capture) ( c-addr u -- )
     dup 0> if  2dup + 1- c@ 10 = if  1-  then  then        \ drop a trailing newline
-    dup 256 > if                                           \ too long for one line
-        2drop  0 (el-pre-len) !
+    (fl-u) !  (fl-src) !
+    0 (fl-out) !  0 (fl-i) !  false (fl-str) !  false (fl-par) !  false (fl-of) !
+    begin  (fl-i) @ (fl-u) @ <  while
+        (fl-cur)
+        (fl-str) @ if                                      \ inside a string
+            dup 10 = if  drop 32  then  dup (fl-emit)  34 = if  false (fl-str) !  then
+            1 (fl-i) +!
+        else (fl-par) @ if                                 \ inside a ( ) comment
+            dup 10 = if  drop 32  then  dup (fl-emit)  41 = if  false (fl-par) !  then
+            1 (fl-i) +!
+        else                                               \ code
+            dup 92 = (fl-prev-delim?) and (fl-next-delim?) and if
+                drop  (fl-comment)
+            else
+                dup 34 = if  true (fl-str) !  then          \ entering a string
+                dup 40 = if  true (fl-par) !  then          \ entering a ( ) comment
+                dup 10 = if  drop 32  then                  \ newline -> space
+                (fl-emit)  1 (fl-i) +!
+            then
+        then then
+    repeat
+    (fl-of) @ if                                           \ converted line too long
+        0 (el-pre-len) !
         (msg:) ." definition too long to edit inline" cr  exit
     then
-    dup (el-pre-len) !                                     ( c-addr u' )
-    0 ?do
-        dup i + c@  dup 10 = over 13 = or if  drop 32  then  \ CR/LF → space
-        (el-pre) i + c!
-    loop  drop ;
+    (fl-out) @ (el-pre-len) ! ;
 
 : edit ( "name" -- )
     s" edit" (msg-u) ! (msg-a) !

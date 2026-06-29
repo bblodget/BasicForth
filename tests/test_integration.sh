@@ -2541,6 +2541,25 @@ assert_editor "edit refuses an over-long def" 'edit see\nbye\n'       "too long 
 # the next prompt is not pre-filled with stale source.
 assert_editor_absent "edit error clears stale preload" 'edit 0<> edit dup\n\nbye\n'  "0= invert"
 
+# edit converts a `\` line comment to ( ) when flattening, so a multi-line
+# commented definition survives the round-trip (a `\` on one line would otherwise
+# swallow the rest). Load a commented word from a file, edit + resubmit as-is, and
+# confirm the comment became a ( ) and the word still works (5 dbl . -> 10).
+cc_dir=$(mktemp -d)
+cat > "$cc_dir/cc.fs" <<'FS'
+: dbl ( n -- n+n )
+\ doubles the input
+dup + ;
+FS
+cc_out=$(printf 'edit dbl\n\n5 dbl .\nbye\n' | BASICFORTH_EDITOR=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
+rm -rf "$cc_dir"
+if [[ "$cc_out" == *"( doubles the input )"* && "$cc_out" == *"10  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit converts a backslash comment to ( )\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit converts a backslash comment to ( )\n"
+    printf "    Got: %s\n" "$(echo "$cc_out" | head -5)"; ((failed++))
+fi
+
 # =========================================================================
 section "BYE"
 # =========================================================================
