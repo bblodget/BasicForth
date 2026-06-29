@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Graphics: software 2D over DRM/KMS (Phase 5, step 1)
+- Put pixels on a modern display straight from Forth — via `/dev/dri/cardN`
+  `ioctl`s, with **no libdrm, no X/Wayland, no GPU library**. This is the first
+  step of the graphics direction recorded in docs/Planning.md (direct,
+  library-free display + software 2D, with a backend-agnostic surface API a
+  Vulkan GPU backend can later sit behind).
+- New on-demand `src/forth/graphics.fs`: a *surface* (base/width/height/stride)
+  plus `set-surface`, `pixel`, `fill-rect`, `clear`, and named colors. 32bpp;
+  drawing words are oblivious to where the pixels live (heap buffer or video
+  memory), so they're testable by read-back.
+- New on-demand `src/forth/drm.fs`: `drm-open` (enumerate → connected connector
+  and mode → dumb framebuffer → map → point the surface at it), `drm-show`
+  (become DRM master and `SETCRTC` to scan out), `drm-close`, and a `drm-demo`.
+- New primitives: `(ioctl) ( fd request argp -- ret )` and
+  `(mmap-dev) ( fd offset size -- addr )` — the direct device-control gateway
+  (DRM now; GPIO/I2C/evdev later), backed by `platform_ioctl`/`platform_mmap_dev`.
+  Also `w@`/`w!`/`l@`/`l!` (16/32-bit memory access) for pixels and ioctl structs.
+- Verified on real hardware (2560×1600): drawing + read-back works as an ordinary
+  DRM client (even under a compositor); from a text VT, `drm-show` returns 0 and
+  the demo renders to the panel. The DRM integration test is gated — it runs on a
+  real DRM host and skips under QEMU and where there is no card node.
+- Docs: docs/Graphics.md (surface model, DRM words, manual VT/board visual test),
+  docs/Planning.md (graphics direction), tools/drmoff.c (struct-offset reference).
+
 ## v0.7.0 — 2026-06-27
 
 ### Shell-like words: `pwd` / `cd` / `ls` / `cat` / `more` / `pushd` / `popd` / `dirs`
