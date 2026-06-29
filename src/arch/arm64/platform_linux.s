@@ -588,6 +588,7 @@ stat_buf:
 .equ PROT_READ_V, 1
 .equ PROT_WRITE_V, 2
 .equ MAP_PRIVATE_V, 2
+.equ MAP_SHARED_V, 1
 .equ MAP_ANONYMOUS_V, 0x20
 
 // st_size is at offset 48 in struct stat (ARM64)
@@ -736,6 +737,28 @@ platform_mmap_file:
     MOV X2, #PROT_READ_V            // prot
     // X1 already = size (length)
     MOV X0, #0                      // addr = NULL
+    MOV X8, #SYS_mmap
+    SVC #0
+    RET
+
+// platform_ioctl ( X0=fd X1=request X2=argp -- X0=ret )
+// Generic ioctl passthrough. Returns the kernel result (negative errno on fail).
+.global platform_ioctl
+platform_ioctl:
+    MOV X8, #SYS_ioctl
+    SVC #0
+    RET
+
+// platform_mmap_dev ( X0=fd X1=size X2=offset -- X0=addr )
+// Shared read/write mapping of a device fd at a byte offset (DRM dumb buffer).
+.global platform_mmap_dev
+platform_mmap_dev:
+    MOV X4, X0                      // fd      -> arg5 (before clobbering X0)
+    MOV X5, X2                      // offset  -> arg6 (before clobbering X2)
+    // X1 already = size (arg2 length)
+    MOV X0, #0                      // addr = NULL (arg1)
+    MOV X2, #3                      // prot = PROT_READ|PROT_WRITE (arg3)
+    MOV X3, #MAP_SHARED_V           // flags (arg4)
     MOV X8, #SYS_mmap
     SVC #0
     RET

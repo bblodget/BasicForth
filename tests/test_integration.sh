@@ -204,6 +204,12 @@ section "Memory Access"
 
 # Note: HERE is not yet exposed as a Forth word
 
+# 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and DRM structs
+assert_output "l! / l@"            'pad $11223344 over l! l@ .'         "287454020"
+assert_output "w! / w@"            'pad $ABCD over w! w@ .'             "43981"
+assert_output "l! writes 4 bytes"  'pad -1 over ! 0 over l! @ u.'      "18446744069414584320"
+assert_output "w! writes 2 bytes"  'pad -1 over ! 0 over w! @ u.'      "18446744073709486080"
+
 # =========================================================================
 section "User-defined Words"
 # =========================================================================
@@ -464,6 +470,38 @@ assert_output "2SWAP"                "1 2 3 4 2swap . . . ."         "2 1 4 3"
 assert_output "*/"                   "3 7 2 */ ."                     "10"
 assert_output "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
 assert_output "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
+
+# =========================================================================
+section "Graphics (software 2D surface)"
+# =========================================================================
+# graphics.fs is loaded on demand (not auto-loaded), so include it by absolute
+# path. Drawing is verified by reading the pixel buffer back — no display needed.
+# A 4x3 surface, stride 16 bytes; pixel (1,2) is at offset 2*16+1*4 = 36.
+GR="$FORTH_LIB/graphics.fs"
+assert_output "gr pixel plots 32bpp"  "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear red 1 2 pixel gb 36 + l@ . ; g"  "16711680"
+assert_output "gr fill-rect"          "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear green 0 0 2 1 fill-rect gb 4 + l@ . ; g"  "65280"
+assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
+assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
+
+# DRM/KMS backend — only meaningful on a real DRM host. Skip under QEMU (cannot
+# emulate DRM ioctls) and when there is no card node. drm-open maps a real dumb
+# buffer (no DRM master needed), so we can clear it blue and read the pixel back;
+# the actual scanout (drm-show / SETCRTC) needs master and is a manual VT/board test.
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (qemu cannot emulate DRM ioctls)\n"
+elif [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ]; then
+    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (no /dev/dri/cardN)\n"
+else
+    drm_px=$(printf 'include %s/graphics.fs\ninclude %s/drm.fs\n: t drm-open gr-base @ dup 0= over -1 = or if drop ." nodev" exit then drop blue clear gr-base @ l@ . drm-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+    if printf '%s' "$drm_px" | grep -q '255'; then
+        printf "  ${GREEN}PASS${NC}  DRM open+map+draw (blue pixel read back from dumb buffer)\n"; ((passed++))
+    elif printf '%s' "$drm_px" | grep -qiE 'nodev|cannot open'; then
+        printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (card present but not usable here)\n"
+    else
+        printf "  ${RED}FAIL${NC}  DRM open+map+draw\n    Got: %q\n" "$drm_px"; ((failed++))
+    fi
+fi
 
 # =========================================================================
 section "Dynamic Memory (heap)"

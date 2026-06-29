@@ -307,9 +307,25 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Phase 5: Graphics and Sound
 
-- [ ] Framebuffer (/dev/fb0), DRM/KMS, or SDL2
-- [ ] Font rendering
-- [ ] Sound output (ALSA or PipeWire)
+See docs/Planning.md "Graphics Direction" for the philosophy/roadmap and
+docs/Graphics.md for the API.
+
+- [x] Direct device gateway: `(ioctl)` / `(mmap-dev)` primitives
+  (`platform_ioctl` / `platform_mmap_dev`), plus `w@`/`w!`/`l@`/`l!` 16/32-bit
+  memory access. (step 1b-i)
+- [x] Backend-agnostic 2D surface + primitives in `graphics.fs` (`set-surface`,
+  `pixel`, `fill-rect`, `clear`, named colors); 32bpp. (step 1a)
+- [x] DRM/KMS software-2D backend in `drm.fs` (`drm-open`/`drm-show`/`drm-close`/
+  `drm-demo`): enumerate → dumb buffer → ADDFB → map → surface → SETCRTC.
+  Verified on real hardware (2560×1600). Gated integration test + tools/drmoff.c.
+  (step 1b)
+- [ ] Double-buffering / page-flip (no tearing) + a simple animation demo
+- [ ] More primitives: lines, circles, blit/sprites
+- [ ] Font / text rendering (show characters on the framebuffer)
+- [ ] Non-32bpp formats; multi-monitor
+- [ ] Vulkan GPU/3D backend behind the surface API (needs an FFI + dynamic
+  linking — the one accepted dependency; see Planning.md)
+- [ ] Sound output (ALSA ioctl, or PipeWire)
 - [ ] Game demos (snake, sprites)
 
 ---

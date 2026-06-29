@@ -752,6 +752,66 @@ forth_cstore:
     STRB W10, [X9]
     RET
 
+// W@ (16-bit fetch, zero-extended) ( addr -- u )
+.global forth_wfetch
+forth_wfetch:
+    LDR X9, [X19]
+    LDRH W9, [X9]
+    STR X9, [X19]
+    RET
+
+// W! (16-bit store, low 16 bits) ( x addr -- )
+.global forth_wstore
+forth_wstore:
+    LDR X9, [X19], #CELL      // pop addr
+    LDR X10, [X19], #CELL     // pop x
+    STRH W10, [X9]
+    RET
+
+// L@ (32-bit fetch, zero-extended) ( addr -- u )
+.global forth_lfetch
+forth_lfetch:
+    LDR X9, [X19]
+    LDR W9, [X9]              // 32-bit load zero-extends into X9
+    STR X9, [X19]
+    RET
+
+// L! (32-bit store, low 32 bits) ( x addr -- )
+.global forth_lstore
+forth_lstore:
+    LDR X9, [X19], #CELL      // pop addr
+    LDR X10, [X19], #CELL     // pop x
+    STR W10, [X9]
+    RET
+
+// (ioctl) ( fd request argp -- ret )
+// Generic ioctl from Forth. ret = kernel result (negative errno on failure).
+.global forth_ioctl
+forth_ioctl:
+    LDR X2, [X19]            // argp (top)
+    LDR X1, [X19, #CELL]     // request
+    LDR X0, [X19, #(2*CELL)] // fd
+    ADD X19, X19, #(2*CELL)  // pop argp, request; result replaces fd slot
+    STP X29, X30, [SP, #-16]!
+    BL platform_ioctl
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
+// (mmap-dev) ( fd offset size -- addr )
+// Shared read/write mmap of a device fd at a byte offset (DRM dumb buffer).
+.global forth_mmap_dev
+forth_mmap_dev:
+    LDR X1, [X19]            // size (top)
+    LDR X2, [X19, #CELL]     // offset
+    LDR X0, [X19, #(2*CELL)] // fd
+    ADD X19, X19, #(2*CELL)
+    STP X29, X30, [SP, #-16]!
+    BL platform_mmap_dev
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 .global forth_emit
@@ -4930,6 +4990,12 @@ DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
 DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
 DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
+DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
+DEFWORD dict_wstore,      "w!",           forth_wstore,      dict_wfetch
+DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
+DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
+DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
+DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4939,6 +5005,8 @@ DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 .global dict_startup_dir
 .global dict_cwd
 .global dict_home_dir
+.global dict_lstore
+.global dict_mmap_dev
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
