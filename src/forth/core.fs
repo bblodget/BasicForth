@@ -908,7 +908,8 @@ variable (el-pos)   \ cursor index, 0..len
 \ Horizontal-scroll state: the editable area shows a window buf[vstart..) that
 \ fits one terminal row. (el-scol) is the terminal cursor's column offset from
 \ the prompt margin; (el-vshown) the number of chars currently drawn there.
-2 constant (el-margin)             \ columns the REPL prompt ("> ") occupies
+: (el-margin) ( -- n )  \ columns the REPL prompt occupies: "... " while a
+    state @ if  4  else  2  then ;  \ definition is open (main.s prints it), else "> "
 variable (el-vstart)               \ leftmost visible buffer index (scroll offset)
 variable (el-scol)                 \ cursor column, as an offset from the margin
 variable (el-vshown)               \ chars currently drawn in the editable area

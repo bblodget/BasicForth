@@ -87,5 +87,17 @@ report("recalled short line renders after scroll",
        '." ZQX"' in seg.decode(errors="replace"),
        "recall redraw was blank")
 
+# 4) Multi-line definition: a continuation prompt ("... ") appears while a
+#    definition is open, and a continuation line wider than the terminal scrolls
+#    and still compiles correctly.
+fd = spawn()
+after_colon = send(fd, b": bigsum\r")        # open def -> continuation prompt next
+send(fd, b"1 2 + 3 + 4 + 5 +\r")             # long continuation line (scrolls)
+send(fd, b";\r")
+result = send(fd, b"bigsum .\r")
+send(fd, b"bye\r"); os.close(fd)
+report("continuation prompt shown", "..." in after_colon.decode(errors="replace"))
+report("long continuation line compiles", "15  ok" in result.decode(errors="replace"))
+
 print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 sys.exit(1 if failed else 0)
