@@ -4,23 +4,32 @@ Environment commands you use *at the prompt* rather than inside programs:
 inspecting words, saving your session, and browsing the docs. Each has a fuller
 topic page (`man <topic>`), linked below.
 
-## Session persistence
+## Module persistence
 
-These work in an interactive session; definitions you enter are captured so they
-can be saved and reloaded. See `man persistence`.
+Your interactive definitions are a **module** you can write to a named file and
+load back (BASIC's `SAVE`/`LOAD`). Capture runs in an interactive session. See
+`man persistence`.
 
-## save ( -- )
-Write the words you've defined this session to `session.fs` in the current
-directory (auto-loaded next start). Writes atomically, so a failure never
-corrupts an existing file.
+## save ( "name" -- )  /  save ( -- )
+`save <name>` writes the module to `<name>` (relative to the current directory)
+and makes it the current file; bare `save` re-writes the current file. Writes
+atomically, so a failure never corrupts an existing file.
 
-## -session ( -- )
-Forget everything defined since startup — the session definitions and anything
-entered interactively — keeping `core.fs` and the loaded session words.
+## load ( "name" -- )
+Open `<file>` as the module — forget the old one, load the new one, make it
+current. Like `basicforth <file>`, mid-session. Discards unsaved changes.
+
+## new ( -- )
+Clear the module — forget every definition, back to a clean slate (core only).
+Discards unsaved changes.
 
 ## reload ( -- )
-`-session` followed by re-loading the (possibly hand-edited) `session.fs` — the
-edit/compile/run loop.
+Re-read the current file from disk — the edit/compile/run loop (`-session` then
+re-load the current module file).
+
+## -session ( -- )
+Low-level "forget the module's words" back to the end of `core.fs` — the helper
+`new` / `load` / `reload` build on.
 
 ## Inspecting words
 
@@ -35,21 +44,21 @@ See `man see`.
 List **every** word in the dictionary, newest first — the ~330 built-ins plus
 anything you've added. Handy for discovery, but a lot to scroll.
 
-## .session ( -- )
-List just the words **you** have defined this session — everything added on top
-of `core.fs` (including a reloaded `session.fs` or anything `include`d at the
-REPL), newest first, with a count. The BASIC `LIST`: *"what have I built?"*
+## .module ( -- )
+List just the words **you** have defined — your module — everything added on top
+of `core.fs` (a `load`ed file or anything `include`d at the REPL), newest first,
+with a count. The BASIC `LIST`: *"what have I built?"*
 
-    \ : sq dup * ;   variable n   .session
-    \ 2 words defined this session (newest first):
+    \ : sq dup * ;   variable n   .module
+    \ 2 words in this module (newest first):
     \ n sq
 
 ## uses ( "name" -- )
-List the session words whose source mentions `<name>` as a whole token
+List the module words whose source mentions `<name>` as a whole token
 (case-insensitive) — a grep over your own definitions, handy before renaming
 something. It reads each word's source the way `see` does — from the interactive
 capture log for words you typed, or from the file for words loaded via a startup
-argument, `include`, or `session.fs` — so it covers everything `.session` lists.
+argument, `load`, or `include` — so it covers everything `.module` lists.
 `<name>`'s own defining line is not counted.
 
     \ variable mcount  : step  mcount @ . ;  : tick  mcount 1+ . ;
@@ -77,7 +86,7 @@ List the topics whose text contains `<keyword>`, each labelled with its section.
 
 ## See Also
 
-- docs/Persistence.md — `save`, `-session`, `reload` in depth.
+- docs/Persistence.md — modules: `save <name>`, `load`, `new`, `reload` in depth.
 - docs/See.md — how `see` reconstructs source.
 - docs/Marker.md — dictionary restore points.
 - docs/Help_System.md — `topics`, `man`, `apropos`, and sections.

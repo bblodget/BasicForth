@@ -106,7 +106,7 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **I/O**: emit, key, accept, type, .", s", write-file
 - **File access**: open-file, create-file, close-file, read-file, read-line, file-size, rename-file
 - **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
-- **Session persistence**: save (write definitions to session.fs; auto-loaded at startup), -session (forget session defs), reload (-session + re-include session.fs), see (print a word's most recent source from the session log)
+- **Module persistence**: save \<name\> (write the module's definitions to a file), load \<file\> (open a module), new (clear it), reload (re-read the current file), -session (forget the module's words), see (print a word's most recent source)
 - **Help system**: topics (list docs topics), man (page a topic's .md file), apropos (search topics for a keyword) — docs found via BASICFORTH_DOCS
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
 - **Compiler**: :, ;, immediate, ', evaluate, included
@@ -173,15 +173,16 @@ compiled words, it will point to inline STC code in the dictionary space.
 To execute an xt: load it into a register and call it (`call *%rax` on
 x86-64, `BLR X9` on ARM64).
 
-## Walking the chain: WORDS and .session
+## Walking the chain: WORDS and .module
 
 `WORDS` walks the chain from `LATEST` to the end (`link = 0`), printing each
-entry's name (offset 9, length from the low 5 bits at offset 8). `.session`
-walks the same chain but stops early, at a **session boundary** — the value of
+entry's name (offset 9, length from the low 5 bits at offset 8). `.module`
+walks the same chain but stops early, at a **module boundary** — the value of
 `LATEST` captured the moment `core.fs` finished loading. Everything newer than
-that boundary is what the user added on top of the core vocabulary (interactive
-definitions, a reloaded `session.fs`, or `INCLUDE`d files), so `.session` lists
+that boundary is what the user added on top of the core vocabulary (their module:
+interactive definitions, a `load`ed file, or `INCLUDE`d files), so `.module` lists
 just those, sparing the reader the ~330 built-ins. The boundary is recorded in
 a plain Forth variable on the last line of `core.fs` (`(latest@) (sw-mark) !`),
-so `.session` and its helpers — defined just before it — fall below the mark and
-never list themselves.
+so `.module` and its helpers — defined just before it — fall below the mark and
+never list themselves. The same end-of-`core.fs` point is also the `-session`
+restore mark, so `-session`/`new`/`load` forget the whole module.

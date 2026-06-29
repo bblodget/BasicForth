@@ -2,13 +2,40 @@
 
 ## Unreleased
 
-### `uses <word>` — find which session words reference a word
-- `uses <word>` lists the session words whose source mentions `<word>` as a
+### Modules: named `save` / `load`, replacing the magic `session.fs`
+- Your interactive definitions are now a **module** you save to and load from
+  **named files** (BASIC's `SAVE` / `LOAD`), instead of an implicit `session.fs`:
+  - `save <name>` writes the module to `<name>` (cwd-relative) and makes it the
+    current file; bare `save` rewrites the current file — remembered as an
+    absolute path, so a later `cd` can't move it (editor-style "save").
+  - `load <file>` opens a module mid-session (forget the old, load the new);
+    `basicforth <file>` does the same at launch.
+  - `new` clears the module to a clean slate (core only).
+  - `reload` re-reads the current file (the edit/compile/run loop).
+  - `-session` is now the low-level "forget the module's words" helper.
+- **Capture is on with a file argument now.** Loading a module and editing it
+  interactively works — `see` / `uses` / `save` cover your edits (previously a
+  file argument silently disabled capture). A `bye`-script still captures nothing.
+- **A broken module** with a compile error: an interactive `basicforth game.fs`
+  reports the error and **drops to the REPL** so you can fix it; a non-interactive
+  run exits non-zero, like a failing Unix utility.
+- The `-session` restore mark now sits at the end of `core.fs`, so
+  `-session` / `new` / `load` forget the *whole* module (the loaded file's words
+  plus interactive ones).
+- `.session` is renamed **`.module`** (breaking change since v0.8.0).
+- **Migration:** there is no more `session.fs` auto-load — an existing
+  `session.fs` is loaded explicitly with `basicforth session.fs`. `save` / `reload`
+  are now cwd-relative (the old startup-directory pinning is gone). `load` / `new`
+  / `reload` discard unsaved changes (a "save first?" prompt is planned). See
+  docs/Persistence.md.
+
+### `uses <word>` — find which module words reference a word
+- `uses <word>` lists the module words whose source mentions `<word>` as a
   whole token (case-insensitive) — a grep over your own definitions, handy
   before renaming something. It reads each word's source the way `see` does —
   from the interactive capture log for words you typed, or from the source file
-  for words loaded as a startup argument, via `include`, or from `session.fs` —
-  so it covers everything `.session` lists, skipping only `<word>`'s own defining
+  for words loaded as a startup argument, via `load`, or via `include` —
+  so it covers everything `.module` lists, skipping only `<word>`'s own defining
   line. Pure Forth (reuses the `see` capture log, per-word source metadata, and
   file reader; reads each source file once); no assembly. See `man Tools`.
 

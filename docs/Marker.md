@@ -53,13 +53,14 @@ Markers nest naturally: running an *outer* marker also forgets any inner markers
 - Markers are forward-only restore points. To partially roll back, place several
   markers and run the earliest one you want to keep *below*.
 
-## Relation to SAVE / sessions
+## Relation to modules (SAVE / LOAD)
 
-The session system uses this idea for its edit/compile/run loop. Rather than
-writing a marker into `session.fs`, BasicForth records a restore point just past
-`core.fs` at startup; `-session` rewinds to it and `reload` does `-session` +
-re-`include session.fs`. So `session.fs` stays pure definitions and is cleanly
-reloadable after a hand-edit. See [Persistence.md](Persistence.md).
+The module system uses this idea for its edit/compile/run loop. Rather than
+writing a marker into the module file, BasicForth records a restore point at the
+end of `core.fs`; `-session` rewinds to it (forgetting the whole module) and
+`reload` does `-session` + re-`include` of the current module file. So the file
+stays pure definitions and is cleanly reloadable after a hand-edit. See
+[Persistence.md](Persistence.md).
 
 ## How it works
 

@@ -233,7 +233,7 @@ to quit:
     chase
 
 It's a real game already, and we still haven't touched a monster. Curious what
-you've built? At the prompt, type `.session` — it lists just the words *you've*
+you've built? At the prompt, type `.module` — it lists just the words *you've*
 defined (skipping the ~330 built-ins), so you can watch your vocabulary grow as
 you fill in seams. Type `next`.
 
@@ -419,7 +419,7 @@ The finished program in `examples/chase.fs` is fully baked — every seam is a
 plain `:` definition, and the only token indirection left is the per-monster
 `mbrain` table, because *that one is the feature*, not scaffolding.
 
-Two notes for when you `save` your work (and check `.session` to see everything
+Two notes for when you `save` your work (and check `.module` to see everything
 you've defined):
 
 - An ordinary word you redefine interactively is captured by `redo`/`reload`.

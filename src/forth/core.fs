@@ -538,95 +538,138 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ +!                  \ log.len += u2
     again ;
 
-\ Absolute session-file paths, pinned to the startup directory so SAVE/RELOAD
-\ always use the launch directory regardless of any later `cd`. Two separate
-\ buffers so "<startup>/session.fs.new" and "<startup>/session.fs" can coexist
-\ on the stack for the atomic rename in SAVE.
-create (sess-a) 1088 allot
-create (sess-b) 1088 allot
-variable (sp-end)                        \ write pointer while building a path
+\ Named-file persistence (replaces the old fixed session.fs). Your interactive
+\ definitions accumulate in the capture log; SAVE <name> writes that log to
+\ <name> in the current directory, and `basicforth <name>` loads <name> and
+\ seeds the log from it so you can keep editing and SAVE it back. Files are
+\ explicit and cwd-relative — there is no magic session.fs.
+1024 constant (cf-max)
+create (cur-file) (cf-max) allot         \ ABSOLUTE path of the current file (0 len = none)
+variable (cur-file-len)
+: (cur-file@) ( -- c-addr u )  (cur-file) (cur-file-len) @ ;
+
+\ Generic "append at a write pointer" buffer builder (also used by the ~ expansion
+\ in the shell words below).
+variable (sp-end)                        \ write pointer while building a buffer
 : (sp-add) ( c-addr u -- )               \ append u bytes at (sp-end)
     dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
     r> (sp-end) +! ;
-: (sess-build) ( buf c-addr u -- path plen )  \ build "<startup>/<name>" into buf
-    (startup-dir) nip 0= if              \ getcwd failed at boot (startup-dir empty):
-        rot drop  exit                   \   fall back to the bare relative name, like
-    then                                 \   make_absolute keeps a path relative on failure
-    >r >r                               ( buf )   \ R: u c-addr (the name)
-    dup (sp-end) !                       \ write pointer := buf
-    (startup-dir) (sp-add)               \ startup directory
-    s" /" (sp-add)                       \ separator
-    r> r> (sp-add)                       \ the name
-    (sp-end) @ over - ;                  ( buf len )
-: (session-path) ( -- c-addr u )  (sess-a) s" session.fs"     (sess-build) ;
-: (session-new)  ( -- c-addr u )  (sess-b) s" session.fs.new" (sess-build) ;
 
-\ (seed-log): reset the log and load the current session.fs's bytes into it, so
-\ SAVE rewrites the file's content (plus later additions) rather than drifting
-\ from a hand-edited file. No-op (empty log) when session.fs is absent.
+: (store-name) ( c-addr u -- )           \ copy <name> verbatim into (cur-file)
+    (cf-max) min  dup (cur-file-len) !  (cur-file) swap cmove ;
+\ Remember <name> as the current file, resolved to an ABSOLUTE path so a later
+\ bare SAVE always rewrites the same file regardless of any `cd`. A relative name
+\ is anchored to the current directory at the moment it is set (startup load or
+\ SAVE <name>); an absolute name is kept as-is. Falls back to the bare name if
+\ <cwd>/<name> would not fit.
+: (set-cur-file) ( c-addr u -- )
+    over c@ [char] / = if  (store-name) exit  then        \ already absolute
+    dup (cwd) nip + 1+ (cf-max) > if  (store-name) exit  then   \ would overflow → bare name
+    (cur-file) (sp-end) !
+    (cwd) (sp-add)  s" /" (sp-add)  (sp-add)              \ <cwd>/<name>
+    (sp-end) @ (cur-file) - (cur-file-len) ! ;
+
+create (path-a) (cf-max) allot           \ scratch: target path "<name>"
+create (path-b) (cf-max) allot           \ scratch: temp path  "<name>.new"
+variable (path-a-len)  variable (path-b-len)
+: (name>paths) ( c-addr u -- )           \ split <name> into (path-a) and (path-b)="<name>.new"
+    (cf-max) 4 - min  >r                  ( c-addr )   \ R: u (room left for ".new")
+    r@ (path-a-len) !
+    dup (path-a) r@ cmove                 \ path-a = name
+    (path-b) r@ cmove                     \ path-b = name
+    s" .new" (path-b) r@ + swap cmove     \ path-b += ".new"
+    r> 4 + (path-b-len) ! ;
+
+\ (seed-log): reset the log + SEE index, then load the current file's bytes into
+\ the log so SAVE rewrites it cumulatively. Empty when there is no current file
+\ (a fresh session) or the file does not exist yet (a new file).
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
-    (session-path) r/o open-file        ( fileid ior )
-    if drop exit then                   \ no session.fs → log stays empty
+    (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
+    (cur-file@) r/o open-file           ( fileid ior )
+    if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
 
-\ (session-init): runs once at interactive startup (after core.fs, before
-\ session.fs is loaded). Records the restore point so -session/RELOAD rewind to
-\ here — keeping core.fs and the session words — then seeds the log.
-: (session-init) ( -- )
-    (session-mark!)
+\ (session-init): boot hook, run once when entering the interactive REPL, with
+\ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
+\ restore point, marks the session active, sets the current file, seeds the log.
+: (session-init) ( c-addr u -- )
     true (session-on) !                 \ mark this run as an interactive session
+    dup if  (set-cur-file)  else  2drop  0 (cur-file-len) !  then
     (seed-log) ;
+\ NOTE: the -session restore mark is captured at the END of core.fs (below), not
+\ here — so -session/new/load forget the WHOLE module (the loaded file's words
+\ plus interactive ones), since the startup file loads after core.fs but before
+\ this hook runs.
 
-\ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
-\ A no-op when nothing has been captured (e.g. capture wasn't active), so it
-\ never litters an empty session.fs. Writes to session.fs.new first, then
-\ atomically renames it over session.fs, so a write failure can never destroy
-\ an existing session.fs.
-: save ( -- )
-    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    (session-new) w/o create-file       ( fileid ior )
-    abort" save: cannot open session.fs.new"   ( fileid )
+\ SAVE <name> (bare SAVE → the current file): write the whole log to <name> in
+\ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
+\ existing file. SAVE <name> also makes <name> the current file (save-as). A
+\ no-op when nothing has been captured, so it never litters an empty file.
+: save ( "name" -- )
+    parse-word dup 0= if
+        2drop (cur-file@) dup 0= if
+            drop ." save: no current file (use: save <name>)" cr exit
+        then
+    else
+        2dup (set-cur-file)
+    then                                ( c-addr u )
+    (log) cell+ @ 0= if  2drop ." nothing to save" cr  exit  then
+    (name>paths)
+    (path-b) (path-b-len) @ w/o create-file   ( fileid ior )
+    abort" save: cannot create temp file"     ( fileid )
     >r
     (log) @ (log) cell+ @ r@ write-file ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
-    (session-new) (session-path) rename-file
+    (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file
     abort" save: rename error"
-    ." saved to session.fs" cr ;
+    ." saved to " (cur-file@) type cr ;
 
-\ -session: forget everything defined since startup (the session definitions and
-\ anything entered interactively), keeping core.fs and the session words. A no-op
-\ outside an interactive session (no restore point recorded).
+\ -session: low-level forget — restore HERE/LATEST to the startup mark, dropping
+\ every definition made since (the module's words). A no-op outside an interactive
+\ session. Used by NEW / LOAD / RELOAD; leaves the log and current file alone.
 : -session ( -- )  (session-restore) ;
 
-\ RELOAD: the edit/compile/run loop — forget the current session definitions and
-\ re-load the (possibly hand-edited) session.fs. (skip-capture) keeps the RELOAD
-\ line out of the captured log. The log is re-synced from the file (so a later
-\ SAVE matches it) ONLY when the file loads cleanly; if a line errors, the file's
-\ own diagnostic (filename:line: ? token) is shown, loading stops there, the log
-\ is left untouched (so SAVE can't persist a broken file), and RELOAD reports
-\ that the session may be incomplete. The REPL keeps running — fix the file and
-\ reload again.
-: reload ( -- )
-    \ Persistence is interactive-only: do nothing when there is no active session
-    \ (e.g. RELOAD called from a script or a pipe), so it never auto-loads
-    \ session.fs outside that scope.
-    (session-on) @ 0= if  ." reload: no active session" cr  exit  then
-    \ Verify session.fs is readable BEFORE destroying the live session — a
-    \ missing or unreadable file must not forget the session or wipe the log
-    \ (forth_included silently treats a missing file as a clean no-op).
-    (session-path) r/o open-file        ( fileid ior )
-    if  drop ." reload: cannot read session.fs" cr  exit  then
-    close-file drop
+\ (open-module): forget the old module, (re)load the current file, reseed the log
+\ so SAVE rewrites it. (skip-capture) keeps this line out of the log.
+: (open-module) ( -- )
     true (skip-capture) !
     -session
-    (session-path) (included?)          ( ior )
-    if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
+    (cur-file@) (included?)             ( ior )
+    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then
     (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
+
+\ LOAD <file>: open <file> as the current module — a clean swap, like
+\ `basicforth <file>` mid-session. Verified readable BEFORE anything is forgotten,
+\ so a typo can't wipe your work. Discards unsaved changes — SAVE first to keep.
+: load ( "name" -- )
+    parse-word dup 0= if  2drop ." usage: load <file>" cr exit  then
+    2dup r/o open-file if  drop ." load: cannot read " type cr exit  then
+    close-file drop                     ( c-addr u )
+    (set-cur-file)                       \ absolutize + adopt as the current file
+    (open-module) ;
+
+\ NEW: clear the module — forget every definition, empty the log, drop the current
+\ file. A clean slate (core vocabulary only). Discards unsaved changes.
+: new ( -- )
+    -session
+    0 (cur-file-len) !
+    (seed-log) ;                        \ no current file → empties the log + SEE index
+
+\ RELOAD: refresh the current module from disk (edit-on-disk loop) — forget the
+\ session and re-read the current file. Verified readable before forgetting, so a
+\ missing/unreadable file never wipes your work.
+: reload ( -- )
+    (session-on) @ 0= if  ." reload: no active session" cr  exit  then
+    (cur-file-len) @ 0= if  ." reload: no current file" cr  exit  then
+    (cur-file@) r/o open-file           ( fileid ior )
+    if  drop ." reload: cannot read " (cur-file@) type cr  exit  then
+    close-file drop
+    (open-module) ;
 
 \ SEE: print the source of the definition currently in force. A source lister,
 \ not a decompiler. File-loaded words are read from their source file via the
@@ -1556,15 +1599,15 @@ variable (ts-any)                          \ printed any line of the wanted step
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
 
-\ ===== .SESSION : the words you've defined this session =====
-\ WORDS dumps the whole dictionary (~330 built-ins); .SESSION shows just what
-\ YOU added on top of core.fs — the BASIC "LIST": "what have I built so far?".
+\ ===== .MODULE : the words in your module =====
+\ WORDS dumps the whole dictionary (~330 built-ins); .MODULE shows just what YOU
+\ added on top of core.fs — your module — the BASIC "LIST": "what have I built?".
 \ It walks the dictionary chain (newest-first: link at offset 0, flags+len at
 \ offset 8 with the length in the low 5 bits, name at offset 9) from LATEST back
 \ to (sw-mark) — the dictionary head captured when core.fs finished loading.
-\ Everything past that mark is the session (a reloaded session.fs or anything
-\ INCLUDEd at the REPL counts too).
-variable (sw-mark)                          \ LATEST at end of core.fs (session start)
+\ Everything past that mark is your module (a LOADed file or anything INCLUDEd
+\ at the REPL counts too).
+variable (sw-mark)                          \ LATEST at end of core.fs (module start)
 
 : (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
     dup 9 +  swap 8 + c@ 31 and ;
@@ -1577,20 +1620,20 @@ variable (sw-mark)                          \ LATEST at end of core.fs (session 
     (latest@)
     begin (sw-end?) 0= while  dup (sw-name) type space  @  repeat  drop  cr ;
 
-: .session ( -- )
+: .module ( -- )
     (sw-count) ?dup 0= if
-        ." No words defined yet this session." cr exit
+        ." (empty module — no words defined yet)" cr exit
     then
     dup .  1 = if ." word" else ." words" then
-    ."  defined this session (newest first):" cr
+    ."  in this module (newest first):" cr
     (sw-list) ;
 
-\ ===== USES : which session words reference a given word =====
-\ `uses <word>` lists the session words whose source mentions <word> as a whole
+\ ===== USES : which module words reference a given word =====
+\ `uses <word>` lists the module words whose source mentions <word> as a whole
 \ token (case-insensitive) — a grep over your own definitions, handy before
-\ renaming something. It searches the captured source of words defined
-\ interactively this session (the same log SEE reads); a word loaded from an
-\ INCLUDEd file has no captured source here and is skipped, as is <word>'s own
+\ renaming something. It resolves each word's source the way SEE does — from the
+\ capture log for words typed at the REPL, or from the file for words LOADed /
+\ INCLUDEd — so it covers everything .MODULE lists, skipping only <word>'s own
 \ defining line.
 variable (uses-xt)
 : (src-of) ( xt -- c-addr u true | false )  \ captured source span of xt, if any
@@ -1682,4 +1725,6 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     (uf-free)                                  \ release the cached source file
     (uses-n) @ 0= if  ."  (none)"  then  cr ;
 
-(latest@) (sw-mark) !                       \ pin the session boundary (keep last!)
+(latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
+(session-mark!)                             \ -session/new/load restore point: HERE+LATEST
+                                            \ here, so they forget the whole module (keep last!)

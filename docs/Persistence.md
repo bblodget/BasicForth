@@ -1,62 +1,83 @@
-# Session Persistence (SAVE)
+# Modules and Persistence
 
-BasicForth can remember the words you define across sessions, in the spirit of
-1980s BASIC: define some words, `save`, quit, come back later and they're
-already there. Persistence is **source-replay** — it records the *source text*
-of your definitions and re-runs it at startup. There is no binary image and no
-dictionary serialization; `session.fs` is just an ordinary Forth source file
-that happens to be written by the machine.
+Your interactive work in BasicForth is a **module** — the words you've defined on
+top of `core.fs`. You can write a module to a named file and load it back later,
+in the spirit of 1980s BASIC's `SAVE "GAME"` / `LOAD "GAME"`. Persistence is
+**source-replay**: a module file is an ordinary, hand-editable Forth source file —
+the *source text* of your definitions — not a binary image.
 
-## Words
+There is no magic `session.fs`. Files are explicit and named.
 
-| Word | Stack effect | Meaning |
-|------|--------------|---------|
-| `save` | ( -- ) | write the captured definitions to `session.fs` in the startup directory |
-| `-session` | ( -- ) | forget everything defined since startup (session words + interactive definitions) |
-| `reload` | ( -- ) | `-session`, then re-`include` the (possibly edited) `session.fs` |
+## The module verbs
 
-There is no separate "load" word: an interactive session **auto-loads**
-`session.fs` at startup (if present), right after `core.fs`.
+| Word | Stack | Meaning |
+|------|-------|---------|
+| `save <name>` | ( "name" -- ) | write the module to `<name>` (relative to the current directory); also makes `<name>` the current file |
+| `save` | ( -- ) | re-write the **current file** (the one you loaded or last `save <name>`d) |
+| `load <file>` | ( "name" -- ) | open `<file>` as the module — forget the old one, load the new one, make it current |
+| `new` | ( -- ) | clear the module — forget every definition, back to a clean slate (core only) |
+| `reload` | ( -- ) | re-read the **current file** from disk (the edit/compile/run loop) |
+| `.module` | ( -- ) | list the module's words (see `man Tools`) |
+| `-session` | ( -- ) | low-level "forget the module's words" (the helper `new`/`load`/`reload` build on) |
 
-`session.fs` lives in the **startup directory** — the directory BasicForth was
-launched in, captured once at boot. `save` and `reload` always use
-`<startup>/session.fs`, so the `cd` shell word can move the working directory
-without scattering your session across the tree (see `docs/Shell_Words.md`). If
-the boot-time `getcwd` fails, it falls back to a plain relative `session.fs`.
+```
+> 22 constant W   variable score   : tick  score @ 1+ score ! ;
+> save game.fs
+saved to game.fs
+```
+
+Later — anywhere — open it:
+
+```
+$ basicforth game.fs        # or, mid-session:  load game.fs
+> tick  score @ .
+1
+```
+
+`basicforth <file>` at startup is just `load` done at launch: it defines the
+file's words and makes it the current module, so editing + a bare `save` writes
+it back. A file ending in `bye`/`bye-code` is a *script* — it runs and exits
+before any of this (see **Scope** below).
+
+## The current file (where `save` writes)
+
+`save <name>` resolves `<name>` against the **current directory** at the moment
+you type it (so it lands where `ls`/`cat`/`cd` are looking), and remembers it as
+an **absolute** path. So a later bare `save` always rewrites *that* file, even
+after you `cd` elsewhere — exactly like an editor:
+
+```
+$ basicforth ~/proj/game.fs    # current file = /home/you/proj/game.fs
+> cd /tmp                       # ls/cat now act on /tmp
+> save                          # still writes /home/you/proj/game.fs
+> save sketch.fs                # writes /tmp/sketch.fs — and that's now current
+```
+
+Only typing a name (startup arg, or `save <name>`) ever resolves a relative path;
+after that the current file is a fixed identity.
 
 ## The edit / compile / run loop
 
-`session.fs` is a plain, hand-editable Forth file. Edit it in another terminal
-(vi, your editor of choice), then in the running BasicForth pull the changes in:
+A module file is plain, hand-editable Forth. Edit it in another terminal, then
+pull the changes in:
 
 ```
 > reload
 ```
 
-`reload` forgets all the current session definitions (`-session`) and re-loads
-`session.fs`, so you get a clean redefinition every time — no duplicate buildup,
-and definitions you deleted from the file actually disappear. You can also do the
-two steps by hand (`-session` then `include session.fs`).
+`reload` forgets the current module (`-session`) and re-reads the current file —
+a clean redefinition every time, no duplicate buildup, and words you deleted from
+the file actually disappear.
 
-This works because at startup BasicForth records a **restore point** just past
-`core.fs`; `-session` rewinds the dictionary to it (keeping `core.fs` and the
-session words themselves, including `-session`/`reload`). Markers underpin this —
-see [Marker.md](Marker.md).
+If the edited file has an error, `reload` shows the file's own `name:line: ?
+token` diagnostic and reports the module may be incomplete; loading stops at the
+bad line, the in-memory log is left untouched (so a later `save` won't persist a
+broken file), and the REPL keeps running — fix the file and `reload` again. A
+broken file is verified readable *before* anything is forgotten, so a missing or
+unreadable file never wipes your work.
 
-`session.fs` stays **pure definitions** — `-session` and `reload` are never
-written into it (capture logs only lines that *define* a word; forgetting moves
-`LATEST` backward and is ignored, and `reload` suppresses its own line). So the
-file is always clean to hand-edit.
-
-If the edited `session.fs` has an error, `reload` shows the file's own
-`session.fs:line: ? token` diagnostic, then reports `reload: session.fs had
-errors — session may be incomplete`. Loading stops at the bad line, the in-memory
-log is left untouched (so a later `save` won't persist a broken file), and the
-REPL keeps running — fix the file and `reload` again.
-
-If `session.fs` is missing or unreadable, `reload` reports `reload: cannot read
-session.fs` and does nothing — it does **not** forget the current session or
-clear the log, so nothing is lost.
+`load`, `new`, and `reload` **discard unsaved changes** — there's no prompt yet,
+so `save` first if you want to keep them.
 
 ## What gets captured
 
@@ -76,45 +97,32 @@ deferred word's action persist). Other transient actions are *not* captured:
 
 Only a *direct* assignment counts — a `to`/`is` performed inside a word you call
 runs as compiled code, not as the interpreter, so calling that word is not
-captured and its runtime effect is not saved.
+captured and its runtime effect is not saved. A definition that **errors** partway
+through is rolled back and not captured. The `-session`/`reload`/`load`/`save`
+lines are never captured either, so a saved file stays **pure definitions**,
+clean to hand-edit.
 
-Multi-line definitions are captured as a unit:
-
-```
-> : factorial ( n -- n! )
->   dup 2 < if drop 1 exit then
->   dup 1- recurse * ;
-```
-
-A definition that **errors** partway through is rolled back and not captured.
-
-`save` then writes everything captured (plus anything previously in
-`session.fs`) back out. Saving is **idempotent** — saving twice in a row leaves
-the file unchanged — and **cumulative** — each session's new definitions are
-appended to what was already there.
-
-```
-> : greet ." hello" cr ;
-> save
-saved to session.fs
-```
-
-`save` is a no-op (prints `nothing to save`) when nothing has been captured, so
-it never leaves an empty `session.fs` lying around.
+`save` writes everything captured (plus whatever the current file already
+contained, which is seeded into the log when you load it). Saving is
+**idempotent** (saving twice leaves the file unchanged) and **cumulative** (new
+definitions are appended to what was there). A bare `save` with nothing captured
+prints `nothing to save`; a bare `save` with no current file prints
+`save: no current file (use: save <name>)`.
 
 ## Scope: interactive sessions only
 
-Capture and auto-load are active **only in an interactive terminal session** —
-when standard input is a TTY and no script file was given on the command line.
-Running a Forth script (`basicforth tool.fs`) or piping input never auto-loads
-your session or captures anything, so utilities and automation stay clean. The
-session words respect this too: outside an interactive session `reload` is a
-no-op (it reports `reload: no active session` rather than auto-loading
-`session.fs`), `-session` forgets nothing, and `save` has an empty log to write.
+Capture is active **only in an interactive session** — when standard input is a
+terminal, or `BASICFORTH_SESSION=1` forces it. Running a Forth script
+(`basicforth tool.fs` that ends in `bye`) or piping input captures nothing, so
+utilities and automation stay clean. Outside an interactive session `reload`
+reports `reload: no active session` and does nothing, and `save` has an empty log.
 
-You can override the default with the `BASICFORTH_SESSION` environment variable:
+A broken module reflects this split: an **interactive** `basicforth game.fs` with
+a compile error reports the error and **drops to the REPL** so you can fix it; a
+**non-interactive** run (a pipe or script) **exits non-zero**, like a failing Unix
+utility.
 
-| Value | Effect |
+| `BASICFORTH_SESSION` | Effect |
 |-------|--------|
 | unset | default — on when stdin is a terminal |
 | `1`   | force the session on (e.g. to drive capture through a pipe) |
@@ -122,52 +130,51 @@ You can override the default with the `BASICFORTH_SESSION` environment variable:
 
 ## Limitations
 
-Persistence saves **definitions and direct `to`/`is` assignments**, but not other
+Persistence saves **definitions and direct `to`/`is` assignments**, not other
 runtime state. A `variable`'s contents (set with `!`) are not captured, so a
 `variable` reloads *uninitialized*:
 
 ```
 > variable hits   10 hits !
-> save             \ captures `variable hits`, NOT the `10 hits !`
-\ ...next session: `hits @` is 0, not 10
+> save game.fs     \ captures `variable hits`, NOT the `10 hits !`
+\ ...next load: `hits @` is 0, not 10
 ```
 
-A `value` or deferred word *does* survive when you set it with a direct `to`/`is`
-at the prompt (`0 value hits` then `5 to hits` both persist). For other mutable
-state, prefer a `value` you assign with `to`, or initialize it inside a defining
-word. Note also that `redo`'s recompilation is not reflected on reload — see
-`docs/Redo.md`.
+A `value` set with a direct `to` *does* survive (`0 value hits` then `5 to hits`).
+For other mutable state, prefer a `value` you assign with `to`, or initialize it
+inside a defining word.
 
 Other notes:
 
-- **Redefinitions accumulate.** Redefining a word across sessions appends each
-  version to `session.fs`; on reload they run in order, so the last one wins,
-  but the file grows. A compacting `save` is possible future work.
-- **Reload is bounded by dictionary space.** A very large accumulated session
-  can exceed the fixed dictionary arena on reload — the same limit you'd hit
-  typing it all in. This is one of the motivations for a future growable
-  dictionary.
+- **Redefinitions accumulate.** Editing a word interactively and re-`save`ing
+  appends the new version; on reload they run in order, so the last one wins, but
+  the file grows. Hand-edit to tidy it, or wait for the planned compacting save.
+- **A library `include`d by a module** stays referenced, not inlined: `save`
+  keeps the `include other.fs` line, not a copy of `other.fs`. The library's
+  words are part of the live module (`.module`/`see`/`uses` show them, read from
+  the library file).
+- **Reload is bounded by dictionary space**, the same limit you'd hit typing it
+  all in.
 
 ## How it works
 
-The capture machinery is built on the dynamic-memory heap (see
-[Core_Primitives.md] / the MEMORY wordset): the session log lives in a
-heap-backed buffer that grows with `RESIZE` as you define more.
+The capture log lives in a heap-backed buffer (see the MEMORY wordset). The
+interactive REPL (`main.s`) drives three hook words defined in `core.fs` and
+registered with the internal `(hook!)` primitive:
 
-The interactive REPL (in `main.s`) drives three hook words defined in `core.fs`
-and registered with the internal `(hook!)` primitive:
+- `(session-init)` — at startup, records the `-session` restore point, marks the
+  run interactive, sets the current file from the startup arg (if any), and seeds
+  the log from it so `save` rewrites it cumulatively. (The restore mark itself is
+  captured at the *end of `core.fs`*, before any module loads, so `-session`/
+  `new`/`load` forget the whole module — the loaded file's words plus interactive
+  ones.)
+- `(capture-line)` — after each interpreted line; flushes a completed definition
+  to the log (detected by `LATEST` advancing while `STATE` is back to interpret,
+  so bare `ALLOT`/`,`/`C,` that move only `HERE` are not captured).
+- `(capture-reset)` — at the top of the REPL loop; discards a pending partial
+  definition left by a line error.
 
-- `(session-seed)` — at startup, copies an existing `session.fs` into the log so
-  `save` rewrites it cumulatively. (The actual *loading* of `session.fs` is done
-  in assembly by `main.s`, exactly like `core.fs`, because calling `INCLUDED`
-  from inside a colon word re-enters the interpreter unsafely.)
-- `(capture-line)` — called after each interpreted line; accumulates it and
-  flushes a completed definition to the log (detected by `LATEST` advancing — a
-  new named header was linked — while `STATE` is back to interpret, so bare
-  `ALLOT`/`,`/`C,` that move only `HERE` are not captured).
-- `(capture-reset)` — called at the top of the REPL loop; discards a pending
-  partial definition left by a line error or fault.
-
-`save` writes the log to a temporary `session.fs.new` and then `rename-file`s
-it over `session.fs` — an atomic replace, so a write failure (e.g. a full disk)
-leaves the existing `session.fs` untouched rather than truncating it.
+`save` writes the log to a temporary `<name>.new` and then `rename-file`s it over
+`<name>` — an atomic replace, so a write failure (e.g. a full disk) leaves the
+existing file untouched rather than truncating it. The `-session` restore point
+is a HERE/LATEST mark (the same mechanism as [Marker.md](Marker.md)).

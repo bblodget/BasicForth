@@ -338,9 +338,23 @@ _start:
     ADR X10, script_running
     STR X9, [X10]
     BL forth_included
-    CBNZ X0, .Lscript_error        // line error — message already printed
+    CBZ X0, .Lcmdline_done         // loaded cleanly
+    // Load error. Drop to the REPL only when we'll be interactive (same rule as
+    // the session below: BASICFORTH_SESSION=1, or unset and stdin is a terminal),
+    // so a broken module can be fixed in place. A script/pipe exits non-zero,
+    // like a failing Unix utility.
+    ADR X9, session_env
+    LDR X9, [X9]
+    CMP X9, #2
+    B.EQ .Lscript_error            // BASICFORTH_SESSION=0 → exit
+    CMP X9, #1
+    B.EQ .Lcmdline_done            // BASICFORTH_SESSION=1 → drop to the REPL
+    MOV X0, #0
+    BL platform_isatty
+    CBZ X0, .Lscript_error         // not a terminal → exit
+.Lcmdline_done:
     ADR X10, script_running
-    STR XZR, [X10]                 // script completed cleanly
+    STR XZR, [X10]                 // done loading (clean, or interactive recovery)
 .Lno_cmdline_file:
 
     // Print the startup banner now, only when actually entering the interactive
@@ -355,15 +369,12 @@ _start:
     BL platform_write
 .Lno_banner:
 
-    // ---- Interactive session: auto-load session.fs + enable capture ----
-    // On only when no script argument was given AND (BASICFORTH_SESSION forces
-    // it on, or stdin is a terminal). Scripts/pipes never auto-session.
+    // ---- Interactive session: capture, seeded from the startup file if any ----
+    // On when BASICFORTH_SESSION forces it on, or stdin is a terminal. A file
+    // argument no longer disables it: we drop to the REPL with capture on and the
+    // log seeded from that file (named-file model — there is no magic session.fs).
     ADR X9, session_active
     STR XZR, [X9]
-    ADR X9, start_argc
-    LDR X9, [X9]
-    CMP X9, #2
-    B.GE .Lsession_decided          // a script arg was given → no session
     ADR X9, session_env
     LDR X9, [X9]
     CMP X9, #2
@@ -377,19 +388,35 @@ _start:
     MOV X9, #1
     ADR X10, session_active
     STR X9, [X10]
-    // Seed the in-memory log from an existing session.fs (registered hook).
+    // Call session-init ( c-addr u -- ) with the startup file path, or ( 0 0 ) if
+    // no file argument was given.
+    ADR X9, start_argc
+    LDR X9, [X9]
+    CMP X9, #2
+    B.LT .Lsess_nofile
+    ADR X9, start_argv1
+    LDR X1, [X9]                    // X1 = path
+    MOV X2, #0                      // X2 = strlen
+.Lsess_arglen:
+    LDRB W3, [X1, X2]
+    CBZ W3, .Lsess_arglen_done
+    ADD X2, X2, #1
+    B .Lsess_arglen
+.Lsess_arglen_done:
+    STR X1, [X19, #-CELL]!          // push c-addr
+    STR X2, [X19, #-CELL]!          // push length
+    B .Lsess_init
+.Lsess_nofile:
+    STR XZR, [X19, #-CELL]!         // push 0  (no file)
+    STR XZR, [X19, #-CELL]!         // push 0
+.Lsess_init:
     ADR X9, session_hooks
-    LDR X10, [X9]                   // [0] = session-seed
-    CBZ X10, .Lsession_load
+    LDR X10, [X9]                   // [0] = session-init ( c-addr u -- )
+    CBNZ X10, .Lsess_call
+    ADD X19, X19, #(2*CELL)         // no hook registered → drop the 2 args
+    B .Lsession_decided
+.Lsess_call:
     BLR X10
-.Lsession_load:
-    // Load session.fs the same way core.fs is loaded — in asm, so we don't call
-    // INCLUDED from inside a colon word. Silently skipped if not found.
-    ADR X9, session_fs_name
-    STR X9, [X19, #-CELL]!         // push c-addr
-    MOV X9, #session_fs_len
-    STR X9, [X19, #-CELL]!         // push length
-    BL forth_included
 .Lsession_decided:
 
     // Resolve once whether the line editor engages. BASICFORTH_EDITOR overrides
