@@ -2739,6 +2739,27 @@ else
 fi
 
 # =========================================================================
+section "Shelling out (sh / (system))"
+# =========================================================================
+# `sh <line>` runs the rest of the line via /bin/sh; the interpreter resumes
+# after it (so a following Forth token still runs).
+sh_out=$(printf 'sh echo hi-from-sh\n42 .\nbye\n' | timeout 2 $FORTH 2>&1)
+[[ "$sh_out" == *"hi-from-sh"* && "$sh_out" == *"42  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  sh runs a command, interpreter resumes after it\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  sh basic\n    Got: %s\n" "$(echo "$sh_out"|head -4)"; ((failed++)); }
+# Bare `sh` with no command prints usage, doesn't choke.
+sh_use=$(printf 'sh\nbye\n' | timeout 2 $FORTH 2>&1)
+[[ "$sh_use" == *"usage: sh <command>"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  bare sh prints usage\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  sh usage\n    Got: %s\n" "$(echo "$sh_use"|head -3)"; ((failed++)); }
+# (system) returns the child's exit status: /bin/true -> 0, /bin/false -> 1.
+sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0 st1\nbye\n' \
+    | timeout 2 $FORTH 2>&1)
+[[ "$sy_out" == *"0 1"* || ( "$sy_out" == *"0 "* && "$sy_out" == *"1 "* ) ]] \
+    && { printf "  ${GREEN}PASS${NC}  (system) returns the child exit status\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  (system) status\n    Got: %s\n" "$(echo "$sy_out"|head -4)"; ((failed++)); }
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

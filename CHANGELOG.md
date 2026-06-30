@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `sh` — run a Linux command from the prompt
+- `sh <command...>` runs the rest of the input line as a shell command via the
+  `(system)` primitive (`/bin/sh -c`), the way you'd type it at a terminal —
+  `sh ls -la`, `sh git status`. Output goes to the terminal; the command is
+  transient (nothing captured to the module). It complements the built-in
+  `pwd`/`cd`/`ls`/`cat` words by reaching the real Linux programs and the full
+  shell (pipes, globs, `$VARS`). New **docs/Shelling_Out.md** explains the
+  spawn-not-link architecture.
+
 ### `edit` opens an external editor (`$EDITOR`) — multi-line, formatting preserved
 - `edit <word>` now writes the word's source to a temp file and opens it in your
   editor (`$VISUAL`, else `$EDITOR`, else `vi`); on a clean exit it re-reads the

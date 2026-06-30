@@ -1790,6 +1790,21 @@ variable (ld-pos)
     (uf-free)
     ." compacted to " (path-a) (path-a-len) @ type cr ;
 
+\ ===== sh : run a Linux command (the rest of the line) via the shell =====
+\ `sh <command...>` runs the rest of the input line as a shell command, the way
+\ you'd type it at a terminal — `sh ls -la`, `sh git status`. It is a thin word
+\ over the (system) primitive (/bin/sh -c). Output goes straight to the terminal;
+\ the exit status is discarded (call (system) yourself if you want it). `sh` runs
+\ a transient command, so nothing is captured to the module. See
+\ docs/Shelling_Out.md.
+: sh ( "command<eol>" -- )
+    10 parse                                 ( c-addr u )   \ the rest of the input line
+    begin  dup 0> if  over c@ bl =  else  false  then  while
+        1 /string                            \ trim leading spaces left after "sh"
+    repeat
+    dup 0= if  2drop  ." usage: sh <command>" cr exit  then
+    (system) drop ;
+
 \ ===== EDIT: open a word's source in an external editor, then recompile =====
 \ `edit <name>` writes the word's current source to a temp file, opens it in your
 \ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit re-reads the file,

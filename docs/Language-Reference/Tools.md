@@ -78,6 +78,20 @@ argument, `load`, or `include` — so it covers everything `.module` lists.
 Define a dictionary restore point (also a defining word — see
 `man defining-words` and `man marker`).
 
+## Shelling out
+
+Run Linux programs from the prompt. See `docs/Shelling_Out.md`.
+
+## sh ( "command<eol>" -- )
+Run the rest of the line as a shell command (`/bin/sh -c`), the way you'd type it
+at a terminal — `sh ls -la`, `sh git status`. Output goes to the terminal; it's
+transient, so nothing is captured to the module.
+
+## (system) ( c-addr u -- status )
+The primitive `sh` is built on: run a command string via `/bin/sh -c` and return
+its exit status (0–255), or -1 on a spawn failure. Use it when you want the
+status or are building the command in code.
+
 ## Browsing the docs
 
 These read the `*.md` topics in the directories named by `BASICFORTH_DOCS`. See
@@ -99,3 +113,4 @@ List the topics whose text contains `<keyword>`, each labelled with its section.
 - docs/See.md — how `see` reconstructs source.
 - docs/Marker.md — dictionary restore points.
 - docs/Help_System.md — `topics`, `man`, `apropos`, and sections.
+- docs/Shelling_Out.md — `sh` / `(system)`: running Linux programs.

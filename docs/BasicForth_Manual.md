@@ -619,6 +619,25 @@ remember to feed the snake
 
 See `docs/Shell_Words.md` for details.
 
+### Running real Linux programs (`sh`)
+
+The words above are small built-ins. For everything else — flags, pipes, `git`,
+`grep`, any installed program — **`sh`** runs the rest of the line as a real
+shell command:
+
+```
+> sh ls -la                      \ GNU ls with flags (the built-in ls takes none)
+> sh grep -n drift chase.fs
+> sh git status
+```
+
+`sh` goes through `/bin/sh -c`, so pipes, globs, and `$VARS` all work, and the
+whole line is the command (no single-word path limit). Output goes to the
+terminal and nothing is captured to your module. The underlying primitive,
+`(system) ( c-addr u -- status )`, returns the command's exit status for use in
+code. BasicForth runs these as separate programs (spawn, not link), so it stays a
+small static binary. See `docs/Shelling_Out.md`.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:
