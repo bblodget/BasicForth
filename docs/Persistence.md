@@ -14,6 +14,7 @@ There is no magic `session.fs`. Files are explicit and named.
 |------|-------|---------|
 | `save <name>` | ( "name" -- ) | write the module to `<name>` (relative to the current directory); also makes `<name>` the current file |
 | `save` | ( -- ) | re-write the **current file** (the one you loaded or last `save <name>`d) |
+| `compact [<name>]` | ( "name" -- ) | write a **deduped** snapshot to a sibling `<base>.compact<.ext>` (for `diff`) |
 | `load <file>` | ( "name" -- ) | open `<file>` as the module — forget the old one, load the new one, make it current |
 | `new` | ( -- ) | clear the module — forget every definition, back to a clean slate (core only) |
 | `reload` | ( -- ) | re-read the **current file** from disk (the edit/compile/run loop) |
@@ -146,9 +147,13 @@ inside a defining word.
 
 Other notes:
 
-- **Redefinitions accumulate.** Editing a word interactively and re-`save`ing
-  appends the new version; on reload they run in order, so the last one wins, but
-  the file grows. Hand-edit to tidy it, or wait for the planned compacting save.
+- **Redefinitions accumulate** under `save`, which rewrites the whole file plus
+  your edits. `compact <name>` writes a deduped snapshot (each word's latest
+  source once, in dependency order) to a sibling `<base>.compact<.ext>` so you can
+  `diff` the two and adopt the clean one if you like. The trade-off: `save` keeps
+  the file's between-definition comments and structure; `compact` keeps only the
+  definitions. A *structure-preserving* compact (splice latest defs into the
+  original text) is future work.
 - **A library `include`d by a module** stays referenced, not inlined: `save`
   keeps the `include other.fs` line, not a copy of `other.fs`. The library's
   words are part of the live module (`.module`/`see`/`uses` show them, read from

@@ -398,7 +398,10 @@ current directory.
 `save` records the *source* of your definitions (not a memory image), so a module
 file is a readable, editable Forth file. Only definitions are captured —
 transient actions like `5 double .` are not — and saving is idempotent and
-cumulative. Capture is interactive-only: a piped script captures nothing.
+cumulative (it rewrites the whole file plus your edits, so redefinitions pile
+up). `compact <name>` writes a **deduped** sibling (`game.fs` → `game.compact.fs`)
+— each word's latest source once — so you can `diff` it and adopt the clean one.
+Capture is interactive-only: a piped script captures nothing.
 
 For an edit/compile/run loop, edit the file in another terminal and type `reload`
 to pull the changes in (it forgets the module and re-reads the current file).

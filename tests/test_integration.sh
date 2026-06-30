@@ -1801,6 +1801,20 @@ if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"
 else
     printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
 fi
+# COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
+# append SAVE keeps both versions, but COMPACT emits only the latest, once.
+cp_dir="$(mktemp -d)"
+printf ': x 1 ;\n' > "$cp_dir/mod.fs"
+( cd "$cp_dir" && printf 'edit x\n: x 9 ;\ncompact mod.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
+cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
+rm -rf "$cp_dir"
+if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact dedup\n    Expected one ': x 9 ;', no ': x 1 ;'\n    Got (%s defs): %q\n" "$cp_count" "$cp_body"; ((failed++))
+fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
 # REPL echoes input as '> ...', so the SEE-printed source is isolated with

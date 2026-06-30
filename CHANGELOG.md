@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `compact` — a deduped snapshot of the module
+- `save` rewrites the whole loaded file (comments and all) plus your edits, so
+  redefinitions accumulate. `compact <name>` instead writes each module word's
+  latest source **once**, in dependency order (walking the `.module` chain
+  oldest-first and resolving each word's in-force source from the log or file),
+  to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` → `game.compact.fs`) so
+  you can `diff` it against `save`'s output. It drops between-definition comments
+  (definitions only); a structure-preserving compact is future work. Bare
+  `compact` uses the current file. See `man Tools` / docs/Persistence.md.
+
 ### `edit` recompiles a word's callers (the edit goes live)
 - BasicForth is subroutine-threaded, so redefining a word doesn't update its
   already-compiled callers. Now `edit <word>` follows your resubmission by

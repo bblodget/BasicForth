@@ -1831,6 +1831,66 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     false (prop-armed) ! ;
 ' (prop-maybe) is (prop-hook)
 
+\ ===== COMPACT: a deduped, dependency-ordered snapshot of the module =====
+\ SAVE rewrites the whole loaded file verbatim (comments and all) then appends, so
+\ redefinitions accumulate. COMPACT instead emits each module word's in-force
+\ source ONCE, at its first (oldest) definition position — deduped, in dependency
+\ order. It writes a sibling "<base>.compact<.ext>" so you can diff it against
+\ SAVE's output; it drops the file's between-definition comments (definitions
+\ only). Reuses the module snapshot and the SEE/USES source resolver.
+create (cmp-seen) 4096 allot                \ space-separated names already written
+variable (cmp-seen-len)
+variable (cmp-fid)
+variable (ld-pos)
+: (cmp-seen+) ( c-addr u -- )
+    dup (cmp-seen-len) @ + 2 + 4096 > if  2drop exit  then
+    (cmp-seen) (cmp-seen-len) @ +  (sp-end) !
+    (sp-add)  s"  " (sp-add)
+    (sp-end) @ (cmp-seen) - (cmp-seen-len) ! ;
+: (cmp-seen?) ( c-addr u -- f )  (cmp-seen) (cmp-seen-len) @ 2swap (word-in?) ;
+: (src-by-name) ( c-addr u -- src-addr src-u true | false )  \ in-force source of a name
+    (find-meta) 0= if  2drop 2drop  false exit  then         ( xt off len srcid )
+    (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !
+    (uh-srcid) @ 65535 = if  false exit  then                \ primitive: no source
+    (uh-srcid) @ 0= if  (uh-xt) @ (src-of)
+    else  (uh-off) @ (uh-len) @ (uh-srcid) @ (file-span)  then ;
+: (last-dot) ( c-addr u -- pos )            \ index of the last '.', or u if none
+    dup (ld-pos) !
+    0 ?do  dup i + c@ [char] . = if  i (ld-pos) !  then  loop  drop
+    (ld-pos) @ ;
+: (compact-name) ( c-addr u -- )            \ (path-a) := "<base>.compact<.ext>"
+    2dup (last-dot) >r                       ( c-addr u )   \ R: dotpos
+    (path-a) (sp-end) !
+    over r@ (sp-add)  s" .compact" (sp-add)  r@ /string (sp-add)
+    r> drop
+    (sp-end) @ (path-a) - (path-a-len) ! ;
+: (compact-one) ( nt -- )                   \ write this word's source if not already written
+    (sw-name) 2dup (cmp-seen?) if  2drop exit  then
+    2dup (cmp-seen+)
+    (src-by-name) if                         ( src-addr src-u )
+        (cmp-fid) @ write-file abort" compact: write error"
+        (nl) 1 (cmp-fid) @ write-file abort" compact: write error"
+    then ;
+: compact ( "name" -- )
+    parse-word dup 0= if
+        2drop (cur-file@) dup 0= if
+            drop ." compact: no current file (use: compact <name>)" cr exit
+        then
+    then                                     ( c-addr u )
+    (compact-name)
+    (path-a) (path-a-len) @ w/o create-file   ( fileid ior )
+    abort" compact: cannot create file"       ( fileid )
+    (cmp-fid) !
+    0 (cmp-seen-len) !
+    (prop-snapshot)
+    (prop-n) @ 0 ?do
+        (prop-n) @ 1- i - cells (prop-nts) + @    \ oldest-first
+        (compact-one)
+    loop
+    (cmp-fid) @ close-file abort" compact: close error"
+    (uf-free)
+    ." compacted to " (path-a) (path-a-len) @ type cr ;
+
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST
                                             \ here, so they forget the whole module (keep last!)

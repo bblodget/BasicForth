@@ -13,7 +13,16 @@ load back (BASIC's `SAVE`/`LOAD`). Capture runs in an interactive session. See
 ## save ( "name" -- )  /  save ( -- )
 `save <name>` writes the module to `<name>` (relative to the current directory)
 and makes it the current file; bare `save` re-writes the current file. Writes
-atomically, so a failure never corrupts an existing file.
+the whole loaded file verbatim (comments and all) plus your edits, so
+redefinitions accumulate. Writes atomically, so a failure never corrupts an
+existing file.
+
+## compact ( "name" -- )  /  compact ( -- )
+Write a **deduped** snapshot of the module — each word's latest source once, in
+dependency order — to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` →
+`game.compact.fs`), so you can `diff` it against `save`'s output. Drops the file's
+between-definition comments (definitions only). Bare `compact` uses the current
+file's name.
 
 ## load ( "name" -- )
 Open `<file>` as the module — forget the old one, load the new one, make it
