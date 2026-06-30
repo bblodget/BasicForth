@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### `edit` opens an external editor (`$EDITOR`) — multi-line, formatting preserved
+- `edit <word>` now writes the word's source to a temp file and opens it in your
+  editor (`$VISUAL`, else `$EDITOR`, else `vi`); on a clean exit it re-reads the
+  file, recompiles the word, and propagates to callers (below). Because the source
+  is a real multi-line file, **indentation, line breaks, and `\` comments survive**
+  — replacing the previous one-line flattened recall. Works for capture-log and
+  file-loaded words alike (a file word's edit is logged like a REPL redefinition,
+  so `save` persists it); a primitive or unknown name reports instead of opening
+  the editor, and a non-zero editor exit leaves the word unchanged.
+- New `(system) ( c-addr u -- status )` primitive runs a command via `/bin/sh -c`
+  (x86 `fork`/`execve`/`wait4`; ARM64 `clone`/`execve`/`wait4`), restoring the
+  terminal around the child. It's the foundation under `edit` and any future
+  `sh`/`!`/`history | grep` words. The edit temp file is a fixed path
+  (`/tmp/basicforth-edit.fs`) in this first cut.
+
 ### `compact` — a deduped snapshot of the module
 - `save` rewrites the whole loaded file (comments and all) plus your edits, so
   redefinitions accumulate. `compact <name>` instead writes each module word's
@@ -14,14 +29,13 @@
 
 ### `edit` recompiles a word's callers (the edit goes live)
 - BasicForth is subroutine-threaded, so redefining a word doesn't update its
-  already-compiled callers. Now `edit <word>` follows your resubmission by
-  **recompiling every module word that transitively uses it** — found via the
-  `uses` caller graph, recompiled from each one's source (capture log or file)
-  in dependency order, and re-logged so `see`/`uses`/`save` stay correct. It
-  prints what it touched, e.g. `updated: init-game setup chase`. So editing a
-  leaf word is live everywhere with no manual recompiling. Only `edit`-driven
-  resubmissions propagate; re-typing a `:` definition by hand stays local. See
-  docs/Line_Editor.md.
+  already-compiled callers. Now `edit <word>` follows the edit by **recompiling
+  every module word that transitively uses it** — found via the `uses` caller
+  graph, recompiled from each one's source (capture log or file) in dependency
+  order, and re-logged so `see`/`uses`/`save` stay correct. It prints what it
+  touched, e.g. `updated: init-game setup chase`. So editing a leaf word is live
+  everywhere with no manual recompiling. (Re-typing a `:` definition by hand
+  stays a local redefinition.) See docs/Line_Editor.md.
 
 ### Modules: named `save` / `load`, replacing the magic `session.fs`
 - Your interactive definitions are now a **module** you save to and load from

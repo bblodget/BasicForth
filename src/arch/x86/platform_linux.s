@@ -15,6 +15,9 @@
 .equ SYS_read,           0
 .equ SYS_write,          1
 .equ SYS_exit,           60
+.equ SYS_fork,           57
+.equ SYS_execve,         59
+.equ SYS_wait4,          61
 .equ SYS_clock_gettime,  228
 .equ SYS_getdents64,     217
 
@@ -629,6 +632,65 @@ platform_rename:
     lea path_scratch2(%rip), %r10
     syscall
     ret
+
+# platform_system ( RDI=NUL-terminated command string -- RAX=status )
+# Run "/bin/sh -c <cmd>", wait for it, and return the child's exit status
+# (0-255), or -1 on a fork/exec failure. Restores the terminal to cooked mode
+# around the child so a full-screen program (an editor) starts from a clean
+# state; the next interactive read re-enters raw mode lazily. environ is passed
+# through so $EDITOR/$PATH/$TERM reach the child (start_envp, saved in main.s).
+.global platform_system
+platform_system:
+    push %rbx
+    mov %rdi, %rbx                  # save cmd ptr (callee-saved across restore_term)
+    call platform_restore_term      # terminal → cooked for the child
+    # build argv = ["/bin/sh", "-c", cmd, NULL]
+    lea sh_path(%rip), %rax
+    mov %rax, spawn_argv+0(%rip)
+    lea sh_dashc(%rip), %rax
+    mov %rax, spawn_argv+8(%rip)
+    mov %rbx, spawn_argv+16(%rip)
+    movq $0, spawn_argv+24(%rip)
+    mov $SYS_fork, %rax
+    syscall
+    test %rax, %rax
+    js .Lsys_fail                   # fork failed
+    jnz .Lsys_parent                # RAX = child pid → parent
+    # ---- child ----
+    lea sh_path(%rip), %rdi
+    lea spawn_argv(%rip), %rsi
+    mov start_envp(%rip), %rdx
+    mov $SYS_execve, %rax
+    syscall
+    mov $127, %rdi                  # execve returned → _exit(127)
+    mov $SYS_exit, %rax
+    syscall
+    # ---- parent ----
+.Lsys_parent:
+    mov %rax, %rdi                  # pid
+    lea sys_wstatus(%rip), %rsi     # &status
+    xor %edx, %edx                  # options = 0
+    xor %r10, %r10                  # rusage = NULL
+    mov $SYS_wait4, %rax
+    syscall
+    movl sys_wstatus(%rip), %eax    # WEXITSTATUS: (status >> 8) & 0xff
+    sarl $8, %eax
+    movzbl %al, %eax
+    pop %rbx
+    ret
+.Lsys_fail:
+    mov $-1, %rax
+    pop %rbx
+    ret
+
+.section .rodata
+sh_path:   .asciz "/bin/sh"
+sh_dashc:  .asciz "-c"
+.bss
+.balign 8
+spawn_argv:   .space 32           # ["/bin/sh","-c",cmd,NULL]
+sys_wstatus:  .space 8            # wait4 status word
+.text
 
 # platform_fstat ( RDI=fd -- RAX=size )
 # Returns file size via fstat, or a negative errno if the fstat syscall fails.

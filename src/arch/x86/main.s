@@ -33,6 +33,12 @@ _start:
     mov %rax, start_argv1(%rip)
 .Lno_argv1:
 
+    # Save &envp[0] for platform_system (execve's third arg). envp[0] sits at
+    # [rsp + 16 + argc*8] = [rsp + 8 + (argc+1)*8], just past argv's NULL.
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rax
+    mov %rax, start_envp(%rip)
+
     # -v / --version: print the version string to stdout and exit 0, before any
     # startup work. An explicit request, so it is NOT gated on isatty (unlike the
     # banner) — `basicforth --version | cat` still prints.
@@ -253,7 +259,7 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, sp0(%rip)             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
-    lea dict_mmap_dev(%rip), %r12   # LATEST (head of the built-in dictionary chain)
+    lea dict_system(%rip), %r12     # LATEST (head of the built-in dictionary chain)
 
     # Initialize saved state for error recovery
     mov %r12, saved_latest(%rip)
@@ -698,6 +704,11 @@ home_ptr:
     .quad 0
 .global home_len
 home_len:
+    .quad 0
+# &envp[0], captured at _start, passed to execve by platform_system so a spawned
+# program inherits the environment (e.g. $EDITOR/$PATH/$TERM for `edit`).
+.global start_envp
+start_envp:
     .quad 0
 
 .bss

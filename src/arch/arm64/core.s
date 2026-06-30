@@ -3830,6 +3830,38 @@ forth_rename_file:
     LDP X29, X30, [SP], #16
     RET
 
+// (system) ( c-addr u -- status )  run a shell command via /bin/sh -c, blocking
+// until it finishes; status is the child's exit code (0-255), or -1 on a
+// fork/exec failure. The string is copied to a private NUL-terminated buffer
+// (clamped to SYS_CMD_MAX-1). The foundation under `edit`'s external-editor
+// spawn and any future `sh`/`!` words.
+.equ SYS_CMD_MAX, 4096
+.global forth_system
+forth_system:
+    STR X30, [SP, #-16]!
+    LDR X1, [X19, #CELL]            // c-addr (src)
+    LDR X2, [X19]                   // u
+    ADD X19, X19, #CELL             // pop u → TOS slot now = status
+    MOV X3, #(SYS_CMD_MAX-1)
+    CMP X2, X3
+    CSEL X2, X2, X3, LS             // X2 = min(u, SYS_CMD_MAX-1)
+    ADR X4, sys_cmd_buf
+    MOV X5, #0
+.Lsys_copy:
+    CMP X5, X2
+    B.GE .Lsys_copied
+    LDRB W6, [X1, X5]
+    STRB W6, [X4, X5]
+    ADD X5, X5, #1
+    B .Lsys_copy
+.Lsys_copied:
+    STRB WZR, [X4, X2]             // NUL-terminate
+    MOV X0, X4                      // cmd ptr
+    BL platform_system             // X0 = status
+    LDR X30, [SP], #16
+    STR X0, [X19]
+    RET
+
 // ---------- Heap primitives (Phase 4) ----------
 // Thin wrappers over the anonymous-mmap platform calls. The ANS MEMORY words
 // ALLOCATE/FREE/RESIZE are built on these in core.fs; sign handling and the
@@ -4996,6 +5028,7 @@ DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
+DEFWORD dict_system,      "(system)",     forth_system,      dict_mmap_dev
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5007,6 +5040,7 @@ DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_home_dir
 .global dict_lstore
 .global dict_mmap_dev
+.global dict_system
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -5035,6 +5069,8 @@ cwd_buf:
 .align 3
 abs_path_buf:                       // scratch for getcwd()+'/'+path absolutization
     .space ABS_PATH_MAX
+sys_cmd_buf:                        // NUL-terminated command for (system)
+    .space SYS_CMD_MAX
 .global src_table_lens
 src_table_lens:                     // length of each registered path (u64)
     .space SRC_TABLE_MAX * 8

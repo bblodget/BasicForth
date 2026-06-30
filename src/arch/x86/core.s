@@ -3505,6 +3505,31 @@ forth_rename_file:
     mov %rax, (%r15)                # ior = errno
     ret
 
+# (system) ( c-addr u -- status )  run a shell command via /bin/sh -c, blocking
+# until it finishes; status is the child's exit code (0-255), or -1 on a
+# fork/exec failure. The string is copied to a private NUL-terminated buffer
+# (clamped to SYS_CMD_MAX-1). The foundation under `edit`'s external-editor
+# spawn and any future `sh`/`!` words.
+.equ SYS_CMD_MAX, 4096
+.global forth_system
+forth_system:
+    mov CELL(%r15), %rsi           # c-addr (src)
+    mov (%r15), %rcx               # u
+    add $CELL, %r15                # pop u → TOS slot now = status
+    cmp $SYS_CMD_MAX-1, %rcx
+    jbe .Lsys_len_ok
+    mov $SYS_CMD_MAX-1, %rcx
+.Lsys_len_ok:
+    lea sys_cmd_buf(%rip), %rdi
+    mov %rcx, %rdx                 # remember length for the NUL terminator
+    cld
+    rep movsb
+    lea sys_cmd_buf(%rip), %rdi
+    movb $0, (%rdi,%rdx)           # NUL-terminate
+    call platform_system           # RDI = buf → RAX = status
+    mov %rax, (%r15)
+    ret
+
 # ---------- Heap primitives (Phase 4) ----------
 # Thin wrappers over the anonymous-mmap platform calls. The ANS MEMORY words
 # ALLOCATE/FREE/RESIZE are built on these in core.fs; sign handling and the
@@ -4586,6 +4611,7 @@ DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
+DEFWORD dict_system,      "(system)",     forth_system,      dict_mmap_dev
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4597,6 +4623,7 @@ DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_home_dir
 .global dict_lstore
 .global dict_mmap_dev
+.global dict_system
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4628,6 +4655,8 @@ cwd_buf:
 .align 8
 abs_path_buf:                       # scratch for getcwd()+'/'+path absolutization
     .space ABS_PATH_MAX
+sys_cmd_buf:                        # NUL-terminated command for (system)
+    .space SYS_CMD_MAX
 .global src_table_lens
 src_table_lens:                     # length of each registered path (u64)
     .space SRC_TABLE_MAX * 8

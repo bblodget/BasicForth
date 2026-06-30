@@ -486,14 +486,6 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         @                                      \ follow link to the previous header
     repeat  drop ;
 
-\ EDIT-propagation arm: `edit <word>` sets these so the next line that redefines
-\ <word> recompiles its transitive callers (the body is defined near EOF, reached
-\ here through the deferred (prop-hook) since it needs USES/REDO machinery).
-variable (prop-armed)                   \ one-shot: a redefinition is pending propagation
-create (prop-pword) 64 allot            \ the armed word's name
-variable (prop-pword-len)
-defer (prop-hook)                       \ set to (prop-maybe) once it is defined
-
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
@@ -520,11 +512,7 @@ defer (prop-hook)                       \ set to (prop-maybe) once it is defined
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
     r> drop                             \ done with the latest param
-    \ EDIT-propagation arm is two-state: `edit` sets 2 (this line is the edit
-    \ itself); we step it to 1 here, and fire on the NEXT line (the resubmit).
-    (prop-armed) @ dup 2 = if  drop  1 (prop-armed) !
-    else  1 = if  (prop-hook)  then  then
-    (latest@) (cap-latest) ! ;          \ baseline = current LATEST (after propagation)
+    (latest@) (cap-latest) ! ;          \ baseline = current LATEST
 
 \ (capture-reset): called at the top of the REPL loop with the current LATEST.
 \ Drops a pending partial definition left behind by a line error or fault (only
@@ -780,96 +768,12 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file) ;
 
-\ ===== EDIT: recall a word's source into the next editable prompt line =====
-\ edit <name> resolves the word's source the same way SEE does, but instead of
-\ printing it, captures it into a preload buffer that the line editor drops onto
-\ the next prompt so you can tweak and resubmit it. The source is flattened to a
-\ single line (newlines are whitespace to Forth), with one wrinkle: a `\` runs to
-\ end-of-line, so on one line it would swallow everything after it — therefore a
-\ `\ comment` is converted to a self-terminating `( comment )`. v1 caps at one
-\ input line; longer definitions report and are left to edit-and-reload.
-\ (Limitation: a literal backslash/paren/quote via `[char]`/`char` in code is not
-\ recognised as a non-comment token.) (edit-line) consumes (el-pre-len).
+\ (el-pre)/(el-pre-len): a one-line preload the interactive line editor can drop
+\ onto the next prompt. EDIT no longer uses it (it opens an external editor now,
+\ defined near EOF), but it stays as line-editor infrastructure — (edit-line)
+\ honours (el-pre-len) for any future inline-recall feature.
 create (el-pre)  256 allot               \ preload text for the next (edit-line)
 variable (el-pre-len)  0 (el-pre-len) !  \ pending preload length; 0 = none
-
-\ --- comment-aware flattener: source span -> one editable line in (el-pre) ---
-variable (fl-src)  variable (fl-u)  variable (fl-i)   \ source + read cursor
-variable (fl-out)  variable (fl-str)  variable (fl-par)  variable (fl-of)
-
-: (fl-emit) ( c -- )                     \ append to (el-pre); flag on overflow
-    (fl-out) @ 256 < if  (el-pre) (fl-out) @ + c!  1 (fl-out) +!
-    else  drop  true (fl-of) !  then ;
-: (fl-cur) ( -- c )  (fl-src) @ (fl-i) @ + c@ ;
-: (fl-delim?) ( c -- f )  dup 32 = swap 10 = or ;          \ space or newline
-: (fl-prev-delim?) ( -- f )                                \ char before cursor
-    (fl-i) @ 0= if  true exit  then
-    (fl-src) @ (fl-i) @ 1- + c@ (fl-delim?) ;
-: (fl-next-delim?) ( -- f )                                \ char after cursor
-    (fl-i) @ 1+ (fl-u) @ < 0= if  true exit  then
-    (fl-src) @ (fl-i) @ 1+ + c@ (fl-delim?) ;
-: (fl-more-line?) ( -- f )               \ not at end, and not on a newline
-    (fl-i) @ (fl-u) @ < if  (fl-cur) 10 <>  else  false  then ;
-
-\ At the backslash: emit the rest of the line as ( ... ), mapping ()->[] so the
-\ comment text can't close the wrapper early. Consumes the line and its newline.
-: (fl-comment) ( -- )
-    40 (fl-emit)  32 (fl-emit)  1 (fl-i) +!              \ "( ", past the backslash
-    (fl-i) @ (fl-u) @ < if  (fl-cur) 32 = if  1 (fl-i) +!  then  then  \ one space
-    begin  (fl-more-line?)  while
-        (fl-cur)  dup 40 = if drop 91 then  dup 41 = if drop 93 then  (fl-emit)
-        1 (fl-i) +!
-    repeat
-    32 (fl-emit)  41 (fl-emit)                            \ " )"
-    (fl-i) @ (fl-u) @ < if  1 (fl-i) +!  then  32 (fl-emit) ;  \ skip nl, separator
-
-: (edit-capture) ( c-addr u -- )
-    dup 0> if  2dup + 1- c@ 10 = if  1-  then  then        \ drop a trailing newline
-    (fl-u) !  (fl-src) !
-    0 (fl-out) !  0 (fl-i) !  false (fl-str) !  false (fl-par) !  false (fl-of) !
-    begin  (fl-i) @ (fl-u) @ <  while
-        (fl-cur)
-        (fl-str) @ if                                      \ inside a string
-            dup 10 = if  drop 32  then  dup (fl-emit)  34 = if  false (fl-str) !  then
-            1 (fl-i) +!
-        else (fl-par) @ if                                 \ inside a ( ) comment
-            dup 10 = if  drop 32  then  dup (fl-emit)  41 = if  false (fl-par) !  then
-            1 (fl-i) +!
-        else                                               \ code
-            dup 92 = (fl-prev-delim?) and (fl-next-delim?) and if
-                drop  (fl-comment)
-            else
-                dup 34 = if  true (fl-str) !  then          \ entering a string
-                dup 40 = if  true (fl-par) !  then          \ entering a ( ) comment
-                dup 10 = if  drop 32  then                  \ newline -> space
-                (fl-emit)  1 (fl-i) +!
-            then
-        then then
-    repeat
-    (fl-of) @ if                                           \ converted line too long
-        0 (el-pre-len) !
-        (msg:) ." definition too long to edit inline" cr  exit
-    then
-    (fl-out) @ (el-pre-len) ! ;
-
-: edit ( "name" -- )
-    s" edit" (msg-u) ! (msg-a) !
-    0 (el-pre-len) !                         \ no stale preload survives any exit path
-    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
-    (see-u) !  (see-a) !
-    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
-    0= if  2drop 2drop  (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
-    dup 65535 = if  2drop 2drop
-        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit
-    then
-    ' (edit-capture) (see-emit-xt) !         \ redirect source into the preload buffer
-    dup 0= if  drop 2drop  (see-xt) !  (see-from-log)
-    else       >r rot drop r>  (see-file)  then
-    ' type (see-emit-xt) !                    \ restore the default (type) sink
-    \ Arm propagation: the next line that redefines this word recompiles its
-    \ transitive callers (so an edit goes live everywhere, despite STC).
-    (see-a) @  (prop-pword)  (see-u) @ 64 min  dup (prop-pword-len) !  cmove
-    2 (prop-armed) ! ;                        \ 2 = armed on the edit line; fires on the next
 
 \ ===== REDO: recompile a REPL-defined word from its captured source =====
 \ redo <name> re-evaluates a word's saved source, so callers that were compiled
@@ -1783,16 +1687,18 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     repeat
     false ;
 
-: (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
-    (word-src) 0= if  exit  then            ( c-addr u )
+: (eval+log) ( c-addr u -- )                \ evaluate source as a new def + log it (srcid 0)
     dup (prop-max) > if  2drop exit  then    ( c-addr u )
     >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
     (log) cell+ @  >r                       ( u )       \ R: log-off
     (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
     (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
-    (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ recompile from the log copy
+    (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
-    drop  1 (prop-count) +! ;
+    drop ;
+: (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
+    (word-src) 0= if  exit  then            ( c-addr u )
+    (eval+log)  1 (prop-count) +! ;
 
 : (prop-snapshot) ( -- )                    \ collect the module's entries (newest-first)
     0 (prop-n) !
@@ -1823,13 +1729,6 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     loop
     (prop-count) @ 0= if  ."  (nothing)"  then  cr
     (uf-free) ;                             \ release the file cache used by (word-src)
-
-: (prop-maybe) ( -- )                       \ fired on the line after `edit`
-    (latest@) (sw-name) (prop-pword) (prop-pword-len) @ (ci=) if
-        (prop-pword) (prop-pword-len) @ (propagate)
-    then
-    false (prop-armed) ! ;
-' (prop-maybe) is (prop-hook)
 
 \ ===== COMPACT: a deduped, dependency-ordered snapshot of the module =====
 \ SAVE rewrites the whole loaded file verbatim (comments and all) then appends, so
@@ -1890,6 +1789,57 @@ variable (ld-pos)
     (cmp-fid) @ close-file abort" compact: close error"
     (uf-free)
     ." compacted to " (path-a) (path-a-len) @ type cr ;
+
+\ ===== EDIT: open a word's source in an external editor, then recompile =====
+\ `edit <name>` writes the word's current source to a temp file, opens it in your
+\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit re-reads the file,
+\ recompiles the word from it (preserving your multi-line formatting — unlike a
+\ one-line REPL recall), and PROPAGATES the change to every module word that uses
+\ it (subroutine threading bakes call targets, so callers must be recompiled too,
+\ just as the redo/IS machinery handles). The edited definition is logged like a
+\ REPL redefinition, so SEE/USES/SAVE see the new source even for a word that was
+\ originally loaded from a file. The temp file is a fixed path, so two BasicForth
+\ sessions editing at the same moment would share it (a known v1 limitation).
+: (edit-tmp) ( -- c-addr u )  s" /tmp/basicforth-edit.fs" ;
+variable (er-fid)  variable (er-buf)  variable (er-len)
+: (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
+    (edit-tmp) w/o create-file if  drop 2drop  false exit  then  ( src-addr src-u fid )
+    dup >r  write-file  r> close-file drop  0= ;             \ ok? = (write ior = 0)
+: (edit-read) ( -- c-addr u true | false )  \ slurp the temp file into a fresh allocation
+    (edit-tmp) r/o open-file if  drop  false exit  then      ( fid )
+    (er-fid) !
+    (er-fid) @ file-size if  2drop  (er-fid) @ close-file drop  false exit  then  ( lo hi )
+    drop  dup (er-len) !                     ( size )        \ assume < 4 GB
+    allocate if  drop  (er-fid) @ close-file drop  false exit  then   ( a )
+    dup (er-buf) !
+    (er-len) @  (er-fid) @  read-file        ( u2 ior )
+    (er-fid) @ close-file drop
+    if  drop  (er-buf) @ free drop  false exit  then         ( u2 )
+    (er-buf) @ swap true ;                   ( c-addr u2 true )
+: (edit-run) ( -- status )                  \ open the temp file in the user's editor
+    \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
+    s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
+: edit ( "name" -- )
+    parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop
+        ." edit: " (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
+    2drop 2drop                              \ done with the meta cells
+    (see-a) @ (see-u) @ (src-by-name) 0= if
+        ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
+    (edit-write) 0= if  ." edit: cannot write temp file" cr exit  then
+    (edit-run) ?dup if                        ( status )
+        ." edit: editor exited with status " . cr exit  then
+    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( c-addr u )
+    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
+    (latest@) >r                              \ R: LATEST before recompiling
+    2dup (eval+log)  drop free drop           \ redefine + log the word; release the slurp
+    (latest@) r> = if
+        ." edit: no change" cr exit  then     \ the edited source defined nothing new
+    (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

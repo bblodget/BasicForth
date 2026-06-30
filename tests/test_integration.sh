@@ -1791,10 +1791,12 @@ fi
 # change goes live everywhere (subroutine threading otherwise leaves callers
 # calling the old word). leaf=1 → mid=leaf*10 → top prints mid; after editing
 # leaf to 2, `top` must print 20, and the report must name the recompiled callers.
+# `edit` spawns $EDITOR on the word's temp file — here a non-interactive sed that
+# rewrites leaf's source from 1 to 2.
 ep_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
-ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\n: leaf 2 ;\ntop\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\ntop\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ep_dir"
 if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"20"* ]]; then
     printf "  ${GREEN}PASS${NC}  edit recompiles transitive callers — the change goes live\n"; ((passed++))
@@ -1805,8 +1807,8 @@ fi
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"
 printf ': x 1 ;\n' > "$cp_dir/mod.fs"
-( cd "$cp_dir" && printf 'edit x\n: x 9 ;\ncompact mod.fs\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+( cd "$cp_dir" && printf 'edit x\ncompact mod.fs\nbye\n' \
+    | EDITOR='sed -i s/1/9/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
 cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
 cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
 rm -rf "$cp_dir"
@@ -2685,34 +2687,55 @@ assert_editor "Ctrl-E end after Ctrl-A"      '1 2 +\001\005 .\nbye\n'          "
 assert_editor_count "history up recalls prev"      '88 emit\n\033[A\nbye\n'                      'X' 2
 assert_editor_count "history up/up/down -> 89"     '88 emit\n89 emit\n\033[A\033[A\033[B\nbye\n' 'Y' 2
 
-# `edit <word>` pre-fills the next line with the word's source.
-# Recall 0<> ( : 0<>   0= invert ; ), backspace the ';', append 'drop 99 ;' so it
-# now pushes 99; if the preload/edit worked, 5 0<> . prints 99 (vs -1 unedited).
-assert_editor "edit recalls + edits a word"  'edit 0<>\n\177drop 99 ;\n5 0<> .\nbye\n'  "99  ok"
-assert_editor "edit reports a primitive"     'edit dup\nbye\n'        "edit: dup is a primitive"
-assert_editor "edit reports not found"       'edit nosuchxyz\nbye\n'  "edit: nosuchxyz not found"
-assert_editor "edit refuses an over-long def" 'edit see\nbye\n'       "too long to edit inline"
-# A failing edit (here a primitive) must clear any preload a prior edit armed, so
-# the next prompt is not pre-filled with stale source.
-assert_editor_absent "edit error clears stale preload" 'edit 0<> edit dup\n\nbye\n'  "0= invert"
+# =========================================================================
+section "EDIT (external editor)"
+# =========================================================================
+# `edit <word>` writes the word's source to a temp file, opens it in $EDITOR, and
+# on a clean exit recompiles from the file and propagates to callers. We drive it
+# non-interactively by pointing $EDITOR at a `sed` (or `true`/`false`) instead of
+# a real editor. The bad-name paths fail before any editor is spawned.
 
-# edit converts a `\` line comment to ( ) when flattening, so a multi-line
-# commented definition survives the round-trip (a `\` on one line would otherwise
-# swallow the rest). Load a commented word from a file, edit + resubmit as-is, and
-# confirm the comment became a ( ) and the word still works (5 dbl . -> 10).
+# Errors before spawning: not-found and primitive (no $EDITOR needed).
+ed_pn=$(printf 'edit dup\nbye\n'       | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_pn" == *"edit: dup is a primitive"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports a primitive\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit reports a primitive\n    Got: %s\n" "$(echo "$ed_pn"|head -3)"; ((failed++)); }
+ed_nf=$(printf 'edit nosuchxyz\nbye\n' | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_nf" == *"edit: nosuchxyz not found"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports not found\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit reports not found\n    Got: %s\n" "$(echo "$ed_nf"|head -3)"; ((failed++)); }
+
+# An external edit takes effect: sed rewrites ee's body from 1 to 7.
+ed_ch=$(printf ': ee 1 ;\nedit ee\nee .\nbye\n' \
+    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_ch" == *"7  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit applies an external editor's changes\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit applies an external edit\n    Got: %s\n" "$(echo "$ed_ch"|head -5)"; ((failed++)); }
+
+# An aborting editor (non-zero exit) leaves the word unchanged.
+ed_ab=$(printf ': eb 1 ;\nedit eb\neb .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_ab" == *"edit: editor exited with status 1"* && "$ed_ab" == *"1  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports an aborted editor, word unchanged\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit aborted-editor handling\n    Got: %s\n" "$(echo "$ed_ab"|head -5)"; ((failed++)); }
+
+# Multi-line formatting survives the round-trip: load a multi-line, commented word
+# from a file, edit it with a no-op editor (true), and confirm SEE still shows it
+# across lines with the `\` comment intact (the old inline edit flattened it).
 cc_dir=$(mktemp -d)
 cat > "$cc_dir/cc.fs" <<'FS'
 : dbl ( n -- n+n )
-\ doubles the input
-dup + ;
+  \ doubles the input
+  dup + ;
 FS
-cc_out=$(printf 'edit dbl\n\n5 dbl .\nbye\n' | BASICFORTH_EDITOR=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
+cc_out=$(printf 'edit dbl\nsee dbl\n5 dbl .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
 rm -rf "$cc_dir"
-if [[ "$cc_out" == *"( doubles the input )"* && "$cc_out" == *"10  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  edit converts a backslash comment to ( )\n"; ((passed++))
+if [[ "$cc_out" == *"\ doubles the input"* && "$cc_out" == *"10  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit preserves multi-line formatting\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  edit converts a backslash comment to ( )\n"
-    printf "    Got: %s\n" "$(echo "$cc_out" | head -5)"; ((failed++))
+    printf "  ${RED}FAIL${NC}  edit preserves multi-line formatting\n"
+    printf "    Got: %s\n" "$(echo "$cc_out" | head -6)"; ((failed++))
 fi
 
 # =========================================================================

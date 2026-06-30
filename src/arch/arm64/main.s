@@ -37,6 +37,15 @@ _start:
     STR X9, [X10]
 .Lno_argv1:
 
+    // Save &envp[0] for platform_system (execve's third arg). envp[0] sits at
+    // [SP + (argc+2)*8], just past argv and its NULL terminator.
+    LDR X9, [SP]                    // argc
+    ADD X9, X9, #2
+    LSL X9, X9, #3
+    ADD X9, SP, X9                  // &envp[0]
+    ADR X10, start_envp
+    STR X9, [X10]
+
     // -v / --version: print the version string to stdout and exit 0, before any
     // startup work. An explicit request, so it is NOT gated on isatty (unlike the
     // banner) — `basicforth --version | cat` still prints.
@@ -266,7 +275,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_mmap_dev          // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_system            // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -736,6 +745,11 @@ home_ptr:
     .quad 0
 .global home_len
 home_len:
+    .quad 0
+// &envp[0], captured at _start, passed to execve by platform_system so a spawned
+// program inherits the environment (e.g. $EDITOR/$PATH/$TERM for `edit`).
+.global start_envp
+start_envp:
     .quad 0
 
 .bss
