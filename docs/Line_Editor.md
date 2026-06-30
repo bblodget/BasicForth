@@ -62,6 +62,26 @@ the rest of the definition, so a `\ comment` is rewritten as a self-terminating
 `( comment )`. A definition whose flattened form exceeds one input line (256
 chars) is declined rather than truncated — edit it in the file and `reload`.
 
+### The edit goes live everywhere (propagation)
+
+BasicForth is subroutine-threaded: redefining a word does **not** update the
+words that already call it (their call targets are compiled in). So `edit`
+follows your resubmission by **recompiling every module word that transitively
+uses the one you edited**, in dependency order, and prints what it touched:
+
+```
+> edit install-brains      # change all three ghosts to ' drift, Enter
+> : install-brains  ( each ghost its own mind )  ' drift 0 brain! ...
+updated: init-game setup chase
+ ok
+> chase                    # the change is live — no manual recompiling
+```
+
+It finds the callers with the same machinery as `uses`, and recompiles each from
+its source (capture log *or* file), re-logging it so `see`/`uses`/`save` stay
+correct. Only an `edit`-driven resubmission propagates; re-typing a `:` definition
+by hand stays a local redefinition.
+
 ## Multi-line definitions
 
 A `:` definition can span several lines. While one is open (the compiler is

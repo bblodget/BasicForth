@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `edit` recompiles a word's callers (the edit goes live)
+- BasicForth is subroutine-threaded, so redefining a word doesn't update its
+  already-compiled callers. Now `edit <word>` follows your resubmission by
+  **recompiling every module word that transitively uses it** — found via the
+  `uses` caller graph, recompiled from each one's source (capture log or file)
+  in dependency order, and re-logged so `see`/`uses`/`save` stay correct. It
+  prints what it touched, e.g. `updated: init-game setup chase`. So editing a
+  leaf word is live everywhere with no manual recompiling. Only `edit`-driven
+  resubmissions propagate; re-typing a `:` definition by hand stays local. See
+  docs/Line_Editor.md.
+
 ### Modules: named `save` / `load`, replacing the magic `session.fs`
 - Your interactive definitions are now a **module** you save to and load from
   **named files** (BASIC's `SAVE` / `LOAD`), instead of an implicit `session.fs`:

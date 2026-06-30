@@ -486,6 +486,14 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         @                                      \ follow link to the previous header
     repeat  drop ;
 
+\ EDIT-propagation arm: `edit <word>` sets these so the next line that redefines
+\ <word> recompiles its transitive callers (the body is defined near EOF, reached
+\ here through the deferred (prop-hook) since it needs USES/REDO machinery).
+variable (prop-armed)                   \ one-shot: a redefinition is pending propagation
+create (prop-pword) 64 allot            \ the armed word's name
+variable (prop-pword-len)
+defer (prop-hook)                       \ set to (prop-maybe) once it is defined
+
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
@@ -511,7 +519,12 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (pend) (log) (buf-append-buf)    \ persist the assignment line (no SEE record)
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
-    r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
+    r> drop                             \ done with the latest param
+    \ EDIT-propagation arm is two-state: `edit` sets 2 (this line is the edit
+    \ itself); we step it to 1 here, and fire on the NEXT line (the resubmit).
+    (prop-armed) @ dup 2 = if  drop  1 (prop-armed) !
+    else  1 = if  (prop-hook)  then  then
+    (latest@) (cap-latest) ! ;          \ baseline = current LATEST (after propagation)
 
 \ (capture-reset): called at the top of the REPL loop with the current LATEST.
 \ Drops a pending partial definition left behind by a line error or fault (only
@@ -852,7 +865,11 @@ variable (fl-out)  variable (fl-str)  variable (fl-par)  variable (fl-of)
     ' (edit-capture) (see-emit-xt) !         \ redirect source into the preload buffer
     dup 0= if  drop 2drop  (see-xt) !  (see-from-log)
     else       >r rot drop r>  (see-file)  then
-    ' type (see-emit-xt) ! ;                 \ restore the default (type) sink
+    ' type (see-emit-xt) !                    \ restore the default (type) sink
+    \ Arm propagation: the next line that redefines this word recompiles its
+    \ transitive callers (so an edit goes live everywhere, despite STC).
+    (see-a) @  (prop-pword)  (see-u) @ 64 min  dup (prop-pword-len) !  cmove
+    2 (prop-armed) ! ;                        \ 2 = armed on the edit line; fires on the next
 
 \ ===== REDO: recompile a REPL-defined word from its captured source =====
 \ redo <name> re-evaluates a word's saved source, so callers that were compiled
@@ -1724,6 +1741,95 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     repeat  drop
     (uf-free)                                  \ release the cached source file
     (uses-n) @ 0= if  ."  (none)"  then  cr ;
+
+\ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
+\ Subroutine threading bakes call targets, so redefining a word doesn't reach its
+\ callers. After `edit <word>` resubmits, recompile every module word that
+\ (transitively) uses it. Walk the module words oldest-first (definition order is
+\ a valid dependency order) with a growing dirty set, recompiling each affected
+\ caller from its source (log or file, via (word-src)) and re-logging it so
+\ SEE/USES/SAVE stay correct.
+8192 constant (prop-max)                    \ max source bytes of one definition handled
+create (prop-src) (prop-max) allot          \ scratch copy (survives a log realloc)
+512 constant (prop-nmax)
+create (prop-nts) (prop-nmax) cells allot   \ snapshot of the module's entries (newest-first)
+variable (prop-n)
+create (prop-dirty) 4096 allot              \ space-separated names known to need recompiling
+variable (prop-dirty-len)
+variable (prop-count)                       \ how many callers were recompiled
+
+: (prop-dirty+) ( c-addr u -- )             \ add a name to the dirty set
+    dup (prop-dirty-len) @ + 2 + 4096 > if  2drop exit  then
+    (prop-dirty) (prop-dirty-len) @ +  (sp-end) !
+    (sp-add)  s"  " (sp-add)
+    (sp-end) @ (prop-dirty) - (prop-dirty-len) ! ;
+: (prop-name-dirty?) ( c-addr u -- f )      \ is this name already in the dirty set?
+    (prop-dirty) (prop-dirty-len) @  2swap  (word-in?) ;
+
+variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
+: (pmd-ws?) ( i -- f )  (prop-dirty) + c@ 33 < ;
+: (prop-mentions-dirty?) ( src u -- f )     \ does this source mention any dirty word?
+    (pmd-srclen) !  (pmd-src) !
+    0 (pmd-pos) !
+    begin (pmd-pos) @ (prop-dirty-len) @ < while
+        (pmd-pos) @ (pmd-ws?) if  1 (pmd-pos) +!
+        else
+            (pmd-pos) @                     ( tok-start )
+            begin (pmd-pos) @ (prop-dirty-len) @ <  (pmd-pos) @ (pmd-ws?) 0=  and
+            while 1 (pmd-pos) +! repeat
+            (prop-dirty) over +  (pmd-pos) @ rot -      ( tok-addr tok-len )
+            (pmd-src) @ (pmd-srclen) @ 2swap (word-in?) if  true exit  then
+        then
+    repeat
+    false ;
+
+: (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
+    (word-src) 0= if  exit  then            ( c-addr u )
+    dup (prop-max) > if  2drop exit  then    ( c-addr u )
+    >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
+    (log) cell+ @  >r                       ( u )       \ R: log-off
+    (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
+    (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
+    (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ recompile from the log copy
+    r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
+    drop  1 (prop-count) +! ;
+
+: (prop-snapshot) ( -- )                    \ collect the module's entries (newest-first)
+    0 (prop-n) !
+    (latest@)
+    begin (sw-end?) 0= while
+        (prop-n) @ (prop-nmax) < if
+            dup  (prop-n) @ cells (prop-nts) +  !  1 (prop-n) +!
+        then
+        @
+    repeat drop ;
+
+: (prop-one) ( nt -- )                      \ recompile this word if it uses a dirty word
+    dup (sw-name) (prop-name-dirty?) if  drop exit  then   \ already dirty → skip
+    dup (word-src) 0= if  drop exit  then    ( nt c-addr u )
+    (prop-mentions-dirty?) 0= if  drop exit  then  ( nt )
+    dup (prop-recompile)
+    dup (sw-name) (prop-dirty+)
+    space (sw-name) type ;
+
+: (propagate) ( c-addr u -- )               \ recompile the edited word's transitive callers
+    0 (prop-dirty-len) !  0 (prop-count) !
+    (prop-dirty+)                           \ the edited word is dirty
+    (prop-snapshot)
+    ." updated:"
+    (prop-n) @ 0 ?do
+        (prop-n) @ 1- i -  cells (prop-nts) + @    \ oldest-first
+        (prop-one)
+    loop
+    (prop-count) @ 0= if  ."  (nothing)"  then  cr
+    (uf-free) ;                             \ release the file cache used by (word-src)
+
+: (prop-maybe) ( -- )                       \ fired on the line after `edit`
+    (latest@) (sw-name) (prop-pword) (prop-pword-len) @ (ci=) if
+        (prop-pword) (prop-pword-len) @ (propagate)
+    then
+    false (prop-armed) ! ;
+' (prop-maybe) is (prop-hook)
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

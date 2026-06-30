@@ -1787,6 +1787,20 @@ if [[ "$gone_out" == *"7"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
 fi
+# EDIT-propagation: editing a word recompiles its transitive callers, so the
+# change goes live everywhere (subroutine threading otherwise leaves callers
+# calling the old word). leaf=1 → mid=leaf*10 → top prints mid; after editing
+# leaf to 2, `top` must print 20, and the report must name the recompiled callers.
+ep_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
+ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\n: leaf 2 ;\ntop\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ep_dir"
+if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"20"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit recompiles transitive callers — the change goes live\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
+fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
 # REPL echoes input as '> ...', so the SEE-printed source is isolated with
