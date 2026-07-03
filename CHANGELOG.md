@@ -2,7 +2,19 @@
 
 ## Unreleased
 
-### `sh` — run a Linux command from the prompt
+### Dirty-guard: `new`/`load`/`bye` ask before discarding unsaved work
+- BasicForth now tracks whether the module is **dirty** — the capture log holds
+  changes `save` hasn't written (a definition, a direct `to`/`is`, an `edit`).
+  When it is, `new`, `load`, `bye`, and `bye-code` ask
+  `unsaved changes — save first? (y/n)`: **y** saves to the current file first
+  (with no current file it hints `save <name>` and cancels), **n** discards, any
+  other key cancels back to the REPL. The flag clears on `save` and whenever the
+  log is rebuilt from a file (`load`/`reload`/`new`/startup).
+- `reload` deliberately stays unguarded — it is the pull-from-disk verb, and a
+  save-first there would overwrite the very file edits being pulled in. The
+  prompt only appears at a real terminal (new `(tty?)` primitive): pipes and
+  scripts proceed silently, so automation never blocks. `bye`/`bye-code` are now
+  thin guarded Forth words over the assembly primitives. See docs/Persistence.md.
 - `sh <command...>` runs the rest of the input line as a shell command via the
   `(system)` primitive (`/bin/sh -c`), the way you'd type it at a terminal —
   `sh ls -la`, `sh git status`. Output goes to the terminal; the command is

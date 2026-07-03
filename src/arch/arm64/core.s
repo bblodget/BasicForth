@@ -3862,6 +3862,18 @@ forth_system:
     STR X0, [X19]
     RET
 
+// (tty?) ( -- f )  true when stdin is a terminal. Gates the dirty-guard prompt:
+// an interactive session asks before discarding unsaved work; pipes and scripts
+// never do.
+.global forth_tty
+forth_tty:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, #0                      // fd 0 = stdin
+    BL platform_isatty              // X0 = 1 tty / 0 not
+    STR X0, [X19, #-CELL]!
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- Heap primitives (Phase 4) ----------
 // Thin wrappers over the anonymous-mmap platform calls. The ANS MEMORY words
 // ALLOCATE/FREE/RESIZE are built on these in core.fs; sign handling and the
@@ -5028,7 +5040,8 @@ DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
-DEFWORD dict_system,      "(system)",     forth_system,      dict_mmap_dev
+DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
+DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta

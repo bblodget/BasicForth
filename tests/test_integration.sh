@@ -2760,6 +2760,31 @@ sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0
     || { printf "  ${RED}FAIL${NC}  (system) status\n    Got: %s\n" "$(echo "$sy_out"|head -4)"; ((failed++)); }
 
 # =========================================================================
+section "Dirty guard"
+# =========================================================================
+# (dirty) tracks unsaved log changes: clean at start, set by a definition,
+# cleared by save, set again by an edit. The save-first prompt itself only
+# engages at a real terminal (PTY suite); here we verify the bookkeeping.
+dg_dir="$(mktemp -d)"
+dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$dg_dir"
+if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"-1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save / edit\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, -1\n    Got: %q\n" "$dg_out"; ((failed++))
+fi
+# In a pipe the guard never prompts: a dirty new/bye proceeds silently (no
+# prompt text, no byte of input consumed as an answer).
+dg2_out=$( printf ': dgx 1 ;\nnew\n.module\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$dg2_out" == *"(empty module"* && "$dg2_out" != *"save first"* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped input never prompts (new/bye proceed silently)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pipe silence\n    Got: %q\n" "$dg2_out"; ((failed++))
+fi
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

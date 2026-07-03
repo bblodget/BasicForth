@@ -440,6 +440,7 @@ create (log)  3 cells allot             \ accumulated definitions (seed + sessio
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
 variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
+variable (dirty)                        \ true = the log holds changes SAVE hasn't written
 variable (cap-assign)                   \ this line ran a direct TO/IS (read from (assign?))
 variable (session-on)                   \ true only after (session-init) ran — i.e.
                                         \ an interactive session (scopes SAVE/RELOAD)
@@ -507,8 +508,10 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
+        true (dirty) !
     else (cap-assign) @ if              \ no new word, but a direct TO/IS ran:
         (pend) (log) (buf-append-buf)    \ persist the assignment line (no SEE record)
+        true (dirty) !
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
     r> drop                             \ done with the latest param
@@ -587,6 +590,7 @@ variable (path-a-len)  variable (path-b-len)
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
+    false (dirty) !                     \ log now mirrors the file (or is empty)
     (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
     (cur-file@) r/o open-file           ( fileid ior )
     if drop exit then                   \ file does not exist yet → log stays empty
@@ -609,16 +613,9 @@ variable (path-a-len)  variable (path-b-len)
 \ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
 \ existing file. SAVE <name> also makes <name> the current file (save-as). A
 \ no-op when nothing has been captured, so it never litters an empty file.
-: save ( "name" -- )
-    parse-word dup 0= if
-        2drop (cur-file@) dup 0= if
-            drop ." save: no current file (use: save <name>)" cr exit
-        then
-    else
-        2dup (set-cur-file)
-    then                                ( c-addr u )
-    (log) cell+ @ 0= if  2drop ." nothing to save" cr  exit  then
-    (name>paths)
+: (save) ( -- )                         \ write the log to the current file
+    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+    (cur-file@) (name>paths)
     (path-b) (path-b-len) @ w/o create-file   ( fileid ior )
     abort" save: cannot create temp file"     ( fileid )
     >r
@@ -628,7 +625,47 @@ variable (path-a-len)  variable (path-b-len)
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
     (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file
     abort" save: rename error"
+    false (dirty) !
     ." saved to " (cur-file@) type cr ;
+
+: save ( "name" -- )
+    parse-word dup if  (set-cur-file)
+    else
+        2drop (cur-file-len) @ 0= if
+            ." save: no current file (use: save <name>)" cr exit
+        then
+    then
+    (save) ;
+
+\ ===== Dirty-guard: don't silently discard unsaved work =====
+\ (dirty) is set when the capture log gains something SAVE hasn't written (a
+\ definition, a direct to/is, an edit) and cleared by SAVE and (seed-log). When
+\ the module is dirty, NEW / LOAD / BYE / BYE-CODE ask before discarding:
+\ y = save first (needs a current file), n = discard, any other key = cancel.
+\ Only a real terminal prompts — pipes and scripts proceed silently, so
+\ automation never blocks. RELOAD stays unguarded on purpose: it is the
+\ pull-from-disk verb, and a save-first there would overwrite the very file
+\ edits being pulled in.
+: (dirty-guard) ( -- proceed? )
+    (dirty) @ 0= if  true exit  then
+    (tty?) 0= if  true exit  then       \ non-interactive: never prompt
+    ." unsaved changes — save first? (y/n) "
+    key
+    dup 32 127 within if  dup emit  then  cr    \ raw mode: echo the answer
+    dup [char] y =  over [char] Y =  or if  drop
+        (cur-file-len) @ 0= if
+            ." save: no current file (use: save <name>)" cr  false exit
+        then
+        (save)  true exit
+    then
+    dup [char] n =  swap [char] N =  or if  true exit  then
+    ." (cancelled)" cr  false ;
+
+\ BYE / BYE-CODE, guarded. The inner call is the assembly primitive — a new
+\ definition stays hidden until its `;`, so the name still finds the old one
+\ here. A cancelled exit just returns to the REPL.
+: bye ( -- )  (dirty-guard) if  bye  then ;
+: bye-code ( n -- )  (dirty-guard) if  bye-code  then  drop ;
 
 \ -session: low-level forget — restore HERE/LATEST to the startup mark, dropping
 \ every definition made since (the module's words). A no-op outside an interactive
@@ -651,12 +688,14 @@ variable (path-a-len)  variable (path-b-len)
     parse-word dup 0= if  2drop ." usage: load <file>" cr exit  then
     2dup r/o open-file if  drop ." load: cannot read " type cr exit  then
     close-file drop                     ( c-addr u )
+    (dirty-guard) 0= if  2drop exit  then    \ unsaved work: ask before discarding
     (set-cur-file)                       \ absolutize + adopt as the current file
     (open-module) ;
 
 \ NEW: clear the module — forget every definition, empty the log, drop the current
 \ file. A clean slate (core vocabulary only). Discards unsaved changes.
 : new ( -- )
+    (dirty-guard) 0= if  exit  then     \ unsaved work: ask before discarding
     -session
     0 (cur-file-len) !
     (seed-log) ;                        \ no current file → empties the log + SEE index
@@ -850,7 +889,7 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 (log)  3 cells erase
 (pend) 3 cells erase
 (dir)   3 cells erase
-0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !
+0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !  0 (dirty) !
 ' (session-init)  0 (hook!)
 ' (capture-line)  1 (hook!)
 ' (capture-reset) 2 (hook!)
@@ -1695,7 +1734,7 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
     (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
-    drop ;
+    drop  true (dirty) ! ;
 : (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
     (word-src) 0= if  exit  then            ( c-addr u )
     (eval+log)  1 (prop-count) +! ;

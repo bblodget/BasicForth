@@ -77,8 +77,39 @@ broken file), and the REPL keeps running — fix the file and `reload` again. A
 broken file is verified readable *before* anything is forgotten, so a missing or
 unreadable file never wipes your work.
 
-`load`, `new`, and `reload` **discard unsaved changes** — there's no prompt yet,
-so `save` first if you want to keep them.
+`load` and `new` ask before discarding unsaved changes (see **The dirty-guard**
+below). `reload` deliberately does **not** — it is the pull-from-disk verb, so it
+always discards unsaved REPL changes in favor of the file.
+
+## The dirty-guard
+
+BasicForth tracks whether the module is **dirty** — whether the capture log holds
+changes `save` hasn't written (a new definition, a direct `to`/`is`, an `edit`).
+When it is, `new`, `load`, `bye`, and `bye-code` ask before discarding:
+
+```
+> : score+  1 score +! ;
+ ok
+> bye
+unsaved changes — save first? (y/n)
+```
+
+- **y** — save to the current file first, then proceed. With no current file it
+  prints `save: no current file (use: save <name>)` and cancels, so you can
+  `save <name>` yourself.
+- **n** — proceed, discarding the unsaved changes.
+- **any other key** — cancel; you're back at the REPL.
+
+The flag clears on `save` and whenever the log is rebuilt to match a file
+(`load`, `reload`, `new`, startup).
+
+Two words skip the prompt on purpose:
+
+- **`reload`** always proceeds: answering "save first" there would overwrite the
+  external file edits you are trying to pull in.
+- The prompt only appears at a **real terminal**. Piped input and scripts never
+  prompt (they proceed silently), so automation can't block on a question — and
+  Ctrl-D (end of input) exits without prompting.
 
 ## What gets captured
 

@@ -406,9 +406,11 @@ Capture is interactive-only: a piped script captures nothing.
 For an edit/compile/run loop, edit the file in another terminal and type `reload`
 to pull the changes in (it forgets the module and re-reads the current file).
 Files stay pure definitions (the `-session`/`reload`/`load`/`save` lines are never
-written into them). See `docs/Persistence.md` for the full module model and
-limitations (notably: variable/value *contents* are not persisted, only the
-definitions, and `load`/`new`/`reload` discard unsaved changes).
+written into them). When you have unsaved changes, `new`/`load`/`bye` ask
+"save first? (y/n)" at the terminal before discarding (`reload` doesn't — it
+always pulls from disk; pipes and scripts never prompt). See `docs/Persistence.md`
+for the full module model and limitations (notably: variable/value *contents* are
+not persisted, only the definitions).
 
 ### Looking at a definition (`see`)
 

@@ -26,11 +26,12 @@ file's name.
 
 ## load ( "name" -- )
 Open `<file>` as the module — forget the old one, load the new one, make it
-current. Like `basicforth <file>`, mid-session. Discards unsaved changes.
+current. Like `basicforth <file>`, mid-session. If you have unsaved changes it
+asks "save first? (y/n)" at the terminal.
 
 ## new ( -- )
 Clear the module — forget every definition, back to a clean slate (core only).
-Discards unsaved changes.
+If you have unsaved changes it asks "save first? (y/n)" at the terminal.
 
 ## reload ( -- )
 Re-read the current file from disk — the edit/compile/run loop (`-session` then
