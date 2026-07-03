@@ -204,7 +204,7 @@ section "Memory Access"
 
 # Note: HERE is not yet exposed as a Forth word
 
-# 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and DRM structs
+# 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and C structs
 assert_output "l! / l@"            'pad $11223344 over l! l@ .'         "287454020"
 assert_output "w! / w@"            'pad $ABCD over w! w@ .'             "43981"
 assert_output "l! writes 4 bytes"  'pad -1 over ! 0 over l! @ u.'      "18446744069414584320"
@@ -485,26 +485,6 @@ assert_output "gr pixel plots 32bpp"  "include $GR  48 allocate drop value gb  :
 assert_output "gr fill-rect"          "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear green 0 0 2 1 fill-rect gb 4 + l@ . ; g"  "65280"
 assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
 assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
-
-# DRM/KMS backend — only meaningful on a real DRM host. Skip under QEMU (cannot
-# emulate DRM ioctls) and when there is no card node. drm-open maps a real dumb
-# buffer (no DRM master needed), so we can clear it blue and read the pixel back;
-# the actual scanout (drm-show / SETCRTC) needs master and is a manual VT/board test.
-if [[ "$FORTH" == *qemu* ]]; then
-    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (qemu cannot emulate DRM ioctls)\n"
-elif [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ]; then
-    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (no /dev/dri/cardN)\n"
-else
-    drm_px=$(printf 'include %s/graphics.fs\ninclude %s/drm.fs\n: t drm-open gr-base @ dup 0= over -1 = or if drop ." nodev" exit then drop blue clear gr-base @ l@ . drm-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
-        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
-    if printf '%s' "$drm_px" | grep -q '255'; then
-        printf "  ${GREEN}PASS${NC}  DRM open+map+draw (blue pixel read back from dumb buffer)\n"; ((passed++))
-    elif printf '%s' "$drm_px" | grep -qiE 'nodev|cannot open'; then
-        printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (card present but not usable here)\n"
-    else
-        printf "  ${RED}FAIL${NC}  DRM open+map+draw\n    Got: %q\n" "$drm_px"; ((failed++))
-    fi
-fi
 
 # =========================================================================
 section "Dynamic Memory (heap)"

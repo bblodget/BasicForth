@@ -743,7 +743,7 @@ platform_mmap_file:
 # platform_ioctl ( RDI=fd RSI=request RDX=argp -- RAX=ret )
 # Generic ioctl passthrough. Returns the kernel result (0/positive on success,
 # negative errno on failure). The gateway for direct device control from Forth
-# (DRM/KMS now; GPIO/I2C/evdev later).
+# (GPIO/I2C/evdev, and any other device node).
 .global platform_ioctl
 platform_ioctl:
     mov $SYS_ioctl, %rax
@@ -751,8 +751,8 @@ platform_ioctl:
     ret
 
 # platform_mmap_dev ( RDI=fd RSI=size RDX=offset -- RAX=addr )
-# Shared read/write mapping of a device fd at a byte offset (e.g. a DRM dumb
-# buffer via the offset returned by MAP_DUMB). Returns addr or negative errno.
+# Shared read/write mapping of a device fd at a byte offset (e.g. a mappable
+# frame/sample buffer a driver hands out). Returns addr or negative errno.
 .global platform_mmap_dev
 platform_mmap_dev:
     mov %rdi, %r8               # arg5 = fd (before clobbering %rdi)

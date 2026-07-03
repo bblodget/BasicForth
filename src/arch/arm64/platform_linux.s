@@ -826,7 +826,7 @@ platform_ioctl:
     RET
 
 // platform_mmap_dev ( X0=fd X1=size X2=offset -- X0=addr )
-// Shared read/write mapping of a device fd at a byte offset (DRM dumb buffer).
+// Shared read/write mapping of a device fd at a byte offset (device buffer).
 .global platform_mmap_dev
 platform_mmap_dev:
     MOV X4, X0                      // fd      -> arg5 (before clobbering X0)

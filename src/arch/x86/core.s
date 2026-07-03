@@ -713,7 +713,7 @@ forth_lstore:
 
 # (ioctl) ( fd request argp -- ret )
 # Generic ioctl from Forth. ret is the kernel result (0/positive ok, negative
-# errno). The direct device-control gateway (DRM/KMS, later GPIO/I2C/evdev).
+# errno). The direct device-control gateway (GPIO/I2C/evdev, device nodes).
 .global forth_ioctl
 forth_ioctl:
     mov (%r15), %rdx            # argp (top)
@@ -725,7 +725,7 @@ forth_ioctl:
     ret
 
 # (mmap-dev) ( fd offset size -- addr )
-# Shared read/write mmap of a device fd at a byte offset (e.g. a DRM dumb buffer).
+# Shared read/write mmap of a device fd at a byte offset (a device buffer).
 # addr is the mapping base, or a negative errno on failure.
 .global forth_mmap_dev
 forth_mmap_dev:

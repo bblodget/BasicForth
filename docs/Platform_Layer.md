@@ -635,7 +635,10 @@ Functions to be added as BasicForth grows:
 |---------------------|-----------------------------------------------|-------|
 | platform_lseek      | Seek within file                              |     4 |
 | platform_fork_exec  | Fork and exec external process (for $EDITOR)  |     4 |
-| platform_fb_open    | Open framebuffer or DRM device                |     5 |
-| platform_fb_mmap    | Map framebuffer memory                        |     5 |
 | platform_gpio_open  | Open /dev/gpiochip                            |     6 |
 | platform_gpio_ioctl | GPIO read/write via ioctl                     |     6 |
+
+The planned `platform_fb_open`/`platform_fb_mmap` pair was superseded in
+v0.8.0 by the generic device gateway: `platform_ioctl` (fd, request, argp) and
+`platform_mmap_dev` (fd, offset, size — shared RW mapping of a device fd),
+exposed to Forth as `(ioctl)` and `(mmap-dev)`.

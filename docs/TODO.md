@@ -315,17 +315,23 @@ docs/Graphics.md for the API.
   memory access. (step 1b-i)
 - [x] Backend-agnostic 2D surface + primitives in `graphics.fs` (`set-surface`,
   `pixel`, `fill-rect`, `clear`, named colors); 32bpp. (step 1a)
-- [x] DRM/KMS software-2D backend in `drm.fs` (`drm-open`/`drm-show`/`drm-close`/
-  `drm-demo`): enumerate → dumb buffer → ADDFB → map → surface → SETCRTC.
-  Verified on real hardware (2560×1600). Gated integration test + tools/drmoff.c.
-  (step 1b)
-- [ ] Double-buffering / page-flip (no tearing) + a simple animation demo
+- [x] `fill32` fast block-fill primitive; `fill-rect` clips once and fills each
+  row in one burst (full-screen `clear` is instant).
+- [x] ~~DRM/KMS software-2D backend~~ — built and hardware-validated in v0.8.0,
+  **removed** in the SDL pivot (a desktop compositor owns the display, so DRM
+  could never show a window; SDL's KMSDRM driver covers the console case).
+  In git history: `src/forth/drm.fs`, `tools/drmoff.c`.
+- [ ] FFI: dynamic-link build (`gcc -nostartfiles`), `(dlopen)` / `(dlsym)` /
+  `ccall` primitives (integer/pointer args first), libc-based tests
+- [ ] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
+  `set-surface`; vsync'd `present`; poll-event decoding (keyboard first)
+- [ ] Animation demo: bouncing rectangle in a window, ESC/close to quit
+- [ ] SDL3 in the Pumpkian board image (build from source; bookworm has no
+  libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites
 - [ ] Font / text rendering (show characters on the framebuffer)
-- [ ] Non-32bpp formats; multi-monitor
-- [ ] Vulkan GPU/3D backend behind the surface API (needs an FFI + dynamic
-  linking — the one accepted dependency; see Planning.md)
-- [ ] Sound output (ALSA ioctl, or PipeWire)
+- [ ] Sound output via SDL3 audio
+- [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
 ---

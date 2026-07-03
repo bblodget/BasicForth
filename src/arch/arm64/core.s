@@ -806,7 +806,7 @@ forth_ioctl:
     RET
 
 // (mmap-dev) ( fd offset size -- addr )
-// Shared read/write mmap of a device fd at a byte offset (DRM dumb buffer).
+// Shared read/write mmap of a device fd at a byte offset (a device buffer).
 .global forth_mmap_dev
 forth_mmap_dev:
     LDR X1, [X19]            // size (top)

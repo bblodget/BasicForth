@@ -4,8 +4,8 @@
 \
 \ Loaded on demand (include graphics.fs), NOT at startup. Provides software 2D
 \ drawing over an abstract "surface": a flat 32bpp pixel buffer described by a
-\ base address, width, height, and stride (bytes per row). A backend (DRM now,
-\ Vulkan later) points the surface at real video memory with set-surface; the
+\ base address, width, height, and stride (bytes per row). A display backend
+\ (SDL3) points the surface at real presentation memory with set-surface; the
 \ drawing words below are oblivious to where that memory lives.
 \
 \ Colors are packed 0x00RRGGBB (XRGB8888): $FF0000 red, $00FF00 green, etc.

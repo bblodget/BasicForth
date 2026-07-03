@@ -148,6 +148,22 @@
   each monster its own swappable brain via an execution-token table (the Pac-Man
   trick). Builds a complete terminal chase game. Finished program:
   `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+### Graphics pivot: SDL3 replaces the direct DRM/KMS backend
+- **Removed the DRM/KMS display backend** (`drm.fs` with `drm-open`/`drm-show`/
+  `drm-close`/`drm-demo`, `tools/drmoff.c`, and its gated integration test),
+  introduced in v0.8.0. It worked — but on any desktop the compositor owns the
+  display, so a direct-DRM program can never show a *window*, only take over a
+  text VT. The display backend is pivoting to **SDL3** (desktop window now;
+  SDL's KMSDRM driver covers the console/board case; SDL_GPU is the 3D path).
+  The revised philosophy and roadmap are in docs/Planning.md ("Graphics
+  Direction"); the removed code stays in git history.
+- **Kept and unaffected:** the device gateway (`(ioctl)`, `(mmap-dev)`,
+  `w@`/`w!`/`l@`/`l!`) — it exists for GPIO/I2C/evdev as much as for graphics —
+  and all of `graphics.fs` (the backend-agnostic surface + drawing words).
+- **New primitive `fill32` ( value addr count -- )**: 32-bit block fill
+  (`rep stosl` on x86, store loop on ARM64). `fill-rect` now clips the
+  rectangle once and fills each visible row in a single `fill32` burst, so a
+  full-screen `clear` is effectively instant instead of taking seconds.
 
 ## v0.8.0 — 2026-06-29
 

@@ -34,9 +34,11 @@ and project phases.
 
 ## Status
 
-**v0.8.0** — Library-free 2D graphics over DRM/KMS (Phase 5), `edit <word>` to
+**v0.8.0** — Software 2D graphics (Phase 5), `edit <word>` to
 recall and re-edit a definition (with horizontal scrolling and a continuation
-prompt), and `.session` to list this session's words. Builds on v0.7.0's
+prompt), and `.session` to list this session's words. Since then the display
+backend has pivoted from direct DRM/KMS to **SDL3** (see docs/Planning.md,
+"Graphics Direction"). Builds on v0.7.0's
 interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
 persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
 tutorials, source viewing (`see`), file access, and dynamic memory.
@@ -72,9 +74,9 @@ What works today:
 - Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
-- Graphics (Phase 5): library-free software 2D over DRM/KMS — `set-surface`,
-  `pixel`, `fill-rect`, `clear`, named colors (`graphics.fs`); `drm-open`/
-  `drm-show`/`drm-close` scan out to a real display with no libdrm/X/Wayland
+- Graphics (Phase 5): software 2D on a backend-agnostic surface — `set-surface`,
+  `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`);
+  SDL3 display backend (window + input + vsync) in progress
 - Tools: `WORDS`, `.SESSION` (list this session's words), `DUMP`, `.S`,
   `VERSION` (also `basicforth -v`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
@@ -222,7 +224,6 @@ BasicForth/
     forth/
       core.fs               Forth-defined words (loaded at startup)
       graphics.fs           Software 2D surface API (on-demand)
-      drm.fs                DRM/KMS display backend (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
     test_integration.sh     Integration tests (510 tests, piped I/O)
