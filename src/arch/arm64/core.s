@@ -812,6 +812,23 @@ forth_mmap_dev:
     STR X0, [X19]
     RET
 
+// FILL32 ( value addr count -- )
+// Store COUNT copies of the 32-bit VALUE starting at ADDR (4 bytes each).
+// Fast block fill for 32bpp pixel buffers (clear, fill-rect rows).
+.global forth_fill32
+forth_fill32:
+    LDR X2, [X19]            // count (top)
+    LDR X1, [X19, #CELL]     // addr
+    LDR X0, [X19, #(2*CELL)] // value (low 32 bits used)
+    ADD X19, X19, #(3*CELL)  // pop all three
+.Lfill32_loop:
+    CBZ X2, .Lfill32_done
+    STR W0, [X1], #4         // store value, post-increment addr by 4
+    SUB X2, X2, #1
+    B .Lfill32_loop
+.Lfill32_done:
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 .global forth_emit
@@ -4996,6 +5013,7 @@ DEFWORD dict_lfetch,      "l@",           forth_lfetch,      dict_wstore
 DEFWORD dict_lstore,      "l!",           forth_lstore,      dict_lfetch
 DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
+DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_mmap_dev
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5007,6 +5025,7 @@ DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 .global dict_home_dir
 .global dict_lstore
 .global dict_mmap_dev
+.global dict_fill32
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
