@@ -17,6 +17,8 @@ int main(void){
     (unsigned long)DRM_IOCTL_MODE_CREATE_DUMB,(unsigned long)DRM_IOCTL_MODE_MAP_DUMB,
     (unsigned long)DRM_IOCTL_MODE_ADDFB,(unsigned long)DRM_IOCTL_MODE_SETCRTC);
   printf("SET_MASTER=0x%lx DROP_MASTER=0x%lx\n",(unsigned long)DRM_IOCTL_SET_MASTER,(unsigned long)DRM_IOCTL_DROP_MASTER);
+  printf("PAGE_FLIP=0x%lx  PAGE_FLIP_EVENT=0x%x\n",
+    (unsigned long)DRM_IOCTL_MODE_PAGE_FLIP,(unsigned)DRM_MODE_PAGE_FLIP_EVENT);
   printf("\n-- struct sizes & offsets --\n");
   SZ(drm_mode_card_res);
   O(drm_mode_card_res, crtc_id_ptr); O(drm_mode_card_res, connector_id_ptr);
@@ -43,5 +45,10 @@ int main(void){
   O(drm_mode_crtc, set_connectors_ptr); O(drm_mode_crtc, count_connectors);
   O(drm_mode_crtc, crtc_id); O(drm_mode_crtc, fb_id); O(drm_mode_crtc, mode_valid);
   O(drm_mode_crtc, mode);
+  SZ(drm_mode_crtc_page_flip);
+  O(drm_mode_crtc_page_flip, crtc_id); O(drm_mode_crtc_page_flip, fb_id);
+  O(drm_mode_crtc_page_flip, flags); O(drm_mode_crtc_page_flip, user_data);
+  SZ(drm_event); O(drm_event, type); O(drm_event, length);
+  SZ(drm_event_vblank); O(drm_event_vblank, user_data); O(drm_event_vblank, sequence);
   return 0;
 }
