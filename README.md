@@ -36,14 +36,17 @@ and project phases.
 
 ## Status
 
-**v0.8.0** — Software 2D graphics (Phase 5), `edit <word>` to
-recall and re-edit a definition (with horizontal scrolling and a continuation
-prompt), and `.session` to list this session's words. Since then the display
-backend has pivoted from direct DRM/KMS to **SDL3** (see docs/Planning.md,
-"Graphics Direction"). Builds on v0.7.0's
-interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
-persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
-tutorials, source viewing (`see`), file access, and dynamic memory.
+**v0.9.0** — Graphics in a desktop window: an **FFI**
+(`dlopen`/`dlsym`/`(ccall)`) lets Forth call any C library, and `sdl3.fs`
+presents the software 2D surface via **SDL3** with vsync and events
+(`examples/bounce.fs`). Named **modules** replace the magic session file
+(`save game` / `load game`, `compact`, `uses`), `edit <word>` opens your
+`$EDITOR` and recompiles callers, `sh` runs shell commands, and a dirty-guard
+protects unsaved work. Dictionary headers gained a word-type byte, making
+`is`/`to` type-checked and `see` defer-aware; a second tutorial (`tutorial
+Chase`) teaches top-down design with `defer`. Builds on v0.8.0's line editor
+with `edit`/`.session`, v0.7.0's shell-like words, persistence, built-in help,
+tutorials, and dynamic memory.
 119 unit tests + 545 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
@@ -71,8 +74,8 @@ What works today:
 - File access: `OPEN-FILE`, `CREATE-FILE`, `CLOSE-FILE`, `READ-FILE`, `READ-LINE`,
   `WRITE-FILE`, `WRITE-LINE`, `FILE-SIZE`, `RENAME-FILE` (methods `R/O W/O R/W BIN`)
 - Dynamic memory (ANS MEMORY): `ALLOCATE`, `FREE`, `RESIZE`
-- Session persistence: `SAVE`/`RELOAD`/`-SESSION` (source-replay to `session.fs`)
-  and `MARKER` dictionary restore points
+- Modules: `SAVE <name>` / `LOAD <name>` / `NEW` / `RELOAD` / `COMPACT` /
+  `USES` (named source-replay files) and `MARKER` dictionary restore points
 - Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
@@ -82,7 +85,7 @@ What works today:
   frames, keyboard/quit events; try `examples/bounce.fs`
 - FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
   (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
-- Tools: `WORDS`, `.SESSION` (list this session's words), `DUMP`, `.S`,
+- Tools: `WORDS`, `.MODULE` (list the module's words), `DUMP`, `.S`,
   `VERSION` (also `basicforth -v`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
   `BYE-CODE` (exit status), clean stdout for use as a pipe/utility

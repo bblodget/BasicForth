@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 — 2026-07-03
 
 ### `compact` keeps final `is`/`to` bindings
 - A definitions-only snapshot lost a deferred word's binding and a `value`'s
