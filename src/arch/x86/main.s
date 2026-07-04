@@ -33,6 +33,12 @@ _start:
     mov %rax, start_argv1(%rip)
 .Lno_argv1:
 
+    # Save &envp[0] for platform_system (execve's third arg). envp[0] sits at
+    # [rsp + 16 + argc*8] = [rsp + 8 + (argc+1)*8], just past argv's NULL.
+    mov start_argc(%rip), %rcx
+    lea 16(%rsp,%rcx,8), %rax
+    mov %rax, start_envp(%rip)
+
     # -v / --version: print the version string to stdout and exit 0, before any
     # startup work. An explicit request, so it is NOT gated on isatty (unlike the
     # banner) — `basicforth --version | cat` still prints.
@@ -319,8 +325,21 @@ _start:
     movq $1, script_running(%rip)
     call forth_included
     test %rax, %rax
-    jnz .Lscript_error              # line error — message already printed
-    movq $0, script_running(%rip)   # script completed cleanly
+    jz .Lcmdline_done               # loaded cleanly
+    # Load error. Drop to the REPL only when we'll be interactive (same rule as
+    # the session below: BASICFORTH_SESSION=1, or unset and stdin is a terminal),
+    # so a broken module can be fixed in place. A script/pipe exits non-zero, like
+    # a failing Unix utility.
+    cmpq $2, session_env(%rip)
+    je .Lscript_error               # BASICFORTH_SESSION=0 → exit
+    cmpq $1, session_env(%rip)
+    je .Lcmdline_done               # BASICFORTH_SESSION=1 → drop to the REPL
+    xor %edi, %edi
+    call platform_isatty
+    test %rax, %rax
+    jz .Lscript_error               # not a terminal → exit
+.Lcmdline_done:
+    movq $0, script_running(%rip)   # done loading (clean, or interactive recovery)
 .Lno_cmdline_file:
 
     # Print the startup banner now, only when actually entering the interactive
@@ -336,12 +355,11 @@ _start:
     call platform_write
 .Lno_banner:
 
-    # ---- Interactive session: auto-load session.fs + enable capture ----
-    # On only when no script argument was given AND (BASICFORTH_SESSION forces it
-    # on, or stdin is a terminal). Scripts/pipes never auto-session.
+    # ---- Interactive session: capture, seeded from the startup file if any ----
+    # On when BASICFORTH_SESSION forces it on, or stdin is a terminal. A file
+    # argument no longer disables it: we drop to the REPL with capture on and the
+    # log seeded from that file (named-file model — there is no magic session.fs).
     movq $0, session_active(%rip)
-    cmpq $2, start_argc(%rip)
-    jge .Lsession_decided           # a script arg was given → no session
     cmpq $2, session_env(%rip)
     je .Lsession_decided            # BASICFORTH_SESSION=0 → forced off
     cmpq $1, session_env(%rip)
@@ -352,21 +370,38 @@ _start:
     jz .Lsession_decided
 .Lsession_on:
     movq $1, session_active(%rip)
-    # Seed the in-memory log from an existing session.fs (registered Forth hook),
-    # so SAVE later rewrites it cumulatively. No-op if the file is absent.
-    mov session_hooks+0(%rip), %rax # [0] = session-seed
+    # Call session-init ( c-addr u -- ) with the startup file path, or ( 0 0 ) if
+    # no file argument was given. The hook records the -session restore point,
+    # sets the current file, and seeds the log from it.
+    cmpq $2, start_argc(%rip)
+    jl .Lsess_nofile
+    mov start_argv1(%rip), %rsi     # RSI = path
+    xor %ecx, %ecx                  # ECX = strlen
+.Lsess_arglen:
+    cmpb $0, (%rsi,%rcx)
+    je .Lsess_arglen_done
+    inc %ecx
+    jmp .Lsess_arglen
+.Lsess_arglen_done:
+    sub $CELL, %r15
+    mov %rsi, (%r15)                # push c-addr
+    sub $CELL, %r15
+    movslq %ecx, %rax
+    mov %rax, (%r15)                # push length
+    jmp .Lsess_init
+.Lsess_nofile:
+    sub $CELL, %r15
+    movq $0, (%r15)                 # push 0  (no file)
+    sub $CELL, %r15
+    movq $0, (%r15)                 # push 0
+.Lsess_init:
+    mov session_hooks+0(%rip), %rax # [0] = session-init ( c-addr u -- )
     test %rax, %rax
-    jz .Lsession_load
+    jnz .Lsess_call
+    add $(2*CELL), %r15             # no hook registered → drop the 2 args
+    jmp .Lsession_decided
+.Lsess_call:
     call *%rax
-.Lsession_load:
-    # Load session.fs the same way core.fs is loaded — in asm, so we don't call
-    # INCLUDED from inside a colon word. Silently skipped if not found.
-    lea session_fs_name(%rip), %rax
-    sub $CELL, %r15
-    mov %rax, (%r15)                # push c-addr
-    sub $CELL, %r15
-    movq $session_fs_len, (%r15)    # push length
-    call forth_included
 .Lsession_decided:
 
     # Resolve once whether the line editor engages. BASICFORTH_EDITOR overrides
@@ -669,6 +704,11 @@ home_ptr:
     .quad 0
 .global home_len
 home_len:
+    .quad 0
+# &envp[0], captured at _start, passed to execve by platform_system so a spawned
+# program inherits the environment (e.g. $EDITOR/$PATH/$TERM for `edit`).
+.global start_envp
+start_envp:
     .quad 0
 
 .bss

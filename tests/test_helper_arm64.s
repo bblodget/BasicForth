@@ -148,6 +148,16 @@ platform_rename:
     MOV X0, #0                      // return 0 (success)
     RET
 
+.global platform_system
+platform_system:
+    MOV X0, #0                      // return status 0 (not exercised by unit tests)
+    RET
+
+.global platform_isatty
+platform_isatty:
+    MOV X0, #0                      // not a tty (unit tests run headless)
+    RET
+
 .global platform_close_file
 platform_close_file:
     RET

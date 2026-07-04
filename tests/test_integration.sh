@@ -380,22 +380,25 @@ assert_error "MARKER nested (outer forgets inner)" \
     "marker -a  : x1 1 ;  marker -b  : x2 2 ;  -a  -b"  "-b"
 
 # =========================================================================
-section ".session (list this session's words)"
+section ".module (list your module's words)"
 # =========================================================================
-# A fresh session has defined nothing on top of core.fs.
-assert_output ".session reports an empty session" \
-    ".session"  "No words defined yet"
+# A fresh module has defined nothing on top of core.fs.
+assert_output ".module reports an empty module" \
+    ".module"  "empty module"
 # Defining one word: the count is 1 (proves the ~330 core words are excluded —
 # if they leaked in the count would be hundreds), and the name is listed.
-assert_output ".session counts only your words" \
-    ": zonk ;  .session"  "1 word defined"
-assert_output ".session lists your word's name" \
-    ": zonk ;  .session"  "zonk"
+assert_output ".module counts only your words" \
+    ": zonk ;  .module"  "1 word in this module"
+assert_output ".module lists your word's name" \
+    ": zonk ;  .module"  "zonk"
 # Words of every kind count, newest-first (matching WORDS' chain order).
-assert_output ".session lists newest-first" \
-    ": a1 ;  : b2 ;  : c3 ;  .session"  "c3 b2 a1"
-assert_output ".session counts a mix of word kinds" \
-    "7 constant k  variable v  defer d  : w ;  .session"  "4 words defined"
+assert_output ".module lists newest-first" \
+    ": a1 ;  : b2 ;  : c3 ;  .module"  "c3 b2 a1"
+assert_output ".module counts a mix of word kinds" \
+    "7 constant k  variable v  defer d  : w ;  .module"  "4 words in this module"
+# NEW clears the module back to a clean slate.
+assert_output "new clears the module" \
+    ": gone 1 ;  new  .module"  "empty module"
 
 # =========================================================================
 section "CHAR robustness"
@@ -961,6 +964,47 @@ sm_collide() {  # desc  extra-input  expected-OVER
 sm_collide "follow the vacating tail is legal"  '0 dx ! -1 dy !\n1 fx ! 1 fy !\ntick\n'  "0"
 sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\ntick\n'  "-1"
 sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
+
+# examples/chase.fs (the Chase tutorial's finished program) must load and its
+# top-down design must work headlessly. The "hunt" brain steps a monster one
+# cell toward the player on each axis: monster at (5,5), player at (10,8) -> (6,6).
+t0=$(date +%s.%N)
+ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 px ! 8 py !\n0 hunt\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/chase.fs"
+if [[ "$ch_hunt" == *"CHX=6"* && "$ch_hunt" == *"CHY=6"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs loads and the hunt brain chases\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs loads and the hunt brain chases\n"
+    printf "    Expected: CHX=6 CHY=6\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Per-monster brains (the Pac-Man trick): init-game installs a different brain
+# token in each monster's slot, so step-monsters runs DIFFERENT minds per
+# monster. With the player at (20,10) heading right, two monsters sharing cell
+# (22,10) diverge: monster 0 (hunt) steps left toward the player -> x=21, while
+# monster 1 (ambush) aims 3 cells ahead of the player -> x=23.
+ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n1 pdx ! 0 pdy !\n22 0 mx! 10 0 my!\n22 1 mx! 10 1 my!\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_brains" == *"H0X=21"* && "$ch_brains" == *"A1X=23"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs runs a different brain per monster\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs runs a different brain per monster\n"
+    printf "    Expected: H0X=21 A1X=23\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# A monster reaching the player ends the game (collide? sets caught).
+ch_caught=$(printf 'include %s/examples/chase.fs\ninit-game\npx @ 0 mx! py @ 0 my!\nfalse caught !\ncollide?\n.( CAUGHT=) caught @ . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_caught" == *"CAUGHT=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs ends the game when a monster catches you\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs ends the game when a monster catches you\n"
+    printf "    Expected: CAUGHT=-1\n    Got:      %s\n" "$(echo "$ch_caught" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
 
 # examples/snake.fs (the fuller version) must never spawn food on the snake or
 # border: its collision is screen-based, so food on the just-vacated tail could
@@ -1573,195 +1617,205 @@ if [ -w /dev/full ]; then
     fi
 fi
 
-# Session persistence (SAVE). Capture only runs in an interactive session, so
-# the tests force it on through a pipe with BASICFORTH_SESSION=1. session.fs is
-# written to the STARTUP directory (the launch CWD), so each run is wrapped in a
-# subshell that cd's to a tmpdir before launching the binary.
+# Module persistence: SAVE <name> / LOAD / RELOAD / NEW over named, cwd-relative
+# files (no more magic session.fs). Capture only runs in an interactive session,
+# so the tests force it on with BASICFORTH_SESSION=1; subshells cd to a tmpdir.
 sv_dir="$(mktemp -d)"
-# The harness is invoked with a relative binary path (./basicforth) from the
-# build dir; these subshells cd elsewhere, so resolve it to an absolute command.
+# Harness uses a relative binary path (./basicforth); resolve it to absolute since
+# these subshells cd elsewhere.
 sv_forth="${FORTH/.\//$PWD/}"
 t0=$(date +%s.%N)
 # Session 1: a multi-line def, a one-liner, a transient action, and a bare ALLOT
-# (moves HERE but defines no word — must NOT be captured); then save.
-( cd "$sv_dir" && printf ': dbl dup + ;\n: tri\n  dup dup * *\n;\n42 .\n100 allot\nsave\nbye\n' \
+# (moves HERE but defines no word — must NOT be captured); save to mod.fs.
+( cd "$sv_dir" && printf ': dbl dup + ;\n: tri\n  dup dup * *\n;\n42 .\n100 allot\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-sv_file=$(cat "$sv_dir/session.fs" 2>/dev/null)
-# Fresh process in the same dir: startup must auto-load the saved definitions.
+sv_file=$(cat "$sv_dir/mod.fs" 2>/dev/null)
+# `basicforth mod.fs` loads the module: its words are defined, capture is on.
 sv_reload=$( cd "$sv_dir" && printf '7 dbl . 3 tri . bye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
-# Idempotent: reload, define nothing, save again → file unchanged.
-cp "$sv_dir/session.fs" "$sv_dir/before"
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null )
+# Idempotent: load, define nothing, bare save (→ current file) → file unchanged.
+cp "$sv_dir/mod.fs" "$sv_dir/before"
 ( cd "$sv_dir" && printf 'save\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-diff -q "$sv_dir/before" "$sv_dir/session.fs" >/dev/null && sv_idem=ok || sv_idem=bad
-# Cumulative: a later session adds a word; the file keeps the old ones too.
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+diff -q "$sv_dir/before" "$sv_dir/mod.fs" >/dev/null && sv_idem=ok || sv_idem=bad
+# Cumulative: load, add a word, save → the file keeps the old ones too.
 ( cd "$sv_dir" && printf ': sq dup * ;\nsave\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-sv_cumul=$(cat "$sv_dir/session.fs")
-# Session OFF (no env, piped stdin is not a tty): save is a no-op, no file made.
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+sv_cumul=$(cat "$sv_dir/mod.fs")
+rm -rf "$sv_dir"
+# Session OFF (no env, piped stdin not a tty): no capture; SAVE <name> writes
+# nothing (the log is empty), so no file is made.
 off_dir="$(mktemp -d)"
-( cd "$off_dir" && printf ': zzz 9 ;\nsave\nbye\n' \
+( cd "$off_dir" && printf ': zzz 9 ;\nsave mod.fs\nbye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-[ -e "$off_dir/session.fs" ] && sv_off=made || sv_off=none
-# A failed save must not destroy an existing session.fs. Block the temp file by
-# pre-creating session.fs.new as a directory, so create-file on it fails.
+[ -e "$off_dir/mod.fs" ] && sv_off=made || sv_off=none
+rm -rf "$off_dir"
+# A failed save never destroys an existing file (atomic .new + rename): block the
+# temp by pre-creating mod.fs.new as a directory, so create-file on it fails.
 fail_dir="$(mktemp -d)"
-printf 'PRECIOUS\n' > "$fail_dir/session.fs"
-mkdir "$fail_dir/session.fs.new"
-( cd "$fail_dir" && printf ': c 3 ;\nsave\nbye\n' \
+printf 'PRECIOUS\n' > "$fail_dir/mod.fs"
+mkdir "$fail_dir/mod.fs.new"
+( cd "$fail_dir" && printf ': c 3 ;\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-sv_safe=$(cat "$fail_dir/session.fs" 2>/dev/null)
+sv_safe=$(cat "$fail_dir/mod.fs" 2>/dev/null)
 rm -rf "$fail_dir"
-# An empty (0-byte) session.fs must auto-load cleanly, not wedge the REPL.
-# (Regression: forth_included mishandled empty/tiny files, closing a std fd.)
+# An empty (0-byte) module file loads cleanly, not wedging the REPL.
 empty_dir="$(mktemp -d)"
-: > "$empty_dir/session.fs"
+: > "$empty_dir/mod.fs"
 sv_empty=$( cd "$empty_dir" && printf '3 4 + . bye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null )
 rm -rf "$empty_dir"
-# -session / reload loop. Even when a session uses -session and reload, the saved
-# file must stay PURE definitions (those lines are never captured).
+# -session / reload loop: in one run a word works, -session forgets it, reload
+# brings it back from the file.
 rl_dir="$(mktemp -d)"
-( cd "$rl_dir" && printf ': widget 100 ;\nsave\n-session\nreload\nsave\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-rl_pure=$(cat "$rl_dir/session.fs" 2>/dev/null)
-# In one session: word works, -session forgets it, reload brings it back.
+printf ': widget 100 ;\n' > "$rl_dir/mod.fs"
 rl_loop=$( cd "$rl_dir" && printf 'widget .\n-session\nwidget\nreload\nwidget .\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
-# reload picks up an external edit to session.fs.
-printf ': widget 999 ;\n' > "$rl_dir/session.fs"
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null )
+# The saved file stays PURE definitions (-session / reload / save are never captured).
+( cd "$rl_dir" && printf '-session\nreload\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+rl_pure=$(cat "$rl_dir/mod.fs" 2>/dev/null)
+# reload picks up an external edit to the module file.
+printf ': widget 999 ;\n' > "$rl_dir/mod.fs"
 rl_edit=$( cd "$rl_dir" && printf 'reload\nwidget . bye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null )
 rm -rf "$rl_dir"
-# reload of a session.fs with a compile error must NOT wedge/crash the REPL
-# (regression: forth_included left the freed mmap as the source → segfault).
+# A broken module: interactive `basicforth bad.fs` reports the error and DROPS TO
+# THE REPL (so you can fix it), the REPL keeps working...
 bad_dir="$(mktemp -d)"
-printf ': good 1 ;\n: bad nosuchword ;\n' > "$bad_dir/session.fs"
-rl_bad=$( cd "$bad_dir" && printf 'reload\n5 6 + . bye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+printf ': good 1 ;\n: bad nosuchword ;\n' > "$bad_dir/mod.fs"
+rl_bad=$( cd "$bad_dir" && printf '5 6 + . bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+# ...but non-interactively the same broken module exits non-zero (Unix utility).
+( cd "$bad_dir" && printf '5 6 + . bye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+rl_bad_code=$?
 rm -rf "$bad_dir"
-# reload with NO session.fs must not destroy the live session or wipe the log:
-# define a word interactively, reload (file absent), the word must survive.
-miss_dir="$(mktemp -d)"
-rl_miss=$( cd "$miss_dir" && printf ': keepme 42 ;\nreload\nkeepme . bye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
-rm -rf "$miss_dir"
-# Persistence is interactive-only: reload from a NON-interactive run (no
-# BASICFORTH_SESSION, piped stdin) must NOT auto-load session.fs.
+# LOAD <file> swaps the module mid-session; NEW clears it to a clean slate.
+sw_dir="$(mktemp -d)"
+printf ': alpha 1 ;\n' > "$sw_dir/a.fs"
+printf ': beta 2 ;\n' > "$sw_dir/b.fs"
+rl_swap=$( cd "$sw_dir" && printf 'alpha .\nload b.fs\nbeta .\nalpha\nnew\nbeta\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth a.fs 2>&1 )
+rm -rf "$sw_dir"
+# reload outside an interactive session is a no-op (no active session).
 scope_dir="$(mktemp -d)"
-printf ': secret 123 ;\n' > "$scope_dir/session.fs"
+printf ': secret 123 ;\n' > "$scope_dir/mod.fs"
 rl_scope=$( cd "$scope_dir" && printf 'reload\nsecret . bye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 rm -rf "$scope_dir"
-# A reload that faults mid-load (stack underflow in session.fs) must not leave
-# the one-shot (skip-capture) flag stuck — the next definition must still be
-# captured and saved.
-stuck_dir="$(mktemp -d)"
-printf ': keep 1 ;\ndrop\n' > "$stuck_dir/session.fs"   # 'drop' underflows on load
-( cd "$stuck_dir" && printf 'reload\n: persisted 42 ;\nsave\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-rl_stuck=$(cat "$stuck_dir/session.fs" 2>/dev/null)
-rm -rf "$stuck_dir"
-# session.fs is pinned to the STARTUP directory: after a `cd` away, save must
-# still write to the launch dir, not the new cwd.
-pin_dir="$(mktemp -d)"
-pin_away="$(mktemp -d)"
-( cd "$pin_dir" && printf ': pinned 7 ;\ncd %s\nsave\nbye\n' "$pin_away" \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-pin_home=$(cat "$pin_dir/session.fs" 2>/dev/null)
-[ -e "$pin_away/session.fs" ] && pin_away_made=yes || pin_away_made=no
-rm -rf "$pin_dir" "$pin_away"
 # Graceful degradation when boot-time getcwd fails (startup dir removed out from
-# under the process): (startup-dir) is empty, so the session paths fall back to
-# the bare relative name instead of an absolute "/session.fs" that could pollute
-# the filesystem root. The REPL must keep working — confirm it still evaluates.
+# under the process): the REPL must keep working — confirm it still evaluates.
 gone_dir="$(mktemp -d)"
 gone_out=$( cd "$gone_dir" && rmdir "$gone_dir" && printf '3 4 + .\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
-t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "session persistence"
-rm -rf "$sv_dir" "$off_dir"
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "module persistence"
 
 if [[ "$sv_file" == *": dbl dup + ;"* && "$sv_file" == *"dup dup * *"* \
       && "$sv_file" != *"42 ."* && "$sv_file" != *"100 allot"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SAVE captures definitions (multi-line), not transient actions or bare ALLOT\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  SAVE <name> captures definitions (multi-line), not transient actions or bare ALLOT\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SAVE captures definitions, not transient actions/ALLOT\n    Got: %q\n" "$sv_file"; ((failed++))
 fi
 if [[ "$sv_reload" == *"14"* && "$sv_reload" == *"27"* ]]; then
-    printf "  ${GREEN}PASS${NC}  startup reloads saved definitions\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  basicforth <module> loads the saved definitions\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  startup reloads saved definitions\n    Expected 14 and 27\n    Got: %q\n" "$sv_reload"; ((failed++))
+    printf "  ${RED}FAIL${NC}  loading a module\n    Expected 14 and 27\n    Got: %q\n" "$sv_reload"; ((failed++))
 fi
 if [[ "$sv_idem" == "ok" ]]; then
-    printf "  ${GREEN}PASS${NC}  SAVE is idempotent (re-save unchanged)\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  bare SAVE is idempotent (re-save unchanged)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  SAVE is idempotent\n"; ((failed++))
 fi
 if [[ "$sv_cumul" == *": dbl dup + ;"* && "$sv_cumul" == *": sq dup * ;"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SAVE is cumulative across sessions\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  SAVE is cumulative (adds new defs, keeps old)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SAVE is cumulative across sessions\n    Got: %q\n" "$sv_cumul"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SAVE is cumulative\n    Got: %q\n" "$sv_cumul"; ((failed++))
 fi
 if [[ "$sv_off" == "none" ]]; then
-    printf "  ${GREEN}PASS${NC}  no capture / no session.fs when not interactive\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  no capture / no file written when not interactive\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  unexpected session.fs created when session inactive\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  unexpected file created when session inactive\n"; ((failed++))
 fi
 if [[ "$sv_safe" == "PRECIOUS" ]]; then
-    printf "  ${GREEN}PASS${NC}  a failed save preserves the existing session.fs\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  a failed save preserves the existing file\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  a failed save destroyed session.fs\n    Got: %q\n" "$sv_safe"; ((failed++))
+    printf "  ${RED}FAIL${NC}  a failed save destroyed the file\n    Got: %q\n" "$sv_safe"; ((failed++))
 fi
 if [[ "$sv_empty" == *"7"* ]]; then
-    printf "  ${GREEN}PASS${NC}  empty session.fs auto-loads without wedging the REPL\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  an empty module file loads without wedging the REPL\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  empty session.fs wedged the REPL\n    Expected 7\n    Got: %q\n" "$sv_empty"; ((failed++))
-fi
-if [[ "$rl_pure" == *": widget 100 ;"* && "$rl_pure" != *"-session"* && "$rl_pure" != *"reload"* ]]; then
-    printf "  ${GREEN}PASS${NC}  session.fs stays pure definitions (no -session/reload lines)\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  session.fs polluted with -session/reload\n    Got: %q\n" "$rl_pure"; ((failed++))
+    printf "  ${RED}FAIL${NC}  empty module file wedged the REPL\n    Expected 7\n    Got: %q\n" "$sv_empty"; ((failed++))
 fi
 if [[ "$rl_loop" == *"100"*"100"* && "$rl_loop" == *"? widget"* ]]; then
     printf "  ${GREEN}PASS${NC}  -session forgets, reload restores (edit/compile/run loop)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  -session/reload loop\n    Expected 100 ... ? widget ... 100\n    Got: %q\n" "$rl_loop"; ((failed++))
 fi
+if [[ "$rl_pure" == *": widget 100 ;"* && "$rl_pure" != *"-session"* && "$rl_pure" != *"reload"* ]]; then
+    printf "  ${GREEN}PASS${NC}  the module file stays pure definitions (no -session/reload lines)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  module file polluted with -session/reload\n    Got: %q\n" "$rl_pure"; ((failed++))
+fi
 if [[ "$rl_edit" == *"999"* ]]; then
-    printf "  ${GREEN}PASS${NC}  reload picks up an external edit to session.fs\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  reload picks up an external edit to the module file\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  reload did not pick up the edit\n    Expected 999\n    Got: %q\n" "$rl_edit"; ((failed++))
 fi
-if [[ "$rl_bad" == *"reload:"* && "$rl_bad" == *"11"* ]]; then
-    printf "  ${GREEN}PASS${NC}  reload of a bad session.fs warns and the REPL keeps going\n"; ((passed++))
+if [[ "$rl_bad" == *"nosuchword"* && "$rl_bad" == *"11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a broken module drops to the REPL (interactive), which keeps going\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  reload of a bad session.fs\n    Expected a 'reload:' warning and 11\n    Got: %q\n" "$rl_bad"; ((failed++))
+    printf "  ${RED}FAIL${NC}  broken module did not drop to the REPL\n    Expected 'nosuchword' and 11\n    Got: %q\n" "$rl_bad"; ((failed++))
 fi
-if [[ "$rl_miss" == *"cannot read"* && "$rl_miss" == *"42"* ]]; then
-    printf "  ${GREEN}PASS${NC}  reload with no session.fs reports it and keeps the live session\n"; ((passed++))
+if [[ "$rl_bad_code" != "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  a broken module exits non-zero when NOT interactive (utility)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  reload with missing session.fs lost the session\n    Expected 'cannot read' and 42\n    Got: %q\n" "$rl_miss"; ((failed++))
+    printf "  ${RED}FAIL${NC}  broken module exited 0 non-interactively\n"; ((failed++))
+fi
+if [[ "$rl_swap" == *"1"* && "$rl_swap" == *"2"* && "$rl_swap" == *"? alpha"* && "$rl_swap" == *"? beta"* ]]; then
+    printf "  ${GREEN}PASS${NC}  LOAD swaps the module, NEW clears it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  LOAD/NEW\n    Expected 1, 2, '? alpha', '? beta'\n    Got: %q\n" "$rl_swap"; ((failed++))
 fi
 if [[ "$rl_scope" == *"no active session"* && "$rl_scope" == *"? secret"* ]]; then
     printf "  ${GREEN}PASS${NC}  reload is a no-op outside an interactive session (scope)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  reload auto-loaded session.fs outside an interactive session\n    Got: %q\n" "$rl_scope"; ((failed++))
-fi
-if [[ "$rl_stuck" == *"persisted"* ]]; then
-    printf "  ${GREEN}PASS${NC}  a faulting reload does not leave skip-capture stuck\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  definition after a faulting reload was not captured\n    Got: %q\n" "$rl_stuck"; ((failed++))
-fi
-if [[ "$pin_home" == *": pinned 7 ;"* && "$pin_away_made" == "no" ]]; then
-    printf "  ${GREEN}PASS${NC}  save pins session.fs to the startup dir across a cd\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  session.fs not pinned to startup dir after cd\n    home: %q / away-made: %s\n" "$pin_home" "$pin_away_made"; ((failed++))
+    printf "  ${RED}FAIL${NC}  reload acted outside an interactive session\n    Got: %q\n" "$rl_scope"; ((failed++))
 fi
 if [[ "$gone_out" == *"7"* ]]; then
-    printf "  ${GREEN}PASS${NC}  REPL survives a failed boot-time getcwd (relative session.fs fallback)\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  REPL survives a failed boot-time getcwd\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
+fi
+# EDIT-propagation: editing a word recompiles its transitive callers, so the
+# change goes live everywhere (subroutine threading otherwise leaves callers
+# calling the old word). leaf=1 → mid=leaf*10 → top prints mid; after editing
+# leaf to 2, `top` must print 20, and the report must name the recompiled callers.
+# `edit` spawns $EDITOR on the word's temp file — here a non-interactive sed that
+# rewrites leaf's source from 1 to 2.
+ep_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
+ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\ntop\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ep_dir"
+if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"20"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit recompiles transitive callers — the change goes live\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
+fi
+# COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
+# append SAVE keeps both versions, but COMPACT emits only the latest, once.
+cp_dir="$(mktemp -d)"
+printf ': x 1 ;\n' > "$cp_dir/mod.fs"
+( cd "$cp_dir" && printf 'edit x\ncompact mod.fs\nbye\n' \
+    | EDITOR='sed -i s/1/9/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
+cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
+rm -rf "$cp_dir"
+if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact dedup\n    Expected one ': x 9 ;', no ': x 1 ;'\n    Got (%s defs): %q\n" "$cp_count" "$cp_body"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
@@ -1806,38 +1860,37 @@ see_prim=$( cd "$see_dir" && printf 'see dup\nbye\n' \
 see_core=$( cd "$see_dir" && printf 'see spaces\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: SPACES' )
 # Using SEE must not capture itself into the saved file.
-( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave\nbye\n' \
+( cd "$see_dir" && printf ': keep 5 ;\nsee keep\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-see_pure=$(cat "$see_dir/session.fs" 2>/dev/null)
-# Seeded definitions: SEE must also cover words loaded from session.fs at startup
-# (indexed by (index-seeded), not interactive capture). Separate dir with a
-# pre-existing session.fs; grep '^...' isolates SEE's printed source from echoes.
+see_pure=$(cat "$see_dir/mod.fs" 2>/dev/null)
+# SEE must also cover the words of a LOADed module (read from the file via source
+# metadata, not interactive capture). Separate dir with a module file we load.
 seed_dir="$(mktemp -d)"
-printf ': sgreet ." hi" cr ;\nvariable sv\n7 constant sc\n' > "$seed_dir/session.fs"
+printf ': sgreet ." hi" cr ;\nvariable sv\n7 constant sc\n' > "$seed_dir/mod.fs"
 see_sc=$( cd "$seed_dir" && printf 'see sgreet\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sgreet' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^: sgreet' )
 see_sv=$( cd "$seed_dir" && printf 'see sv\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^variable sv' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^variable sv' )
 see_sk=$( cd "$seed_dir" && printf 'see sc\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^7 constant sc' )
-# ';' inside a string must not truncate the seeded definition's span.
-printf ': sstr ." a; b" cr ;\n' > "$seed_dir/session.fs"
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^7 constant sc' )
+# ';' inside a string must not truncate the loaded definition's span.
+printf ': sstr ." a; b" cr ;\n' > "$seed_dir/mod.fs"
 see_sstr=$( cd "$seed_dir" && printf 'see sstr\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sstr' )
-# reload re-indexes: seeded words stay see-able after a reload.
-printf ': sre 1 ;\n' > "$seed_dir/session.fs"
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^: sstr' )
+# reload re-indexes: loaded words stay see-able after a reload.
+printf ': sre 1 ;\n' > "$seed_dir/mod.fs"
 see_sre=$( cd "$seed_dir" && printf 'reload\nsee sre\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^: sre' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^: sre' )
 # Case-insensitive defining words: an uppercase VARIABLE (valid Forth) must index.
-printf 'VARIABLE su\n' > "$seed_dir/session.fs"
+printf 'VARIABLE su\n' > "$seed_dir/mod.fs"
 see_su=$( cd "$seed_dir" && printf 'see su\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^VARIABLE su' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^VARIABLE su' )
 # Custom defining words: a word made by a *user-defined* defining word, loaded
-# from session.fs, is now see-able via source metadata — the case the text-parse
+# from a module file, is see-able via source metadata — the case the text-parse
 # seeded-SEE MVP could not handle.
-printf ': mk create , does> @ ;\n5 mk five\n' > "$seed_dir/session.fs"
+printf ': mk create , does> @ ;\n5 mk five\n' > "$seed_dir/mod.fs"
 see_cdw=$( cd "$seed_dir" && printf 'see five\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^5 mk five' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^5 mk five' )
 rm -rf "$seed_dir"
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "SEE"
 rm -rf "$see_dir"
@@ -1933,6 +1986,54 @@ else
     printf "  ${RED}FAIL${NC}  SEE custom-defining-word word\n    Expected '5 mk five'\n    Got: %q\n" "$see_cdw"; ((failed++))
 fi
 
+# uses — list the session words that reference a given word (whole-word,
+# case-insensitive, over the interactive capture log like SEE). Forced on
+# through a pipe with BASICFORTH_SESSION=1.
+uses_dir="$(mktemp -d)"
+# Lists referencing words newest-first; excludes the target's own def and
+# words that don't reference it (c uses nothing).
+uses_basic=$( cd "$uses_dir" && printf 'variable mc\n: a mc @ . ;\n: b mc @ 1+ . ;\n: c 1 . ;\nuses mc\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Whole-word + case-insensitive: MC matches mc, but mcx (used by 'nope') does not.
+uses_word=$( cd "$uses_dir" && printf 'variable mc\nvariable mcx\n: nope mcx @ . ;\n: v mc @ . ;\nuses MC\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Nothing references it.
+uses_none=$( cd "$uses_dir" && printf ': a 1 . ;\nuses zzz\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep 'used by' )
+# Missing argument is reported, not crashed.
+uses_noarg=$( cd "$uses_dir" && printf 'uses\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null )
+
+if [[ "$uses_basic" == *"mc is used by: b a"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses lists referencing words newest-first, excluding the target\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses basic\n    Expected 'mc is used by: b a'\n    Got: %q\n" "$uses_basic"; ((failed++))
+fi
+if [[ "$uses_word" == *"used by: v"* && "$uses_word" != *nope* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses matches whole words case-insensitively (mc, not mcx)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses whole-word/case\n    Expected 'used by: v' and no 'nope'\n    Got: %q\n" "$uses_word"; ((failed++))
+fi
+if [[ "$uses_none" == *"(none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses reports when nothing references the word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses none\n    Expected '(none)'\n    Got: %q\n" "$uses_none"; ((failed++))
+fi
+if [[ "$uses_noarg" == *"usage: uses"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses with no argument prints usage\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses no-arg\n    Expected 'usage: uses'\n    Got: %q\n" "$uses_noarg"; ((failed++))
+fi
+# FILE-loaded words: uses reads a word's source from its file (like SEE), so it
+# works on a program loaded as a startup argument — no capture/session needed.
+uses_file=$( printf 'uses mcount\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$REPO_ROOT/examples/chase.fs" 2>/dev/null | grep 'used by' )
+if [[ "$uses_file" == *step-monsters* && "$uses_file" == *draw-monsters* && "$uses_file" != *"(none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses searches file-loaded words (examples/chase.fs, no session)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses on a file-loaded program\n    Expected step-monsters + draw-monsters\n    Got: %q\n" "$uses_file"; ((failed++))
+fi
+
 # =========================================================================
 section "REDO (recompile a captured word from its source)"
 # =========================================================================
@@ -1995,36 +2096,36 @@ fi
 # =========================================================================
 section "Persistence of state-setting words (to / is)"
 # =========================================================================
-# save now records direct TO/IS assignments (not just definitions), so a value's
-# contents and a deferred word's action survive save+reload. Forced on with
-# BASICFORTH_SESSION=1 like the other persistence tests; each runs a session that
-# saves, then a fresh session that auto-loads the written session.fs.
+# save records direct TO/IS assignments (not just definitions), so a value's
+# contents and a deferred word's action survive save + reload. Forced on with
+# BASICFORTH_SESSION=1; each runs a session that saves a module, then a fresh
+# session that loads it back.
 ps_dir="$(mktemp -d)"
-( cd "$ps_dir" && printf '0 value pv\n7 to pv\nsave\nbye\n' \
+( cd "$ps_dir" && printf '0 value pv\n7 to pv\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 ps_to=$( cd "$ps_dir" && printf 'pv .\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^7' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^7' )
 rm -rf "$ps_dir"
 ps_dir="$(mktemp -d)"
-( cd "$ps_dir" && printf 'defer pg\n: ph pg ;\n:noname 42 ; is pg\nsave\nbye\n' \
+( cd "$ps_dir" && printf 'defer pg\n: ph pg ;\n:noname 42 ; is pg\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
 ps_is=$( cd "$ps_dir" && printf 'ph .\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^42' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^42' )
 rm -rf "$ps_dir"
 # Over-capture guard: a TO *inside* a called word compiles a store (not forth_to),
 # so calling it neither logs a 'setpc' command line nor persists the runtime value.
 ps_dir="$(mktemp -d)"
-( cd "$ps_dir" && printf '0 value pc\n: setpc 9 to pc ;\nsetpc\nsave\nbye\n' \
+( cd "$ps_dir" && printf '0 value pc\n: setpc 9 to pc ;\nsetpc\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-ps_call_line=$(grep -c '^setpc$' "$ps_dir/session.fs")
+ps_call_line=$(grep -c '^setpc$' "$ps_dir/mod.fs")
 ps_reload=$( cd "$ps_dir" && printf 'pc .\nbye\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null | grep '^0' )
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^0' )
 rm -rf "$ps_dir"
 # Errored assignment must not leak: the following transient line is not captured.
 ps_dir="$(mktemp -d)"
-( cd "$ps_dir" && printf '0 value pe\n5 to pe zzz\n1 2 + .\nsave\nbye\n' \
+( cd "$ps_dir" && printf '0 value pe\n5 to pe zzz\n1 2 + .\nsave mod.fs\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
-ps_leak=$(grep -cE '1 2 \+|5 to pe' "$ps_dir/session.fs")
+ps_leak=$(grep -cE '1 2 \+|5 to pe' "$ps_dir/mod.fs")
 rm -rf "$ps_dir"
 
 if [[ "$ps_to" == 7* ]]; then
@@ -2586,34 +2687,101 @@ assert_editor "Ctrl-E end after Ctrl-A"      '1 2 +\001\005 .\nbye\n'          "
 assert_editor_count "history up recalls prev"      '88 emit\n\033[A\nbye\n'                      'X' 2
 assert_editor_count "history up/up/down -> 89"     '88 emit\n89 emit\n\033[A\033[A\033[B\nbye\n' 'Y' 2
 
-# `edit <word>` pre-fills the next line with the word's source.
-# Recall 0<> ( : 0<>   0= invert ; ), backspace the ';', append 'drop 99 ;' so it
-# now pushes 99; if the preload/edit worked, 5 0<> . prints 99 (vs -1 unedited).
-assert_editor "edit recalls + edits a word"  'edit 0<>\n\177drop 99 ;\n5 0<> .\nbye\n'  "99  ok"
-assert_editor "edit reports a primitive"     'edit dup\nbye\n'        "edit: dup is a primitive"
-assert_editor "edit reports not found"       'edit nosuchxyz\nbye\n'  "edit: nosuchxyz not found"
-assert_editor "edit refuses an over-long def" 'edit see\nbye\n'       "too long to edit inline"
-# A failing edit (here a primitive) must clear any preload a prior edit armed, so
-# the next prompt is not pre-filled with stale source.
-assert_editor_absent "edit error clears stale preload" 'edit 0<> edit dup\n\nbye\n'  "0= invert"
+# =========================================================================
+section "EDIT (external editor)"
+# =========================================================================
+# `edit <word>` writes the word's source to a temp file, opens it in $EDITOR, and
+# on a clean exit recompiles from the file and propagates to callers. We drive it
+# non-interactively by pointing $EDITOR at a `sed` (or `true`/`false`) instead of
+# a real editor. The bad-name paths fail before any editor is spawned.
 
-# edit converts a `\` line comment to ( ) when flattening, so a multi-line
-# commented definition survives the round-trip (a `\` on one line would otherwise
-# swallow the rest). Load a commented word from a file, edit + resubmit as-is, and
-# confirm the comment became a ( ) and the word still works (5 dbl . -> 10).
+# Errors before spawning: not-found and primitive (no $EDITOR needed).
+ed_pn=$(printf 'edit dup\nbye\n'       | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_pn" == *"edit: dup is a primitive"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports a primitive\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit reports a primitive\n    Got: %s\n" "$(echo "$ed_pn"|head -3)"; ((failed++)); }
+ed_nf=$(printf 'edit nosuchxyz\nbye\n' | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_nf" == *"edit: nosuchxyz not found"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports not found\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit reports not found\n    Got: %s\n" "$(echo "$ed_nf"|head -3)"; ((failed++)); }
+
+# An external edit takes effect: sed rewrites ee's body from 1 to 7.
+ed_ch=$(printf ': ee 1 ;\nedit ee\nee .\nbye\n' \
+    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_ch" == *"7  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit applies an external editor's changes\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit applies an external edit\n    Got: %s\n" "$(echo "$ed_ch"|head -5)"; ((failed++)); }
+
+# An aborting editor (non-zero exit) leaves the word unchanged.
+ed_ab=$(printf ': eb 1 ;\nedit eb\neb .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+[[ "$ed_ab" == *"edit: editor exited with status 1"* && "$ed_ab" == *"1  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports an aborted editor, word unchanged\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  edit aborted-editor handling\n    Got: %s\n" "$(echo "$ed_ab"|head -5)"; ((failed++)); }
+
+# Multi-line formatting survives the round-trip: load a multi-line, commented word
+# from a file, edit it with a no-op editor (true), and confirm SEE still shows it
+# across lines with the `\` comment intact (the old inline edit flattened it).
 cc_dir=$(mktemp -d)
 cat > "$cc_dir/cc.fs" <<'FS'
 : dbl ( n -- n+n )
-\ doubles the input
-dup + ;
+  \ doubles the input
+  dup + ;
 FS
-cc_out=$(printf 'edit dbl\n\n5 dbl .\nbye\n' | BASICFORTH_EDITOR=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
+cc_out=$(printf 'edit dbl\nsee dbl\n5 dbl .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 timeout 2 $FORTH "$cc_dir/cc.fs" 2>&1)
 rm -rf "$cc_dir"
-if [[ "$cc_out" == *"( doubles the input )"* && "$cc_out" == *"10  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  edit converts a backslash comment to ( )\n"; ((passed++))
+if [[ "$cc_out" == *"\ doubles the input"* && "$cc_out" == *"10  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit preserves multi-line formatting\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  edit converts a backslash comment to ( )\n"
-    printf "    Got: %s\n" "$(echo "$cc_out" | head -5)"; ((failed++))
+    printf "  ${RED}FAIL${NC}  edit preserves multi-line formatting\n"
+    printf "    Got: %s\n" "$(echo "$cc_out" | head -6)"; ((failed++))
+fi
+
+# =========================================================================
+section "Shelling out (sh / (system))"
+# =========================================================================
+# `sh <line>` runs the rest of the line via /bin/sh; the interpreter resumes
+# after it (so a following Forth token still runs).
+sh_out=$(printf 'sh echo hi-from-sh\n42 .\nbye\n' | timeout 2 $FORTH 2>&1)
+[[ "$sh_out" == *"hi-from-sh"* && "$sh_out" == *"42  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  sh runs a command, interpreter resumes after it\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  sh basic\n    Got: %s\n" "$(echo "$sh_out"|head -4)"; ((failed++)); }
+# Bare `sh` with no command prints usage, doesn't choke.
+sh_use=$(printf 'sh\nbye\n' | timeout 2 $FORTH 2>&1)
+[[ "$sh_use" == *"usage: sh <command>"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  bare sh prints usage\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  sh usage\n    Got: %s\n" "$(echo "$sh_use"|head -3)"; ((failed++)); }
+# (system) returns the child's exit status: /bin/true -> 0, /bin/false -> 1.
+sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0 st1\nbye\n' \
+    | timeout 2 $FORTH 2>&1)
+[[ "$sy_out" == *"0 1"* || ( "$sy_out" == *"0 "* && "$sy_out" == *"1 "* ) ]] \
+    && { printf "  ${GREEN}PASS${NC}  (system) returns the child exit status\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  (system) status\n    Got: %s\n" "$(echo "$sy_out"|head -4)"; ((failed++)); }
+
+# =========================================================================
+section "Dirty guard"
+# =========================================================================
+# (dirty) tracks unsaved log changes: clean at start, set by a definition,
+# cleared by save, set again by an edit. The save-first prompt itself only
+# engages at a real terminal (PTY suite); here we verify the bookkeeping.
+dg_dir="$(mktemp -d)"
+dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+rm -rf "$dg_dir"
+if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"-1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save / edit\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, -1\n    Got: %q\n" "$dg_out"; ((failed++))
+fi
+# In a pipe the guard never prompts: a dirty new/bye proceeds silently (no
+# prompt text, no byte of input consumed as an answer).
+dg2_out=$( printf ': dgx 1 ;\nnew\n.module\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$dg2_out" == *"(empty module"* && "$dg2_out" != *"save first"* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped input never prompts (new/bye proceed silently)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  pipe silence\n    Got: %q\n" "$dg2_out"; ((failed++))
 fi
 
 # =========================================================================

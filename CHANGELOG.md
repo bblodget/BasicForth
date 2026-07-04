@@ -1,5 +1,108 @@
 # Changelog
 
+## Unreleased
+
+### Dirty-guard: `new`/`load`/`bye` ask before discarding unsaved work
+- BasicForth now tracks whether the module is **dirty** — the capture log holds
+  changes `save` hasn't written (a definition, a direct `to`/`is`, an `edit`).
+  When it is, `new`, `load`, `bye`, and `bye-code` ask
+  `unsaved changes — save first? (y/n)`: **y** saves to the current file first
+  (with no current file it hints `save <name>` and cancels), **n** discards, any
+  other key cancels back to the REPL. The flag clears on `save` and whenever the
+  log is rebuilt from a file (`load`/`reload`/`new`/startup).
+- `reload` deliberately stays unguarded — it is the pull-from-disk verb, and a
+  save-first there would overwrite the very file edits being pulled in. The
+  prompt only appears at a real terminal (new `(tty?)` primitive): pipes and
+  scripts proceed silently, so automation never blocks. `bye`/`bye-code` are now
+  thin guarded Forth words over the assembly primitives. See docs/Persistence.md.
+- `sh <command...>` runs the rest of the input line as a shell command via the
+  `(system)` primitive (`/bin/sh -c`), the way you'd type it at a terminal —
+  `sh ls -la`, `sh git status`. Output goes to the terminal; the command is
+  transient (nothing captured to the module). It complements the built-in
+  `pwd`/`cd`/`ls`/`cat` words by reaching the real Linux programs and the full
+  shell (pipes, globs, `$VARS`). New **docs/Shelling_Out.md** explains the
+  spawn-not-link architecture.
+
+### `edit` opens an external editor (`$EDITOR`) — multi-line, formatting preserved
+- `edit <word>` now writes the word's source to a temp file and opens it in your
+  editor (`$VISUAL`, else `$EDITOR`, else `vi`); on a clean exit it re-reads the
+  file, recompiles the word, and propagates to callers (below). Because the source
+  is a real multi-line file, **indentation, line breaks, and `\` comments survive**
+  — replacing the previous one-line flattened recall. Works for capture-log and
+  file-loaded words alike (a file word's edit is logged like a REPL redefinition,
+  so `save` persists it); a primitive or unknown name reports instead of opening
+  the editor, and a non-zero editor exit leaves the word unchanged.
+- New `(system) ( c-addr u -- status )` primitive runs a command via `/bin/sh -c`
+  (x86 `fork`/`execve`/`wait4`; ARM64 `clone`/`execve`/`wait4`), restoring the
+  terminal around the child. It's the foundation under `edit` and any future
+  `sh`/`!`/`history | grep` words. The edit temp file is a fixed path
+  (`/tmp/basicforth-edit.fs`) in this first cut.
+
+### `compact` — a deduped snapshot of the module
+- `save` rewrites the whole loaded file (comments and all) plus your edits, so
+  redefinitions accumulate. `compact <name>` instead writes each module word's
+  latest source **once**, in dependency order (walking the `.module` chain
+  oldest-first and resolving each word's in-force source from the log or file),
+  to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` → `game.compact.fs`) so
+  you can `diff` it against `save`'s output. It drops between-definition comments
+  (definitions only); a structure-preserving compact is future work. Bare
+  `compact` uses the current file. See `man Tools` / docs/Persistence.md.
+
+### `edit` recompiles a word's callers (the edit goes live)
+- BasicForth is subroutine-threaded, so redefining a word doesn't update its
+  already-compiled callers. Now `edit <word>` follows the edit by **recompiling
+  every module word that transitively uses it** — found via the `uses` caller
+  graph, recompiled from each one's source (capture log or file) in dependency
+  order, and re-logged so `see`/`uses`/`save` stay correct. It prints what it
+  touched, e.g. `updated: init-game setup chase`. So editing a leaf word is live
+  everywhere with no manual recompiling. (Re-typing a `:` definition by hand
+  stays a local redefinition.) See docs/Line_Editor.md.
+
+### Modules: named `save` / `load`, replacing the magic `session.fs`
+- Your interactive definitions are now a **module** you save to and load from
+  **named files** (BASIC's `SAVE` / `LOAD`), instead of an implicit `session.fs`:
+  - `save <name>` writes the module to `<name>` (cwd-relative) and makes it the
+    current file; bare `save` rewrites the current file — remembered as an
+    absolute path, so a later `cd` can't move it (editor-style "save").
+  - `load <file>` opens a module mid-session (forget the old, load the new);
+    `basicforth <file>` does the same at launch.
+  - `new` clears the module to a clean slate (core only).
+  - `reload` re-reads the current file (the edit/compile/run loop).
+  - `-session` is now the low-level "forget the module's words" helper.
+- **Capture is on with a file argument now.** Loading a module and editing it
+  interactively works — `see` / `uses` / `save` cover your edits (previously a
+  file argument silently disabled capture). A `bye`-script still captures nothing.
+- **A broken module** with a compile error: an interactive `basicforth game.fs`
+  reports the error and **drops to the REPL** so you can fix it; a non-interactive
+  run exits non-zero, like a failing Unix utility.
+- The `-session` restore mark now sits at the end of `core.fs`, so
+  `-session` / `new` / `load` forget the *whole* module (the loaded file's words
+  plus interactive ones).
+- `.session` is renamed **`.module`** (breaking change since v0.8.0).
+- **Migration:** there is no more `session.fs` auto-load — an existing
+  `session.fs` is loaded explicitly with `basicforth session.fs`. `save` / `reload`
+  are now cwd-relative (the old startup-directory pinning is gone). `load` / `new`
+  / `reload` discard unsaved changes (a "save first?" prompt is planned). See
+  docs/Persistence.md.
+
+### `uses <word>` — find which module words reference a word
+- `uses <word>` lists the module words whose source mentions `<word>` as a
+  whole token (case-insensitive) — a grep over your own definitions, handy
+  before renaming something. It reads each word's source the way `see` does —
+  from the interactive capture log for words you typed, or from the source file
+  for words loaded as a startup argument, via `load`, or via `include` —
+  so it covers everything `.module` lists, skipping only `<word>`'s own defining
+  line. Pure Forth (reuses the `see` capture log, per-word source metadata, and
+  file reader; reads each source file once); no assembly. See `man Tools`.
+
+### New tutorial: `tutorial Chase` — top-down game design
+- A second interactive tutorial that teaches how to *design* a program from the
+  top down with `defer`: write the whole game's shape first as deferred seams,
+  run the empty skeleton to prove the structure, then fill in the parts and give
+  each monster its own swappable brain via an execution-token table (the Pac-Man
+  trick). Builds a complete terminal chase game. Finished program:
+  `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+
 ## v0.8.0 — 2026-06-29
 
 ### Line editor: `edit <word>`, horizontal scrolling, continuation prompt

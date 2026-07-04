@@ -4,7 +4,7 @@ At an interactive terminal the BasicForth prompt is a small line editor, like
 the one a modern shell gives you: move around the line, fix a typo in the
 middle, and recall and re-run previous commands. Long lines scroll sideways, a
 `:` definition that spans lines gets a continuation prompt, and `edit <word>`
-recalls an existing definition for tweaking. Most of it is just how the prompt
+opens an existing definition in your editor. Most of it is just how the prompt
 behaves — only `edit` is a word you type.
 
 ## Keys
@@ -40,27 +40,57 @@ width.
 
 ## Editing a definition: `edit`
 
-`edit <name>` recalls a word's source onto the **next** prompt, pre-filled and
-ready to tweak:
+`edit <name>` opens a word's source in your editor; when you save and quit,
+BasicForth recompiles it:
 
 ```
 > : triple 3 * ;
  ok
-> edit triple
-> : triple 3 * ;        # pre-filled; arrow to the 3, change it, press Enter
+> edit triple              # opens $EDITOR on triple's source — edit, save, quit
+ ok
+> triple                   # the new definition is live
 ```
 
-It works for words you defined this session (from the capture log) and for
-file-loaded words — `core.fs`, `include`d files — read straight from their source
-file via the dictionary's source metadata, the same way `see` finds them. An
-assembly primitive or an unknown name reports a short message instead.
+It writes the word's current source to a temp file and launches your editor —
+`$VISUAL`, then `$EDITOR`, then `vi` if neither is set. The terminal returns to
+its normal (cooked) mode for the editor and the prompt re-engages raw mode when
+you come back, so a full-screen editor (vim, nano, …) behaves normally. On a
+clean exit BasicForth re-reads the file, recompiles the word, and propagates the
+change (below). If the editor exits non-zero (e.g. `:cq` in vim), the word is
+left unchanged.
 
-The source is **flattened to a single line** so the existing single-line editor
-can hold it (newlines are whitespace to Forth). One wrinkle is handled
-automatically: a `\` comment runs to end-of-line, which on one line would swallow
-the rest of the definition, so a `\ comment` is rewritten as a self-terminating
-`( comment )`. A definition whose flattened form exceeds one input line (256
-chars) is declined rather than truncated — edit it in the file and `reload`.
+Because the source is a real multi-line file, your **formatting is preserved** —
+indentation, line breaks, and `\` comments all survive the round-trip. (An
+earlier version flattened each definition onto one editable input line; the
+external editor removed that limitation.)
+
+`edit` works for words you defined this session (source from the capture log) and
+for file-loaded words — `core.fs`, `include`d files — read from their source file
+via the dictionary's source metadata, the same way `see` finds them. For a
+file-loaded word the edited version is logged like a REPL redefinition, so a later
+`save` persists it. An assembly primitive or an unknown name reports a short
+message instead of opening the editor.
+
+The temp file is a fixed path (`/tmp/basicforth-edit.fs`), so two BasicForth
+sessions editing at the same moment would share it.
+
+### The edit goes live everywhere (propagation)
+
+BasicForth is subroutine-threaded: redefining a word does **not** update the
+words that already call it (their call targets are compiled in). So after you
+save, `edit` **recompiles every module word that transitively uses the one you
+edited**, in dependency order, and prints what it touched:
+
+```
+> edit install-brains      # change all three ghosts to ' drift, save + quit
+updated: init-game setup chase
+ ok
+> chase                    # the change is live — no manual recompiling
+```
+
+It finds the callers with the same machinery as `uses`, and recompiles each from
+its source (capture log *or* file), re-logging it so `see`/`uses`/`save` stay
+correct.
 
 ## Multi-line definitions
 
@@ -103,10 +133,6 @@ tests to drive it over a pipe), and `BASICFORTH_EDITOR=0` forces it off.
 - The arrow keys are decoded from ANSI escape sequences (`ESC [ A/B/C/D`) by the
   platform layer, so a terminal in standard ("application cursor keys" off) mode
   is assumed.
-- `edit`'s `\`-comment conversion does not recognise a literal backslash, paren,
-  or quote introduced via `[char]` / `char` in code (e.g. `[char] \`); such a
-  definition would flatten incorrectly. This is rare; edit it in the file
-  instead.
 
 ## Implementation
 
@@ -122,6 +148,7 @@ escape sequences). The `... ` continuation prompt is printed by `main.s` based o
 `STATE`, and the editor's scroll margin tracks `STATE` to stay aligned with it.
 
 Automated coverage: the pipe-based suite (`tests/test_integration.sh`, with
-`BASICFORTH_EDITOR=1`) covers editing, history, and `edit`; scrolling and the
-continuation prompt need a real terminal, so `tests/test_line_editor_pty.py`
+`BASICFORTH_EDITOR=1`) covers editing and history; `edit` is covered in its own
+section (driving `$EDITOR` with a non-interactive `sed`/`true`/`false`). Scrolling
+and the continuation prompt need a real terminal, so `tests/test_line_editor_pty.py`
 (run via `make run-pty`) drives the REPL under a narrow pseudo-terminal.

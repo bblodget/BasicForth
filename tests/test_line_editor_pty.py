@@ -95,9 +95,72 @@ after_colon = send(fd, b": bigsum\r")        # open def -> continuation prompt n
 send(fd, b"1 2 + 3 + 4 + 5 +\r")             # long continuation line (scrolls)
 send(fd, b";\r")
 result = send(fd, b"bigsum .\r")
-send(fd, b"bye\r"); os.close(fd)
+send(fd, b"bye\r"); send(fd, b"n")           # dirty-guard: discard bigsum
+os.close(fd)
 report("continuation prompt shown", "..." in after_colon.decode(errors="replace"))
 report("long continuation line compiles", "15  ok" in result.decode(errors="replace"))
+
+# --- Dirty-guard: the save-first prompt only engages at a real terminal, so its
+#     interactive paths are tested here (the pipe suite covers the bookkeeping).
+
+# 5) A dirty `bye` prompts; answering n discards and exits.
+fd = spawn()
+send(fd, b": gw1 1 ;\r")
+out = send(fd, b"bye\r")
+report("dirty bye prompts save-first", "save first? (y/n)" in out.decode(errors="replace"))
+out = send(fd, b"n")
+report("guard n discards and exits", "Goodbye" in out.decode(errors="replace"))
+os.close(fd)
+
+# 6) Any other key cancels (the session survives); y with no current file
+#    cancels too, with a hint.
+fd = spawn()
+send(fd, b": gw2 2 ;\r")
+send(fd, b"bye\r")
+out = send(fd, b"q")
+report("guard other-key cancels", "(cancelled)" in out.decode(errors="replace"))
+alive = send(fd, b"gw2 .\r")
+report("cancelled exit returns to the REPL", "2  ok" in alive.decode(errors="replace"))
+send(fd, b"bye\r")
+out = send(fd, b"y")
+report("guard y without a current file cancels",
+       "no current file" in out.decode(errors="replace"))
+send(fd, b"bye\r"); send(fd, b"n"); os.close(fd)
+
+# 7) y with a current file saves, then proceeds with the exit.
+import tempfile
+gfd, gpath = tempfile.mkstemp(suffix=".fs", prefix="bf-guard-")
+os.close(gfd)
+fd = spawn()
+send(fd, ("save %s\r" % gpath).encode())     # sets the current file (log still empty)
+send(fd, b": gw3 3 ;\r")
+send(fd, b"bye\r")
+out = send(fd, b"y", 0.7)
+report("guard y saves then exits",
+       "saved to" in out.decode(errors="replace") and "Goodbye" in out.decode(errors="replace"))
+try:
+    saved = open(gpath).read()
+except OSError:
+    saved = ""
+report("guard y wrote the definition", ": gw3 3 ;" in saved)
+try:
+    os.remove(gpath)
+except OSError:
+    pass
+os.close(fd)
+
+# 8) `new` is guarded the same way: cancel keeps the module, n discards it.
+fd = spawn()
+send(fd, b": gw4 4 ;\r")
+out = send(fd, b"new\r")
+report("dirty new prompts save-first", "save first? (y/n)" in out.decode(errors="replace"))
+send(fd, b"q")
+alive = send(fd, b"gw4 .\r")
+report("cancelled new keeps the module", "4  ok" in alive.decode(errors="replace"))
+send(fd, b"new\r"); send(fd, b"n")
+gone = send(fd, b"gw4 .\r")
+report("n on new discards the module", "? gw4" in gone.decode(errors="replace"))
+send(fd, b"bye\r"); os.close(fd)
 
 print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 sys.exit(1 if failed else 0)

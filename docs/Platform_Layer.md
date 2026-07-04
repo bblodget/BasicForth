@@ -277,6 +277,22 @@ by `SAVE` to swap a freshly written temp file over `session.fs`.
 | **Output**   | X0 = 0, or negative errno                    | RAX = 0, or negative errno                   |
 | **Syscall**  | renameat(AT_FDCWD, old, AT_FDCWD, new) #38   | renameat(AT_FDCWD, old, AT_FDCWD, new) #264  |
 
+### platform_system
+
+Run a shell command (`/bin/sh -c <cmd>`) and wait for it, returning the child's
+exit status. Restores the terminal to cooked mode around the child so a
+full-screen program (an editor) starts clean — the next interactive read
+re-enters raw mode lazily. `environ` (captured at `_start` as `start_envp`) is
+passed to `execve`, so the child inherits `$EDITOR`/`$PATH`/`$TERM`. ARM64 has no
+`fork`, so `clone(SIGCHLD, stack=0, …)` gives fork semantics. Backs the Forth
+`(system)` primitive and the `sh` / `edit` words. See **Shelling_Out.md**.
+
+|              | ARM64                                          | x86-64                                       |
+|--------------|------------------------------------------------|----------------------------------------------|
+| **Input**    | X0 = NUL-terminated command string             | RDI = NUL-terminated command string          |
+| **Output**   | X0 = exit status (0-255), or -1 on fork/exec   | RAX = exit status (0-255), or -1 on fork/exec |
+| **Syscall**  | clone #220, execve #221, wait4 #260            | fork #57, execve #59, wait4 #61              |
+
 ### platform_mmap_file
 
 Memory-map a file with PROT_READ, MAP_PRIVATE.
@@ -587,6 +603,10 @@ VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 | clock_gettime |     113 |      228 | (clockid, &timespec)                 |
 | openat        |      56 |      257 | (dirfd, path, flags, mode)           |
 | exit          |      93 |       60 | (status)                             |
+| fork          |     n/a |       57 | () — x86 only; ARM64 uses clone      |
+| clone         |     220 |      n/a | (flags, stack, ptid, tls, ctid)      |
+| execve        |     221 |       59 | (path, argv, envp)                   |
+| wait4         |     260 |       61 | (pid, &status, options, &rusage)     |
 
 ### ioctl Commands
 

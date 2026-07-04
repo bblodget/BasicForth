@@ -373,36 +373,44 @@ worked example: a pipe's size is unknown, so it slurps stdin into an
 lines back-to-front and `free`s it. It has no fixed input limit, in contrast to
 `sort.fs`, which relies on `file-size` and a fixed buffer.
 
-### Saving your work
+### Saving your work — modules
 
-In an interactive session, the words you define are remembered across runs, like
-1980s BASIC. Define some words, type `save`, and they are written to
-`session.fs` in the current directory; the next interactive session in that
-directory loads them automatically at startup.
+The words you define are a **module** you can save to a named file and load
+back, like 1980s BASIC's `SAVE "GAME"` / `LOAD "GAME"`:
 
 ```
 > : greet ." hello!" cr ;
 > : double dup + ;
-> save
-saved to session.fs
+> save mygame.fs
+saved to mygame.fs
 > bye
-$ basicforth          # later, same directory
+$ basicforth mygame.fs     # later — open the module
 > greet
 hello!
 ```
 
-`save` records the *source* of your definitions (not a memory image), so
-`session.fs` is a readable, editable Forth file. Only definitions are captured —
-transient actions like `5 double .` are not — and saving is idempotent and
-cumulative. This is interactive-only: running a script or piping input never
-auto-loads or captures.
+`basicforth <file>` opens a module (defines its words, makes it the current
+file); mid-session, `load <file>` does the same; `new` clears to a blank slate.
+A bare `save` re-writes the **current file** wherever it lives (it's remembered
+as an absolute path, so `cd` can't move it); `save <name>` is "save as" in the
+current directory.
 
-For an edit/compile/run loop, edit `session.fs` in another terminal and type
-`reload` to pull the changes in — it forgets the current session definitions
-(`-session`) and re-loads the file. `session.fs` stays pure definitions (the
-`-session`/`reload` words are never written into it). See `docs/Persistence.md`
-for the full details and limitations (notably: variable/value *contents* are not
-persisted, only the definitions).
+`save` records the *source* of your definitions (not a memory image), so a module
+file is a readable, editable Forth file. Only definitions are captured —
+transient actions like `5 double .` are not — and saving is idempotent and
+cumulative (it rewrites the whole file plus your edits, so redefinitions pile
+up). `compact <name>` writes a **deduped** sibling (`game.fs` → `game.compact.fs`)
+— each word's latest source once — so you can `diff` it and adopt the clean one.
+Capture is interactive-only: a piped script captures nothing.
+
+For an edit/compile/run loop, edit the file in another terminal and type `reload`
+to pull the changes in (it forgets the module and re-reads the current file).
+Files stay pure definitions (the `-session`/`reload`/`load`/`save` lines are never
+written into them). When you have unsaved changes, `new`/`load`/`bye` ask
+"save first? (y/n)" at the terminal before discarding (`reload` doesn't — it
+always pulls from disk; pipes and scripts never prompt). See `docs/Persistence.md`
+for the full module model and limitations (notably: variable/value *contents* are
+not persisted, only the definitions).
 
 ### Looking at a definition (`see`)
 
@@ -419,23 +427,40 @@ It covers words you define interactively this session (it reads the same capture
 log as `save`). A redefinition shadows the earlier one, and `see` works for any
 defining word, not just `:`. See `docs/See.md`.
 
-### Listing your words (`.session`)
+### Listing your words (`.module`)
 
 `words` lists the entire dictionary — every built-in plus your own, hundreds of
-names. Usually you only want to see *your* words, so `.session` lists just the
-ones you've defined on top of `core.fs` this session, newest first, with a
+names. Usually you only want to see *your* words, so `.module` lists just the
+ones you've defined on top of `core.fs` — your module — newest first, with a
 count:
 
 ```
 > 22 constant W   variable score   : tick  score @ 1+ score ! ;
-> .session
-3 words defined this session (newest first):
+> .module
+3 words in this module (newest first):
 tick score W
 ```
 
 It's the BASIC `LIST` — *"what have I built so far?"* — and it counts every kind
-of definition (`:`, `variable`, `constant`, `defer`, …). Anything you `include`
-or a reloaded `session.fs` counts as part of your session too.
+of definition (`:`, `variable`, `constant`, `defer`, …). Anything you `load` or
+`include` counts as part of your module too.
+
+### Finding references (`uses`)
+
+Where `.module` lists your words and `see` shows one definition, `uses
+<word>` greps across them — it lists the module words whose source mentions
+`<word>` as a whole word (case-insensitive), so you can answer *"if I rename
+this, what do I touch?"*:
+
+```
+> uses score
+score is used by: tick
+```
+
+Like `see`, it finds each word's source either way — from the interactive
+capture log for words you typed, or from the file for words loaded as a startup
+argument, via `load`, or via `include` — so it covers everything
+`.module` lists. It skips `<word>`'s own defining line.
 
 ### Forgetting definitions (`marker`)
 
@@ -550,6 +575,14 @@ on:
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.
 
+Two tutorials ship today, each building a complete terminal game:
+
+- `tutorial Snake` — learn the language *bottom-up*, one small word at a time,
+  until the last word is the whole game. Finished program: `examples/snake-mini.fs`.
+- `tutorial Chase` — learn to *design* a game *top-down*: sketch the whole shape
+  first with `defer`, run the empty skeleton, then fill in the parts and give each
+  monster its own swappable brain. Finished program: `examples/chase.fs`.
+
 ## Shell-Like Words
 
 Navigate and inspect the filesystem from the REPL without leaving BasicForth:
@@ -577,16 +610,35 @@ remember to feed the snake
 | `popd` | ( -- ) | return to the most recently `pushd`-ed directory |
 | `dirs` | ( -- ) | list the directory stack: current first, then saved (top first) |
 
-- `cd` changes the **real process directory**, so relative `include` and
-  `open-file` agree with it. **`session.fs` stays pinned to the startup
-  directory**, so `save` always writes where you launched, no matter where you
-  `cd`. Bare `cd` (no argument) returns there.
+- `cd` changes the **real process directory**, so relative `include`,
+  `open-file`, and `save <name>` agree with it. Bare `cd` (no argument) returns
+  to the startup directory. (A bare `save` still rewrites the current module
+  wherever it lives — its path is remembered absolute — so `cd` can't move it.)
 - A failed command (missing file/directory, bad path) prints an error and
   signals failure — the REPL shows the message and **no `ok`** — rather than
   silently succeeding.
 - Paths come from the next word, so they cannot contain spaces yet.
 
 See `docs/Shell_Words.md` for details.
+
+### Running real Linux programs (`sh`)
+
+The words above are small built-ins. For everything else — flags, pipes, `git`,
+`grep`, any installed program — **`sh`** runs the rest of the line as a real
+shell command:
+
+```
+> sh ls -la                      \ GNU ls with flags (the built-in ls takes none)
+> sh grep -n drift chase.fs
+> sh git status
+```
+
+`sh` goes through `/bin/sh -c`, so pipes, globs, and `$VARS` all work, and the
+whole line is the command (no single-word path limit). Output goes to the
+terminal and nothing is captured to your module. The underlying primitive,
+`(system) ( c-addr u -- status )`, returns the command's exit status for use in
+code. BasicForth runs these as separate programs (spawn, not link), so it stays a
+small static binary. See `docs/Shelling_Out.md`.
 
 ## The Prompt
 
@@ -607,9 +659,10 @@ previous lines from the command history, which you can edit before pressing
 Enter. A line wider than the terminal **scrolls sideways** instead of wrapping.
 
 A `:` definition can span several lines; while one is open the prompt becomes
-`... ` until `;` closes it. **`edit <word>`** recalls an existing definition onto
-the next prompt, pre-filled, so you can tweak and resubmit it instead of
-retyping. See `docs/Line_Editor.md` for the full key list and details.
+`... ` until `;` closes it. **`edit <word>`** opens an existing definition in your
+editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth recompiles
+it — preserving your multi-line formatting — and updates every word that calls it.
+See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

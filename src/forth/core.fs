@@ -440,6 +440,7 @@ create (log)  3 cells allot             \ accumulated definitions (seed + sessio
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
 variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
+variable (dirty)                        \ true = the log holds changes SAVE hasn't written
 variable (cap-assign)                   \ this line ran a direct TO/IS (read from (assign?))
 variable (session-on)                   \ true only after (session-init) ran — i.e.
                                         \ an interactive session (scopes SAVE/RELOAD)
@@ -507,11 +508,14 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
+        true (dirty) !
     else (cap-assign) @ if              \ no new word, but a direct TO/IS ran:
         (pend) (log) (buf-append-buf)    \ persist the assignment line (no SEE record)
+        true (dirty) !
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
-    r> (cap-latest) ! ;                 \ next group's baseline = current LATEST
+    r> drop                             \ done with the latest param
+    (latest@) (cap-latest) ! ;          \ baseline = current LATEST
 
 \ (capture-reset): called at the top of the REPL loop with the current LATEST.
 \ Drops a pending partial definition left behind by a line error or fault (only
@@ -538,95 +542,174 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (log) cell+ +!                  \ log.len += u2
     again ;
 
-\ Absolute session-file paths, pinned to the startup directory so SAVE/RELOAD
-\ always use the launch directory regardless of any later `cd`. Two separate
-\ buffers so "<startup>/session.fs.new" and "<startup>/session.fs" can coexist
-\ on the stack for the atomic rename in SAVE.
-create (sess-a) 1088 allot
-create (sess-b) 1088 allot
-variable (sp-end)                        \ write pointer while building a path
+\ Named-file persistence (replaces the old fixed session.fs). Your interactive
+\ definitions accumulate in the capture log; SAVE <name> writes that log to
+\ <name> in the current directory, and `basicforth <name>` loads <name> and
+\ seeds the log from it so you can keep editing and SAVE it back. Files are
+\ explicit and cwd-relative — there is no magic session.fs.
+1024 constant (cf-max)
+create (cur-file) (cf-max) allot         \ ABSOLUTE path of the current file (0 len = none)
+variable (cur-file-len)
+: (cur-file@) ( -- c-addr u )  (cur-file) (cur-file-len) @ ;
+
+\ Generic "append at a write pointer" buffer builder (also used by the ~ expansion
+\ in the shell words below).
+variable (sp-end)                        \ write pointer while building a buffer
 : (sp-add) ( c-addr u -- )               \ append u bytes at (sp-end)
     dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
     r> (sp-end) +! ;
-: (sess-build) ( buf c-addr u -- path plen )  \ build "<startup>/<name>" into buf
-    (startup-dir) nip 0= if              \ getcwd failed at boot (startup-dir empty):
-        rot drop  exit                   \   fall back to the bare relative name, like
-    then                                 \   make_absolute keeps a path relative on failure
-    >r >r                               ( buf )   \ R: u c-addr (the name)
-    dup (sp-end) !                       \ write pointer := buf
-    (startup-dir) (sp-add)               \ startup directory
-    s" /" (sp-add)                       \ separator
-    r> r> (sp-add)                       \ the name
-    (sp-end) @ over - ;                  ( buf len )
-: (session-path) ( -- c-addr u )  (sess-a) s" session.fs"     (sess-build) ;
-: (session-new)  ( -- c-addr u )  (sess-b) s" session.fs.new" (sess-build) ;
 
-\ (seed-log): reset the log and load the current session.fs's bytes into it, so
-\ SAVE rewrites the file's content (plus later additions) rather than drifting
-\ from a hand-edited file. No-op (empty log) when session.fs is absent.
+: (store-name) ( c-addr u -- )           \ copy <name> verbatim into (cur-file)
+    (cf-max) min  dup (cur-file-len) !  (cur-file) swap cmove ;
+\ Remember <name> as the current file, resolved to an ABSOLUTE path so a later
+\ bare SAVE always rewrites the same file regardless of any `cd`. A relative name
+\ is anchored to the current directory at the moment it is set (startup load or
+\ SAVE <name>); an absolute name is kept as-is. Falls back to the bare name if
+\ <cwd>/<name> would not fit.
+: (set-cur-file) ( c-addr u -- )
+    over c@ [char] / = if  (store-name) exit  then        \ already absolute
+    dup (cwd) nip + 1+ (cf-max) > if  (store-name) exit  then   \ would overflow → bare name
+    (cur-file) (sp-end) !
+    (cwd) (sp-add)  s" /" (sp-add)  (sp-add)              \ <cwd>/<name>
+    (sp-end) @ (cur-file) - (cur-file-len) ! ;
+
+create (path-a) (cf-max) allot           \ scratch: target path "<name>"
+create (path-b) (cf-max) allot           \ scratch: temp path  "<name>.new"
+variable (path-a-len)  variable (path-b-len)
+: (name>paths) ( c-addr u -- )           \ split <name> into (path-a) and (path-b)="<name>.new"
+    (cf-max) 4 - min  >r                  ( c-addr )   \ R: u (room left for ".new")
+    r@ (path-a-len) !
+    dup (path-a) r@ cmove                 \ path-a = name
+    (path-b) r@ cmove                     \ path-b = name
+    s" .new" (path-b) r@ + swap cmove     \ path-b += ".new"
+    r> 4 + (path-b-len) ! ;
+
+\ (seed-log): reset the log + SEE index, then load the current file's bytes into
+\ the log so SAVE rewrites it cumulatively. Empty when there is no current file
+\ (a fresh session) or the file does not exist yet (a new file).
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
-    (session-path) r/o open-file        ( fileid ior )
-    if drop exit then                   \ no session.fs → log stays empty
+    false (dirty) !                     \ log now mirrors the file (or is empty)
+    (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
+    (cur-file@) r/o open-file           ( fileid ior )
+    if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
 
-\ (session-init): runs once at interactive startup (after core.fs, before
-\ session.fs is loaded). Records the restore point so -session/RELOAD rewind to
-\ here — keeping core.fs and the session words — then seeds the log.
-: (session-init) ( -- )
-    (session-mark!)
+\ (session-init): boot hook, run once when entering the interactive REPL, with
+\ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
+\ restore point, marks the session active, sets the current file, seeds the log.
+: (session-init) ( c-addr u -- )
     true (session-on) !                 \ mark this run as an interactive session
+    dup if  (set-cur-file)  else  2drop  0 (cur-file-len) !  then
     (seed-log) ;
+\ NOTE: the -session restore mark is captured at the END of core.fs (below), not
+\ here — so -session/new/load forget the WHOLE module (the loaded file's words
+\ plus interactive ones), since the startup file loads after core.fs but before
+\ this hook runs.
 
-\ SAVE: rewrite session.fs from the whole log (seed + this session's additions).
-\ A no-op when nothing has been captured (e.g. capture wasn't active), so it
-\ never litters an empty session.fs. Writes to session.fs.new first, then
-\ atomically renames it over session.fs, so a write failure can never destroy
-\ an existing session.fs.
-: save ( -- )
+\ SAVE <name> (bare SAVE → the current file): write the whole log to <name> in
+\ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
+\ existing file. SAVE <name> also makes <name> the current file (save-as). A
+\ no-op when nothing has been captured, so it never litters an empty file.
+: (save) ( -- )                         \ write the log to the current file
     (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    (session-new) w/o create-file       ( fileid ior )
-    abort" save: cannot open session.fs.new"   ( fileid )
+    (cur-file@) (name>paths)
+    (path-b) (path-b-len) @ w/o create-file   ( fileid ior )
+    abort" save: cannot create temp file"     ( fileid )
     >r
     (log) @ (log) cell+ @ r@ write-file ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
-    (session-new) (session-path) rename-file
+    (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file
     abort" save: rename error"
-    ." saved to session.fs" cr ;
+    false (dirty) !
+    ." saved to " (cur-file@) type cr ;
 
-\ -session: forget everything defined since startup (the session definitions and
-\ anything entered interactively), keeping core.fs and the session words. A no-op
-\ outside an interactive session (no restore point recorded).
+: save ( "name" -- )
+    parse-word dup if  (set-cur-file)
+    else
+        2drop (cur-file-len) @ 0= if
+            ." save: no current file (use: save <name>)" cr exit
+        then
+    then
+    (save) ;
+
+\ ===== Dirty-guard: don't silently discard unsaved work =====
+\ (dirty) is set when the capture log gains something SAVE hasn't written (a
+\ definition, a direct to/is, an edit) and cleared by SAVE and (seed-log). When
+\ the module is dirty, NEW / LOAD / BYE / BYE-CODE ask before discarding:
+\ y = save first (needs a current file), n = discard, any other key = cancel.
+\ Only a real terminal prompts — pipes and scripts proceed silently, so
+\ automation never blocks. RELOAD stays unguarded on purpose: it is the
+\ pull-from-disk verb, and a save-first there would overwrite the very file
+\ edits being pulled in.
+: (dirty-guard) ( -- proceed? )
+    (dirty) @ 0= if  true exit  then
+    (tty?) 0= if  true exit  then       \ non-interactive: never prompt
+    ." unsaved changes — save first? (y/n) "
+    key
+    dup 32 127 within if  dup emit  then  cr    \ raw mode: echo the answer
+    dup [char] y =  over [char] Y =  or if  drop
+        (cur-file-len) @ 0= if
+            ." save: no current file (use: save <name>)" cr  false exit
+        then
+        (save)  true exit
+    then
+    dup [char] n =  swap [char] N =  or if  true exit  then
+    ." (cancelled)" cr  false ;
+
+\ BYE / BYE-CODE, guarded. The inner call is the assembly primitive — a new
+\ definition stays hidden until its `;`, so the name still finds the old one
+\ here. A cancelled exit just returns to the REPL.
+: bye ( -- )  (dirty-guard) if  bye  then ;
+: bye-code ( n -- )  (dirty-guard) if  bye-code  then  drop ;
+
+\ -session: low-level forget — restore HERE/LATEST to the startup mark, dropping
+\ every definition made since (the module's words). A no-op outside an interactive
+\ session. Used by NEW / LOAD / RELOAD; leaves the log and current file alone.
 : -session ( -- )  (session-restore) ;
 
-\ RELOAD: the edit/compile/run loop — forget the current session definitions and
-\ re-load the (possibly hand-edited) session.fs. (skip-capture) keeps the RELOAD
-\ line out of the captured log. The log is re-synced from the file (so a later
-\ SAVE matches it) ONLY when the file loads cleanly; if a line errors, the file's
-\ own diagnostic (filename:line: ? token) is shown, loading stops there, the log
-\ is left untouched (so SAVE can't persist a broken file), and RELOAD reports
-\ that the session may be incomplete. The REPL keeps running — fix the file and
-\ reload again.
-: reload ( -- )
-    \ Persistence is interactive-only: do nothing when there is no active session
-    \ (e.g. RELOAD called from a script or a pipe), so it never auto-loads
-    \ session.fs outside that scope.
-    (session-on) @ 0= if  ." reload: no active session" cr  exit  then
-    \ Verify session.fs is readable BEFORE destroying the live session — a
-    \ missing or unreadable file must not forget the session or wipe the log
-    \ (forth_included silently treats a missing file as a clean no-op).
-    (session-path) r/o open-file        ( fileid ior )
-    if  drop ." reload: cannot read session.fs" cr  exit  then
-    close-file drop
+\ (open-module): forget the old module, (re)load the current file, reseed the log
+\ so SAVE rewrites it. (skip-capture) keeps this line out of the log.
+: (open-module) ( -- )
     true (skip-capture) !
     -session
-    (session-path) (included?)          ( ior )
-    if  ." reload: session.fs had errors — session may be incomplete" cr  exit  then
+    (cur-file@) (included?)             ( ior )
+    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then
     (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
+
+\ LOAD <file>: open <file> as the current module — a clean swap, like
+\ `basicforth <file>` mid-session. Verified readable BEFORE anything is forgotten,
+\ so a typo can't wipe your work. Discards unsaved changes — SAVE first to keep.
+: load ( "name" -- )
+    parse-word dup 0= if  2drop ." usage: load <file>" cr exit  then
+    2dup r/o open-file if  drop ." load: cannot read " type cr exit  then
+    close-file drop                     ( c-addr u )
+    (dirty-guard) 0= if  2drop exit  then    \ unsaved work: ask before discarding
+    (set-cur-file)                       \ absolutize + adopt as the current file
+    (open-module) ;
+
+\ NEW: clear the module — forget every definition, empty the log, drop the current
+\ file. A clean slate (core vocabulary only). Discards unsaved changes.
+: new ( -- )
+    (dirty-guard) 0= if  exit  then     \ unsaved work: ask before discarding
+    -session
+    0 (cur-file-len) !
+    (seed-log) ;                        \ no current file → empties the log + SEE index
+
+\ RELOAD: refresh the current module from disk (edit-on-disk loop) — forget the
+\ session and re-read the current file. Verified readable before forgetting, so a
+\ missing/unreadable file never wipes your work.
+: reload ( -- )
+    (session-on) @ 0= if  ." reload: no active session" cr  exit  then
+    (cur-file-len) @ 0= if  ." reload: no current file" cr  exit  then
+    (cur-file@) r/o open-file           ( fileid ior )
+    if  drop ." reload: cannot read " (cur-file@) type cr  exit  then
+    close-file drop
+    (open-module) ;
 
 \ SEE: print the source of the definition currently in force. A source lister,
 \ not a decompiler. File-loaded words are read from their source file via the
@@ -724,92 +807,12 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file) ;
 
-\ ===== EDIT: recall a word's source into the next editable prompt line =====
-\ edit <name> resolves the word's source the same way SEE does, but instead of
-\ printing it, captures it into a preload buffer that the line editor drops onto
-\ the next prompt so you can tweak and resubmit it. The source is flattened to a
-\ single line (newlines are whitespace to Forth), with one wrinkle: a `\` runs to
-\ end-of-line, so on one line it would swallow everything after it — therefore a
-\ `\ comment` is converted to a self-terminating `( comment )`. v1 caps at one
-\ input line; longer definitions report and are left to edit-and-reload.
-\ (Limitation: a literal backslash/paren/quote via `[char]`/`char` in code is not
-\ recognised as a non-comment token.) (edit-line) consumes (el-pre-len).
+\ (el-pre)/(el-pre-len): a one-line preload the interactive line editor can drop
+\ onto the next prompt. EDIT no longer uses it (it opens an external editor now,
+\ defined near EOF), but it stays as line-editor infrastructure — (edit-line)
+\ honours (el-pre-len) for any future inline-recall feature.
 create (el-pre)  256 allot               \ preload text for the next (edit-line)
 variable (el-pre-len)  0 (el-pre-len) !  \ pending preload length; 0 = none
-
-\ --- comment-aware flattener: source span -> one editable line in (el-pre) ---
-variable (fl-src)  variable (fl-u)  variable (fl-i)   \ source + read cursor
-variable (fl-out)  variable (fl-str)  variable (fl-par)  variable (fl-of)
-
-: (fl-emit) ( c -- )                     \ append to (el-pre); flag on overflow
-    (fl-out) @ 256 < if  (el-pre) (fl-out) @ + c!  1 (fl-out) +!
-    else  drop  true (fl-of) !  then ;
-: (fl-cur) ( -- c )  (fl-src) @ (fl-i) @ + c@ ;
-: (fl-delim?) ( c -- f )  dup 32 = swap 10 = or ;          \ space or newline
-: (fl-prev-delim?) ( -- f )                                \ char before cursor
-    (fl-i) @ 0= if  true exit  then
-    (fl-src) @ (fl-i) @ 1- + c@ (fl-delim?) ;
-: (fl-next-delim?) ( -- f )                                \ char after cursor
-    (fl-i) @ 1+ (fl-u) @ < 0= if  true exit  then
-    (fl-src) @ (fl-i) @ 1+ + c@ (fl-delim?) ;
-: (fl-more-line?) ( -- f )               \ not at end, and not on a newline
-    (fl-i) @ (fl-u) @ < if  (fl-cur) 10 <>  else  false  then ;
-
-\ At the backslash: emit the rest of the line as ( ... ), mapping ()->[] so the
-\ comment text can't close the wrapper early. Consumes the line and its newline.
-: (fl-comment) ( -- )
-    40 (fl-emit)  32 (fl-emit)  1 (fl-i) +!              \ "( ", past the backslash
-    (fl-i) @ (fl-u) @ < if  (fl-cur) 32 = if  1 (fl-i) +!  then  then  \ one space
-    begin  (fl-more-line?)  while
-        (fl-cur)  dup 40 = if drop 91 then  dup 41 = if drop 93 then  (fl-emit)
-        1 (fl-i) +!
-    repeat
-    32 (fl-emit)  41 (fl-emit)                            \ " )"
-    (fl-i) @ (fl-u) @ < if  1 (fl-i) +!  then  32 (fl-emit) ;  \ skip nl, separator
-
-: (edit-capture) ( c-addr u -- )
-    dup 0> if  2dup + 1- c@ 10 = if  1-  then  then        \ drop a trailing newline
-    (fl-u) !  (fl-src) !
-    0 (fl-out) !  0 (fl-i) !  false (fl-str) !  false (fl-par) !  false (fl-of) !
-    begin  (fl-i) @ (fl-u) @ <  while
-        (fl-cur)
-        (fl-str) @ if                                      \ inside a string
-            dup 10 = if  drop 32  then  dup (fl-emit)  34 = if  false (fl-str) !  then
-            1 (fl-i) +!
-        else (fl-par) @ if                                 \ inside a ( ) comment
-            dup 10 = if  drop 32  then  dup (fl-emit)  41 = if  false (fl-par) !  then
-            1 (fl-i) +!
-        else                                               \ code
-            dup 92 = (fl-prev-delim?) and (fl-next-delim?) and if
-                drop  (fl-comment)
-            else
-                dup 34 = if  true (fl-str) !  then          \ entering a string
-                dup 40 = if  true (fl-par) !  then          \ entering a ( ) comment
-                dup 10 = if  drop 32  then                  \ newline -> space
-                (fl-emit)  1 (fl-i) +!
-            then
-        then then
-    repeat
-    (fl-of) @ if                                           \ converted line too long
-        0 (el-pre-len) !
-        (msg:) ." definition too long to edit inline" cr  exit
-    then
-    (fl-out) @ (el-pre-len) ! ;
-
-: edit ( "name" -- )
-    s" edit" (msg-u) ! (msg-a) !
-    0 (el-pre-len) !                         \ no stale preload survives any exit path
-    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
-    (see-u) !  (see-a) !
-    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
-    0= if  2drop 2drop  (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
-    dup 65535 = if  2drop 2drop
-        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit
-    then
-    ' (edit-capture) (see-emit-xt) !         \ redirect source into the preload buffer
-    dup 0= if  drop 2drop  (see-xt) !  (see-from-log)
-    else       >r rot drop r>  (see-file)  then
-    ' type (see-emit-xt) ! ;                 \ restore the default (type) sink
 
 \ ===== REDO: recompile a REPL-defined word from its captured source =====
 \ redo <name> re-evaluates a word's saved source, so callers that were compiled
@@ -886,7 +889,7 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 (log)  3 cells erase
 (pend) 3 cells erase
 (dir)   3 cells erase
-0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !
+0 (cap-latest) !  0 (skip-capture) !  0 (session-on) !  0 (dirty) !
 ' (session-init)  0 (hook!)
 ' (capture-line)  1 (hook!)
 ' (capture-reset) 2 (hook!)
@@ -1556,15 +1559,15 @@ variable (ts-any)                          \ printed any line of the wanted step
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
 
-\ ===== .SESSION : the words you've defined this session =====
-\ WORDS dumps the whole dictionary (~330 built-ins); .SESSION shows just what
-\ YOU added on top of core.fs — the BASIC "LIST": "what have I built so far?".
+\ ===== .MODULE : the words in your module =====
+\ WORDS dumps the whole dictionary (~330 built-ins); .MODULE shows just what YOU
+\ added on top of core.fs — your module — the BASIC "LIST": "what have I built?".
 \ It walks the dictionary chain (newest-first: link at offset 0, flags+len at
 \ offset 8 with the length in the low 5 bits, name at offset 9) from LATEST back
 \ to (sw-mark) — the dictionary head captured when core.fs finished loading.
-\ Everything past that mark is the session (a reloaded session.fs or anything
-\ INCLUDEd at the REPL counts too).
-variable (sw-mark)                          \ LATEST at end of core.fs (session start)
+\ Everything past that mark is your module (a LOADed file or anything INCLUDEd
+\ at the REPL counts too).
+variable (sw-mark)                          \ LATEST at end of core.fs (module start)
 
 : (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
     dup 9 +  swap 8 + c@ 31 and ;
@@ -1577,12 +1580,321 @@ variable (sw-mark)                          \ LATEST at end of core.fs (session 
     (latest@)
     begin (sw-end?) 0= while  dup (sw-name) type space  @  repeat  drop  cr ;
 
-: .session ( -- )
+: .module ( -- )
     (sw-count) ?dup 0= if
-        ." No words defined yet this session." cr exit
+        ." (empty module — no words defined yet)" cr exit
     then
     dup .  1 = if ." word" else ." words" then
-    ."  defined this session (newest first):" cr
+    ."  in this module (newest first):" cr
     (sw-list) ;
 
-(latest@) (sw-mark) !                       \ pin the session boundary (keep last!)
+\ ===== USES : which module words reference a given word =====
+\ `uses <word>` lists the module words whose source mentions <word> as a whole
+\ token (case-insensitive) — a grep over your own definitions, handy before
+\ renaming something. It resolves each word's source the way SEE does — from the
+\ capture log for words typed at the REPL, or from the file for words LOADed /
+\ INCLUDEd — so it covers everything .MODULE lists, skipping only <word>'s own
+\ defining line.
+variable (uses-xt)
+: (src-of) ( xt -- c-addr u true | false )  \ captured source span of xt, if any
+    (uses-xt) !
+    (dir) cell+ @ 3 cells /                 ( count )
+    begin dup 0> while
+        1-  dup 3 cells * (dir) @ +         ( i rec )       \ newest record first
+        dup 2 cells + @ (uses-xt) @ = if    ( i rec )       \ rec's xt == target?
+            dup @ (log) @ +  swap cell+ @   ( i c-addr u )
+            rot drop  true exit
+        then
+        drop                                ( i )
+    repeat
+    drop  false ;
+
+variable (u-src)   variable (u-srclen)
+variable (u-tgt)   variable (u-tgtlen)   variable (u-pos)
+: (u-ws?) ( i -- f )  (u-src) @ + c@ 33 < ;     \ char at offset i is a delimiter?
+: (word-in?) ( src u t tu -- f )            \ does src contain t as a whole token (ci)?
+    (u-tgtlen) !  (u-tgt) !  (u-srclen) !  (u-src) !
+    0 (u-pos) !
+    begin (u-pos) @ (u-srclen) @ < while
+        (u-pos) @ (u-ws?) if  1 (u-pos) +!
+        else
+            (u-pos) @                       ( tok-start )
+            begin (u-pos) @ (u-srclen) @ <  (u-pos) @ (u-ws?) 0=  and
+            while  1 (u-pos) +!  repeat
+            (u-src) @ over +  (u-pos) @ rot -   ( tok-addr tok-len )
+            (u-tgt) @ (u-tgtlen) @ (ci=) if  true exit  then
+        then
+    repeat
+    false ;
+
+\ Source of a FILE-loaded word (srcid >= 1): read its file once and index into
+\ it. (uf-buf) caches the most recently read file's whole contents, so a run of
+\ words from the same file — the common case — costs a single read. Reuses SEE's
+\ span reader ((sf-*)).
+variable (uf-srcid)  variable (uf-buf)  variable (uf-len)
+: (uf-free) ( -- )  (uf-buf) @ if  (uf-buf) @ free drop  0 (uf-buf) !  then  0 (uf-srcid) ! ;
+: (uf-want) ( srcid -- ok? )                \ ensure (uf-buf) holds this srcid's file
+    dup (uf-srcid) @ = if  drop  (uf-buf) @ 0<>  exit  then   \ already cached
+    (uf-free)
+    dup (source-path) dup 0= if  2drop drop  false exit  then  ( srcid c-addr u )
+    r/o open-file if  drop  false exit  then  ( srcid fileid )
+    (sf-fid) !                                ( srcid )
+    (sf-fid) @ file-size if                   ( srcid lo hi )
+        2drop  (sf-fid) @ close-file drop  drop  false exit  then
+    drop  dup (sf-need) !                     ( srcid size )
+    allocate if                               ( srcid a )
+        drop  (sf-fid) @ close-file drop  drop  false exit  then
+    dup (sf-buf) !  (uf-buf) !                ( srcid )
+    (sf-read)
+    (sf-got) @ (uf-len) !
+    (uf-srcid) !
+    (sf-fid) @ close-file drop
+    true ;
+: (file-span) ( off len srcid -- c-addr u true | false )
+    (uf-want) 0= if  2drop  false exit  then  ( off len )
+    over (uf-len) @ <  0= if  2drop false exit  then       \ off past EOF
+    over (uf-len) @ swap -  min               ( off u )    \ u = min(len, uf-len-off)
+    swap (uf-buf) @ +  swap  true ;
+
+variable (uses-t)  variable (uses-tu)  variable (uses-n)
+variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
+: (word-src) ( nt -- c-addr u true | false )  \ source of the in-force def named by nt
+    dup (sw-name) (find-meta)                 ( nt xt off len srcid flag )
+    0= if  2drop 2drop drop  false exit  then  \ name not currently defined
+    (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !   ( nt )
+    (xt-of) (uh-xt) @ <> if  false exit  then  \ a shadowed (not in-force) entry → skip
+    (uh-srcid) @ 65535 = if  false exit  then  \ primitive: no source
+    (uh-srcid) @ 0= if
+        (uh-xt) @ (src-of)                     \ REPL word: from the capture log
+    else
+        (uh-off) @ (uh-len) @ (uh-srcid) @ (file-span)   \ file word: from its source file
+    then ;
+: (uses-hit?) ( nt -- f )                   \ does this word reference the target?
+    dup (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own def
+    (word-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: uses ( "name" -- )
+    parse-word  dup 0= if  2drop  ." usage: uses <word>" cr  exit  then
+    (uses-tu) !  (uses-t) !
+    0 (uses-n) !
+    (uses-t) @ (uses-tu) @ type ."  is used by:"
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        @
+    repeat  drop
+    (uf-free)                                  \ release the cached source file
+    (uses-n) @ 0= if  ."  (none)"  then  cr ;
+
+\ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
+\ Subroutine threading bakes call targets, so redefining a word doesn't reach its
+\ callers. After `edit <word>` resubmits, recompile every module word that
+\ (transitively) uses it. Walk the module words oldest-first (definition order is
+\ a valid dependency order) with a growing dirty set, recompiling each affected
+\ caller from its source (log or file, via (word-src)) and re-logging it so
+\ SEE/USES/SAVE stay correct.
+8192 constant (prop-max)                    \ max source bytes of one definition handled
+create (prop-src) (prop-max) allot          \ scratch copy (survives a log realloc)
+512 constant (prop-nmax)
+create (prop-nts) (prop-nmax) cells allot   \ snapshot of the module's entries (newest-first)
+variable (prop-n)
+create (prop-dirty) 4096 allot              \ space-separated names known to need recompiling
+variable (prop-dirty-len)
+variable (prop-count)                       \ how many callers were recompiled
+
+: (prop-dirty+) ( c-addr u -- )             \ add a name to the dirty set
+    dup (prop-dirty-len) @ + 2 + 4096 > if  2drop exit  then
+    (prop-dirty) (prop-dirty-len) @ +  (sp-end) !
+    (sp-add)  s"  " (sp-add)
+    (sp-end) @ (prop-dirty) - (prop-dirty-len) ! ;
+: (prop-name-dirty?) ( c-addr u -- f )      \ is this name already in the dirty set?
+    (prop-dirty) (prop-dirty-len) @  2swap  (word-in?) ;
+
+variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
+: (pmd-ws?) ( i -- f )  (prop-dirty) + c@ 33 < ;
+: (prop-mentions-dirty?) ( src u -- f )     \ does this source mention any dirty word?
+    (pmd-srclen) !  (pmd-src) !
+    0 (pmd-pos) !
+    begin (pmd-pos) @ (prop-dirty-len) @ < while
+        (pmd-pos) @ (pmd-ws?) if  1 (pmd-pos) +!
+        else
+            (pmd-pos) @                     ( tok-start )
+            begin (pmd-pos) @ (prop-dirty-len) @ <  (pmd-pos) @ (pmd-ws?) 0=  and
+            while 1 (pmd-pos) +! repeat
+            (prop-dirty) over +  (pmd-pos) @ rot -      ( tok-addr tok-len )
+            (pmd-src) @ (pmd-srclen) @ 2swap (word-in?) if  true exit  then
+        then
+    repeat
+    false ;
+
+: (eval+log) ( c-addr u -- )                \ evaluate source as a new def + log it (srcid 0)
+    dup (prop-max) > if  2drop exit  then    ( c-addr u )
+    >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
+    (log) cell+ @  >r                       ( u )       \ R: log-off
+    (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
+    (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
+    (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
+    r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
+    drop  true (dirty) ! ;
+: (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
+    (word-src) 0= if  exit  then            ( c-addr u )
+    (eval+log)  1 (prop-count) +! ;
+
+: (prop-snapshot) ( -- )                    \ collect the module's entries (newest-first)
+    0 (prop-n) !
+    (latest@)
+    begin (sw-end?) 0= while
+        (prop-n) @ (prop-nmax) < if
+            dup  (prop-n) @ cells (prop-nts) +  !  1 (prop-n) +!
+        then
+        @
+    repeat drop ;
+
+: (prop-one) ( nt -- )                      \ recompile this word if it uses a dirty word
+    dup (sw-name) (prop-name-dirty?) if  drop exit  then   \ already dirty → skip
+    dup (word-src) 0= if  drop exit  then    ( nt c-addr u )
+    (prop-mentions-dirty?) 0= if  drop exit  then  ( nt )
+    dup (prop-recompile)
+    dup (sw-name) (prop-dirty+)
+    space (sw-name) type ;
+
+: (propagate) ( c-addr u -- )               \ recompile the edited word's transitive callers
+    0 (prop-dirty-len) !  0 (prop-count) !
+    (prop-dirty+)                           \ the edited word is dirty
+    (prop-snapshot)
+    ." updated:"
+    (prop-n) @ 0 ?do
+        (prop-n) @ 1- i -  cells (prop-nts) + @    \ oldest-first
+        (prop-one)
+    loop
+    (prop-count) @ 0= if  ."  (nothing)"  then  cr
+    (uf-free) ;                             \ release the file cache used by (word-src)
+
+\ ===== COMPACT: a deduped, dependency-ordered snapshot of the module =====
+\ SAVE rewrites the whole loaded file verbatim (comments and all) then appends, so
+\ redefinitions accumulate. COMPACT instead emits each module word's in-force
+\ source ONCE, at its first (oldest) definition position — deduped, in dependency
+\ order. It writes a sibling "<base>.compact<.ext>" so you can diff it against
+\ SAVE's output; it drops the file's between-definition comments (definitions
+\ only). Reuses the module snapshot and the SEE/USES source resolver.
+create (cmp-seen) 4096 allot                \ space-separated names already written
+variable (cmp-seen-len)
+variable (cmp-fid)
+variable (ld-pos)
+: (cmp-seen+) ( c-addr u -- )
+    dup (cmp-seen-len) @ + 2 + 4096 > if  2drop exit  then
+    (cmp-seen) (cmp-seen-len) @ +  (sp-end) !
+    (sp-add)  s"  " (sp-add)
+    (sp-end) @ (cmp-seen) - (cmp-seen-len) ! ;
+: (cmp-seen?) ( c-addr u -- f )  (cmp-seen) (cmp-seen-len) @ 2swap (word-in?) ;
+: (src-by-name) ( c-addr u -- src-addr src-u true | false )  \ in-force source of a name
+    (find-meta) 0= if  2drop 2drop  false exit  then         ( xt off len srcid )
+    (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !
+    (uh-srcid) @ 65535 = if  false exit  then                \ primitive: no source
+    (uh-srcid) @ 0= if  (uh-xt) @ (src-of)
+    else  (uh-off) @ (uh-len) @ (uh-srcid) @ (file-span)  then ;
+: (last-dot) ( c-addr u -- pos )            \ index of the last '.', or u if none
+    dup (ld-pos) !
+    0 ?do  dup i + c@ [char] . = if  i (ld-pos) !  then  loop  drop
+    (ld-pos) @ ;
+: (compact-name) ( c-addr u -- )            \ (path-a) := "<base>.compact<.ext>"
+    2dup (last-dot) >r                       ( c-addr u )   \ R: dotpos
+    (path-a) (sp-end) !
+    over r@ (sp-add)  s" .compact" (sp-add)  r@ /string (sp-add)
+    r> drop
+    (sp-end) @ (path-a) - (path-a-len) ! ;
+: (compact-one) ( nt -- )                   \ write this word's source if not already written
+    (sw-name) 2dup (cmp-seen?) if  2drop exit  then
+    2dup (cmp-seen+)
+    (src-by-name) if                         ( src-addr src-u )
+        (cmp-fid) @ write-file abort" compact: write error"
+        (nl) 1 (cmp-fid) @ write-file abort" compact: write error"
+    then ;
+: compact ( "name" -- )
+    parse-word dup 0= if
+        2drop (cur-file@) dup 0= if
+            drop ." compact: no current file (use: compact <name>)" cr exit
+        then
+    then                                     ( c-addr u )
+    (compact-name)
+    (path-a) (path-a-len) @ w/o create-file   ( fileid ior )
+    abort" compact: cannot create file"       ( fileid )
+    (cmp-fid) !
+    0 (cmp-seen-len) !
+    (prop-snapshot)
+    (prop-n) @ 0 ?do
+        (prop-n) @ 1- i - cells (prop-nts) + @    \ oldest-first
+        (compact-one)
+    loop
+    (cmp-fid) @ close-file abort" compact: close error"
+    (uf-free)
+    ." compacted to " (path-a) (path-a-len) @ type cr ;
+
+\ ===== sh : run a Linux command (the rest of the line) via the shell =====
+\ `sh <command...>` runs the rest of the input line as a shell command, the way
+\ you'd type it at a terminal — `sh ls -la`, `sh git status`. It is a thin word
+\ over the (system) primitive (/bin/sh -c). Output goes straight to the terminal;
+\ the exit status is discarded (call (system) yourself if you want it). `sh` runs
+\ a transient command, so nothing is captured to the module. See
+\ docs/Shelling_Out.md.
+: sh ( "command<eol>" -- )
+    10 parse                                 ( c-addr u )   \ the rest of the input line
+    begin  dup 0> if  over c@ bl =  else  false  then  while
+        1 /string                            \ trim leading spaces left after "sh"
+    repeat
+    dup 0= if  2drop  ." usage: sh <command>" cr exit  then
+    (system) drop ;
+
+\ ===== EDIT: open a word's source in an external editor, then recompile =====
+\ `edit <name>` writes the word's current source to a temp file, opens it in your
+\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit re-reads the file,
+\ recompiles the word from it (preserving your multi-line formatting — unlike a
+\ one-line REPL recall), and PROPAGATES the change to every module word that uses
+\ it (subroutine threading bakes call targets, so callers must be recompiled too,
+\ just as the redo/IS machinery handles). The edited definition is logged like a
+\ REPL redefinition, so SEE/USES/SAVE see the new source even for a word that was
+\ originally loaded from a file. The temp file is a fixed path, so two BasicForth
+\ sessions editing at the same moment would share it (a known v1 limitation).
+: (edit-tmp) ( -- c-addr u )  s" /tmp/basicforth-edit.fs" ;
+variable (er-fid)  variable (er-buf)  variable (er-len)
+: (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
+    (edit-tmp) w/o create-file if  drop 2drop  false exit  then  ( src-addr src-u fid )
+    dup >r  write-file  r> close-file drop  0= ;             \ ok? = (write ior = 0)
+: (edit-read) ( -- c-addr u true | false )  \ slurp the temp file into a fresh allocation
+    (edit-tmp) r/o open-file if  drop  false exit  then      ( fid )
+    (er-fid) !
+    (er-fid) @ file-size if  2drop  (er-fid) @ close-file drop  false exit  then  ( lo hi )
+    drop  dup (er-len) !                     ( size )        \ assume < 4 GB
+    allocate if  drop  (er-fid) @ close-file drop  false exit  then   ( a )
+    dup (er-buf) !
+    (er-len) @  (er-fid) @  read-file        ( u2 ior )
+    (er-fid) @ close-file drop
+    if  drop  (er-buf) @ free drop  false exit  then         ( u2 )
+    (er-buf) @ swap true ;                   ( c-addr u2 true )
+: (edit-run) ( -- status )                  \ open the temp file in the user's editor
+    \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
+    s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
+: edit ( "name" -- )
+    parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop
+        ." edit: " (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
+    2drop 2drop                              \ done with the meta cells
+    (see-a) @ (see-u) @ (src-by-name) 0= if
+        ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
+    (edit-write) 0= if  ." edit: cannot write temp file" cr exit  then
+    (edit-run) ?dup if                        ( status )
+        ." edit: editor exited with status " . cr exit  then
+    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( c-addr u )
+    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
+    (latest@) >r                              \ R: LATEST before recompiling
+    2dup (eval+log)  drop free drop           \ redefine + log the word; release the slurp
+    (latest@) r> = if
+        ." edit: no change" cr exit  then     \ the edited source defined nothing new
+    (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
+
+(latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
+(session-mark!)                             \ -session/new/load restore point: HERE+LATEST
+                                            \ here, so they forget the whole module (keep last!)

@@ -53,8 +53,8 @@ Multi-line definitions and non-colon defining words come back whole:
 
 `SEE` shows the source of the definition currently in force, for:
 
-- words you define **interactively** this session (from the session capture log),
-- words loaded from **any source file** — `core.fs`, `session.fs`, or any
+- words you define **interactively** this session (from the capture log),
+- words loaded from **any source file** — `core.fs`, a `load`ed module, or any
   `include`d file — read straight from that file,
 - **including** words made by your own *custom* defining words.
 
@@ -84,7 +84,7 @@ live xt) and dispatches on the source-id:
 - **source-id ≥ 1** (loaded from a file) → `(source-path)` gives the file's
   absolute path; `SEE` re-opens it and prints bytes `[offset, offset+length)`.
 
-### File-loaded words (core.fs, includes, session.fs)
+### File-loaded words (core.fs, modules, includes)
 
 The metadata is stamped at **compile time** by the file loader
 (`forth_included` → `build_header`), so the span is exact regardless of which
@@ -99,7 +99,7 @@ that span — re-`reload` to re-stamp.)
 ### Interactive (unsaved) words
 
 A word typed at the REPL has **no file** until you `save`, so its source lives in
-the session capture log — the same buffer `save` writes to `session.fs` (see
+the capture log — the same buffer `save` writes to a module file (see
 [Persistence.md](Persistence.md)). A small **directory** of records is built as
 each definition is captured:
 

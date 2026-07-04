@@ -90,18 +90,21 @@ Staging:
   in-line editor (left/right arrows, Ctrl-A/Ctrl-E, mid-line insert/delete) with
   an up/down command-history ring. Implemented in Forth in `core.fs` behind a
   REPL input hook, arrow keys decoded by `platform_key`. See docs/Line_Editor.md.
-- **Stage C — `EDIT <word>`**: **Done.** `edit <word>` feeds `see`'s source
-  lookup into the line editor as the starting text. As anticipated, a multi-line
-  `: … ;` is recalled as a *single* (long) line (newlines are whitespace to
-  Forth) and edited with the Stage-B editor — no true multi-line editing needed —
-  with horizontal scrolling making the long line manageable and `\` line comments
-  converted to `( … )` so they stay terminated. See docs/Line_Editor.md.
+- **Stage C — `EDIT <word>`**: **Done, then re-done.** The first cut fed `see`'s
+  source lookup into the Stage-B line editor as starting text, flattening a
+  multi-line `: … ;` onto one (long) horizontally-scrolled line with `\` comments
+  rewritten to `( … )`. That solved recall but lost formatting. `edit` now instead
+  **spawns an external editor** (`$VISUAL`/`$EDITOR`/`vi`) on a temp file via a new
+  `fork`/`exec`/`wait` platform primitive (`(system)`), then recompiles + propagates
+  on save — so the full source, multi-line layout and all, survives the round-trip.
+  See docs/Line_Editor.md.
 
-Still open — a true **free-cursor multi-line editor** (see all the lines of a
-definition at once, move the cursor freely between rows, soft-enter to split):
-the line-by-line single-line editor covers most of the need, but a real
-multi-row text widget (2D cursor, multi-row redraw) would be the next level if
-recalling and editing big definitions in place becomes common.
+The **free-cursor multi-line editor** (see all the lines of a definition at once,
+move the cursor freely between rows, soft-enter to split) is no longer needed for
+`edit` — the external editor covers it — but remains the obvious path for an
+*in-window* editor once BasicForth grows its own graphics surface (see below).
+The `(system)` spawn primitive is also the foundation for reusing other Unix
+tools: `sh`/`!` to run a command, `history | grep`/fzf, and friends.
 
 ## SEE for any word — source-location metadata in the dictionary
 

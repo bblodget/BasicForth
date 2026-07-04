@@ -149,6 +149,16 @@ platform_rename:
     xor %eax, %eax              # return 0 (success)
     ret
 
+.global platform_system
+platform_system:
+    xor %eax, %eax              # return status 0 (not exercised by unit tests)
+    ret
+
+.global platform_isatty
+platform_isatty:
+    xor %eax, %eax              # not a tty (unit tests run headless)
+    ret
+
 .global platform_close_file
 platform_close_file:
     ret

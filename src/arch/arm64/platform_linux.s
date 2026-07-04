@@ -8,6 +8,10 @@
 .equ SYS_read,           63
 .equ SYS_write,          64
 .equ SYS_exit,           93
+.equ SYS_clone,          220
+.equ SYS_execve,         221
+.equ SYS_wait4,          260
+.equ SIGCHLD,            17
 .equ SYS_clock_gettime,  113
 .equ SYS_getdents64,     61
 
@@ -692,6 +696,78 @@ platform_rename:
     MOV X8, #SYS_renameat
     SVC #0
     RET
+
+// platform_system ( X0=NUL-terminated command string -- X0=status )
+// Run "/bin/sh -c <cmd>", wait for it, and return the child's exit status
+// (0-255), or -1 on a fork/exec failure. Restores the terminal to cooked mode
+// around the child so a full-screen program (an editor) starts from a clean
+// state; the next interactive read re-enters raw mode lazily. environ is passed
+// through so $EDITOR/$PATH/$TERM reach the child (start_envp, saved in main.s).
+// AArch64 has no fork syscall, so clone(SIGCHLD, stack=0, ...) gives fork
+// semantics (child gets a copy-on-write image and shares the parent SP).
+.global platform_system
+platform_system:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STP X19, X20, [SP, #-16]!       // X20 holds cmd ptr across calls
+    MOV X20, X0                     // save cmd ptr
+    BL platform_restore_term        // terminal → cooked for the child
+    // build argv = ["/bin/sh", "-c", cmd, NULL]
+    ADR X1, sh_path
+    ADR X2, spawn_argv
+    STR X1, [X2, #0]
+    ADR X1, sh_dashc
+    STR X1, [X2, #8]
+    STR X20, [X2, #16]
+    STR XZR, [X2, #24]
+    // clone(SIGCHLD, 0, 0, 0, 0)
+    MOV X0, #SIGCHLD
+    MOV X1, #0
+    MOV X2, #0
+    MOV X3, #0
+    MOV X4, #0
+    MOV X8, #SYS_clone
+    SVC #0
+    CMP X0, #0
+    B.LT .Lsys_fail                 // clone failed
+    B.GT .Lsys_parent               // X0 = child pid → parent
+    // ---- child ----
+    ADR X0, sh_path
+    ADR X1, spawn_argv
+    ADR X2, start_envp
+    LDR X2, [X2]
+    MOV X8, #SYS_execve
+    SVC #0
+    MOV X0, #127                    // execve returned → exit(127)
+    MOV X8, #SYS_exit
+    SVC #0
+    // ---- parent ----  (X0 = child pid)
+.Lsys_parent:
+    ADR X1, sys_wstatus             // &status
+    MOV X2, #0                      // options = 0
+    MOV X3, #0                      // rusage = NULL
+    MOV X8, #SYS_wait4
+    SVC #0
+    ADR X0, sys_wstatus             // WEXITSTATUS: (status >> 8) & 0xff
+    LDR W0, [X0]
+    ASR W0, W0, #8
+    AND X0, X0, #0xff
+    B .Lsys_done
+.Lsys_fail:
+    MOV X0, #-1
+.Lsys_done:
+    LDP X19, X20, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+.section .rodata
+sh_path:   .asciz "/bin/sh"
+sh_dashc:  .asciz "-c"
+.bss
+.balign 8
+spawn_argv:   .space 32           // ["/bin/sh","-c",cmd,NULL]
+sys_wstatus:  .space 8            // wait4 status word
+.text
 
 // platform_fstat ( X0=fd -- X0=size )
 // Returns file size via fstat, or a negative errno if the fstat syscall fails.
