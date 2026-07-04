@@ -22,14 +22,17 @@ xt is name          \ interpret: set name's action now
 ```
 
 Until you set its action, executing a deferred word reports
-`uninitialized deferred word` and returns to the prompt.
+`<name>: uninitialized deferred word` and returns to the prompt.
 
-> **`is` and `to` are the same operation** — both store a cell into the named
-> word's data field — so they are interchangeable and **unchecked**. By
-> convention use `is` for deferred words and `to` for `value`s, but `5 is x`
-> (on a value) and `' w to d` (on a defer) also work. Beware the dangerous
-> direction: `5 to game` puts a plain number where a deferred word expects an
-> xt, so calling `game` would jump to that address and crash.
+> **`is` and `to` are the same store** — a cell into the named word's data
+> field — but both are **type-checked** against the target's word-type code
+> (see docs/Dictionary.md): `is` requires a deferred word (`x: not a deferred
+> word` otherwise), and `to` accepts a `value` or a deferred word (`x: not a
+> value or deferred word` otherwise — including constants and ordinary words,
+> whose compiled code the store used to silently corrupt). `' w to d` on a
+> defer still works; note that `5 to game` on a defer remains *semantically*
+> your problem — a plain number where an xt belongs will crash when `game`
+> runs.
 
 ## Why: top-down development
 
@@ -82,8 +85,27 @@ There are two ways to get the xt that `is` installs:
 `defer` compiles a tiny word whose body is "push the stored xt, then `execute`
 it". The xt lives in an inline cell at the same offset `value` uses for its
 datum, so `is` is mechanically the same operation as `to` — it stores a cell into
-that slot. A freshly deferred word's cell points at an internal handler that
-prints `uninitialized deferred word` and aborts.
+that slot. A freshly deferred word's cell points at a small per-word stub compiled
+after the body, which reports `<name>: uninitialized deferred word` and aborts
+(`is` overwrites the cell, after which the stub is dead code).
+
+## Introspection: `action-of`, `defer@`, and `see`
+
+`action-of <name>` pushes a deferred word's current action (checked); `defer@`
+is its raw ( xt1 -- xt2 ) form. `see <name>` on a deferred word appends what it
+currently does:
+
+```
+> see monster-brain
+defer monster-brain
+\ currently: ' hunt is monster-brain
+```
+
+The report has three forms: `uninitialized` (nothing installed yet — read
+straight from the action cell), `' <word> is <name>` (bound to a named word —
+also read from the cell), or `set by: <line>` (a `:noname` — recovered from the
+capture log's last direct assignment to that name, so it is a best-effort
+report: an `is` performed *inside* another word leaves no logged line).
 
 ## Persistence
 

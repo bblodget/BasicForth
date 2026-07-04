@@ -19,10 +19,10 @@ existing file.
 
 ## compact ( "name" -- )  /  compact ( -- )
 Write a **deduped** snapshot of the module — each word's latest source once, in
-dependency order — to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` →
-`game.compact.fs`), so you can `diff` it against `save`'s output. Drops the file's
-between-definition comments (definitions only). Bare `compact` uses the current
-file's name.
+dependency order, then each `value`/deferred word's **final direct `to`/`is`
+assignment** — to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` →
+`game.compact.fs`), so you can `diff` it against `save`'s output. Drops the
+file's between-definition comments. Bare `compact` uses the current file's name.
 
 ## load ( "name" -- )
 Open `<file>` as the module — forget the old one, load the new one, make it

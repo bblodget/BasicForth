@@ -42,13 +42,13 @@ Why hybrid (recap of the design discussion):
 Today (both arches), each entry is:
 
 ```
-[Link:8] [Flags+Len:1] [Name:N] [pad→8] [CodePtr:8] [CodeLen:4]   then inline code
+[Link:8] [Flags+Len:1] [Flags2:1] [Name:N] [pad→8] [CodePtr:8] [CodeLen:4]   then inline code
 ```
 
 Add a fixed 8-byte metadata block **after `CodeLen`, before the code body**:
 
 ```
-[Link:8] [Flags+Len:1] [Name:N] [pad→8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]   then code
+[Link:8] [Flags+Len:1] [Flags2:1] [Name:N] [pad→8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]   then code
 ```
 
 - Packed to **8 bytes/word**: `SrcId` u16 (source-table id), `Len` u16 (a single

@@ -38,6 +38,11 @@
 .equ F_HIDDEN,      0x40
 .equ F_COMPILE_ONLY,0x20
 .equ F_LENMASK,     0x1F
+# Second flags byte (Flags2) at entry+9: low nibble = word-type code, high
+# nibble reserved for future flags. Types: 0 = ordinary code, 1 = deferred.
+.equ F2_TYPE_MASK,  0x0F
+.equ T_DEFER,       1
+.equ T_VALUE,       2
 
 # Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 # SrcId sentinel for assembly primitives.
@@ -68,13 +73,15 @@
 #   label: the assembly code address
 #   link:  label of previous entry (0 for first)
 #   flags: optional flags byte (default 0)
-.macro DEFWORD entry, name, label, link, flags=0
+.macro DEFWORD entry, name, label, link, flags=0, type=0
 .section .data
 .balign 8
 \entry:
     .quad \link
 \entry\()_flags:
     .byte ((\entry\()_name_end - \entry\()_name_start) | \flags)
+\entry\()_flags2:
+    .byte \type                     # Flags2: word-type code (0 = ordinary)
 \entry\()_name_start:
     .ascii "\name"
 \entry\()_name_end:
@@ -1040,7 +1047,7 @@ forth_find:
     jne .Lfind_next
 
     # Lengths match — compare names case-insensitively
-    lea 9(%rbx), %rdi           # RDI = entry name start
+    lea 10(%rbx), %rdi          # RDI = entry name start
     mov %rsi, %rdx              # RDX = search name ptr
     mov %rcx, %r8               # R8 = remaining count
 
@@ -1073,8 +1080,9 @@ forth_find:
     jmp .Lfind_cmp
 
 .Lfind_match:
-    # CodePtr is at offset align8(9 + name_len) from entry start
-    lea 9+7(%rcx), %rax         # 9 + len + 7
+    mov %rbx, found_entry(%rip)  # record the entry for TO/IS's type check
+    # CodePtr is at offset align8(10 + name_len) from entry start
+    lea 10+7(%rcx), %rax        # 10 + len + 7
     and $~7, %rax               # round down to 8-byte boundary
     # Push xt and flag
     mov (%rbx,%rax), %rax       # RAX = xt
@@ -1338,8 +1346,12 @@ cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
-msg_undef_defer: .ascii "uninitialized deferred word\n"
+msg_undef_defer: .ascii ": uninitialized deferred word\n"
 .equ msg_undef_defer_len, . - msg_undef_defer
+msg_not_defer: .ascii ": not a deferred word\n"
+.equ msg_not_defer_len, . - msg_not_defer
+msg_not_value: .ascii ": not a value or deferred word\n"
+.equ msg_not_value_len, . - msg_not_value
 .text
 
 # ---------- LIT (runtime) ----------
@@ -1496,9 +1508,9 @@ compile_branch_back:
 meta_from_entry:
     movzbl 8(%rax), %ecx            # flags+len byte
     and $F_LENMASK, %ecx            # name length
-    add $16, %rcx                   # + 9 + 7  (so (namelen+9+7)&~7 = align8(9+namelen))
+    add $17, %rcx                   # + 10 + 7  (so (namelen+10+7)&~7 = align8(10+namelen))
     and $~7, %rcx
-    add %rcx, %rax                  # entry + align8(9+namelen) = CodePtr cell
+    add %rcx, %rax                  # entry + align8(10+namelen) = CodePtr cell
     add $12, %rax                   # + CodePtr(8) + CodeLen(4) = metadata block
     ret
 
@@ -1674,7 +1686,7 @@ forth_find_meta:
     and $F_LENMASK, %ecx
     cmp %rdx, %rcx
     jne .Lfm_next                   # length differs
-    lea 9(%r9), %rdi               # entry name start (already lowercase)
+    lea 10(%r9), %rdi              # entry name start (already lowercase)
     mov %rsi, %r10                 # input ptr
     mov %rdx, %rcx                 # count
     test %rcx, %rcx
@@ -1778,6 +1790,10 @@ build_header:
     mov %ecx, %eax
     or $F_HIDDEN, %al
     movb %al, (%r13)
+    inc %r13
+
+    # Write Flags2 byte (type = 0, ordinary; DEFER retags after)
+    movb $0, (%r13)
     inc %r13
 
     # Write name (lowercase)
@@ -2849,8 +2865,9 @@ forth_value:
     sub %rcx, %rdx
     mov %edx, (%rax)
 
-    # Clear HIDDEN flag
+    # Clear HIDDEN flag, tag Flags2 as a value
     andb $~F_HIDDEN, 8(%r12)
+    movb $T_VALUE, 9(%r12)
 
     pop %rbp
     pop %rbx
@@ -2869,10 +2886,21 @@ forth_value:
 # Assign a new value to a VALUE word. In interpret mode, stores immediately.
 # In compile mode, compiles code to store at runtime.
 # Value address is xt + 5 (skip CALL opcode + 4-byte rel32 of forth_lit).
+.global forth_is
+forth_is:
+    movq $1, tois_mode(%rip)        # is: defers only
+    jmp .Ltois_body
 .global forth_to
 forth_to:
+    movq $0, tois_mode(%rip)        # to: values or defers
+.Ltois_body:
     push %rbx
     call forth_parse_word           # ( -- c-addr u )
+    # Stash the name for the type-error message (find consumes it)
+    mov CELL(%r15), %rax
+    mov %rax, tois_name(%rip)
+    mov (%r15), %rax
+    mov %rax, tois_name_len(%rip)
     call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
     mov (%r15), %rax                # flag
     test %rax, %rax
@@ -2880,6 +2908,19 @@ forth_to:
     add $CELL, %r15                 # drop flag
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # drop xt
+
+    # Type check (Flags2 of the entry FIND matched). A store into an untyped
+    # word would silently corrupt its compiled code.
+    mov found_entry(%rip), %rcx
+    movzbl 9(%rcx), %ecx
+    and $F2_TYPE_MASK, %ecx
+    cmp $T_DEFER, %ecx
+    je .Lto_target_ok
+    cmpq $0, tois_mode(%rip)
+    jne .Lto_type_err               # is: defers only
+    cmp $T_VALUE, %ecx
+    jne .Lto_type_err               # to: values or defers
+.Lto_target_ok:
 
     # Value address = xt + 5 (past CALL forth_lit opcode)
     lea 5(%rax), %rbx               # RBX = addr of inline value
@@ -2904,6 +2945,23 @@ forth_to:
     call compile_call               # compile call to !
     pop %rbx
     ret
+
+.Lto_type_err:
+    mov tois_name(%rip), %rsi
+    mov tois_name_len(%rip), %rdx
+    call platform_write             # the offending name
+    cmpq $0, tois_mode(%rip)
+    je .Lto_err_to
+    lea msg_not_defer(%rip), %rsi
+    mov $msg_not_defer_len, %rdx
+    jmp .Lto_err_say
+.Lto_err_to:
+    lea msg_not_value(%rip), %rsi
+    mov $msg_not_value_len, %rdx
+.Lto_err_say:
+    call platform_write
+    pop %rbx
+    jmp forth_abort
 
 .Lto_not_found:
     # Word not found — set error token and abort
@@ -2932,9 +2990,11 @@ forth_assign_query:
 # ---------- DEFER ----------
 # DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
 # xt stored in its inline cell (at xt+5, the same layout VALUE uses); set that
-# xt with IS. The cell is initialized to forth_undef_defer, which aborts if the
-# word is executed before IS. Body compiled: CALL forth_lit ; <xt> ; CALL
-# forth_execute ; RET — forth_lit pushes the stored xt, forth_execute runs it.
+# xt with IS. Body compiled: CALL forth_lit ; <xt> ; CALL forth_execute ; RET —
+# forth_lit pushes the stored xt, forth_execute runs it. The cell starts out
+# pointing at a per-word uninit stub compiled after the RET, which pushes this
+# word's own header and reports "<name>: uninitialized deferred word"; IS
+# overwrites the cell, after which the stub is simply dead code.
 .global forth_defer
 forth_defer:
     push %rbx
@@ -2943,11 +3003,19 @@ forth_defer:
     call build_header
     jc .Ldefer_err
 
-    lea forth_undef_defer(%rip), %rax   # initial action xt
+    xor %eax, %eax                      # placeholder action (patched below)
     call compile_literal                # CALL forth_lit + 8-byte action cell
+    lea -8(%r13), %rbx                  # RBX = &action cell
     lea forth_execute(%rip), %rax
     call compile_call                   # CALL forth_execute
     call compile_ret                    # RET
+
+    # Per-word uninit stub: push our header, report-and-abort (never returns).
+    mov %r13, (%rbx)                    # action cell ← the stub (starts at HERE)
+    mov %r12, %rax                      # this word's header (nt)
+    call compile_literal                # stub: CALL forth_lit + nt cell
+    lea forth_undef_defer(%rip), %rax
+    call compile_call                   # stub: CALL forth_undef_defer
 
     # Fill code_len (code starts past CodeLen + 8-byte SrcMeta = +12)
     mov colon_code_len_addr(%rip), %rax
@@ -2957,6 +3025,7 @@ forth_defer:
     mov %edx, (%rax)
 
     andb $~F_HIDDEN, 8(%r12)            # clear HIDDEN
+    movb $T_DEFER, 9(%r12)              # Flags2: tag as a deferred word
 
     pop %rbp
     pop %rbx
@@ -2967,14 +3036,32 @@ forth_defer:
     pop %rbx
     ret
 
-# Initial action for a freshly DEFERed word: report and abort to the REPL.
-# Reached via forth_execute when an uninitialized deferred word is run.
+# Uninitialized-defer trap ( nt -- ): print "<name>: uninitialized deferred
+# word" and abort. Reached only via the per-word stub DEFER compiles; nt is the
+# deferred word's own header, pushed by the stub.
 .global forth_undef_defer
 forth_undef_defer:
+    mov (%r15), %rax                    # nt
+    add $CELL, %r15
+    lea 10(%rax), %rsi                  # name text
+    movzbl 8(%rax), %edx
+    and $F_LENMASK, %edx                # name length
+    call platform_write
     lea msg_undef_defer(%rip), %rsi
     mov $msg_undef_defer_len, %rdx
     call platform_write
     jmp forth_abort
+
+# defer@ ( xt1 -- xt2 )  fetch a deferred word's current action — the inline
+# cell at xt+5, the same slot IS writes. Standard Forth 2012. Applying it to a
+# non-deferred xt reads garbage; checked callers (action-of, SEE) test the
+# Flags2 type first.
+.global forth_defer_fetch
+forth_defer_fetch:
+    mov (%r15), %rax
+    mov 5(%rax), %rax
+    mov %rax, (%r15)
+    ret
 
 # ---------- :NONAME ----------
 # :NONAME ( -- xt )
@@ -3077,8 +3164,8 @@ forth_words:
     and $F_LENMASK, %eax            # mask to get length
     mov %rax, %rbp                  # RBP = name length
 
-    # Name starts at offset 9
-    lea 9(%rbx), %rsi               # RSI = name address
+    # Name starts at offset 10
+    lea 10(%rbx), %rsi              # RSI = name address
     mov %rbp, %rdx                  # RDX = name length
     call platform_write
 
@@ -4623,7 +4710,7 @@ DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
-DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
+DEFWORD dict_is,          "is",           forth_is,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
@@ -4637,7 +4724,8 @@ DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
-DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_system
+DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
+DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4684,6 +4772,14 @@ abs_path_buf:                       # scratch for getcwd()+'/'+path absolutizati
     .space ABS_PATH_MAX
 sys_cmd_buf:                        # NUL-terminated command for (system)
     .space SYS_CMD_MAX
+found_entry:                        # header matched by the last successful FIND
+    .space 8
+tois_mode:                          # 0 = to, 1 = is (selects the type check)
+    .space 8
+tois_name:                          # TO/IS target name, for the type error
+    .space 8
+tois_name_len:
+    .space 8
 .global src_table_lens
 src_table_lens:                     # length of each registered path (u64)
     .space SRC_TABLE_MAX * 8

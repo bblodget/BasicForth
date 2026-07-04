@@ -179,12 +179,14 @@ inside a defining word.
 Other notes:
 
 - **Redefinitions accumulate** under `save`, which rewrites the whole file plus
-  your edits. `compact <name>` writes a deduped snapshot (each word's latest
-  source once, in dependency order) to a sibling `<base>.compact<.ext>` so you can
-  `diff` the two and adopt the clean one if you like. The trade-off: `save` keeps
-  the file's between-definition comments and structure; `compact` keeps only the
-  definitions. A *structure-preserving* compact (splice latest defs into the
-  original text) is future work.
+  your edits. `compact <name>` writes a deduped snapshot — each word's latest
+  source once, in dependency order, then each `value`/deferred word's **final
+  direct `to`/`is` assignment** (so bindings and value contents survive the
+  dedup) — to a sibling `<base>.compact<.ext>` so you can `diff` the two and
+  adopt the clean one if you like. The trade-off: `save` keeps the file's
+  between-definition comments and structure; `compact` keeps only definitions
+  and final assignments. A *structure-preserving* compact (splice latest defs
+  into the original text) is future work.
 - **A library `include`d by a module** stays referenced, not inlined: `save`
   keeps the `include other.fs` line, not a copy of `other.fs`. The library's
   words are part of the live module (`.module`/`see`/`uses` show them, read from

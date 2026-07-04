@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### `compact` keeps final `is`/`to` bindings
+- A definitions-only snapshot lost a deferred word's binding and a `value`'s
+  contents — `cat game.compact.fs` had a dead `defer brain` and every brain
+  defined but none installed. `compact` now appends, after the deduped
+  definitions, the **last logged direct `is`/`to` assignment for each
+  value/deferred word in the module** (found with the same log scanner `see`'s
+  binding report uses), so the compacted file loads to the same behavior as
+  `save`'s output.
+
+### `defer@`, `action-of`, and a defer-aware `see`
+- New standard words: **`defer@ ( xt1 -- xt2 )`** reads a deferred word's
+  current action; **`action-of <name>`** is the checked, named form. And
+  **`see`** on a deferred word now reports its current binding —
+  `\ currently: uninitialized`, `\ currently: ' hunt is monster-brain`, or
+  (for a `:noname`) `\ currently set by: <the logged assignment line>`. The
+  first two read the live action cell; the `:noname` form is recovered from the
+  capture log's last direct assignment, so it's best-effort (an `is` run inside
+  another word leaves no logged line). See docs/Deferred_Words.md.
+
+### `is`/`to` are type-checked (no more silent code corruption)
+- `is` now requires a **deferred** target (`x: not a deferred word` otherwise);
+  `to` accepts a **value or deferred** target (`x: not a value or deferred
+  word` otherwise). Previously `5 to square` or `' w is square` silently
+  overwrote a cell inside `square`'s compiled code. The check rides on the new
+  Flags2 word-type code (`value` now tags its words too) and fires at compile
+  time inside definitions. `' w to d` on a defer remains allowed, as
+  documented. Constants are refused (they were never assignable — the store
+  just used to "work").
+
+### Dictionary header: second flags byte (Flags2) with a word-type code
+- Each dictionary entry gains a **Flags2** byte between the flags+len byte and
+  the name: low nibble = word-type code (0 = ordinary code, 1 = deferred),
+  high nibble reserved. The first flags byte was full (3 flag bits + 5 length
+  bits), and a type code lets tools identify what a word *is* without
+  heuristics — the base for `is`/`to` type checking and a defer-aware `see`.
+  `defer` tags its words; everything else is type 0. Internal layout change
+  only (the name moved from offset 9 to 10) — BasicForth has no binary image
+  format, so nothing external depends on the layout. See docs/Dictionary.md.
+
+### Uninitialized deferred words name themselves
+- Running a deferred word before `is` now reports **which** word is empty —
+  `setup: uninitialized deferred word` instead of the anonymous message. `defer`
+  compiles a small per-word stub after the body that knows its own header; `is`
+  overwrites the action cell as before, after which the stub is dead code. No
+  change to the happy path or to `is`/`to`.
+
 ### Dirty-guard: `new`/`load`/`bye` ask before discarding unsaved work
 - BasicForth now tracks whether the module is **dirty** — the capture log holds
   changes `save` hasn't written (a definition, a direct `to`/`is`, an `edit`).

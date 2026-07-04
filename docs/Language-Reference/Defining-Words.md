@@ -41,13 +41,16 @@ Unlike a `variable` (whose `!` contents aren't saved), a `value` set with a
 direct `to` at the prompt **persists across `save`/`reload`** — see `man Persistence`.
 
 ## to ( x "name" -- )
-Store a new value into a `value`.
+Store a new value into a `value` (or a deferred word). Any other target is
+refused — `x: not a value or deferred word` — since the store would corrupt an
+ordinary word's compiled code.
 
     5 value count   9 to count   count .   \ 9
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it
-before a behavior is installed aborts with `uninitialized deferred word`. The
+before a behavior is installed aborts with `greet: uninitialized deferred
+word`. The
 tool behind top-down design (`tutorial Chase`).
 
     defer greet
@@ -56,7 +59,8 @@ tool behind top-down design (`tutorial Chase`).
 
 ## is ( xt "name" -- )
 Install an execution token as a deferred word's behavior. Swappable **live**, any
-time, without recompiling the word's callers — that's the point.
+time, without recompiling the word's callers — that's the point. A non-deferred
+target is refused: `x: not a deferred word`.
 
     defer brain
     ' negate is brain   5 brain .    \ -5
@@ -64,6 +68,21 @@ time, without recompiling the word's callers — that's the point.
 
 A direct `is` typed at the prompt persists across `save`/`reload`, like `to` —
 see `man Persistence`. Deeper dive: docs/Deferred_Words.md.
+
+## defer@ ( xt1 -- xt2 )
+Fetch a deferred word's current action from its xt — the raw form of
+`action-of`. Applying it to a non-deferred xt reads garbage; prefer `action-of`,
+which checks.
+
+## action-of ( "name" -- xt )
+A deferred word's current action, by name — checked (`x: not a deferred word`
+for anything else). With `see`, the way to ask "what does this seam do right
+now?":
+
+    defer greet   :noname ." hi" ; is greet
+    action-of greet execute        \ hi
+    see greet                      \ defer greet
+                                   \ \ currently set by: :noname ." hi" ; is greet
 
 ## create ( "name" -- )   →   name: ( -- addr )
 Create a named entry whose run-time behaviour is to push the address of the space

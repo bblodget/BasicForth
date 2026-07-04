@@ -757,7 +757,39 @@ assert_output "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'    
 assert_output "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
 assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
 assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
-assert_error  "defer uninitialized"  'defer p p'                                             "uninitialized deferred word"
+assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
+assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
+# Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary,
+# 2 = value.
+assert_output "Flags2 tags a defer as type 1"     'defer p (latest@) 9 + c@ .'  "1"
+assert_output "Flags2 leaves a colon word type 0" ': c 1 ; (latest@) 9 + c@ .'  "0"
+assert_output "Flags2 tags a value as type 2"     '5 value v (latest@) 9 + c@ .'  "2"
+# to/is are type-checked against Flags2: is wants a defer; to takes a value or
+# a defer; anything else is refused (the store used to corrupt compiled code).
+assert_error  "to refuses an ordinary word"   ': w 7 ; 5 to w'      "w: not a value or deferred word"
+assert_error  "to refuses a constant"         '42 constant k 9 to k'  "k: not a value or deferred word"
+assert_error  "is refuses an ordinary word"   ': w 7 ; '\'' w is w'  "w: not a deferred word"
+assert_error  "is refuses a value"            '5 value v 6 is v'     "v: not a deferred word"
+assert_output "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
+# A refused store must leave the target intact (it used to be corrupted).
+ti_out=$(printf ': w 7 ;\n5 to w\nw .\nbye\n' | timeout 2 $FORTH 2>&1)
+if [[ "$ti_out" == *"w: not a value or deferred word"* && "$ti_out" == *"7  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  refused to leaves the word intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused to leaves the word intact\n    Got: %s\n" "$(echo "$ti_out"|head -4)"; ((failed++))
+fi
+# defer@ / action-of (Forth 2012) and SEE's binding report.
+assert_output "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
+assert_output "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
+assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a deferred word"
+sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+if [[ "$sb_out" == *"currently: uninitialized"* && "$sb_out" == *"currently: ' one is d"* \
+      && "$sb_out" == *"currently set by: :noname 42 . ; is d"* ]]; then
+    printf "  ${GREEN}PASS${NC}  see reports a defer's binding (uninit/named/:noname)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  see defer-binding report\n    Got: %q\n" "$sb_out"; ((failed++))
+fi
 
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
@@ -1812,6 +1844,22 @@ printf ': x 1 ;\n' > "$cp_dir/mod.fs"
 cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
 cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
 rm -rf "$cp_dir"
+# COMPACT keeps final is/to bindings: the deduped snapshot must load to the
+# same behavior — the defer bound (last assignment wins) and the value set.
+ca_dir="$(mktemp -d)"
+printf 'defer g\n' > "$ca_dir/mod.fs"
+( cd "$ca_dir" && printf ': one 1 ;\n: two 2 ;\n'\'' one is g\n'\'' two is g\n0 value hits\n7 to hits\ncompact\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+ca_out=$( printf 'g .\nhits .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$ca_dir/mod.compact.fs" 2>&1 )
+ca_file=$(cat "$ca_dir/mod.compact.fs" 2>/dev/null)
+rm -rf "$ca_dir"
+if [[ "$ca_out" == *"2 "* && "$ca_out" == *"7 "* && "$ca_file" == *"' two is g"* \
+      && "$ca_file" != *"' one is g"* && "$ca_file" == *"7 to hits"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact keeps final is/to bindings (loads live)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact final bindings\n    Got out: %q\n    File: %q\n" "$ca_out" "$ca_file"; ((failed++))
+fi
 if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;"* ]]; then
     printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
 else
