@@ -12,6 +12,14 @@ than run.
     : square  dup * ;
     5 square .        \ 25
 
+## :noname ( -- xt )
+Like `:` but with no name: compile a definition and leave its *execution token*
+(xt) on the stack instead. Run it with `execute`, or install it as a deferred
+word's behavior with `is` — the seam-filling idiom from the Chase tutorial.
+
+    :noname  dup * ;      \ compiles, leaves the xt on the stack
+    5 swap execute .      \ 25
+
 ## variable ( "name" -- )   →   name: ( -- a-addr )
 Create a named one-cell variable. Running the name pushes its address; use `@`
 and `!` (see `man memory`).
@@ -36,6 +44,26 @@ direct `to` at the prompt **persists across `save`/`reload`** — see `man Persi
 Store a new value into a `value`.
 
     5 value count   9 to count   count .   \ 9
+
+## defer ( "name" -- )
+Create a word whose behavior is filled in *later* — a named seam. Running it
+before a behavior is installed aborts with `uninitialized deferred word`. The
+tool behind top-down design (`tutorial Chase`).
+
+    defer greet
+    :noname  ." Hello!" cr ;  is greet
+    greet                 \ Hello!
+
+## is ( xt "name" -- )
+Install an execution token as a deferred word's behavior. Swappable **live**, any
+time, without recompiling the word's callers — that's the point.
+
+    defer brain
+    ' negate is brain   5 brain .    \ -5
+    ' abs    is brain  -5 brain .    \ 5
+
+A direct `is` typed at the prompt persists across `save`/`reload`, like `to` —
+see `man Persistence`. Deeper dive: docs/Deferred_Words.md.
 
 ## create ( "name" -- )   →   name: ( -- addr )
 Create a named entry whose run-time behaviour is to push the address of the space
@@ -86,4 +114,4 @@ words; pairs with `postpone`/`literal` (see `man interpreter`).
 
 - `man memory` — `@` / `!` / `allot` for the storage these words create.
 - `man interpreter` — `execute`, `postpone`, `literal`, and how compilation works.
-- docs/Defining_Words.md and docs/Marker.md — deeper dives.
+- docs/Defining_Words.md, docs/Deferred_Words.md, and docs/Marker.md — deeper dives.

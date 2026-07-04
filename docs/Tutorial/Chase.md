@@ -227,6 +227,16 @@ the real `done?` (we're done when `caught`):
     :noname  step-player  eat? ;  is update
     :noname  caught @ ;           is done?
 
+One catch — and it's a Forth lesson worth the whole tutorial. `setup` was
+compiled with a **direct call** to the `new-game` that existed back in the board
+step. Redefining `new-game` makes a *new* word; it does not rewire words already
+compiled to call the old one (that's subroutine threading — it's why BasicForth
+is fast). Deferred words are the exception: `is` re-points them any time. So
+whenever a seam's *ingredients* change, refresh the seam — re-install `setup` so
+it picks up the new `new-game`:
+
+    :noname  page cursor-off  new-game  draw-border ;  is setup
+
 Play the (monsterless) game — walk onto the `$` and watch your score climb, `q`
 to quit:
 
@@ -271,6 +281,10 @@ all, and `new-game` fields one monster for now:
         W 2 / px !  H 2 / py !  0 pdx !  0 pdy !
         false caught !  0 score !
         1 mcount !  0 place-monster  spawn-gold ;
+
+`new-game` grew again, so refresh the seam that calls it:
+
+    :noname  page cursor-off  new-game  draw-border ;  is setup
 
 Type `next` to give that monster a brain.
 
@@ -399,6 +413,12 @@ three of them:
         3 mcount !  mcount @ 0 ?do i place-monster loop
         install-brains  spawn-gold ;
 
+Two words changed under their compiled callers this time, so refresh both
+seams — `update` (it calls `step-monsters`) and `setup` (it calls `new-game`):
+
+    :noname  step-player  step-monsters  eat?  collide? ;   is update
+    :noname  page cursor-off  new-game  draw-border ;  is setup
+
 Play it — three monsters, three minds, all from one table of tokens:
 
     chase
@@ -419,14 +439,20 @@ The finished program in `examples/chase.fs` is fully baked — every seam is a
 plain `:` definition, and the only token indirection left is the per-monster
 `mbrain` table, because *that one is the feature*, not scaffolding.
 
-Two notes for when you `save` your work (and check `.module` to see everything
+A few notes for when you `save` your work (and check `.module` to see everything
 you've defined):
 
-- An ordinary word you redefine interactively is captured by `redo`/`reload`.
+- Every redefinition you typed is captured, so the saved file accumulates the
+  old versions too. `compact <name>` writes a deduped snapshot alongside it —
+  each word's latest source once.
 - A live `is`/`to` is saved **only** when you typed it straight at the prompt —
   an `is` buried inside another word isn't replayed. So keep your final brain
   assignments (`' hunt 0 brain!` …) at the top level, or fold them into
-  `new-game` as we did. Type `next` for where to take it.
+  `new-game` as we did.
+- The seam-refresh dance you did for `setup` and `update` is automated for
+  *named* words: `edit <word>` opens its source in your editor and, when you
+  save, recompiles every word that calls it. `:noname` seams are refreshed the
+  way you did it — by re-`is`-ing them. Type `next` for where to take it.
 
 ## Make it your own — toward Pac-Man
 
@@ -443,5 +469,6 @@ it:
   around them. That's real maze pathfinding — the natural next project.
 
 The finished program is `examples/chase.fs`. For any word used here, the
-Language Reference has a page per topic — try `man defer`, `man execute`, or
-`man Loops`. Type `back` to revisit any step. Happy hacking!
+Language Reference has a page per topic — try `man defining-words` (for `defer`,
+`is`, `:noname`, and `'`), `man interpreter` (for `execute`), or `man Loops`.
+Type `back` to revisit any step. Happy hacking!
