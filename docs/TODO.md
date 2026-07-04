@@ -325,9 +325,15 @@ docs/Graphics.md for the API.
   `(dlopen)` / `(dlsym)` / `(ccall)` primitives (up to 6 integer/pointer args),
   `ffi.fs` wrappers, libc-based integration tests, docs/FFI.md + `man ffi`.
   Deferred: float args/returns, >6 args, C-to-Forth callbacks.
-- [ ] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
-  `set-surface`; vsync'd `present`; poll-event decoding (keyboard first)
-- [ ] Animation demo: bouncing rectangle in a window, ESC/close to quit
+- [x] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
+  `set-surface`; vsync'd present (`sdl-frame` / `sdl-show`); poll-event
+  decoding (`sdl-poll`/`sdl-event-type`/`sdl-key`); `tools/sdl3off.c` verifies
+  constants/offsets. Dummy-driver integration test (headless).
+- [x] Animation demo: `examples/bounce.fs` — bouncing square at the display
+  refresh rate (vsync), ESC/q/close to quit
+- [ ] Interpreted `s"` (ANS File word set semantics: transient buffer) — the
+  compile-only gotcha bites every binding file; sdl3.fs had to wrap its
+  strings in a `(sdl-bind)` word
 - [ ] SDL3 in the Pumpkian board image (build from source; bookworm has no
   libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites

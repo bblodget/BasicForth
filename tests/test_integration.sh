@@ -498,6 +498,24 @@ assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 
 assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
 assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
 
+# SDL3 backend — needs libSDL3 on the host. Uses SDL's dummy video driver so
+# no display is required: open window + renderer + streaming texture, lock,
+# draw through the graphics.fs surface, read the pixel back, close. Skipped
+# under QEMU (no aarch64 libSDL3 in the -L sysroot).
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (no libSDL3 in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (libSDL3 not installed)\n"
+else
+    sdl_px=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 64 32 sdl-open sdl-frame red clear gr-base @ l@ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_px" | grep -q '16711680'; then
+        printf "  ${GREEN}PASS${NC}  SDL3 open+draw+readback (red pixel via dummy video driver)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
+    fi
+fi
+
 # =========================================================================
 section "Dynamic Memory (heap)"
 # =========================================================================

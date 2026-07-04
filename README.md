@@ -44,7 +44,7 @@ backend has pivoted from direct DRM/KMS to **SDL3** (see docs/Planning.md,
 interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
 persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
 tutorials, source viewing (`see`), file access, and dynamic memory.
-119 unit tests + 515 integration tests.
+119 unit tests + 545 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -77,8 +77,11 @@ What works today:
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
 - Graphics (Phase 5): software 2D on a backend-agnostic surface — `set-surface`,
-  `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`);
-  SDL3 display backend (window + input + vsync) in progress
+  `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`) —
+  presented in a desktop window via the SDL3 backend (`sdl3.fs`): vsync'd
+  frames, keyboard/quit events; try `examples/bounce.fs`
+- FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
+  (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
 - Tools: `WORDS`, `.SESSION` (list this session's words), `DUMP`, `.S`,
   `VERSION` (also `basicforth -v`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
@@ -92,8 +95,9 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: more Phase 5 — sound, a GPU (Vulkan) backend behind the surface
-API, font rendering — plus locals word set, threading, and more games.
+What's next: more Phase 5 — sound (SDL3 audio), more 2D primitives and font
+rendering, a GPU backend (SDL_GPU) behind the surface API — plus locals word
+set, threading, and more games.
 
 ## Building
 
@@ -229,9 +233,11 @@ BasicForth/
     forth/
       core.fs               Forth-defined words (loaded at startup)
       graphics.fs           Software 2D surface API (on-demand)
+      ffi.fs                dlopen/dlsym wrappers for C libraries (on-demand)
+      sdl3.fs               SDL3 display backend (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (515 tests, piped I/O)
+    test_integration.sh     Integration tests (545 tests, piped I/O)
     test_line_editor_pty.py Line-editor tests under a pseudo-terminal
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge

@@ -148,6 +148,23 @@
   each monster its own swappable brain via an execution-token table (the Pac-Man
   trick). Builds a complete terminal chase game. Finished program:
   `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+### SDL3 display backend: a window at last (`sdl3.fs` + `bounce`)
+- New on-demand **`src/forth/sdl3.fs`** — the display backend behind the
+  graphics.fs surface, bound through the FFI (no glue code in C or asm):
+  `sdl-open ( w h -- )`, then per frame `sdl-frame` (lock the streaming
+  texture, point the surface at its pixels) → draw → `sdl-show` (present,
+  vsync-paced), plus `sdl-poll`/`sdl-event-type`/`sdl-key` and event/keycode
+  constants. Works in a desktop window; on a console-only system SDL's KMSDRM
+  driver takes the display directly. Constants/offsets verified against the
+  SDL3 headers by the new `tools/sdl3off.c`.
+- New **`examples/bounce.fs`**: a yellow square bouncing in a 640×360 window
+  at the display refresh rate — the first BasicForth graphics you can see
+  without leaving the desktop. ESC/q/close quits.
+- Integration test drives the whole stack headless via SDL's dummy video
+  driver (open → lock → draw → read back); skipped where libSDL3 is absent.
+- Requires SDL3 (laptop: built from source into /usr/local; board: added to
+  the Pumpkian image). docs/Graphics.md covers the API and frame cycle.
+
 ### FFI: call C libraries from Forth (`dlopen` / `dlsym` / `(ccall)`)
 - New primitives **`(dlopen)`**, **`(dlsym)`**, and **`(ccall)`** ( arg1 ..
   argN nargs fnptr -- ret ): load a shared C library and call its functions
