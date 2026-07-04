@@ -38,6 +38,10 @@
 .equ F_HIDDEN,      0x40
 .equ F_COMPILE_ONLY,0x20
 .equ F_LENMASK,     0x1F
+# Second flags byte (Flags2) at entry+9: low nibble = word-type code, high
+# nibble reserved for future flags. Types: 0 = ordinary code, 1 = deferred.
+.equ F2_TYPE_MASK,  0x0F
+.equ T_DEFER,       1
 
 # Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 # SrcId sentinel for assembly primitives.
@@ -68,13 +72,15 @@
 #   label: the assembly code address
 #   link:  label of previous entry (0 for first)
 #   flags: optional flags byte (default 0)
-.macro DEFWORD entry, name, label, link, flags=0
+.macro DEFWORD entry, name, label, link, flags=0, type=0
 .section .data
 .balign 8
 \entry:
     .quad \link
 \entry\()_flags:
     .byte ((\entry\()_name_end - \entry\()_name_start) | \flags)
+\entry\()_flags2:
+    .byte \type                     # Flags2: word-type code (0 = ordinary)
 \entry\()_name_start:
     .ascii "\name"
 \entry\()_name_end:
@@ -1040,7 +1046,7 @@ forth_find:
     jne .Lfind_next
 
     # Lengths match — compare names case-insensitively
-    lea 9(%rbx), %rdi           # RDI = entry name start
+    lea 10(%rbx), %rdi          # RDI = entry name start
     mov %rsi, %rdx              # RDX = search name ptr
     mov %rcx, %r8               # R8 = remaining count
 
@@ -1073,8 +1079,8 @@ forth_find:
     jmp .Lfind_cmp
 
 .Lfind_match:
-    # CodePtr is at offset align8(9 + name_len) from entry start
-    lea 9+7(%rcx), %rax         # 9 + len + 7
+    # CodePtr is at offset align8(10 + name_len) from entry start
+    lea 10+7(%rcx), %rax        # 10 + len + 7
     and $~7, %rax               # round down to 8-byte boundary
     # Push xt and flag
     mov (%rbx,%rax), %rax       # RAX = xt
@@ -1496,9 +1502,9 @@ compile_branch_back:
 meta_from_entry:
     movzbl 8(%rax), %ecx            # flags+len byte
     and $F_LENMASK, %ecx            # name length
-    add $16, %rcx                   # + 9 + 7  (so (namelen+9+7)&~7 = align8(9+namelen))
+    add $17, %rcx                   # + 10 + 7  (so (namelen+10+7)&~7 = align8(10+namelen))
     and $~7, %rcx
-    add %rcx, %rax                  # entry + align8(9+namelen) = CodePtr cell
+    add %rcx, %rax                  # entry + align8(10+namelen) = CodePtr cell
     add $12, %rax                   # + CodePtr(8) + CodeLen(4) = metadata block
     ret
 
@@ -1674,7 +1680,7 @@ forth_find_meta:
     and $F_LENMASK, %ecx
     cmp %rdx, %rcx
     jne .Lfm_next                   # length differs
-    lea 9(%r9), %rdi               # entry name start (already lowercase)
+    lea 10(%r9), %rdi              # entry name start (already lowercase)
     mov %rsi, %r10                 # input ptr
     mov %rdx, %rcx                 # count
     test %rcx, %rcx
@@ -1778,6 +1784,10 @@ build_header:
     mov %ecx, %eax
     or $F_HIDDEN, %al
     movb %al, (%r13)
+    inc %r13
+
+    # Write Flags2 byte (type = 0, ordinary; DEFER retags after)
+    movb $0, (%r13)
     inc %r13
 
     # Write name (lowercase)
@@ -2967,6 +2977,7 @@ forth_defer:
     mov %edx, (%rax)
 
     andb $~F_HIDDEN, 8(%r12)            # clear HIDDEN
+    movb $T_DEFER, 9(%r12)              # Flags2: tag as a deferred word
 
     pop %rbp
     pop %rbx
@@ -2984,7 +2995,7 @@ forth_defer:
 forth_undef_defer:
     mov (%r15), %rax                    # nt
     add $CELL, %r15
-    lea 9(%rax), %rsi                   # name text
+    lea 10(%rax), %rsi                  # name text
     movzbl 8(%rax), %edx
     and $F_LENMASK, %edx                # name length
     call platform_write
@@ -3094,8 +3105,8 @@ forth_words:
     and $F_LENMASK, %eax            # mask to get length
     mov %rax, %rbp                  # RBP = name length
 
-    # Name starts at offset 9
-    lea 9(%rbx), %rsi               # RSI = name address
+    # Name starts at offset 10
+    lea 10(%rbx), %rsi              # RSI = name address
     mov %rbp, %rdx                  # RDX = name length
     call platform_write
 

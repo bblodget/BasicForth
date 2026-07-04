@@ -759,6 +759,9 @@ assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :nona
 assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
 assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
 assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
+# Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary.
+assert_output "Flags2 tags a defer as type 1"     'defer p (latest@) 9 + c@ .'  "1"
+assert_output "Flags2 leaves a colon word type 0" ': c 1 ; (latest@) 9 + c@ .'  "0"
 
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"

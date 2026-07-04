@@ -10,13 +10,14 @@ calling the defined word executes native instructions directly.
 Every word in the dictionary has this layout:
 
 ```
-[Link:8][Flags+Len:1][Name:N][align8][CodePtr:8][CodeLen:4][...code...]
+[Link:8][Flags+Len:1][Flags2:1][Name:N][align8][CodePtr:8][CodeLen:4][...code...]
 ```
 
 | Field    | Size    | Description                                       |
 |----------|---------|---------------------------------------------------|
 | Link     | 8 bytes | Pointer to previous dictionary entry (or 0)       |
 | Flags+Len| 1 byte  | Upper bits = flags, lower 5 bits = name length    |
+| Flags2   | 1 byte  | Word-type code (low nibble: 0 = code, 1 = defer) + reserved |
 | Name     | N bytes | Word name (case-preserved, lookup case-insensitive)|
 | align    | 0-7     | Padding to 8-byte boundary                        |
 | CodePtr  | 8 bytes | Pointer to the start of compiled code              |

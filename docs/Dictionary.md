@@ -13,8 +13,9 @@ Offset    Size    Field
 ------    ----    -----
 0         8       Link        Pointer to previous entry (0 = end of list)
 8         1       Flags+Len   Flags (bits 7-5) + name length (bits 4-0)
-9         N       Name        Word name (N = length from Flags+Len, max 31 chars)
-9+N       pad     Padding     .balign 8 (zero bytes to next 8-byte boundary)
+9         1       Flags2      Word-type code (low nibble) + reserved flag bits
+10        N       Name        Word name (N = length from Flags+Len, max 31 chars)
+10+N      pad     Padding     .balign 8 (zero bytes to next 8-byte boundary)
 aligned   8       CodePtr     Execution token — address of the code to run
 aligned+8 4       CodeLen     Length of code in bytes (0 for ASM primitives)
 ```
@@ -40,6 +41,22 @@ Bits 0-4      Length          Name length (0-31 characters)
 Words can combine flags. For example, IF is both IMMEDIATE and
 COMPILE_ONLY — it executes at compile time (not compiled as a call)
 and is rejected if used outside a definition.
+
+### Flags2 Byte
+
+A second flags byte at offset 9, added for growing room once the first byte
+filled up (its low 5 bits are the name length, its top 3 bits are all spoken
+for). The low nibble is a **word-type code**; the high nibble is reserved for
+future flags.
+
+```
+Bits 0-3      Type            0 = ordinary code, 1 = deferred word (DEFER)
+Bits 4-7      (reserved)
+```
+
+The type code lets tools identify what a word *is* without heuristics —
+`is`/`to` can type-check their target, and `see` can recognize a deferred
+word and show its current binding.
 
 ## Engine Registers
 
@@ -158,11 +175,11 @@ fails (returning the original `c-addr u` for error reporting).
 Given an entry at address `E` with name length `N`:
 
 ```
-CodePtr address = E + align8(9 + N)
-                = E + ((9 + N + 7) & ~7)
+CodePtr address = E + align8(10 + N)
+                = E + ((10 + N + 7) & ~7)
 ```
 
-The `9` accounts for the 8-byte link field plus the 1-byte flags+len field.
+The `10` accounts for the 8-byte link field plus the two 1-byte flag fields.
 
 ## Execution Tokens
 

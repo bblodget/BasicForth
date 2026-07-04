@@ -460,9 +460,9 @@ create (dir)     3 cells allot          \ cell buffer: 3-cell records (see above
 create (dir-rec) 3 cells allot          \ scratch: one record being built
 
 \ entry → the execution token FIND returns: load the CodePtr at the aligned
-\ offset align8(9 + name-len) past the entry. Mirrors FIND's xt calculation.
+\ offset align8(10 + name-len) past the entry. Mirrors FIND's xt calculation.
 : (xt-of) ( entry -- xt )
-    dup 8 + c@ 31 and  9 +  7 + -8 and  +  @ ;
+    dup 8 + c@ 31 and  10 +  7 + -8 and  +  @ ;
 
 \ (dir-add): record one captured group. entry = a header just linked.
 : (dir-add) ( log-off log-len entry -- )
@@ -1570,7 +1570,7 @@ variable (ts-any)                          \ printed any line of the wanted step
 variable (sw-mark)                          \ LATEST at end of core.fs (module start)
 
 : (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
-    dup 9 +  swap 8 + c@ 31 and ;
+    dup 10 +  swap 8 + c@ 31 and ;
 : (sw-end?) ( nt -- nt f )                  \ true when nt is the boundary or chain end
     dup (sw-mark) @ =  over 0= or ;
 : (sw-count) ( -- n )

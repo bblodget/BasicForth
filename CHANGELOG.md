@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Dictionary header: second flags byte (Flags2) with a word-type code
+- Each dictionary entry gains a **Flags2** byte between the flags+len byte and
+  the name: low nibble = word-type code (0 = ordinary code, 1 = deferred),
+  high nibble reserved. The first flags byte was full (3 flag bits + 5 length
+  bits), and a type code lets tools identify what a word *is* without
+  heuristics — the base for `is`/`to` type checking and a defer-aware `see`.
+  `defer` tags its words; everything else is type 0. Internal layout change
+  only (the name moved from offset 9 to 10) — BasicForth has no binary image
+  format, so nothing external depends on the layout. See docs/Dictionary.md.
+
 ### Uninitialized deferred words name themselves
 - Running a deferred word before `is` now reports **which** word is empty —
   `setup: uninitialized deferred word` instead of the anonymous message. `defer`
