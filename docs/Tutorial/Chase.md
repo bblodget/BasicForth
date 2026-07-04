@@ -468,6 +468,11 @@ it:
 - **Toward Pac-Man:** add **walls** inside the arena and have brains route
   around them. That's real maze pathfinding — the natural next project.
 
+And when you start your **next** game, don't start from nothing:
+`examples/game-template.fs` is this chapter's skeleton with all eight seams
+deferred and runnable stubs installed — open it, `save mygame.fs`, and fill
+the seams top-down, just like you did here.
+
 The finished program is `examples/chase.fs`. For any word used here, the
 Language Reference has a page per topic — try `man defining-words` (for `defer`,
 `is`, `:noname`, and `'`), `man interpreter` (for `execute`), or `man Loops`.

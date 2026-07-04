@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### `examples/game-template.fs` — a starting point for your own game
+- The Chase tutorial's skeleton, generalized into a blank-slate template: the
+  frame-loop engine (`play`, `game`) with all eight seams deferred (`setup`,
+  `finish`, `input`, `erase`, `update`, `render`, `frame-wait`, `done?`) and
+  runnable stubs installed, so `game` works out of the box — a blank frame
+  loop that exits on any key. `FRAME` is a `value` (tune live with
+  `90 to FRAME`). Workflow: `basicforth game-template.fs`, then
+  `save mygame.fs` first (save-as, so the template stays clean), then replace
+  seams one at a time with `:noname ... ; is update` and bake them when
+  settled. The Chase tutorial's closing step points here.
+
 ## v0.9.0 — 2026-07-03
 
 ### `compact` keeps final `is`/`to` bindings

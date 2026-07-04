@@ -1048,6 +1048,34 @@ else
     ((failed++))
 fi
 
+# examples/game-template.fs must load and run out of the box: the stubs make
+# `game` a working (blank) frame loop. Make done? end after one frame and
+# FRAME instant, then run the whole engine headlessly — finish's stub prints
+# "done." and control returns to the interpreter.
+t0=$(date +%s.%N)
+gt_run=$(printf 'include %s/examples/game-template.fs\n0 to FRAME\n:noname true ; is done?\ngame\n.( TPLOK=1) cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/game-template.fs"
+if [[ "$gt_run" == *"done."* && "$gt_run" == *"TPLOK=1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/game-template.fs runs a full frame out of the box\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/game-template.fs runs a full frame out of the box\n"
+    printf "    Expected: done. + TPLOK=1\n    Got:      %s\n" "$(echo "$gt_run" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# The template's seams accept the intended workflow: FRAME is a value (to
+# tunes it) and each seam is a deferred word an is can retarget.
+gt_seam=$(printf 'include %s/examples/game-template.fs\n90 to FRAME\n.( FR=) FRAME . cr\n:noname 7 ;\nis update\nupdate\n.( UPD=) . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$gt_seam" == *"FR=90"* && "$gt_seam" == *"UPD=7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/game-template.fs seams retarget with to/is\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/game-template.fs seams retarget with to/is\n"
+    printf "    Expected: FR=90 UPD=7\n    Got:      %s\n" "$(echo "$gt_seam" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # examples/snake.fs (the fuller version) must never spawn food on the snake or
 # border: its collision is screen-based, so food on the just-vacated tail could
 # be eaten without being noticed. Occupy the top half, place food 300 times, and
