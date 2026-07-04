@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `defer@`, `action-of`, and a defer-aware `see`
+- New standard words: **`defer@ ( xt1 -- xt2 )`** reads a deferred word's
+  current action; **`action-of <name>`** is the checked, named form. And
+  **`see`** on a deferred word now reports its current binding —
+  `\ currently: uninitialized`, `\ currently: ' hunt is monster-brain`, or
+  (for a `:noname`) `\ currently set by: <the logged assignment line>`. The
+  first two read the live action cell; the `:noname` form is recovered from the
+  capture log's last direct assignment, so it's best-effort (an `is` run inside
+  another word leaves no logged line). See docs/Deferred_Words.md.
+
 ### `is`/`to` are type-checked (no more silent code corruption)
 - `is` now requires a **deferred** target (`x: not a deferred word` otherwise);
   `to` accepts a **value or deferred** target (`x: not a value or deferred

@@ -778,6 +778,18 @@ if [[ "$ti_out" == *"w: not a value or deferred word"* && "$ti_out" == *"7  ok"*
 else
     printf "  ${RED}FAIL${NC}  refused to leaves the word intact\n    Got: %s\n" "$(echo "$ti_out"|head -4)"; ((failed++))
 fi
+# defer@ / action-of (Forth 2012) and SEE's binding report.
+assert_output "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
+assert_output "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
+assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a deferred word"
+sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+if [[ "$sb_out" == *"currently: uninitialized"* && "$sb_out" == *"currently: ' one is d"* \
+      && "$sb_out" == *"currently set by: :noname 42 . ; is d"* ]]; then
+    printf "  ${GREEN}PASS${NC}  see reports a defer's binding (uninit/named/:noname)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  see defer-binding report\n    Got: %q\n" "$sb_out"; ((failed++))
+fi
 
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"

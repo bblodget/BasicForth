@@ -69,6 +69,21 @@ target is refused: `x: not a deferred word`.
 A direct `is` typed at the prompt persists across `save`/`reload`, like `to` —
 see `man Persistence`. Deeper dive: docs/Deferred_Words.md.
 
+## defer@ ( xt1 -- xt2 )
+Fetch a deferred word's current action from its xt — the raw form of
+`action-of`. Applying it to a non-deferred xt reads garbage; prefer `action-of`,
+which checks.
+
+## action-of ( "name" -- xt )
+A deferred word's current action, by name — checked (`x: not a deferred word`
+for anything else). With `see`, the way to ask "what does this seam do right
+now?":
+
+    defer greet   :noname ." hi" ; is greet
+    action-of greet execute        \ hi
+    see greet                      \ defer greet
+                                   \ \ currently set by: :noname ." hi" ; is greet
+
 ## create ( "name" -- )   →   name: ( -- addr )
 Create a named entry whose run-time behaviour is to push the address of the space
 that follows it — the basis for arrays and buffers. Reserve space after it with

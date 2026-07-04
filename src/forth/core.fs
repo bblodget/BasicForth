@@ -721,6 +721,10 @@ variable (see-xt)                       \ the live word's xt (for the REPL sessi
 \ Message prefix ("see" / "edit") so the shared source helpers report under the
 \ command the user actually typed.
 variable (msg-a)  variable (msg-u)
+
+\ (see-post): hook run after SEE prints a word's source. The real body — the
+\ deferred-word binding report — is installed near EOF once its helpers exist.
+defer (see-post)  :noname ; is (see-post)
 : (msg:) ( -- )  (msg-a) @ (msg-u) @ type ." : " ;
 
 \ Source sink: SEE types a word's source straight out; EDIT redirects it into the
@@ -802,10 +806,10 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     then
     dup 0= if                                \ srcid 0 → REPL word: use the capture log
         drop  2drop  (see-xt) !
-        (see-from-log) exit
+        (see-from-log)  (see-post) exit
     then
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
-    (see-file) ;
+    (see-file)  (see-post) ;
 
 \ (el-pre)/(el-pre-len): a one-line preload the interactive line editor can drop
 \ onto the next prompt. EDIT no longer uses it (it opens an external editor now,
@@ -1684,6 +1688,101 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     repeat  drop
     (uf-free)                                  \ release the cached source file
     (uses-n) @ 0= if  ."  (none)"  then  cr ;
+
+\ ===== Deferred-word introspection: ACTION-OF + SEE's binding report =====
+\ `defer@` (asm) reads a deferred word's action cell. ACTION-OF is the checked,
+\ named form. SEE uses them to append what a deferred word currently does:
+\ uninitialized / bound to a named word / set by a logged assignment line.
+
+: (nt-by-name) ( c-addr u -- nt true | false )   \ in-force header for a name
+    (latest@)
+    begin dup while                          ( c-addr u nt )
+        dup 8 + c@ 64 and 0= if              \ skip hidden entries
+            dup (sw-name)  4 pick 4 pick (ci=) if
+                nip nip  true exit
+            then
+        then
+        @
+    repeat
+    drop 2drop  false ;
+
+: (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
+: (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup @  swap 8 + l@ ;
+
+: action-of ( "name" -- xt )                 \ a deferred word's current action
+    parse-word 2dup (nt-by-name) 0= if
+        type ." : not found" cr abort  then  ( c-addr u nt )
+    dup (nt-type) 1 <> if
+        drop type ." : not a deferred word" cr abort  then
+    nip nip  (xt-of) defer@ ;
+
+: (xt>name) ( xt -- c-addr u true | false )  \ name owning this xt, if any
+    (latest@)
+    begin dup while                          ( xt nt )
+        dup 8 + c@ 64 and 0= if
+            2dup (xt-of) = if  nip (sw-name) true exit  then
+        then
+        @
+    repeat
+    2drop  false ;
+
+\ --- last direct-assignment line in the log targeting a given name ---
+variable (t2-fa) variable (t2-fu)            \ a line's first token
+variable (t2-pa) variable (t2-pu)            \ ...second-to-last token
+variable (t2-la) variable (t2-lu)            \ ...last token
+variable (l2-src) variable (l2-len) variable (l2-pos)
+: (l2-ws?) ( i -- f )  (l2-src) @ + c@ 33 < ;
+: (last2!) ( a u -- )                        \ record first + last two tokens
+    (l2-len) !  (l2-src) !  0 (l2-pos) !
+    0 (t2-fu) !  0 (t2-pu) !  0 (t2-lu) !
+    begin (l2-pos) @ (l2-len) @ < while
+        (l2-pos) @ (l2-ws?) if  1 (l2-pos) +!
+        else
+            (l2-pos) @                       ( tok-start )
+            begin (l2-pos) @ (l2-len) @ <  (l2-pos) @ (l2-ws?) 0=  and
+            while  1 (l2-pos) +!  repeat
+            (t2-la) @ (t2-pa) !  (t2-lu) @ (t2-pu) !
+            (l2-src) @ over +  (t2-la) !  (l2-pos) @ swap - (t2-lu) !
+            (t2-fu) @ 0= if  (t2-la) @ (t2-fa) !  (t2-lu) @ (t2-fu) !  then
+        then
+    repeat ;
+variable (sb-t)  variable (sb-tu)            \ the binding target being searched
+: (assign-line?) ( a u -- f )                \ "... is <target>" / "... to <target>"?
+    (last2!)
+    (t2-fa) @ (t2-fu) @ s" \" (ci=) if  false exit  then   \ not a comment line
+    (t2-la) @ (t2-lu) @ (sb-t) @ (sb-tu) @ (ci=) 0= if  false exit  then
+    (t2-pa) @ (t2-pu) @ s" is" (ci=)
+    (t2-pa) @ (t2-pu) @ s" to" (ci=)  or ;
+variable (sb-a)  variable (sb-u)             \ best (= last) matching line
+: (last-assign?) ( -- f )                    \ leaves the line in (sb-a)/(sb-u)
+    0 (sb-a) !
+    (log) @ (rd-a) !  (log) cell+ @ (rd-u) !
+    begin (rd-u) @ 0> while
+        10 (rd-chpos)                        ( linelen )
+        (rd-a) @ over (assign-line?) if
+            (rd-a) @ (sb-a) !  dup (sb-u) !
+        then
+        dup (rd-u) @ < if 1+ then
+        dup (rd-a) +!  (rd-u) @ swap - (rd-u) !
+    repeat
+    (sb-a) @ 0<> ;
+
+variable (sb-xt)  variable (sb-len)  variable (sb-act)
+: (see-binding) ( -- )                       \ SEE's report for a deferred word
+    (see-a) @ (see-u) @ (nt-by-name) 0= if  exit  then   ( nt )
+    dup (nt-type) 1 <> if  drop exit  then   \ only deferred words
+    (nt>code)  (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
+    (sb-act) @  (sb-xt) @  (sb-xt) @ (sb-len) @ +  within if
+        ." \ currently: uninitialized" cr  exit  then   \ still the uninit stub
+    (sb-act) @ (xt>name) if                  ( c-addr u )
+        ." \ currently: ' " type ."  is " (see-a) @ (see-u) @ type cr  exit  then
+    (see-a) @ (sb-t) !  (see-u) @ (sb-tu) !
+    (last-assign?) if                        \ a :noname — show its logged line
+        ." \ currently set by: " (sb-a) @ (sb-u) @ type cr  exit  then
+    ." \ currently: an unnamed word (no logged assignment)" cr ;
+' (see-binding) is (see-post)
 
 \ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
 \ Subroutine threading bakes call targets, so redefining a word doesn't reach its

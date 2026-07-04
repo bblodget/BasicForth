@@ -89,6 +89,24 @@ that slot. A freshly deferred word's cell points at a small per-word stub compil
 after the body, which reports `<name>: uninitialized deferred word` and aborts
 (`is` overwrites the cell, after which the stub is dead code).
 
+## Introspection: `action-of`, `defer@`, and `see`
+
+`action-of <name>` pushes a deferred word's current action (checked); `defer@`
+is its raw ( xt1 -- xt2 ) form. `see <name>` on a deferred word appends what it
+currently does:
+
+```
+> see monster-brain
+defer monster-brain
+\ currently: ' hunt is monster-brain
+```
+
+The report has three forms: `uninitialized` (nothing installed yet — read
+straight from the action cell), `' <word> is <name>` (bound to a named word —
+also read from the cell), or `set by: <line>` (a `:noname` — recovered from the
+capture log's last direct assignment to that name, so it is a best-effort
+report: an `is` performed *inside* another word leaves no logged line).
+
 ## Persistence
 
 `save` records the `defer` declaration **and** any direct `is` assignment you

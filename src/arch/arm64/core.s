@@ -3363,6 +3363,17 @@ forth_undef_defer:
     BL platform_write
     B forth_abort
 
+// defer@ ( xt1 -- xt2 )  fetch a deferred word's current action — the inline
+// cell at xt+8, the same slot IS writes. Standard Forth 2012. Applying it to a
+// non-deferred xt reads garbage; checked callers (action-of, SEE) test the
+// Flags2 type first.
+.global forth_defer_fetch
+forth_defer_fetch:
+    LDR X9, [X19]
+    LDR X9, [X9, #8]
+    STR X9, [X19]
+    RET
+
 // ---------- :NONAME ----------
 // :NONAME ( -- xt )
 .global forth_noname
@@ -5151,7 +5162,8 @@ DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
-DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_system
+DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
+DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
