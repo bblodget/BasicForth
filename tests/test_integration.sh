@@ -759,9 +759,25 @@ assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :nona
 assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
 assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
 assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
-# Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary.
+# Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary,
+# 2 = value.
 assert_output "Flags2 tags a defer as type 1"     'defer p (latest@) 9 + c@ .'  "1"
 assert_output "Flags2 leaves a colon word type 0" ': c 1 ; (latest@) 9 + c@ .'  "0"
+assert_output "Flags2 tags a value as type 2"     '5 value v (latest@) 9 + c@ .'  "2"
+# to/is are type-checked against Flags2: is wants a defer; to takes a value or
+# a defer; anything else is refused (the store used to corrupt compiled code).
+assert_error  "to refuses an ordinary word"   ': w 7 ; 5 to w'      "w: not a value or deferred word"
+assert_error  "to refuses a constant"         '42 constant k 9 to k'  "k: not a value or deferred word"
+assert_error  "is refuses an ordinary word"   ': w 7 ; '\'' w is w'  "w: not a deferred word"
+assert_error  "is refuses a value"            '5 value v 6 is v'     "v: not a deferred word"
+assert_output "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
+# A refused store must leave the target intact (it used to be corrupted).
+ti_out=$(printf ': w 7 ;\n5 to w\nw .\nbye\n' | timeout 2 $FORTH 2>&1)
+if [[ "$ti_out" == *"w: not a value or deferred word"* && "$ti_out" == *"7  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  refused to leaves the word intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused to leaves the word intact\n    Got: %s\n" "$(echo "$ti_out"|head -4)"; ((failed++))
+fi
 
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"

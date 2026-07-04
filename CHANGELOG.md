@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `is`/`to` are type-checked (no more silent code corruption)
+- `is` now requires a **deferred** target (`x: not a deferred word` otherwise);
+  `to` accepts a **value or deferred** target (`x: not a value or deferred
+  word` otherwise). Previously `5 to square` or `' w is square` silently
+  overwrote a cell inside `square`'s compiled code. The check rides on the new
+  Flags2 word-type code (`value` now tags its words too) and fires at compile
+  time inside definitions. `' w to d` on a defer remains allowed, as
+  documented. Constants are refused (they were never assignable — the store
+  just used to "work").
+
 ### Dictionary header: second flags byte (Flags2) with a word-type code
 - Each dictionary entry gains a **Flags2** byte between the flags+len byte and
   the name: low nibble = word-type code (0 = ordinary code, 1 = deferred),

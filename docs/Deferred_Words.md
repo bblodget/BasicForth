@@ -24,12 +24,15 @@ xt is name          \ interpret: set name's action now
 Until you set its action, executing a deferred word reports
 `<name>: uninitialized deferred word` and returns to the prompt.
 
-> **`is` and `to` are the same operation** — both store a cell into the named
-> word's data field — so they are interchangeable and **unchecked**. By
-> convention use `is` for deferred words and `to` for `value`s, but `5 is x`
-> (on a value) and `' w to d` (on a defer) also work. Beware the dangerous
-> direction: `5 to game` puts a plain number where a deferred word expects an
-> xt, so calling `game` would jump to that address and crash.
+> **`is` and `to` are the same store** — a cell into the named word's data
+> field — but both are **type-checked** against the target's word-type code
+> (see docs/Dictionary.md): `is` requires a deferred word (`x: not a deferred
+> word` otherwise), and `to` accepts a `value` or a deferred word (`x: not a
+> value or deferred word` otherwise — including constants and ordinary words,
+> whose compiled code the store used to silently corrupt). `' w to d` on a
+> defer still works; note that `5 to game` on a defer remains *semantically*
+> your problem — a plain number where an xt belongs will crash when `game`
+> runs.
 
 ## Why: top-down development
 

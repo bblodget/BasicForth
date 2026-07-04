@@ -41,7 +41,9 @@ Unlike a `variable` (whose `!` contents aren't saved), a `value` set with a
 direct `to` at the prompt **persists across `save`/`reload`** — see `man Persistence`.
 
 ## to ( x "name" -- )
-Store a new value into a `value`.
+Store a new value into a `value` (or a deferred word). Any other target is
+refused — `x: not a value or deferred word` — since the store would corrupt an
+ordinary word's compiled code.
 
     5 value count   9 to count   count .   \ 9
 
@@ -57,7 +59,8 @@ tool behind top-down design (`tutorial Chase`).
 
 ## is ( xt "name" -- )
 Install an execution token as a deferred word's behavior. Swappable **live**, any
-time, without recompiling the word's callers — that's the point.
+time, without recompiling the word's callers — that's the point. A non-deferred
+target is refused: `x: not a deferred word`.
 
     defer brain
     ' negate is brain   5 brain .    \ -5

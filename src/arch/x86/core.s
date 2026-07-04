@@ -42,6 +42,7 @@
 # nibble reserved for future flags. Types: 0 = ordinary code, 1 = deferred.
 .equ F2_TYPE_MASK,  0x0F
 .equ T_DEFER,       1
+.equ T_VALUE,       2
 
 # Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 # SrcId sentinel for assembly primitives.
@@ -1079,6 +1080,7 @@ forth_find:
     jmp .Lfind_cmp
 
 .Lfind_match:
+    mov %rbx, found_entry(%rip)  # record the entry for TO/IS's type check
     # CodePtr is at offset align8(10 + name_len) from entry start
     lea 10+7(%rcx), %rax        # 10 + len + 7
     and $~7, %rax               # round down to 8-byte boundary
@@ -1346,6 +1348,10 @@ sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
 msg_undef_defer: .ascii ": uninitialized deferred word\n"
 .equ msg_undef_defer_len, . - msg_undef_defer
+msg_not_defer: .ascii ": not a deferred word\n"
+.equ msg_not_defer_len, . - msg_not_defer
+msg_not_value: .ascii ": not a value or deferred word\n"
+.equ msg_not_value_len, . - msg_not_value
 .text
 
 # ---------- LIT (runtime) ----------
@@ -2859,8 +2865,9 @@ forth_value:
     sub %rcx, %rdx
     mov %edx, (%rax)
 
-    # Clear HIDDEN flag
+    # Clear HIDDEN flag, tag Flags2 as a value
     andb $~F_HIDDEN, 8(%r12)
+    movb $T_VALUE, 9(%r12)
 
     pop %rbp
     pop %rbx
@@ -2879,10 +2886,21 @@ forth_value:
 # Assign a new value to a VALUE word. In interpret mode, stores immediately.
 # In compile mode, compiles code to store at runtime.
 # Value address is xt + 5 (skip CALL opcode + 4-byte rel32 of forth_lit).
+.global forth_is
+forth_is:
+    movq $1, tois_mode(%rip)        # is: defers only
+    jmp .Ltois_body
 .global forth_to
 forth_to:
+    movq $0, tois_mode(%rip)        # to: values or defers
+.Ltois_body:
     push %rbx
     call forth_parse_word           # ( -- c-addr u )
+    # Stash the name for the type-error message (find consumes it)
+    mov CELL(%r15), %rax
+    mov %rax, tois_name(%rip)
+    mov (%r15), %rax
+    mov %rax, tois_name_len(%rip)
     call forth_find                 # ( c-addr u -- xt flag | c-addr u 0 )
     mov (%r15), %rax                # flag
     test %rax, %rax
@@ -2890,6 +2908,19 @@ forth_to:
     add $CELL, %r15                 # drop flag
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # drop xt
+
+    # Type check (Flags2 of the entry FIND matched). A store into an untyped
+    # word would silently corrupt its compiled code.
+    mov found_entry(%rip), %rcx
+    movzbl 9(%rcx), %ecx
+    and $F2_TYPE_MASK, %ecx
+    cmp $T_DEFER, %ecx
+    je .Lto_target_ok
+    cmpq $0, tois_mode(%rip)
+    jne .Lto_type_err               # is: defers only
+    cmp $T_VALUE, %ecx
+    jne .Lto_type_err               # to: values or defers
+.Lto_target_ok:
 
     # Value address = xt + 5 (past CALL forth_lit opcode)
     lea 5(%rax), %rbx               # RBX = addr of inline value
@@ -2914,6 +2945,23 @@ forth_to:
     call compile_call               # compile call to !
     pop %rbx
     ret
+
+.Lto_type_err:
+    mov tois_name(%rip), %rsi
+    mov tois_name_len(%rip), %rdx
+    call platform_write             # the offending name
+    cmpq $0, tois_mode(%rip)
+    je .Lto_err_to
+    lea msg_not_defer(%rip), %rsi
+    mov $msg_not_defer_len, %rdx
+    jmp .Lto_err_say
+.Lto_err_to:
+    lea msg_not_value(%rip), %rsi
+    mov $msg_not_value_len, %rdx
+.Lto_err_say:
+    call platform_write
+    pop %rbx
+    jmp forth_abort
 
 .Lto_not_found:
     # Word not found — set error token and abort
@@ -4651,7 +4699,7 @@ DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
 DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
-DEFWORD dict_is,          "is",           forth_to,          dict_defer,     F_IMMEDIATE
+DEFWORD dict_is,          "is",           forth_is,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
 DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
@@ -4712,6 +4760,14 @@ abs_path_buf:                       # scratch for getcwd()+'/'+path absolutizati
     .space ABS_PATH_MAX
 sys_cmd_buf:                        # NUL-terminated command for (system)
     .space SYS_CMD_MAX
+found_entry:                        # header matched by the last successful FIND
+    .space 8
+tois_mode:                          # 0 = to, 1 = is (selects the type check)
+    .space 8
+tois_name:                          # TO/IS target name, for the type error
+    .space 8
+tois_name_len:
+    .space 8
 .global src_table_lens
 src_table_lens:                     # length of each registered path (u64)
     .space SRC_TABLE_MAX * 8
