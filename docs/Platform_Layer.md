@@ -506,6 +506,41 @@ Show the terminal cursor.
 
 Writes ANSI escape sequence `ESC[?25h` (6 bytes) via `platform_write`.
 
+### platform_ioctl
+
+Generic ioctl passthrough — the gateway for direct device control from Forth
+(GPIO/I2C/evdev, any device node). Exposed to Forth as `(ioctl)`.
+
+|              | ARM64                          | x86-64                         |
+|--------------|--------------------------------|--------------------------------|
+| **Input**    | X0 = fd, X1 = request, X2 = argp | RDI = fd, RSI = request, RDX = argp |
+| **Output**   | X0 = result or -errno          | RAX = result or -errno         |
+| **Syscall**  | ioctl — SYS_ioctl #29          | ioctl — SYS_ioctl #16          |
+
+### platform_mmap_dev
+
+Shared read/write mapping of a device fd at a byte offset (a mappable buffer
+a driver hands out). Exposed to Forth as `(mmap-dev)`.
+
+|              | ARM64                          | x86-64                         |
+|--------------|--------------------------------|--------------------------------|
+| **Input**    | X0 = fd, X1 = size, X2 = offset | RDI = fd, RSI = size, RDX = offset |
+| **Output**   | X0 = addr or -errno            | RAX = addr or -errno           |
+| **Syscall**  | mmap(NULL, size, RW, SHARED, fd, offset) — #222 | same — #9 |
+
+### platform_dlopen / platform_dlsym
+
+The FFI's library loader — the **only** platform functions that call libc
+instead of the kernel (loading shared libraries needs ld.so, which only
+libc's `dlopen`/`dlsym` reach). Exposed to Forth as `(dlopen)`/`(dlsym)`;
+see [FFI.md](FFI.md).
+
+|              | ARM64                          | x86-64                         |
+|--------------|--------------------------------|--------------------------------|
+| **Input**    | X0 = zpath (dlopen); X0 = handle, X1 = zname (dlsym) | RDI = zpath (dlopen); RDI = handle, RSI = zname (dlsym) |
+| **Output**   | X0 = handle/fnptr or 0         | RAX = handle/fnptr or 0        |
+| **Calls**    | libc `dlopen(path, RTLD_NOW)` / `dlsym` | same, with RSP 16-byte aligned around the call |
+
 ## I-Cache Coherency (ARM64)
 
 ARM64 CPUs have **separate instruction and data caches** that are not
@@ -635,7 +670,10 @@ Functions to be added as BasicForth grows:
 |---------------------|-----------------------------------------------|-------|
 | platform_lseek      | Seek within file                              |     4 |
 | platform_fork_exec  | Fork and exec external process (for $EDITOR)  |     4 |
-| platform_fb_open    | Open framebuffer or DRM device                |     5 |
-| platform_fb_mmap    | Map framebuffer memory                        |     5 |
 | platform_gpio_open  | Open /dev/gpiochip                            |     6 |
 | platform_gpio_ioctl | GPIO read/write via ioctl                     |     6 |
+
+The planned `platform_fb_open`/`platform_fb_mmap` pair was superseded in
+v0.8.0 by the generic device gateway: `platform_ioctl` (fd, request, argp) and
+`platform_mmap_dev` (fd, offset, size — shared RW mapping of a device fd),
+exposed to Forth as `(ioctl)` and `(mmap-dev)`.

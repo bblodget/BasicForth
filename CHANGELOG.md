@@ -148,6 +148,58 @@
   each monster its own swappable brain via an execution-token table (the Pac-Man
   trick). Builds a complete terminal chase game. Finished program:
   `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+### SDL3 display backend: a window at last (`sdl3.fs` + `bounce`)
+- New on-demand **`src/forth/sdl3.fs`** — the display backend behind the
+  graphics.fs surface, bound through the FFI (no glue code in C or asm):
+  `sdl-open ( w h -- )`, then per frame `sdl-frame` (lock the streaming
+  texture, point the surface at its pixels) → draw → `sdl-show` (present,
+  vsync-paced), plus `sdl-poll`/`sdl-event-type`/`sdl-key` and event/keycode
+  constants. Works in a desktop window; on a console-only system SDL's KMSDRM
+  driver takes the display directly. Constants/offsets verified against the
+  SDL3 headers by the new `tools/sdl3off.c`.
+- New **`examples/bounce.fs`**: a yellow square bouncing in a 640×360 window
+  at the display refresh rate — the first BasicForth graphics you can see
+  without leaving the desktop. ESC/q/close quits.
+- Integration test drives the whole stack headless via SDL's dummy video
+  driver (open → lock → draw → read back); skipped where libSDL3 is absent.
+- Requires SDL3 (laptop: built from source into /usr/local; board: added to
+  the Pumpkian image). docs/Graphics.md covers the API and frame cycle.
+
+### FFI: call C libraries from Forth (`dlopen` / `dlsym` / `(ccall)`)
+- New primitives **`(dlopen)`**, **`(dlsym)`**, and **`(ccall)`** ( arg1 ..
+  argN nargs fnptr -- ret ): load a shared C library and call its functions
+  with up to 6 integer/pointer arguments, passed in C parameter order (a call
+  site reads left-to-right like the C prototype). On x86-64 AL is zeroed so
+  variadic functions (printf-family) work. New on-demand `src/forth/ffi.fs`
+  adds `>z` (NUL-terminate a string) and aborting `dlopen`/`dlsym` wrappers.
+  See docs/FFI.md and `man ffi`.
+- **The binary is now dynamically linked** (`gcc -nostartfiles -no-pie`,
+  keeping our own `_start`) so ld.so and `dlopen` are available. The platform
+  layer still makes raw syscalls for all OS work — libc is bypassed except
+  `dlopen`/`dlsym`. The dictionary is `mprotect`ed RWX at startup (STC
+  compiles machine code into it; the old `ld -N` single-RWX-segment layout
+  doesn't survive dynamic linking). Under QEMU, run with
+  `-L /usr/aarch64-linux-gnu` so the emulated ld.so is found (Makefile
+  handles it).
+- This is the enabling step for the SDL3 graphics backend — and for any
+  future C library.
+
+### Graphics pivot: SDL3 replaces the direct DRM/KMS backend
+- **Removed the DRM/KMS display backend** (`drm.fs` with `drm-open`/`drm-show`/
+  `drm-close`/`drm-demo`, `tools/drmoff.c`, and its gated integration test),
+  introduced in v0.8.0. It worked — but on any desktop the compositor owns the
+  display, so a direct-DRM program can never show a *window*, only take over a
+  text VT. The display backend is pivoting to **SDL3** (desktop window now;
+  SDL's KMSDRM driver covers the console/board case; SDL_GPU is the 3D path).
+  The revised philosophy and roadmap are in docs/Planning.md ("Graphics
+  Direction"); the removed code stays in git history.
+- **Kept and unaffected:** the device gateway (`(ioctl)`, `(mmap-dev)`,
+  `w@`/`w!`/`l@`/`l!`) — it exists for GPIO/I2C/evdev as much as for graphics —
+  and all of `graphics.fs` (the backend-agnostic surface + drawing words).
+- **New primitive `fill32` ( value addr count -- )**: 32-bit block fill
+  (`rep stosl` on x86, store loop on ARM64). `fill-rect` now clips the
+  rectangle once and fills each visible row in a single `fill32` burst, so a
+  full-screen `clear` is effectively instant instead of taking seconds.
 
 ## v0.8.0 — 2026-06-29
 

@@ -204,7 +204,7 @@ section "Memory Access"
 
 # Note: HERE is not yet exposed as a Forth word
 
-# 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and DRM structs
+# 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and C structs
 assert_output "l! / l@"            'pad $11223344 over l! l@ .'         "287454020"
 assert_output "w! / w@"            'pad $ABCD over w! w@ .'             "43981"
 assert_output "l! writes 4 bytes"  'pad -1 over ! 0 over l! @ u.'      "18446744069414584320"
@@ -486,23 +486,33 @@ assert_output "gr fill-rect"          "include $GR  48 allocate drop value gb  :
 assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
 assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
 
-# DRM/KMS backend — only meaningful on a real DRM host. Skip under QEMU (cannot
-# emulate DRM ioctls) and when there is no card node. drm-open maps a real dumb
-# buffer (no DRM master needed), so we can clear it blue and read the pixel back;
-# the actual scanout (drm-show / SETCRTC) needs master and is a manual VT/board test.
+# =========================================================================
+section "FFI (dlopen / dlsym / ccall)"
+# =========================================================================
+# Calls into libc through the same path SDL bindings use. Works under QEMU
+# too (the emulated ld.so resolves libc.so.6 inside the -L sysroot).
+FFI="$FORTH_LIB/ffi.fs"
+assert_output "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlopen s\" getpid\" dlsym >r 0 r> (ccall) 0> . ; t"  "-1"
+assert_output "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
+assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
+assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
+assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
+
+# SDL3 backend — needs libSDL3 on the host. Uses SDL's dummy video driver so
+# no display is required: open window + renderer + streaming texture, lock,
+# draw through the graphics.fs surface, read the pixel back, close. Skipped
+# under QEMU (no aarch64 libSDL3 in the -L sysroot).
 if [[ "$FORTH" == *qemu* ]]; then
-    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (qemu cannot emulate DRM ioctls)\n"
-elif [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ]; then
-    printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (no /dev/dri/cardN)\n"
+    printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (no libSDL3 in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (libSDL3 not installed)\n"
 else
-    drm_px=$(printf 'include %s/graphics.fs\ninclude %s/drm.fs\n: t drm-open gr-base @ dup 0= over -1 = or if drop ." nodev" exit then drop blue clear gr-base @ l@ . drm-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
-        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
-    if printf '%s' "$drm_px" | grep -q '255'; then
-        printf "  ${GREEN}PASS${NC}  DRM open+map+draw (blue pixel read back from dumb buffer)\n"; ((passed++))
-    elif printf '%s' "$drm_px" | grep -qiE 'nodev|cannot open'; then
-        printf "  ${YELLOW}SKIP${NC}  DRM open+map+draw (card present but not usable here)\n"
+    sdl_px=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 64 32 sdl-open sdl-frame red clear gr-base @ l@ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_px" | grep -q '16711680'; then
+        printf "  ${GREEN}PASS${NC}  SDL3 open+draw+readback (red pixel via dummy video driver)\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  DRM open+map+draw\n    Got: %q\n" "$drm_px"; ((failed++))
+        printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
     fi
 fi
 

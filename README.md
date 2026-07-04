@@ -2,8 +2,9 @@
 
 A "basic" Forth system written in pure assembly for ARM64 and x86-64 Linux.
 
-Inspired by 1980s BASIC — boot up and start coding. No libc, no dynamic
-linker, just static ELF binaries built from assembly source. Subroutine
+Inspired by 1980s BASIC — boot up and start coding. Raw Linux syscalls, no
+runtime written in C — pure assembly source, plus an FFI that can call into
+any C library (SDL3 for graphics). Subroutine
 Threaded Code (STC) with 64-bit cells.
 
 Goal:  Fun, retro-inspired Forth environment for graphics, sounds, games
@@ -22,10 +23,11 @@ guiding ideas:
   networking) and own everything above the syscall boundary. Bare metal is
   fascinating but impractical for supporting modern peripherals; the platform
   layer stays isolated so a bare-metal or other-OS backend remains possible.
-- **Low-level but practical** — raw syscalls by default (no libc, no dynamic
-  linker, static ELF), but open to minimal libraries where going direct would be
-  unreasonably painful (graphics, sound, threading). Engine registers follow each
-  platform's C calling convention, keeping the door open to linking C/C++ later.
+- **Low-level but practical** — raw syscalls by default (the platform layer
+  never calls libc), plus an FFI (`dlopen`/`dlsym`/`(ccall)`) for the few
+  capabilities sealed behind libraries (graphics, sound). Engine registers
+  follow each platform's C calling convention, which is what lets Forth call
+  straight into C libraries.
 - **Target applications** — video games and robotics on real ARM64 and x86-64
   hardware.
 
@@ -34,13 +36,15 @@ and project phases.
 
 ## Status
 
-**v0.8.0** — Library-free 2D graphics over DRM/KMS (Phase 5), `edit <word>` to
+**v0.8.0** — Software 2D graphics (Phase 5), `edit <word>` to
 recall and re-edit a definition (with horizontal scrolling and a continuation
-prompt), and `.session` to list this session's words. Builds on v0.7.0's
+prompt), and `.session` to list this session's words. Since then the display
+backend has pivoted from direct DRM/KMS to **SDL3** (see docs/Planning.md,
+"Graphics Direction"). Builds on v0.7.0's
 interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
 persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
 tutorials, source viewing (`see`), file access, and dynamic memory.
-119 unit tests + 510 integration tests.
+119 unit tests + 545 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -72,9 +76,12 @@ What works today:
 - Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
-- Graphics (Phase 5): library-free software 2D over DRM/KMS — `set-surface`,
-  `pixel`, `fill-rect`, `clear`, named colors (`graphics.fs`); `drm-open`/
-  `drm-show`/`drm-close` scan out to a real display with no libdrm/X/Wayland
+- Graphics (Phase 5): software 2D on a backend-agnostic surface — `set-surface`,
+  `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`) —
+  presented in a desktop window via the SDL3 backend (`sdl3.fs`): vsync'd
+  frames, keyboard/quit events; try `examples/bounce.fs`
+- FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
+  (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
 - Tools: `WORDS`, `.SESSION` (list this session's words), `DUMP`, `.S`,
   `VERSION` (also `basicforth -v`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
@@ -88,8 +95,9 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: more Phase 5 — sound, a GPU (Vulkan) backend behind the surface
-API, font rendering — plus locals word set, threading, and more games.
+What's next: more Phase 5 — sound (SDL3 audio), more 2D primitives and font
+rendering, a GPU backend (SDL_GPU) behind the surface API — plus locals word
+set, threading, and more games.
 
 ## Building
 
@@ -191,7 +199,10 @@ BasicForth uses a three-layer design:
 - **Pure memory stack**: data stack top is always in memory at `[DSP]`,
   not cached in a register. Simpler, easier to debug.
 - **64-bit cells**: native word size on both architectures.
-- **No libc**: direct Linux syscalls via `syscall` (x86) / `SVC #0` (ARM64).
+- **Raw syscalls**: all OS work goes through `syscall` (x86) / `SVC #0`
+  (ARM64) in the platform layer — never through libc. The binary is
+  dynamically linked only so the FFI can `dlopen` C libraries (SDL3);
+  libc is bypassed except `dlopen`/`dlsym`.
 
 ### Register Allocation
 
@@ -222,10 +233,11 @@ BasicForth/
     forth/
       core.fs               Forth-defined words (loaded at startup)
       graphics.fs           Software 2D surface API (on-demand)
-      drm.fs                DRM/KMS display backend (on-demand)
+      ffi.fs                dlopen/dlsym wrappers for C libraries (on-demand)
+      sdl3.fs               SDL3 display backend (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (510 tests, piped I/O)
+    test_integration.sh     Integration tests (545 tests, piped I/O)
     test_line_editor_pty.py Line-editor tests under a pseudo-terminal
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge

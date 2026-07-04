@@ -525,6 +525,23 @@ NEW                       \ recompiled against the new setup
 points you to edit-and-`reload`, and primitives have no source. See
 `docs/Redo.md`.
 
+## Calling C Libraries (FFI)
+
+`include ffi.fs`, then `dlopen` a library, `dlsym` a function, and `(ccall)`
+it with up to 6 integer/pointer arguments in C parameter order:
+
+```
+> include ffi.fs
+ ok
+> : pid ( -- n ) s" libc.so.6" dlopen s" getpid" dlsym >r 0 r> (ccall) ;
+ ok
+> pid .
+48213  ok
+```
+
+This is how the SDL3 graphics backend reaches the display. C code has no
+safety net — see `man ffi` and `docs/FFI.md`.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

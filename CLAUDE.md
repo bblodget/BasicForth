@@ -37,7 +37,8 @@ as the code evolves:
 
 - Multi-arch: src/arch/arm64/ and src/arch/x86/
 - Shared Forth source: src/forth/core.fs (loaded at startup)
-- No libc, no dynamic linker — static ELF binaries
+- Raw syscalls for all OS work (no libc calls in the platform layer); the
+  binary is dynamically linked only so the FFI can dlopen C libraries (SDL3)
 - Subroutine Threaded Code (STC)
 - 64-bit cells (native word size on both architectures)
 - Linux syscalls (SVC #0 on ARM64, syscall on x86-64)

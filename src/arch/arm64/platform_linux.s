@@ -401,6 +401,17 @@ platform_init_guard_pages:
     SVC #0
     CBNZ X0, .Lguard_fail
 
+    // mprotect(dict_space, dict_space_end - dict_space, RWX)
+    // STC compiles machine code into the dictionary; the dynamically-linked
+    // binary maps .bss read-write only (unlike the old `ld -N` RWX segment).
+    ADR X0, dict_space
+    ADR X1, dict_space_end
+    SUB X1, X1, X0
+    MOV X2, #7                     // PROT_READ|PROT_WRITE|PROT_EXEC
+    MOV X8, #SYS_mprotect
+    SVC #0
+    CBNZ X0, .Lguard_fail
+
     // rt_sigaction(SIGSEGV, &sigact, NULL, sizeof(sigset_t))
     // Kernel sigaction struct: [handler:8][flags:8][mask:128]
     // (ARM64 has no sa_restorer field)
@@ -826,7 +837,7 @@ platform_ioctl:
     RET
 
 // platform_mmap_dev ( X0=fd X1=size X2=offset -- X0=addr )
-// Shared read/write mapping of a device fd at a byte offset (DRM dumb buffer).
+// Shared read/write mapping of a device fd at a byte offset (device buffer).
 .global platform_mmap_dev
 platform_mmap_dev:
     MOV X4, X0                      // fd      -> arg5 (before clobbering X0)
@@ -860,6 +871,32 @@ platform_mmap_anon:
 platform_munmap:
     MOV X8, #SYS_munmap
     SVC #0
+    RET
+
+// ---------- FFI: dynamic libraries ----------
+// The one place the platform layer calls the C library instead of the kernel:
+// loading shared libraries needs ld.so, which only libc's dlopen/dlsym reach.
+
+.equ RTLD_NOW, 2
+
+// platform_dlopen ( X0=zpath -- X0=handle or 0 )
+// zpath is a NUL-terminated library name/path (e.g. "libSDL3.so.0").
+.global platform_dlopen
+platform_dlopen:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    MOV X1, #RTLD_NOW
+    BL dlopen
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_dlsym ( X0=handle X1=zname -- X0=fnptr or 0 )
+.global platform_dlsym
+platform_dlsym:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    BL dlsym
+    LDP X29, X30, [SP], #16
     RET
 
 // platform_close_file ( X0=fd -- X0=0 or -errno )

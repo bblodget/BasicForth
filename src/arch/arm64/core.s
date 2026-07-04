@@ -806,7 +806,7 @@ forth_ioctl:
     RET
 
 // (mmap-dev) ( fd offset size -- addr )
-// Shared read/write mmap of a device fd at a byte offset (DRM dumb buffer).
+// Shared read/write mmap of a device fd at a byte offset (a device buffer).
 .global forth_mmap_dev
 forth_mmap_dev:
     LDR X1, [X19]            // size (top)
@@ -834,6 +834,75 @@ forth_fill32:
     SUB X2, X2, #1
     B .Lfill32_loop
 .Lfill32_done:
+    RET
+
+// ---------- FFI ----------
+// (dlopen) ( zaddr -- handle )
+// Load a shared library by NUL-terminated name/path. 0 on failure.
+.global forth_dlopen
+forth_dlopen:
+    LDR X0, [X19]
+    STP X29, X30, [SP, #-16]!
+    BL platform_dlopen
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
+// (dlsym) ( handle zaddr -- fnptr )
+// Resolve a symbol in an open library. 0 on failure.
+.global forth_dlsym
+forth_dlsym:
+    LDR X1, [X19]            // zaddr (top)
+    LDR X0, [X19, #CELL]     // handle
+    ADD X19, X19, #CELL
+    STP X29, X30, [SP, #-16]!
+    BL platform_dlsym
+    LDP X29, X30, [SP], #16
+    STR X0, [X19]
+    RET
+
+// (ccall) ( arg1 .. argN nargs fnptr -- ret )
+// Call a C function through the AAPCS64 ABI with up to 6 integer/pointer args.
+// arg1 (pushed first, deepest on the stack) becomes the first C parameter,
+// so a call reads left-to-right like C: `ren fmt acc w h 5 fn (ccall)`.
+// The C ABI preserves X19/X21/X22 (DSP/HERE/LATEST) — callee-saved — and SP
+// is always 16-byte aligned on ARM64.
+.global forth_ccall
+forth_ccall:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    LDR X9, [X19]            // fnptr (top)
+    LDR X10, [X19, #CELL]    // nargs
+    ADD X19, X19, #(2*CELL)  // pop fnptr + nargs; args remain
+    // arg K sits at [DSP + (nargs-K)*8]; load registers in C-parameter order
+    CBZ X10, .Lccall_go
+    SUB X11, X10, #1
+    LDR X0, [X19, X11, LSL #3]    // arg1
+    CMP X10, #2
+    B.LO .Lccall_go
+    SUB X11, X10, #2
+    LDR X1, [X19, X11, LSL #3]    // arg2
+    CMP X10, #3
+    B.LO .Lccall_go
+    SUB X11, X10, #3
+    LDR X2, [X19, X11, LSL #3]    // arg3
+    CMP X10, #4
+    B.LO .Lccall_go
+    SUB X11, X10, #4
+    LDR X3, [X19, X11, LSL #3]    // arg4
+    CMP X10, #5
+    B.LO .Lccall_go
+    SUB X11, X10, #5
+    LDR X4, [X19, X11, LSL #3]    // arg5
+    CMP X10, #6
+    B.LO .Lccall_go
+    SUB X11, X10, #6
+    LDR X5, [X19, X11, LSL #3]    // arg6
+.Lccall_go:
+    ADD X19, X19, X10, LSL #3     // pop all the args
+    BLR X9
+    STR X0, [X19, #-CELL]!        // push the C return value
+    LDP X29, X30, [SP], #16
     RET
 
 // ---------- EMIT (Forth-level) ----------
@@ -5164,6 +5233,9 @@ DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
 DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
 DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
+DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
+DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
+DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5177,6 +5249,7 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 .global dict_mmap_dev
 .global dict_system
 .global dict_fill32
+.global dict_ccall
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -5236,11 +5309,14 @@ guard_page_underflow:
     .space 4096
 
 // ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 262144    // 256KB
-.balign 8
+// Page-aligned: made executable at startup with mprotect (STC compiles
+// machine code into it; see platform_init_guard_pages).
+.equ DICT_SPACE_SIZE, 262144    // 256KB (64 whole pages)
+.balign 4096
 .global dict_space
 dict_space:
     .space DICT_SPACE_SIZE
+.global dict_space_end
 dict_space_end:
 
 // ---------- Variables ----------
