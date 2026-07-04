@@ -1844,6 +1844,22 @@ printf ': x 1 ;\n' > "$cp_dir/mod.fs"
 cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
 cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
 rm -rf "$cp_dir"
+# COMPACT keeps final is/to bindings: the deduped snapshot must load to the
+# same behavior — the defer bound (last assignment wins) and the value set.
+ca_dir="$(mktemp -d)"
+printf 'defer g\n' > "$ca_dir/mod.fs"
+( cd "$ca_dir" && printf ': one 1 ;\n: two 2 ;\n'\'' one is g\n'\'' two is g\n0 value hits\n7 to hits\ncompact\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+ca_out=$( printf 'g .\nhits .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$ca_dir/mod.compact.fs" 2>&1 )
+ca_file=$(cat "$ca_dir/mod.compact.fs" 2>/dev/null)
+rm -rf "$ca_dir"
+if [[ "$ca_out" == *"2 "* && "$ca_out" == *"7 "* && "$ca_file" == *"' two is g"* \
+      && "$ca_file" != *"' one is g"* && "$ca_file" == *"7 to hits"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact keeps final is/to bindings (loads live)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact final bindings\n    Got out: %q\n    File: %q\n" "$ca_out" "$ca_file"; ((failed++))
+fi
 if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;"* ]]; then
     printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
 else

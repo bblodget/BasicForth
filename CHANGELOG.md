@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `compact` keeps final `is`/`to` bindings
+- A definitions-only snapshot lost a deferred word's binding and a `value`'s
+  contents — `cat game.compact.fs` had a dead `defer brain` and every brain
+  defined but none installed. `compact` now appends, after the deduped
+  definitions, the **last logged direct `is`/`to` assignment for each
+  value/deferred word in the module** (found with the same log scanner `see`'s
+  binding report uses), so the compacted file loads to the same behavior as
+  `save`'s output.
+
 ### `defer@`, `action-of`, and a defer-aware `see`
 - New standard words: **`defer@ ( xt1 -- xt2 )`** reads a deferred word's
   current action; **`action-of <name>`** is the checked, named form. And

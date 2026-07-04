@@ -1908,6 +1908,20 @@ variable (ld-pos)
         (cmp-fid) @ write-file abort" compact: write error"
         (nl) 1 (cmp-fid) @ write-file abort" compact: write error"
     then ;
+\ (cmp-assign): a definitions-only snapshot would lose a deferred word's
+\ binding and a value's contents — those live in direct `is`/`to` lines, not in
+\ any definition. For each in-force defer/value in the module, append its LAST
+\ logged direct assignment (found with SEE's (last-assign?) scanner), so the
+\ compacted file loads to the same behavior the module has now.
+: (cmp-assign) ( nt -- )
+    dup (nt-type)  dup 1 =  swap 2 =  or  0= if  drop exit  then
+    dup dup (sw-name) (nt-by-name) 0= if  2drop exit  then   ( nt nt nt' )
+    = 0= if  drop exit  then                 ( nt )   \ shadowed entry → skip
+    (sw-name)  (sb-tu) !  (sb-t) !
+    (last-assign?) 0= if  exit  then          \ never directly assigned
+    (sb-a) @ (sb-u) @ (cmp-fid) @ write-file abort" compact: write error"
+    (nl) 1 (cmp-fid) @ write-file abort" compact: write error" ;
+
 : compact ( "name" -- )
     parse-word dup 0= if
         2drop (cur-file@) dup 0= if
@@ -1923,6 +1937,10 @@ variable (ld-pos)
     (prop-n) @ 0 ?do
         (prop-n) @ 1- i - cells (prop-nts) + @    \ oldest-first
         (compact-one)
+    loop
+    (prop-n) @ 0 ?do                          \ final is/to binding per target
+        (prop-n) @ 1- i - cells (prop-nts) + @
+        (cmp-assign)
     loop
     (cmp-fid) @ close-file abort" compact: close error"
     (uf-free)
