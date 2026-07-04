@@ -143,6 +143,16 @@ platform_mmap_dev:
     MOV X0, #-1                     // return MAP_FAILED
     RET
 
+.global platform_dlopen
+platform_dlopen:
+    MOV X0, #0                      // return NULL (no dynamic loading in unit tests)
+    RET
+
+.global platform_dlsym
+platform_dlsym:
+    MOV X0, #0                      // return NULL
+    RET
+
 .global platform_rename
 platform_rename:
     MOV X0, #0                      // return 0 (success)

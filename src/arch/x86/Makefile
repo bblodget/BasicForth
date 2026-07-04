@@ -17,9 +17,15 @@ TEST_BIN = test_basicforth
 
 .PHONY: all test run run-test run-integration run-pty clean help FORCE
 
-# Default: build binary only
+# Default: build binary only.
+# Dynamically linked (gcc, not ld) so the FFI can dlopen C libraries (SDL3).
+# -nostartfiles keeps our own _start; ld.so still runs libc's initializers
+# before jumping to it, which is what makes dlopen/dlsym usable. The
+# dictionary is made executable at startup by mprotect (STC compiles machine
+# code into it) — the old `ld -N` single-RWX-segment trick doesn't survive
+# dynamic linking.
 $(BIN): $(OBJS)
-	$(LD) -N -o $@ $(OBJS)
+	$(CC) -nostartfiles -no-pie -o $@ $(OBJS) -ldl
 
 main.o: main.s version.inc
 

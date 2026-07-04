@@ -144,6 +144,16 @@ platform_mmap_dev:
     mov $-1, %rax               # return MAP_FAILED
     ret
 
+.global platform_dlopen
+platform_dlopen:
+    xor %eax, %eax              # return NULL (no dynamic loading in unit tests)
+    ret
+
+.global platform_dlsym
+platform_dlsym:
+    xor %eax, %eax              # return NULL
+    ret
+
 .global platform_rename
 platform_rename:
     xor %eax, %eax              # return 0 (success)

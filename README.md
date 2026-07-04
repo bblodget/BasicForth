@@ -2,8 +2,9 @@
 
 A "basic" Forth system written in pure assembly for ARM64 and x86-64 Linux.
 
-Inspired by 1980s BASIC — boot up and start coding. No libc, no dynamic
-linker, just static ELF binaries built from assembly source. Subroutine
+Inspired by 1980s BASIC — boot up and start coding. Raw Linux syscalls, no
+runtime written in C — pure assembly source, plus an FFI that can call into
+any C library (SDL3 for graphics). Subroutine
 Threaded Code (STC) with 64-bit cells.
 
 Goal:  Fun, retro-inspired Forth environment for graphics, sounds, games
@@ -22,10 +23,11 @@ guiding ideas:
   networking) and own everything above the syscall boundary. Bare metal is
   fascinating but impractical for supporting modern peripherals; the platform
   layer stays isolated so a bare-metal or other-OS backend remains possible.
-- **Low-level but practical** — raw syscalls by default (no libc, no dynamic
-  linker, static ELF), but open to minimal libraries where going direct would be
-  unreasonably painful (graphics, sound, threading). Engine registers follow each
-  platform's C calling convention, keeping the door open to linking C/C++ later.
+- **Low-level but practical** — raw syscalls by default (the platform layer
+  never calls libc), plus an FFI (`dlopen`/`dlsym`/`(ccall)`) for the few
+  capabilities sealed behind libraries (graphics, sound). Engine registers
+  follow each platform's C calling convention, which is what lets Forth call
+  straight into C libraries.
 - **Target applications** — video games and robotics on real ARM64 and x86-64
   hardware.
 
@@ -42,7 +44,7 @@ backend has pivoted from direct DRM/KMS to **SDL3** (see docs/Planning.md,
 interactive line editor, shell-like words (`cd`/`ls`/`cat`/`pushd`/…), session
 persistence (`save`/`reload`), built-in help (`man`/`topics`/`apropos`),
 tutorials, source viewing (`see`), file access, and dynamic memory.
-119 unit tests + 510 integration tests.
+119 unit tests + 515 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -193,7 +195,10 @@ BasicForth uses a three-layer design:
 - **Pure memory stack**: data stack top is always in memory at `[DSP]`,
   not cached in a register. Simpler, easier to debug.
 - **64-bit cells**: native word size on both architectures.
-- **No libc**: direct Linux syscalls via `syscall` (x86) / `SVC #0` (ARM64).
+- **Raw syscalls**: all OS work goes through `syscall` (x86) / `SVC #0`
+  (ARM64) in the platform layer — never through libc. The binary is
+  dynamically linked only so the FFI can `dlopen` C libraries (SDL3);
+  libc is bypassed except `dlopen`/`dlsym`.
 
 ### Register Allocation
 
@@ -226,7 +231,7 @@ BasicForth/
       graphics.fs           Software 2D surface API (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (510 tests, piped I/O)
+    test_integration.sh     Integration tests (515 tests, piped I/O)
     test_line_editor_pty.py Line-editor tests under a pseudo-terminal
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge

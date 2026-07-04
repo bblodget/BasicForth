@@ -487,6 +487,18 @@ assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  :
 assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
 
 # =========================================================================
+section "FFI (dlopen / dlsym / ccall)"
+# =========================================================================
+# Calls into libc through the same path SDL bindings use. Works under QEMU
+# too (the emulated ld.so resolves libc.so.6 inside the -L sysroot).
+FFI="$FORTH_LIB/ffi.fs"
+assert_output "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlopen s\" getpid\" dlsym >r 0 r> (ccall) 0> . ; t"  "-1"
+assert_output "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
+assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
+assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
+assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
+
+# =========================================================================
 section "Dynamic Memory (heap)"
 # =========================================================================
 # ALLOCATE/FREE round-trip: store and read a cell, ior 0 throughout.

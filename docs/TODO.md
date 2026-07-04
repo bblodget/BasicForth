@@ -321,8 +321,10 @@ docs/Graphics.md for the API.
   **removed** in the SDL pivot (a desktop compositor owns the display, so DRM
   could never show a window; SDL's KMSDRM driver covers the console case).
   In git history: `src/forth/drm.fs`, `tools/drmoff.c`.
-- [ ] FFI: dynamic-link build (`gcc -nostartfiles`), `(dlopen)` / `(dlsym)` /
-  `ccall` primitives (integer/pointer args first), libc-based tests
+- [x] FFI: dynamic-link build (`gcc -nostartfiles`, dictionary mprotect'd RWX),
+  `(dlopen)` / `(dlsym)` / `(ccall)` primitives (up to 6 integer/pointer args),
+  `ffi.fs` wrappers, libc-based integration tests, docs/FFI.md + `man ffi`.
+  Deferred: float args/returns, >6 args, C-to-Forth callbacks.
 - [ ] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
   `set-surface`; vsync'd `present`; poll-event decoding (keyboard first)
 - [ ] Animation demo: bouncing rectangle in a window, ESC/close to quit

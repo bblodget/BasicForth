@@ -750,6 +750,74 @@ forth_fill32:
     rep stosl                   # store EAX -> [RDI], RCX times
     ret
 
+# ---------- FFI ----------
+# (dlopen) ( zaddr -- handle )
+# Load a shared library by NUL-terminated name/path. 0 on failure.
+.global forth_dlopen
+forth_dlopen:
+    mov (%r15), %rdi
+    call platform_dlopen
+    mov %rax, (%r15)
+    ret
+
+# (dlsym) ( handle zaddr -- fnptr )
+# Resolve a symbol in an open library. 0 on failure.
+.global forth_dlsym
+forth_dlsym:
+    mov (%r15), %rsi            # zaddr (top)
+    mov CELL(%r15), %rdi        # handle
+    add $CELL, %r15
+    call platform_dlsym
+    mov %rax, (%r15)
+    ret
+
+# (ccall) ( arg1 .. argN nargs fnptr -- ret )
+# Call a C function through the SysV ABI with up to 6 integer/pointer args.
+# arg1 (pushed first, deepest on the stack) becomes the first C parameter,
+# so a call reads left-to-right like C: `ren fmt acc w h 5 fn (ccall)`.
+# AL=0 tells variadic callees there are no vector-register args. The C ABI
+# preserves R12/R13/R15 (LATEST/HERE/DSP) — callee-saved — and requires RSP
+# 16-byte aligned at the call, which our return stack doesn't guarantee, so
+# align around the call.
+.global forth_ccall
+forth_ccall:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    mov (%r15), %rbx            # fnptr (top)
+    mov CELL(%r15), %rax        # nargs
+    add $2*CELL, %r15           # pop fnptr + nargs; args remain
+    # arg K sits at [DSP + (nargs-K)*8]; load registers in C-parameter order
+    test %rax, %rax
+    jz .Lccall_go
+    mov -8(%r15,%rax,8), %rdi   # arg1
+    cmp $2, %rax
+    jb .Lccall_go
+    mov -16(%r15,%rax,8), %rsi  # arg2
+    cmp $3, %rax
+    jb .Lccall_go
+    mov -24(%r15,%rax,8), %rdx  # arg3
+    cmp $4, %rax
+    jb .Lccall_go
+    mov -32(%r15,%rax,8), %rcx  # arg4
+    cmp $5, %rax
+    jb .Lccall_go
+    mov -40(%r15,%rax,8), %r8   # arg5
+    cmp $6, %rax
+    jb .Lccall_go
+    mov -48(%r15,%rax,8), %r9   # arg6
+.Lccall_go:
+    lea (%r15,%rax,8), %r15     # pop all the args
+    and $-16, %rsp
+    xor %eax, %eax              # AL = 0 (no vector args)
+    call *%rbx
+    sub $CELL, %r15             # push the C return value
+    mov %rax, (%r15)
+    lea -8(%rbp), %rsp
+    pop %rbx
+    pop %rbp
+    ret
+
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
 .global forth_emit
@@ -4726,6 +4794,9 @@ DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
 DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
 DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
+DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
+DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
+DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4739,6 +4810,7 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 .global dict_mmap_dev
 .global dict_system
 .global dict_fill32
+.global dict_ccall
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):
@@ -4801,11 +4873,15 @@ guard_page_underflow:
     .space 4096
 
 # ---------- Dictionary Space ----------
-.equ DICT_SPACE_SIZE, 262144    # 256KB
-.balign 8
+# Page-aligned: made executable at startup with mprotect (STC compiles
+# machine code into it; see platform_init_guard_pages).
+.equ DICT_SPACE_SIZE, 262144    # 256KB (64 whole pages)
+.balign 4096
 .global dict_space
 dict_space:
     .space DICT_SPACE_SIZE
+.global dict_space_end
+dict_space_end:
 
 # ---------- Variables ----------
 .data

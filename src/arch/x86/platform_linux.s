@@ -352,6 +352,18 @@ platform_init_guard_pages:
     test %rax, %rax
     jnz .Lguard_fail
 
+    # mprotect(dict_space, dict_space_end - dict_space, RWX)
+    # STC compiles machine code into the dictionary; the dynamically-linked
+    # binary maps .bss read-write only (unlike the old `ld -N` RWX segment).
+    mov $SYS_mprotect, %rax
+    lea dict_space(%rip), %rdi
+    lea dict_space_end(%rip), %rsi
+    sub %rdi, %rsi
+    mov $7, %rdx                # PROT_READ|PROT_WRITE|PROT_EXEC
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
     # rt_sigaction(SIGSEGV, &sigact, NULL, 8)
     # Kernel sigaction struct: [handler:8][flags:8][restorer:8][mask:128]
     lea sigact(%rip), %rbx
@@ -786,6 +798,38 @@ platform_mmap_anon:
 platform_munmap:
     mov $SYS_munmap, %rax
     syscall
+    ret
+
+# ---------- FFI: dynamic libraries ----------
+# The one place the platform layer calls the C library instead of the kernel:
+# loading shared libraries needs ld.so, which only libc's dlopen/dlsym reach.
+# The C ABI requires RSP 16-byte aligned at the call, and our RSP (the Forth
+# return stack) has no such guarantee — so align around each call.
+
+.equ RTLD_NOW, 2
+
+# platform_dlopen ( RDI=zpath -- RAX=handle or 0 )
+# zpath is a NUL-terminated library name/path (e.g. "libSDL3.so.0").
+.global platform_dlopen
+platform_dlopen:
+    push %rbp
+    mov %rsp, %rbp
+    and $-16, %rsp
+    mov $RTLD_NOW, %esi
+    call dlopen
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+
+# platform_dlsym ( RDI=handle RSI=zname -- RAX=fnptr or 0 )
+.global platform_dlsym
+platform_dlsym:
+    push %rbp
+    mov %rsp, %rbp
+    and $-16, %rsp
+    call dlsym
+    mov %rbp, %rsp
+    pop %rbp
     ret
 
 # platform_close_file ( RDI=fd -- RAX=0 or -errno )

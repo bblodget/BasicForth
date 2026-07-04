@@ -58,8 +58,10 @@ primary goal.
 
 ### Minimal Library Dependencies
 
-The default is raw syscalls: no libc, no dynamic linker, static ELF binary
-linked with `ld` directly.
+The default is raw syscalls — the platform layer never calls libc. Since the
+FFI landed, the binary is dynamically linked (`gcc -nostartfiles`, keeping our
+own `_start`) so `dlopen` can load C libraries; libc is along for the ride but
+bypassed except `dlopen`/`dlsym`.
 
 However, we're open to minimal libraries where going direct would be
 unreasonably painful:
@@ -73,8 +75,9 @@ unreasonably painful:
 | Sound      | ALSA ioctl               | SDL3 audio / PipeWire    | SDL3 likely (comes free with the graphics dependency) |
 | Threading  | clone() syscall          | pthread                  | TBD         |
 
-When we do use a library, switch from `ld` to `gcc -nostartfiles` to get
-dynamic linking while keeping our own `_start`.
+The build already links with `gcc -nostartfiles` (dynamic, own `_start`);
+the dictionary is made executable at startup with mprotect, since the old
+`ld -N` single-RWX-segment layout doesn't survive dynamic linking.
 
 ### Graphics Direction
 
@@ -306,9 +309,10 @@ To call Forth from C:
 3. Execute Forth code
 4. Store engine registers back, restore caller's registers
 
-This is a later-phase feature. For now we link with `ld` directly (no libc).
-When needed, switch to `gcc -nostartfiles` to get access to shared libraries
-while still providing our own `_start`.
+The C-calling half of this shipped as the FFI: the build switched to
+`gcc -nostartfiles` (our own `_start`, dynamically linked), and
+`(dlopen)`/`(dlsym)`/`(ccall)` call into shared libraries with up to 6
+integer/pointer args. Calling Forth *from* C (callbacks) is still future work.
 
 ## Concurrency (OS Threads)
 

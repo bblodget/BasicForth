@@ -148,6 +148,25 @@
   each monster its own swappable brain via an execution-token table (the Pac-Man
   trick). Builds a complete terminal chase game. Finished program:
   `examples/chase.fs`; tutorial in `docs/Tutorial/Chase.md`.
+### FFI: call C libraries from Forth (`dlopen` / `dlsym` / `(ccall)`)
+- New primitives **`(dlopen)`**, **`(dlsym)`**, and **`(ccall)`** ( arg1 ..
+  argN nargs fnptr -- ret ): load a shared C library and call its functions
+  with up to 6 integer/pointer arguments, passed in C parameter order (a call
+  site reads left-to-right like the C prototype). On x86-64 AL is zeroed so
+  variadic functions (printf-family) work. New on-demand `src/forth/ffi.fs`
+  adds `>z` (NUL-terminate a string) and aborting `dlopen`/`dlsym` wrappers.
+  See docs/FFI.md and `man ffi`.
+- **The binary is now dynamically linked** (`gcc -nostartfiles -no-pie`,
+  keeping our own `_start`) so ld.so and `dlopen` are available. The platform
+  layer still makes raw syscalls for all OS work — libc is bypassed except
+  `dlopen`/`dlsym`. The dictionary is `mprotect`ed RWX at startup (STC
+  compiles machine code into it; the old `ld -N` single-RWX-segment layout
+  doesn't survive dynamic linking). Under QEMU, run with
+  `-L /usr/aarch64-linux-gnu` so the emulated ld.so is found (Makefile
+  handles it).
+- This is the enabling step for the SDL3 graphics backend — and for any
+  future C library.
+
 ### Graphics pivot: SDL3 replaces the direct DRM/KMS backend
 - **Removed the DRM/KMS display backend** (`drm.fs` with `drm-open`/`drm-show`/
   `drm-close`/`drm-demo`, `tools/drmoff.c`, and its gated integration test),
