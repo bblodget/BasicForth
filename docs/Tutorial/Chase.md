@@ -45,7 +45,7 @@ Normally a word must exist before you can use it. `defer` breaks that rule: it
 creates a word whose *behavior is filled in later*. Try it:
 
     defer greet
-    greet                  \ aborts: "uninitialized deferred word"
+    greet                  \ aborts: "greet: uninitialized deferred word"
 
 `greet` exists, but it has no body yet, so running it is an error. Now give it
 one with `is`:
@@ -101,7 +101,7 @@ real:
 
 Read `chase` as the design, verbatim: set up, play, finish. Now run it:
 
-    chase                  \ aborts on an uninitialized deferred word
+    chase                  \ aborts: "setup: uninitialized deferred word"
 
 The whole program *runs* — and stops at the first empty part (`setup`). That's
 the top-down payoff: the structure is real and proven before a single job is

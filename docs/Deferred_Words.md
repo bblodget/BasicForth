@@ -22,7 +22,7 @@ xt is name          \ interpret: set name's action now
 ```
 
 Until you set its action, executing a deferred word reports
-`uninitialized deferred word` and returns to the prompt.
+`<name>: uninitialized deferred word` and returns to the prompt.
 
 > **`is` and `to` are the same operation** — both store a cell into the named
 > word's data field — so they are interchangeable and **unchecked**. By
@@ -82,8 +82,9 @@ There are two ways to get the xt that `is` installs:
 `defer` compiles a tiny word whose body is "push the stored xt, then `execute`
 it". The xt lives in an inline cell at the same offset `value` uses for its
 datum, so `is` is mechanically the same operation as `to` — it stores a cell into
-that slot. A freshly deferred word's cell points at an internal handler that
-prints `uninitialized deferred word` and aborts.
+that slot. A freshly deferred word's cell points at a small per-word stub compiled
+after the body, which reports `<name>: uninitialized deferred word` and aborts
+(`is` overwrites the cell, after which the stub is dead code).
 
 ## Persistence
 

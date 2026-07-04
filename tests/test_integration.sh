@@ -757,7 +757,8 @@ assert_output "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'    
 assert_output "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
 assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
 assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
-assert_error  "defer uninitialized"  'defer p p'                                             "uninitialized deferred word"
+assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
+assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
 
 # ?DO
 assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"

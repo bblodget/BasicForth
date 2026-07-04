@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Uninitialized deferred words name themselves
+- Running a deferred word before `is` now reports **which** word is empty —
+  `setup: uninitialized deferred word` instead of the anonymous message. `defer`
+  compiles a small per-word stub after the body that knows its own header; `is`
+  overwrites the action cell as before, after which the stub is dead code. No
+  change to the happy path or to `is`/`to`.
+
 ### Dirty-guard: `new`/`load`/`bye` ask before discarding unsaved work
 - BasicForth now tracks whether the module is **dirty** — the capture log holds
   changes `save` hasn't written (a definition, a direct `to`/`is`, an `edit`).

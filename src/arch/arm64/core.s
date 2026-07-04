@@ -1403,7 +1403,7 @@ cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
-msg_undef_defer: .ascii "uninitialized deferred word\n"
+msg_undef_defer: .ascii ": uninitialized deferred word\n"
 .equ msg_undef_defer_len, . - msg_undef_defer
 .text
 
@@ -3218,9 +3218,12 @@ forth_assign_query:
 // ---------- DEFER ----------
 // DEFER ( "name" -- )  Create a deferred (vectored) word. Executing it runs the
 // xt stored in its inline cell (at xt+8: prolog 4 + BL forth_lit 4, same layout
-// VALUE uses); set that xt with IS. Initialized to forth_undef_defer, which
-// aborts if the word is executed before IS. Body: prolog ; BL forth_lit ; <xt> ;
-// BL forth_execute ; epilog — forth_lit pushes the stored xt, forth_execute runs it.
+// VALUE uses); set that xt with IS. Body: prolog ; BL forth_lit ; <xt> ;
+// BL forth_execute ; epilog — forth_lit pushes the stored xt, forth_execute
+// runs it. The cell starts out pointing at a per-word uninit stub compiled
+// after the epilog, which pushes this word's own header and reports
+// "<name>: uninitialized deferred word"; IS overwrites the cell, after which
+// the stub is simply dead code.
 .global forth_defer
 forth_defer:
     STP X29, X30, [SP, #-16]!
@@ -3230,11 +3233,20 @@ forth_defer:
     CBNZ X0, .Ldefer_err
 
     BL compile_prolog
-    ADR X0, forth_undef_defer       // initial action xt
+    MOV X0, #0                      // placeholder action (patched below)
     BL compile_literal              // BL forth_lit + 8-byte action cell
+    SUB X24, X21, #8                // X24 = &action cell
     ADR X0, forth_execute
     BL compile_call                 // BL forth_execute
     BL compile_ret
+
+    // Per-word uninit stub: push our header, report-and-abort (never returns,
+    // so it needs no prolog/epilog).
+    STR X21, [X24]                  // action cell ← the stub (starts at HERE)
+    MOV X0, X22                     // this word's header (nt)
+    BL compile_literal              // stub: BL forth_lit + nt cell
+    ADR X0, forth_undef_defer
+    BL compile_call                 // stub: BL forth_undef_defer
 
     // Fill code_len (code starts past CodeLen + 8-byte SrcMeta = +12)
     ADR X9, colon_code_len_addr
@@ -3262,10 +3274,16 @@ forth_defer:
     LDP X29, X30, [SP], #16
     RET
 
-// Initial action for a freshly DEFERed word: report and abort to the REPL.
-// Reached via forth_execute when an uninitialized deferred word is run.
+// Uninitialized-defer trap ( nt -- ): print "<name>: uninitialized deferred
+// word" and abort. Reached only via the per-word stub DEFER compiles; nt is
+// the deferred word's own header, pushed by the stub.
 .global forth_undef_defer
 forth_undef_defer:
+    LDR X9, [X19], #8               // pop nt
+    ADD X0, X9, #9                  // name text
+    LDRB W1, [X9, #8]
+    AND X1, X1, #F_LENMASK          // name length
+    BL platform_write
     ADR X0, msg_undef_defer
     MOV X1, #msg_undef_defer_len
     BL platform_write

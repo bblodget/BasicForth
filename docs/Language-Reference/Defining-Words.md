@@ -47,7 +47,8 @@ Store a new value into a `value`.
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it
-before a behavior is installed aborts with `uninitialized deferred word`. The
+before a behavior is installed aborts with `greet: uninitialized deferred
+word`. The
 tool behind top-down design (`tutorial Chase`).
 
     defer greet
