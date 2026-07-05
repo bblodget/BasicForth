@@ -1079,7 +1079,7 @@ fi
 # DOWN arrows then a LEFT, one input call — the heading must be LEFT, not the
 # first stale DOWN. (The sleep lets the drain loop see an empty pipe and stop.)
 ch_drain=$({ printf 'include %s/examples/chase.fs\ninit-game\n: t input ." PDX=" pdx @ . ." PDY=" pdy @ . cr ;\n' "$REPO_ROOT"; \
-    printf 't\n\033[B\033[B\033[B\033[D'; sleep 0.5; printf 'bye\n'; } \
+    printf 't\n\033[B\033[B\033[B\033[D'; sleep 1; printf 'bye\n'; } \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
 if [[ "$ch_drain" == *"PDX=-1"* && "$ch_drain" == *"PDY=0"* ]]; then
     printf "  ${GREEN}PASS${NC}  examples/chase.fs input drains the queue; last key wins\n"; ((passed++))

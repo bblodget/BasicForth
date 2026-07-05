@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `random` is now xorshift64 — `rnd`'s low bits were broken
+- The old LCG returned its raw seed, and `rnd` reduces with `mod`, which
+  uses the **low bits** — an LCG's weakest: bit 0 alternates with period 2,
+  so `2 rnd` flip-flopped deterministically and small moduli cycled. In
+  Chase this made `wobble`'s coin-flip axis choice alternate and skewed the
+  brains' dice, seed-dependently (caught by a statistical test flaking per
+  run). `random` is now Marsaglia xorshift64 (13/7/17): same speed, every
+  output bit well-mixed. Seed still comes from `ms@`, forced nonzero.
+
 ### Chase: fair, imperfect monsters
 - `hunt` and `ambush` stepped **both** axes every frame — a diagonal move,
   strictly faster than the player's one-axis step, so escape was impossible.

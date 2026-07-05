@@ -252,9 +252,16 @@ variable (dump-addr)  variable (dump-len)
 132 constant KEY_LEFT
 
 \ Random number generator (Linear Congruential Generator)
-\ seed = (seed * 1103515245 + 12345) mod 2^64
-variable seed  ms@ seed !
-: random ( -- n ) seed @ 1103515245 * 12345 + dup seed ! ;
+\ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
+\ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
+\ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
+variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 0
+: random ( -- n )
+    seed @
+    dup 13 lshift xor
+    dup  7 rshift xor
+    dup 17 lshift xor
+    dup seed ! ;
 : rnd    ( n -- 0..n-1 ) random swap mod abs ;
 
 \ Double-Number words (8)
