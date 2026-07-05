@@ -689,7 +689,10 @@ editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth recompiles
 it — preserving your multi-line formatting — and updates every word that calls it.
 If you leave without changing the file (vi's `:q!`, for example), nothing is
 recompiled: `edit` compares the file to what it wrote, not just the editor's
-exit status. See `docs/Line_Editor.md` for the full key list and details.
+exit status. On a **deferred word**, `edit` follows the binding: a `:noname`
+action opens *its* source (saving re-binds the defer), a named action points
+you at that word, an uninitialized defer tells you to `is` it first. See
+`docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

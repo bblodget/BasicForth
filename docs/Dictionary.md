@@ -50,13 +50,20 @@ for). The low nibble is a **word-type code**; the high nibble is reserved for
 future flags.
 
 ```
-Bits 0-3      Type            0 = ordinary code, 1 = deferred word (DEFER)
+Bits 0-3      Type            0 = ordinary code, 1 = deferred word (DEFER),
+                              2 = VALUE, 3 = :NONAME (anonymous definition)
 Bits 4-7      (reserved)
 ```
 
 The type code lets tools identify what a word *is* without heuristics —
 `is`/`to` can type-check their target, and `see` can recognize a deferred
 word and show its current binding.
+
+A `:noname` definition gets a real dictionary entry with an **empty name**
+(length 0). It is unfindable by construction — `find` compares lengths first
+and every typed token has length ≥ 1 — and `words`/`.module` skip it, so the
+entry exists purely to carry metadata: its code pointer and source record let
+`see` print a defer's anonymous action and let `compact` replay it.
 
 ## Engine Registers
 

@@ -1608,14 +1608,18 @@ variable (sw-mark)                          \ LATEST at end of core.fs (module s
 
 : (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
     dup 10 +  swap 8 + c@ 31 and ;
+: (sw-anon?) ( nt -- f )                    \ :noname entry (empty name)?
+    8 + c@ 31 and 0= ;
 : (sw-end?) ( nt -- nt f )                  \ true when nt is the boundary or chain end
     dup (sw-mark) @ =  over 0= or ;
 : (sw-count) ( -- n )
     0 (latest@)
-    begin (sw-end?) 0= while  swap 1+ swap  @  repeat  drop ;
+    begin (sw-end?) 0= while
+        dup (sw-anon?) 0= if  swap 1+ swap  then  @  repeat  drop ;
 : (sw-list) ( -- )
     (latest@)
-    begin (sw-end?) 0= while  dup (sw-name) type space  @  repeat  drop  cr ;
+    begin (sw-end?) 0= while
+        dup (sw-anon?) 0= if  dup (sw-name) type space  then  @  repeat  drop  cr ;
 
 : .module ( -- )
     (sw-count) ?dup 0= if
@@ -1716,7 +1720,9 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     (uses-t) @ (uses-tu) @ type ."  is used by:"
     (latest@)
     begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
-        dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        dup (sw-anon?) 0= if
+            dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        then
         @
     repeat  drop
     (uf-free)                                  \ release the cached source file
@@ -1760,15 +1766,27 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
         drop type ." : not a deferred word" cr abort  then
     nip nip  (xt-of) defer@ ;
 
-: (xt>name) ( xt -- c-addr u true | false )  \ name owning this xt, if any
+: (xt>nt) ( xt -- nt true | false )          \ header owning this xt (incl. :noname)
     (latest@)
     begin dup while                          ( xt nt )
         dup 8 + c@ 64 and 0= if
-            2dup (xt-of) = if  nip (sw-name) true exit  then
+            2dup (xt-of) = if  nip true exit  then
         then
         @
     repeat
     2drop  false ;
+: (xt>name) ( xt -- c-addr u true | false )  \ NAME owning this xt (:noname skipped)
+    (xt>nt) 0= if  false exit  then          ( nt )
+    dup (sw-anon?) if  drop false exit  then
+    (sw-name) true ;
+: (nt-meta) ( nt -- off len srcid )          \ source-metadata fields of a header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup 16 + l@  over 14 + w@  rot 12 + w@ ;
+: (nt-src) ( nt -- c-addr u true | false )   \ a header's recorded source (log/file)
+    dup (nt-meta)                            ( nt off len srcid )
+    dup 0= if                                \ REPL word: source from the capture log
+        drop 2drop  (nt>code) drop  (src-of)  exit  then
+    >r >r >r drop r> r> r>  (file-span) ;    \ file word: (off len srcid)
 
 \ --- last direct-assignment line in the log targeting a given name ---
 variable (t2-fa) variable (t2-fu)            \ a line's first token
@@ -1820,10 +1838,14 @@ variable (sb-xt)  variable (sb-len)  variable (sb-act)
         ." \ currently: uninitialized" cr  exit  then   \ still the uninit stub
     (sb-act) @ (xt>name) if                  ( c-addr u )
         ." \ currently: ' " type ."  is " (see-a) @ (see-u) @ type cr  exit  then
-    (see-a) @ (sb-t) !  (see-u) @ (sb-tu) !
-    (last-assign?) if                        \ a :noname — show its logged line
-        ." \ currently set by: " (sb-a) @ (sb-u) @ type cr  exit  then
-    ." \ currently: an unnamed word (no logged assignment)" cr ;
+    (sb-act) @ (xt>nt) if                    ( nt )    \ a :noname — its own header
+        dup (sw-anon?) if                    \ carries the recorded source
+            (nt-src) if
+                ." \ currently: " cr  type  (uf-free)  exit  then
+            (uf-free)
+        else drop then
+    then
+    ." \ currently: an unnamed word (no recorded source)" cr ;
 ' (see-binding) is (see-post)
 
 \ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
@@ -1944,6 +1966,11 @@ variable (ld-pos)
     r> drop
     (sp-end) @ (path-a) - (path-a-len) ! ;
 : (compact-one) ( nt -- )                   \ write this word's source if not already written
+    dup (sw-anon?) if                        \ :noname: each is unique — emit its
+        (nt-src) if                          \ whole group (it ends in `is <name>`,
+            (cmp-fid) @ write-file abort" compact: write error"   \ so replaying
+            (nl) 1 (cmp-fid) @ write-file abort" compact: write error"  \ rebinds)
+        then  exit  then
     (sw-name) 2dup (cmp-seen?) if  2drop exit  then
     2dup (cmp-seen+)
     (src-by-name) if                         ( src-addr src-u )
@@ -1959,6 +1986,10 @@ variable (ld-pos)
     dup (nt-type)  dup 1 =  swap 2 =  or  0= if  drop exit  then
     dup dup (sw-name) (nt-by-name) 0= if  2drop exit  then   ( nt nt nt' )
     = 0= if  drop exit  then                 ( nt )   \ shadowed entry → skip
+    dup (nt-type) 1 = if                     \ defer bound to a :noname? its
+        dup (nt>code) drop defer@            ( nt act )   \ emitted group already
+        (xt>nt) if  (sw-anon?) if  drop exit  then  then  \ carries the binding
+    then                                     ( nt )
     (sw-name)  (sb-tu) !  (sb-t) !
     (last-assign?) 0= if  exit  then          \ never directly assigned
     (sb-a) @ (sb-u) @ (cmp-fid) @ write-file abort" compact: write error"
@@ -2038,6 +2069,41 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     0 ?do  over i + c@  over i + c@  <> if  2drop  false unloop exit  then  loop
     2drop true ;
 variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor ran
+: (edit-src) ( src-addr src-u -- new? )     \ temp-file edit cycle; true if a def landed
+    (edit-write) 0= if  ." edit: cannot write temp file" cr  false exit  then
+    (edit-read) 0= if  ." edit: cannot read temp file" cr  false exit  then  ( pre-a pre-u )
+    (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
+    (edit-run) ?dup if                        ( status )
+        (ed-pre) @ free drop
+        ." edit: editor exited with status " . cr  false exit  then
+    (edit-read) 0= if
+        (ed-pre) @ free drop
+        ." edit: cannot read temp file" cr  false exit  then  ( c-addr u )
+    2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
+        drop free drop  (ed-pre) @ free drop
+        ." edit: unchanged" cr  false exit  then
+    (ed-pre) @ free drop
+    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
+    (latest@) >r                              \ R: LATEST before recompiling
+    2dup (eval+log)  drop free drop           \ redefine + log; release the slurp
+    (latest@) r> = if
+        ." edit: no change" cr  false exit  then   \ the source defined nothing new
+    true ;
+: (edit-defer) ( nt -- )                     \ edit what a deferred word RUNS
+    (nt>code) (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
+    (sb-act) @  (sb-xt) @  (sb-xt) @ (sb-len) @ +  within if
+        ." edit: " (see-a) @ (see-u) @ type ."  is uninitialized — set it first:  ' <word> is "
+        (see-a) @ (see-u) @ type cr  exit  then
+    (sb-act) @ (xt>name) if                  ( c-addr u )   \ bound to a named word
+        ." edit: " (see-a) @ (see-u) @ type ."  is deferred — its action is "
+        2dup type ." ; edit " type ."  instead" cr  exit  then
+    (sb-act) @ (xt>nt) if                    ( nt' )   \ bound to a :noname — edit
+        dup (sw-anon?) if                    \ ITS group; re-running it rebinds
+            (nt-src) if  (edit-src) drop  (uf-free)  exit  then
+            (uf-free)
+        else drop then
+    then
+    ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr ;
 : edit ( "name" -- )
     parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
     (see-u) !  (see-a) !
@@ -2047,26 +2113,13 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
     dup 65535 = if  2drop 2drop
         ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
     2drop 2drop                              \ done with the meta cells
+    (see-a) @ (see-u) @ (nt-by-name) if      ( nt )
+        dup (nt-type) 1 = if  (edit-defer) exit  then   \ deferred: follow the binding
+        drop
+    then
     (see-a) @ (see-u) @ (src-by-name) 0= if
         ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
-    (edit-write) 0= if  ." edit: cannot write temp file" cr exit  then
-    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( pre-a pre-u )
-    (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
-    (edit-run) ?dup if                        ( status )
-        (ed-pre) @ free drop
-        ." edit: editor exited with status " . cr exit  then
-    (edit-read) 0= if
-        (ed-pre) @ free drop
-        ." edit: cannot read temp file" cr exit  then  ( c-addr u )
-    2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
-        drop free drop  (ed-pre) @ free drop
-        ." edit: unchanged" cr exit  then
-    (ed-pre) @ free drop
-    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
-    (latest@) >r                              \ R: LATEST before recompiling
-    2dup (eval+log)  drop free drop           \ redefine + log the word; release the slurp
-    (latest@) r> = if
-        ." edit: no change" cr exit  then     \ the edited source defined nothing new
+    (edit-src) 0= if  exit  then
     (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs

@@ -795,10 +795,21 @@ assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a d
 sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
     | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
 if [[ "$sb_out" == *"currently: uninitialized"* && "$sb_out" == *"currently: ' one is d"* \
-      && "$sb_out" == *"currently set by: :noname 42 . ; is d"* ]]; then
+      && "$sb_out" == *":noname 42 . ; is d"* ]]; then
     printf "  ${GREEN}PASS${NC}  see reports a defer's binding (uninit/named/:noname)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  see defer-binding report\n    Got: %q\n" "$sb_out"; ((failed++))
+fi
+
+# ...and a MULTI-LINE :noname binding: see prints the whole recorded group
+# (the old log-line heuristic showed only the final line), via the anonymous
+# header's own source metadata.
+sbm_out=$(printf 'defer d\n:noname 40\n  2 + . ; is d\nsee d\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+if [[ "$sbm_out" == *":noname 40"* && "$sbm_out" == *"2 + . ; is d"* ]]; then
+    printf "  ${GREEN}PASS${NC}  see shows a multi-line :noname binding in full\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  see multi-line :noname binding\n    Got: %q\n" "$sbm_out"; ((failed++))
 fi
 
 # ?DO
@@ -1955,6 +1966,21 @@ if [[ "$ed_out" == *"edit: unchanged"* && "$ed_out" == *"42"* && "$ed_out" != *"
 else
     printf "  ${RED}FAIL${NC}  aborted edit of a defer keeps its binding\n    Got: %q\n" "$ed_out"; ((failed++))
 fi
+# edit on a DEFERRED word follows the binding. Three flows: an uninitialized
+# defer explains itself; a named action redirects to that word; a :noname
+# action opens ITS source — saving re-binds the defer live (no propagation:
+# callers go through the defer).
+ef_dir="$(mktemp -d)"
+printf 'defer d\n' > "$ef_dir/mod.fs"
+ef_out=$( cd "$ef_dir" && printf 'edit d\n: w1 7 . ;\n'\'' w1 is d\nedit d\n:noname 42 . ; is d\nedit d\nd\nbye\nn\n' \
+    | EDITOR='sed -i s/42/43/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ef_dir"
+if [[ "$ef_out" == *"is uninitialized"* && "$ef_out" == *"edit w1 instead"* && "$ef_out" == *"43"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit on a defer follows the binding (uninit/named/:noname)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit on a defer follows the binding\n    Got: %q\n" "$ef_out"; ((failed++))
+fi
+
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"
@@ -1984,6 +2010,21 @@ if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;
     printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  compact dedup\n    Expected one ': x 9 ;', no ': x 1 ;'\n    Got (%s defs): %q\n" "$cp_count" "$cp_body"; ((failed++))
+fi
+# COMPACT with a MULTI-LINE :noname binding: the anonymous definition's whole
+# group is emitted (replaying it rebinds the defer). The old line-based
+# scanner emitted only the group's LAST line — a file that failed to load.
+cm_dir="$(mktemp -d)"
+printf 'defer g\n' > "$cm_dir/mod.fs"
+( cd "$cm_dir" && printf ':noname 20\n  2 + . ; is g\ncompact mod.fs\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+cm_out=$( printf 'g\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$cm_dir/mod.compact.fs" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+rm -rf "$cm_dir"
+if [[ "$cm_out" == *"22"* && "$cm_out" != *"uninitialized"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact replays a multi-line :noname binding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact multi-line :noname binding\n    Got: %q\n" "$cm_out"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The

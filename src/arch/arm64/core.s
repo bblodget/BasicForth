@@ -43,6 +43,7 @@
 .equ F2_TYPE_MASK,  0x0F
 .equ T_DEFER,       1
 .equ T_VALUE,       2
+.equ T_NONAME,      3
 
 // Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 // SrcId sentinel for assembly primitives.
@@ -1951,7 +1952,21 @@ build_header:
     LDR X23, [X19], #CELL          // X23 = c-addr
 
     CBZ X24, .Lbh_err
+    B .Lbh_build
 
+// build_header_anon: build_header with an EMPTY name (for :NONAME). A zero-
+// length name is unfindable — find/(nt-by-name) compare lengths first and
+// every token has length >= 1 — so the entry exists only for its metadata.
+build_header_anon:
+    STP X29, X30, [SP, #-16]!
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
+    MOV X24, #0                    // name length 0
+    MOV X23, #0                    // no name bytes (copy loop is skipped)
+
+.Lbh_build:
     // Check dictionary space
     ADR X9, dict_space_end
     ADD X10, X21, #128
@@ -3447,21 +3462,26 @@ forth_defer_fetch:
 // :NONAME ( -- xt )
 .global forth_noname
 forth_noname:
-    // Save state for error recovery
-    ADR X9, saved_latest
-    STR X22, [X9]
-    ADR X9, saved_here
-    STR X21, [X9]
-
+    // Begin an anonymous colon definition. Builds a REAL dictionary header —
+    // empty (unfindable) name, Flags2 type T_NONAME — so the body carries the
+    // same source metadata as a named word: SEE can show a defer's :noname
+    // action and COMPACT can replay it. Pushes the xt (the code area, exactly
+    // what the header's CodePtr points to); ; finishes it like a named word.
     STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
 
-    // Save HERE as xt (before compiling prolog)
+    BL build_header_anon            // cannot fail on name; dict-full aborts
+
+    // Tag Flags2: anonymous definition (X22 = new entry)
+    MOV W9, #T_NONAME
+    STRB W9, [X22, #9]
+
+    // xt = HERE (code area), saved before the prolog is compiled there
     MOV X23, X21
 
     // Compile prolog (STP X29, X30, [SP, #-16]!)
     BL compile_prolog
-
-    LDP X29, X30, [SP], #16
 
     // Push xt to data stack
     STR X23, [X19, #-CELL]!
@@ -3475,10 +3495,9 @@ forth_noname:
     MOV X10, #-1
     STR X10, [X9]
 
-    // No code_len field for :NONAME
-    ADR X9, colon_code_len_addr
-    STR XZR, [X9]
-
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
     RET
 
 // ---------- ?DO ----------
@@ -3554,8 +3573,9 @@ forth_words:
     // Extract name length from flags byte (offset 8)
     LDRB W9, [X23, #8]
     AND W9, W9, #F_LENMASK
+    CBZ W9, .Lwords_next            // empty name (:NONAME entry) — skip
 
-    // Name starts at offset 9
+    // Name starts at offset 10
     ADD X0, X23, #10                // X0 = name address
     MOV X1, X9                      // X1 = name length
     BL platform_write
@@ -3569,6 +3589,7 @@ forth_words:
     BL platform_write
     ADD SP, SP, #16
 
+.Lwords_next:
     // Follow link to next entry
     LDR X23, [X23]
     B .Lwords_loop

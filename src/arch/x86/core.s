@@ -43,6 +43,7 @@
 .equ F2_TYPE_MASK,  0x0F
 .equ T_DEFER,       1
 .equ T_VALUE,       2
+.equ T_NONAME,      3
 
 # Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 # SrcId sentinel for assembly primitives.
@@ -1832,7 +1833,18 @@ build_header:
 
     test %rcx, %rcx
     jz .Lbh_err                     # empty name — bail
+    jmp .Lbh_build
 
+# build_header_anon: build_header with an EMPTY name (for :NONAME). A zero-
+# length name is unfindable — find/(nt-by-name) compare lengths first and
+# every token has length >= 1 — so the entry exists only for its metadata.
+build_header_anon:
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
+    xor %ecx, %ecx                  # name length 0
+    xor %esi, %esi                  # no name bytes (copy loop is skipped)
+
+.Lbh_build:
     # Check dictionary space (need ~128 bytes for header)
     lea dict_space+DICT_SPACE_SIZE(%rip), %rax
     lea 128(%r13), %rdx
@@ -3133,20 +3145,24 @@ forth_defer_fetch:
 
 # ---------- :NONAME ----------
 # :NONAME ( -- xt )
-# Begin an anonymous colon definition. Pushes the xt (HERE) to the data stack.
-# ; ends it normally.
+# Begin an anonymous colon definition. Builds a REAL dictionary header — with
+# an empty (unfindable) name and Flags2 type T_NONAME — so the body carries
+# the same source metadata as a named word: SEE can show a defer's :noname
+# action and COMPACT can replay it. Pushes the xt (the code area, exactly
+# what the header's CodePtr points to); ; finishes it like a named word.
 .global forth_noname
 forth_noname:
-    # Save state for error recovery
-    mov %r12, saved_latest(%rip)
-    mov %r13, saved_here(%rip)
+    push %rbx
+    push %rbp
 
-    # Save HERE as the xt — this is where the code will start
-    mov %r13, %rax
+    call build_header_anon          # cannot fail on name; dict-full aborts
 
-    # Push xt to data stack
+    # Tag Flags2: anonymous definition (RBX = new entry)
+    movb $T_NONAME, 9(%rbx)
+
+    # Push xt (HERE = code area)
     sub $CELL, %r15
-    mov %rax, (%r15)
+    mov %r13, (%r15)
 
     # Save DSP AFTER pushing xt (so ; sees balanced stack)
     mov %r15, colon_dsp(%rip)
@@ -3154,10 +3170,8 @@ forth_noname:
     # Enter compile mode
     movq $-1, state(%rip)
 
-    # No code_len field for :NONAME (no dictionary entry)
-    # Set colon_code_len_addr to 0 so ; skips code_len fill
-    movq $0, colon_code_len_addr(%rip)
-
+    pop %rbp
+    pop %rbx
     ret
 
 # ---------- ?DO ----------
@@ -3230,6 +3244,7 @@ forth_words:
     # Extract name length from flags byte (offset 8 from entry)
     movzbl 8(%rbx), %eax            # flags+len byte
     and $F_LENMASK, %eax            # mask to get length
+    jz .Lwords_next                 # empty name (:NONAME entry) — skip
     mov %rax, %rbp                  # RBP = name length
 
     # Name starts at offset 10
@@ -3245,6 +3260,7 @@ forth_words:
     call platform_write
     add $16, %rsp
 
+.Lwords_next:
     # Follow link to next entry
     mov (%rbx), %rbx
     jmp .Lwords_loop
