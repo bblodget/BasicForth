@@ -183,7 +183,9 @@ Other notes:
   source once, in dependency order, then each `value`/deferred word's **final
   direct `to`/`is` assignment** (so bindings and value contents survive the
   dedup) — to a sibling `<base>.compact<.ext>` so you can `diff` the two and
-  adopt the clean one if you like. The trade-off: `save` keeps the file's
+  adopt the clean one if you like. A `:noname ... ; is x` binding (multi-line
+  included) is emitted as its whole recorded group — replaying it re-binds —
+  and no separate assignment line is appended for it. The trade-off: `save` keeps the file's
   between-definition comments and structure; `compact` keeps only definitions
   and final assignments. A *structure-preserving* compact (splice latest defs
   into the original text) is future work.

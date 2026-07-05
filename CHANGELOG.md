@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### `:noname` definitions carry real source metadata
+- `:noname` now builds a genuine dictionary entry — with an **empty name**
+  (unfindable by construction: lookup compares lengths first and every typed
+  token has length ≥ 1) and word-type code 3 — so an anonymous definition
+  carries the same code pointer and source record as a named word.
+  `words`/`.module`/`uses` skip the nameless entries. What falls out:
+- **`see` on a deferred word shows its `:noname` action in full**, straight
+  from the recorded source — multi-line included. The old log-scanning
+  heuristic (which could only show the group's last line) is gone.
+- **`compact` replays `:noname` bindings correctly.** The whole
+  `:noname ... ; is x` group is emitted as a definition (re-running it
+  re-binds), and no separate assignment line is appended for a defer whose
+  action is anonymous. Previously a *multi-line* `:noname` binding compacted
+  to just its last line — a file that failed to load.
+- **`edit` on a deferred word follows the binding**: a `:noname` action opens
+  *its* source in your editor, and saving re-binds the defer (no caller
+  recompilation needed — callers go through the defer). A named action
+  prints "edit `<word>` instead"; an uninitialized defer says to `is` it
+  first. The old behavior — opening the `defer` declaration line and
+  re-running it on save, which redefined every defer on that line as fresh
+  and uninitialized — is gone.
+
 ### `edit` with an untouched file is a no-op
 - Leaving the editor without saving (vi's `:q!`) exits with status **0**, so
   `edit` re-submitted the unchanged source anyway — recompiling the word and
