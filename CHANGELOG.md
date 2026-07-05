@@ -45,6 +45,15 @@
 - The `--more--` pager pause is now **interactive-only**: piped `man` and
   `tutorial` output prints straight through instead of silently eating input
   lines as pager keystrokes.
+- Resume where you left off: **`tutorial <name> [step]`** starts at a given
+  step — `tutorial chase 10` picks up yesterday's session — and **`step [n]`**
+  jumps straight to step *n* (bare `step` still replays the current one).
+  The argument may also be the name of a **`value`**, identified by its
+  word-type tag and read side-effect-free — the bookmark pattern:
+  `11 value tstep` in your saved module, `tutorial chase tstep` tomorrow
+  (`to tstep` as you advance; `save` persists it). Variables are refused —
+  `save` doesn't persist a variable's contents. Anything that isn't a number
+  or a value is left for the interpreter.
 - The Chase tutorial's five over-long steps were each split in two (22 steps
   now), so every step fits in half–two-thirds of a screen with room to type
   below — the sharpened authoring rule is in docs/Tutorial_System.md. Step
