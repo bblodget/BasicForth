@@ -585,13 +585,17 @@ on:
 ```
 > tutorial Snake                \ start a lesson (name like man, case-insensitive)
 ...
-[ step 1:  next   back   step = replay   end-tutorial ]
+[ step 1:  next   back   step [n] = replay/jump   end-tutorial ]
 > next                          \ next step    (back = previous, step = replay)
+> step 7                        \ jump straight to step 7
 ```
 
 Each step opens on a cleared screen (interactive sessions only). `step` reprints
 the current step — handy after running something that drew over it — and
-`end-tutorial` leaves the tutorial without touching anything you defined.
+`end-tutorial` leaves the tutorial without touching anything you defined. To
+resume a lesson later, note the step number in the footer and start with
+`tutorial Snake 10` — or keep a bookmark in your module: `11 value tstep`
+(persisted by `save`, updated with `to tstep`), then `tutorial Snake tstep`.
 
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.

@@ -252,9 +252,16 @@ variable (dump-addr)  variable (dump-len)
 132 constant KEY_LEFT
 
 \ Random number generator (Linear Congruential Generator)
-\ seed = (seed * 1103515245 + 12345) mod 2^64
-variable seed  ms@ seed !
-: random ( -- n ) seed @ 1103515245 * 12345 + dup seed ! ;
+\ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
+\ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
+\ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
+variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 0
+: random ( -- n )
+    seed @
+    dup 13 lshift xor
+    dup  7 rshift xor
+    dup 17 lshift xor
+    dup seed ! ;
 : rnd    ( n -- 0..n-1 ) random swap mod abs ;
 
 \ Double-Number words (8)
@@ -1548,24 +1555,41 @@ variable (ts-any)                          \ printed any line of the wanted step
         (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
         exit
     then
-    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step = replay   end-tutorial ]" cr ;
-: tutorial ( "name" -- )
+    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
+defer (step-val?)                          \ ( a u -- n true | false ) value-name
+:noname 2drop false ; is (step-val?)       \ lookup; real body after (nt-by-name)
+: (step#?) ( -- n true | false )           \ parse optional step: number or value
+    >in @ >r  parse-word                    ( a u )
+    dup 0= if 2drop r> drop false exit then
+    2dup 0 0 2swap >number nip              ( a u ud u2 )
+    0= if  drop nip nip  r> drop  true exit  then   \ fully numeric: ( n true )
+    2drop                                   ( a u )
+    (step-val?) if  r> drop  true exit  then        \ a value's contents
+    r> >in !  false ;                       \ neither: un-parse it
+: tutorial ( "name" ["step"] -- )
     parse-word (tut-max) min                ( c-addr u )
     dup 0= if 2drop
-        ." usage: tutorial <name>   then  next / back / step  to move" cr
+        ." usage: tutorial <name> [step]   then  next / back / step  to move" cr
         topics exit
     then
     dup (tut-nlen) !                        ( c-addr u )
     >r (tut-name) r> cmove
-    1 (tut-step) !  (tut-go) ;
+    1 (tut-step) !
+    (step#?) if 1 max (tut-step) ! then     \ tutorial chase 10 = resume there
+    (tut-go) ;
 : next ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     1 (tut-step) +! (tut-go) ;
 : back ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
-: step ( -- )                              \ replay the current step
-    (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
+: step ( ["step"] -- )                     \ replay current step; step 10 = jump
+    (step#?)                                ( n true | false )
+    (tut-nlen) @ 0= if
+        if drop then
+        ." (start a tutorial first: tutorial <name>)" cr exit
+    then
+    if 1 max (tut-step) ! then
     (tut-go) ;
 : end-tutorial ( -- )                      \ drop the bookmark; definitions remain
     (tut-nlen) @ 0= if ." (no tutorial in progress)" cr exit then
@@ -1719,6 +1743,15 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
 : (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
     dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
     dup @  swap 8 + l@ ;
+
+\ (step-val?) real body: fetch a VALUE's contents by name, for the optional
+\ step argument of tutorial/step. Only type-2 (value) words execute — a value
+\ just pushes its cell, so this is side-effect free; anything else is refused
+\ and the caller un-parses the token.
+:noname ( c-addr u -- n true | false )
+    (nt-by-name) 0= if false exit then       ( nt )
+    dup (nt-type) 2 <> if drop false exit then
+    (nt>code) drop execute  true ;  is (step-val?)
 
 : action-of ( "name" -- xt )                 \ a deferred word's current action
     parse-word 2dup (nt-by-name) 0= if

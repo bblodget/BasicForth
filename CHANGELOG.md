@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Tabs are whitespace
+- `parse-word` delimited on the space character only, so a source file with a
+  real tab — a tab-indented definition, or a tab between tokens — failed to
+  load with a baffling unknown-word error (`? <tab>W`). The tokenizer now
+  treats every character ≤ 0x20 (tab, CR, ...) as a delimiter, the classic
+  Forth rule. Explicit-delimiter parsing (`."`, `s"`, `(`) is unchanged.
+
+### `random` is now xorshift64 — `rnd`'s low bits were broken
+- The old LCG returned its raw seed, and `rnd` reduces with `mod`, which
+  uses the **low bits** — an LCG's weakest: bit 0 alternates with period 2,
+  so `2 rnd` flip-flopped deterministically and small moduli cycled. In
+  Chase this made `wobble`'s coin-flip axis choice alternate and skewed the
+  brains' dice, seed-dependently (caught by a statistical test flaking per
+  run). `random` is now Marsaglia xorshift64 (13/7/17): same speed, every
+  output bit well-mixed. Seed still comes from `ms@`, forced nonzero.
+
 ### Chase: fair, imperfect monsters
 - `hunt` and `ambush` stepped **both** axes every frame — a diagonal move,
   strictly faster than the player's one-axis step, so escape was impossible.
@@ -45,6 +61,15 @@
 - The `--more--` pager pause is now **interactive-only**: piped `man` and
   `tutorial` output prints straight through instead of silently eating input
   lines as pager keystrokes.
+- Resume where you left off: **`tutorial <name> [step]`** starts at a given
+  step — `tutorial chase 10` picks up yesterday's session — and **`step [n]`**
+  jumps straight to step *n* (bare `step` still replays the current one).
+  The argument may also be the name of a **`value`**, identified by its
+  word-type tag and read side-effect-free — the bookmark pattern:
+  `11 value tstep` in your saved module, `tutorial chase tstep` tomorrow
+  (`to tstep` as you advance; `save` persists it). Variables are refused —
+  `save` doesn't persist a variable's contents. Anything that isn't a number
+  or a value is left for the interpreter.
 - The Chase tutorial's five over-long steps were each split in two (22 steps
   now), so every step fits in half–two-thirds of a screen with room to type
   below — the sharpened authoring rule is in docs/Tutorial_System.md. Step

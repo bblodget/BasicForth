@@ -1218,12 +1218,12 @@ forth_parse_word:
     mov source_len(%rip), %rcx    # RCX = total length
     mov to_in(%rip), %rdx         # RDX = current offset
 
-    # Skip leading spaces
+    # Skip leading whitespace (space and all control chars: tab, CR, ...)
 .Lpw_skip:
     cmp %rcx, %rdx
     jge .Lpw_empty
     cmpb $' ', (%rsi,%rdx)
-    jne .Lpw_found
+    ja .Lpw_found                 # unsigned: > 0x20 is a word char
     inc %rdx
     jmp .Lpw_skip
 
@@ -1240,12 +1240,12 @@ forth_parse_word:
 .Lpw_found:
     lea (%rsi,%rdx), %rdi         # RDI = start of word
 
-    # Scan to end of word
+    # Scan to end of word (any char <= 0x20 delimits)
 .Lpw_scan:
     cmp %rcx, %rdx
     jge .Lpw_done
     cmpb $' ', (%rsi,%rdx)
-    je .Lpw_done
+    jbe .Lpw_done
     inc %rdx
     jmp .Lpw_scan
 

@@ -13,10 +13,10 @@ into steps by its `## ` headings.
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `tutorial` | ( "name" -- ) | start tutorial `<name>` (resolved case-insensitively across the docs dirs, like `man`) and show step 1; with no name, prints a hint and the `topics` list |
+| `tutorial` | ( "name" ["step"] -- ) | start tutorial `<name>` (resolved case-insensitively across the docs dirs, like `man`) at step 1 — or at an optional step: a number, or the name of a `value` holding one. With no name, prints a hint and the `topics` list |
 | `next` | ( -- ) | show the next step |
 | `back` | ( -- ) | show the previous step |
-| `step` | ( -- ) | replay the current step (handy after running something that drew all over the screen) |
+| `step` | ( ["step"] -- ) | replay the current step (handy after running something that drew all over the screen); with a number or a `value` name, jump straight there — `step 7`, `step tstep` |
 | `end-tutorial` | ( -- ) | leave the tutorial: forgets which step `next` would show, nothing else — **your definitions remain** |
 
 ## How a file becomes steps
@@ -46,13 +46,13 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 # Snake — Build Your First Game
 ...
 
-[ step 1:  next   back   step = replay   end-tutorial ]
+[ step 1:  next   back   step [n] = replay/jump   end-tutorial ]
  ok
 > next
 ## The stack — Forth's workspace
 ...
 
-[ step 2:  next   back   step = replay   end-tutorial ]
+[ step 2:  next   back   step [n] = replay/jump   end-tutorial ]
  ok
 > : square dup * ;        \ try things between steps — the REPL is live
  ok
@@ -105,7 +105,24 @@ name plus the current step index, so `next`/`back` just re-open the file and
 re-scan to the new step — no file is held open between commands.
 
 All helper words are internal (`(tut-go)`, `(print-step)`, `(tut-head?)`, …);
-only `tutorial`, `next`, and `back` are meant to be called directly.
+only `tutorial`, `next`, `back`, `step`, and `end-tutorial` are meant to be
+called directly. The optional step argument on `tutorial`/`step` is parsed
+from the line (not the stack). A number is used as-is; the name of a
+**`value`** is looked up by its word-type tag and its contents used — which
+enables the bookmark pattern:
+
+```
+> 11 value tstep          \ in your module; save persists it
+> to tstep ( later: 14 to tstep as you advance )
+...next session:
+> tutorial chase tstep    \ resume exactly where you left off
+```
+
+A `variable` is deliberately refused (its name would mean an address, and
+`save` doesn't persist a variable's *contents* anyway — a `value` is the
+bookmark that survives your save file). Anything that isn't a number or a
+value is left for the interpreter, so `step` followed by another word still
+just replays.
 
 ## See Also
 

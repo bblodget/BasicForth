@@ -909,6 +909,21 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 
+# Tabs are whitespace: a source file indented with real tabs (or with tabs
+# between tokens) must tokenize — parse-word treats every char <= 0x20 as a
+# delimiter, not just space.
+tab_file="$(mktemp)"
+printf ': tabbed\n\t7 8 + . ;\ntabbed\n: tab2 5\t6 + . ;\ntab2\nbye\n' > "$tab_file"
+tab_out=$(BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$tab_file" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+rm -f "$tab_file"
+if [[ "$tab_out" == *"15"* && "$tab_out" == *"11"* && "$tab_out" != *"?"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tab-indented source file loads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tab-indented source file loads\n"
+    printf "    Expected: 15 and 11, no errors\n    Got:      %s\n" "$(echo "$tab_out" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # Command-line file argument (argv[1])
 # Load core.fs via argv[1] (it's idempotent — reloading defines the same words)
 t0=$(date +%s.%N)
@@ -1079,7 +1094,7 @@ fi
 # DOWN arrows then a LEFT, one input call — the heading must be LEFT, not the
 # first stale DOWN. (The sleep lets the drain loop see an empty pipe and stop.)
 ch_drain=$({ printf 'include %s/examples/chase.fs\ninit-game\n: t input ." PDX=" pdx @ . ." PDY=" pdy @ . cr ;\n' "$REPO_ROOT"; \
-    printf 't\n\033[B\033[B\033[B\033[D'; sleep 0.5; printf 'bye\n'; } \
+    printf 't\n\033[B\033[B\033[B\033[D'; sleep 1; printf 'bye\n'; } \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
 if [[ "$ch_drain" == *"PDX=-1"* && "$ch_drain" == *"PDY=0"* ]]; then
     printf "  ${GREEN}PASS${NC}  examples/chase.fs input drains the queue; last key wins\n"; ((passed++))
@@ -2520,6 +2535,14 @@ tut_check "next before start hints"        "next"                            "st
 tut_check "back before start hints"        "back"                            "start a tutorial first"
 tut_check "step before start hints"        "step"                            "start a tutorial first"
 tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+tut_check "tutorial name+step starts there" "tutorial Lesson 2"              "content TWO here"
+tut_check "tutorial step arg in footer"    "tutorial Lesson 3"               "step 3"
+tut_check "step N jumps"                   $'tutorial Lesson\nstep 3'        "content THREE here"
+tut_check "step past end reports end"      $'tutorial Lesson\nstep 9'        "end of 'Lesson'"
+tut_check "step non-number is un-parsed"   $'tutorial Lesson\nstep cr 7 8 + .'  "15"
+tut_check "tutorial takes a value bookmark" $'3 value spot\ntutorial Lesson spot' "content THREE here"
+tut_check "step takes a value name"        $'tutorial Lesson\n2 value spot\nstep spot' "content TWO here"
+tut_check "step refuses a variable"        $'tutorial Lesson\nvariable vv 2 vv !\nstep vv drop .( VOK=1)' "VOK=1"
 tut_check "end-tutorial confirms"          $'tutorial Lesson\nend-tutorial'  "tutorial ended"
 tut_check "end-tutorial then next hints"   $'tutorial Lesson\nend-tutorial\nnext' "start a tutorial first"
 tut_check "end-tutorial with none started" "end-tutorial"                    "no tutorial in progress"
