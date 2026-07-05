@@ -165,14 +165,14 @@ variable food-ok               \ did update-food find an empty cell?
     ms@ swap - frame-ms @ swap - dup 0> if ms else drop then
     1 frame +! ;
 
-: get-key
-    key? 0<> if key case
+: get-key                        \ drain the queue; last key wins
+    begin key? while key case
         KEY_LEFT  of WEST  dir ! endof
         KEY_DOWN  of SOUTH dir ! endof
         KEY_UP    of NORTH dir ! endof
         KEY_RIGHT of EAST  dir ! endof
         [char] q  of true done ! endof
-    endcase then ;
+    endcase repeat ;
 
 : collision?
     at-border? if true exit then

@@ -20,7 +20,7 @@
 \ --- The seams: every frame game fills these eight ---
 defer setup       \ ( -- )     clear screen, init state, first draw
 defer finish      \ ( -- )     restore terminal, final message
-defer input       \ ( -- )     read keys, set intent
+defer input       \ ( -- )     read keys — drain them all; last key wins
 defer erase       \ ( -- )     un-draw the moving actors
 defer update      \ ( -- )     advance the world one step
 defer render      \ ( -- )     draw actors in their new places

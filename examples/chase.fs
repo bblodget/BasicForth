@@ -50,28 +50,45 @@ variable caught                  \ true => game over
 : toward ( cur target -- step )  swap - sgn ;     \ sign(target - cur)
 : draw ( x y char -- )  >r at-xy r> emit ;
 
-\ Move monster i by one step on each axis, clamped to the arena.
-: nudge-x ( i step -- )  over mx@ + 1 max W min swap mx! ;
-: nudge-y ( i step -- )  over my@ + 1 max H min swap my! ;
+\ Move monster i by one step on an axis, clamped to the arena. Terminal cells
+\ are ~2x taller than wide, so x moves in 2-COLUMN STRIDES (same trick as
+\ snake.fs) and every x stays on the even grid — collisions match exactly.
+: nudge-x ( i step -- )  2 *  over mx@ + 2 max W min swap mx! ;
+: nudge-y ( i step -- )        over my@ + 1 max H min swap my! ;
 
 \ ---- Brains: each takes a monster index ( i -- ) and moves that monster ----
-: hunt ( i -- )                                   \ greedy: step toward player
-    dup dup mx@ px @ toward nudge-x
-    dup my@ py @ toward nudge-y ;
+\ A pursuer must never be faster than the player: the player moves one axis
+\ per frame, so a brain does too — it picks an AIM POINT and closes the longer
+\ axis by one. And no brain is perfect: each frame it takes the smart step
+\ only pct% of the time, otherwise a random WOBBLE — those fumbles are the
+\ player's chance. A brain's personality is where it aims and how sharp it is.
+variable tx  variable ty                          \ where the current brain aims
+: aim! ( x y -- )  ty !  tx ! ;
+: step-toward ( i -- )                            \ one step toward (tx,ty)
+    dup mx@ tx @ - abs  over my@ ty @ - abs  > if
+        dup dup mx@ tx @ toward nudge-x           \ farther in x: close x
+    else
+        dup dup my@ ty @ toward nudge-y           \ else close y
+    then drop ;
+: wobble ( i -- )                                 \ one random one-axis step
+    2 rnd if  dup 3 rnd 1- nudge-x  else  dup 3 rnd 1- nudge-y  then  drop ;
+: pursue ( i pct -- )                             \ pct%: smart step, else wobble
+    100 rnd > if  step-toward  else  wobble  then ;
 
-: ambush ( i -- )                                 \ aim 3 cells ahead of player
-    dup dup mx@  px @ pdx @ 3 * +  toward nudge-x
-    dup my@  py @ pdy @ 3 * +  toward nudge-y ;
+: hunt ( i -- )                                   \ sharp: aims at the player
+    px @ py @ aim!  50 pursue ;
 
-: drift ( i -- )                                  \ random wander
-    dup 3 rnd 1- nudge-x
-    3 rnd 1- nudge-y ;
+: ambush ( i -- )                                 \ aims 3 cells ahead of player
+    px @ pdx @ 3 * +  py @ pdy @ 3 * +  aim!  40 pursue ;
+
+: drift ( i -- )                                  \ wanders; occasionally lunges
+    px @ py @ aim!  15 pursue ;
 
 \ ---- Setup ----
-: spawn-gold   W rnd 1+ gx !  H rnd 1+ gy ! ;
+: spawn-gold   W 2 / rnd 1+ 2 *  gx !  H rnd 1+ gy ! ;   \ even column
 
-: place-monster ( i -- )                          \ scatter to a corner
-    dup 2 mod if W 1- else 2 then  over mx!
+: place-monster ( i -- )                          \ scatter to a corner (even x)
+    dup 2 mod if W 2 - else 2 then  over mx!
     dup 2 / 2 mod if H 1- else 2 then  swap my! ;
 
 : install-brains                                  \ each ghost its own mind
@@ -102,8 +119,8 @@ variable caught                  \ true => game over
 
 \ ---- One turn ----
 : go ( dx dy -- )  pdy !  pdx ! ;
-: input
-    key? if
+: input                                           \ drain the queue; last key wins
+    begin key? while
         key case
             KEY_UP    of  0 -1 go endof
             KEY_DOWN  of  0  1 go endof
@@ -111,11 +128,11 @@ variable caught                  \ true => game over
             KEY_RIGHT of  1  0 go endof
             [char] q  of  true caught ! endof
         endcase
-    then ;
+    repeat ;
 
 : step-player
-    px @ pdx @ + 1 max W min px !
-    py @ pdy @ + 1 max H min py ! ;
+    px @ pdx @ 2 * +  2 max W min  px !           \ 2-column stride
+    py @ pdy @ +      1 max H min  py ! ;
 
 : step-monsters                                   \ run each monster's own brain
     mcount @ 0 ?do  i  i brain@  execute  loop ;

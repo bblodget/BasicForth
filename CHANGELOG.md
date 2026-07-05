@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Chase: fair, imperfect monsters
+- `hunt` and `ambush` stepped **both** axes every frame — a diagonal move,
+  strictly faster than the player's one-axis step, so escape was impossible.
+  Brains are now built on a shared aim point: `aim!` sets where a brain is
+  aiming and `step-toward` closes the **longer** axis by one, so a pursuer
+  moves exactly as fast as you.
+- And no brain is perfect: `pursue ( i pct -- )` takes the smart step only
+  *pct*% of frames, otherwise one random one-axis `wobble` — the fumbles are
+  the player's fighting chance. Every brain is now a one-liner of aim +
+  sharpness, with values settled by playtesting: `hunt` 50%, `ambush` 40%,
+  `drift` 15% (it wanders, but lunges about one frame in seven — dim, not
+  blind). New tutorial step "No brain is perfect — dice" teaches the
+  pattern; `examples/chase.fs` matches.
+- Equal *visual* speed on both axes: terminal cells are ~2x taller than
+  wide, so vertical movement looked twice as fast. Chase now moves x in
+  **2-column strides** (the same trick `snake.fs` uses) — player, monsters,
+  and gold all live on the even-column grid, so exact-match collisions still
+  work.
+
+### Game input: drain the key queue every frame
+- Holding an arrow key autorepeats far faster than frames tick; the games
+  read **one** key per frame, so a new direction had to wait for the stale
+  backlog to unwind, one repeat per frame. `input` in `examples/chase.fs` /
+  `snake-mini.fs` (and `get-key` in `snake.fs`) now drains **all** pending
+  keys each frame — `begin key? while ... repeat` — so the last key wins and
+  steering is immediate. Both tutorials teach the pattern, and the game
+  template's `input` seam comment hints it.
+
 ### Tutorial UX: cleared steps, `step`, `end-tutorial`
 - `tutorial` / `next` / `back` now clear the screen before printing a step
   (interactive sessions only — piped input stays plain text). Each step reads
@@ -17,6 +45,11 @@
 - The `--more--` pager pause is now **interactive-only**: piped `man` and
   `tutorial` output prints straight through instead of silently eating input
   lines as pager keystrokes.
+- The Chase tutorial's five over-long steps were each split in two (22 steps
+  now), so every step fits in half–two-thirds of a screen with room to type
+  below — the sharpened authoring rule is in docs/Tutorial_System.md. Step
+  "The real setup" also now tells you `cursor-on` brings the cursor back
+  after running `setup` by hand.
 
 ### `examples/game-template.fs` — a starting point for your own game
 - The Chase tutorial's skeleton, generalized into a blank-slate template: the
