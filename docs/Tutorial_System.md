@@ -16,6 +16,8 @@ into steps by its `## ` headings.
 | `tutorial` | ( "name" -- ) | start tutorial `<name>` (resolved case-insensitively across the docs dirs, like `man`) and show step 1; with no name, prints a hint and the `topics` list |
 | `next` | ( -- ) | show the next step |
 | `back` | ( -- ) | show the previous step |
+| `step` | ( -- ) | replay the current step (handy after running something that drew all over the screen) |
+| `end-tutorial` | ( -- ) | leave the tutorial: forgets which step `next` would show, nothing else — **your definitions remain** |
 
 ## How a file becomes steps
 
@@ -44,13 +46,13 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 # Snake — Build Your First Game
 ...
 
-[ next = continue   back = previous   step 1 ]
+[ step 1:  next   back   step = replay   end-tutorial ]
  ok
 > next
 ## The stack — Forth's workspace
 ...
 
-[ next = continue   back = previous   step 2 ]
+[ step 2:  next   back   step = replay   end-tutorial ]
  ok
 > : square dup * ;        \ try things between steps — the REPL is live
  ok
@@ -62,6 +64,12 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 The name is the file's base name without `.md` (what `topics` shows), matched
 case-insensitively — `tutorial Snake`, `tutorial snake`.
 
+Each step is shown on a **cleared screen** (interactive sessions only — piped
+input gets plain text with no escape codes). Your experiments between steps
+scroll away when you type `next`, but their *effects* persist: the words you
+defined are still there. The clear also keeps the display clean after a step
+has you run something that draws with `at-xy` (like the Chase game itself).
+
 `back` stops at step 1 (it won't go below it). Stepping past the last step prints
 `-- end of '<name>' --` and leaves you on the last step, so `back` still works.
 If you type `next`/`back` before starting, or name a tutorial that doesn't
@@ -69,10 +77,11 @@ exist, BasicForth says so rather than failing silently.
 
 ## Notes for lesson authors
 
-- **Keep each step to about one screen.** A step is printed through the same
-  pager as `man`, so an over-long step pauses (`space` to continue, `q` to stop)
-  — but the point of a tutorial step is to fit above the prompt so the reader can
-  see it *while* typing the examples. Split a long idea across two `## ` steps.
+- **Keep each step to half–two-thirds of a screen.** A step is printed through
+  the same pager as `man`, so an over-long step pauses (`space` to continue,
+  `q` to stop) — but the point of a tutorial step is to leave room *below* it,
+  so the reader can type the examples while the instructions stay visible.
+  Split a long idea across two `## ` steps.
 - **Make examples runnable and short**, with the expected result in a trailing
   `\ comment`, exactly as in the Language Reference pages.
 - **Number lesson files** (`01-…`, `02-…`) so `topics` lists them in order

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Tutorial UX: cleared steps, `step`, `end-tutorial`
+- `tutorial` / `next` / `back` now clear the screen before printing a step
+  (interactive sessions only — piped input stays plain text). Each step reads
+  like a fresh page, the `--More--` pager's line count finally matches the
+  real screen, and the display recovers cleanly after steps that draw with
+  `at-xy` (like playing Chase mid-tutorial).
+- New **`step`** replays the current step — handy after running something
+  that drew over it. New **`end-tutorial`** leaves the tutorial: it forgets
+  which step `next` would show and nothing else — your definitions remain
+  (unlike `-session`, it touches no dictionary state). The step footer now
+  advertises all four: `[ step 6:  next   back   step = replay
+  end-tutorial ]`.
+- The `--more--` pager pause is now **interactive-only**: piped `man` and
+  `tutorial` output prints straight through instead of silently eating input
+  lines as pager keystrokes.
+
 ### `examples/game-template.fs` — a starting point for your own game
 - The Chase tutorial's skeleton, generalized into a blank-slate template: the
   frame-loop engine (`play`, `game`) with all eight seams deferred (`setup`,

@@ -2477,7 +2477,21 @@ tut_check "step heading is shown"          $'tutorial Lesson\nnext'          "##
 tut_check "REPL live between steps"        $'tutorial Lesson\n7 8 + .'       "15"
 tut_check "next before start hints"        "next"                            "start a tutorial first"
 tut_check "back before start hints"        "back"                            "start a tutorial first"
+tut_check "step before start hints"        "step"                            "start a tutorial first"
 tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+tut_check "end-tutorial confirms"          $'tutorial Lesson\nend-tutorial'  "tutorial ended"
+tut_check "end-tutorial then next hints"   $'tutorial Lesson\nend-tutorial\nnext' "start a tutorial first"
+tut_check "end-tutorial with none started" "end-tutorial"                    "no tutorial in progress"
+
+# step replays the current step: after next + step, step 2's content printed twice
+tut_replay=$(printf 'tutorial Lesson\nnext\nstep\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ $(echo "$tut_replay" | grep -c "content TWO here") -eq 2 ]]; then
+    printf "  ${GREEN}PASS${NC}  step replays the current step\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  step replays the current step\n"
+    printf "    Expected 'content TWO here' twice, got: %s\n" "$(echo "$tut_replay" | grep -c 'content TWO here')"; ((failed++))
+fi
 
 # back at step 1 stays at step 1 (does not underflow)
 tut_b1=$(printf 'tutorial Lesson\nback\n' | BASICFORTH_PATH="$FORTH_LIB" \
@@ -2487,6 +2501,30 @@ if [[ "$tut_b1" == *"step 1"* ]] && [[ "$tut_b1" != *"step 0"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  back at step 1 stays at step 1\n"
     printf "    Got:      %s\n" "$(echo "$tut_b1" | head -4)"; ((failed++))
+fi
+
+# Interactive sessions clear the screen per step, but piped input must stay
+# plain text: no escape bytes from the (tty?)-guarded page in (print-step).
+tut_esc=$(printf 'tutorial Lesson\nnext\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_esc" != *$'\x1b'* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped tutorial output has no escape codes\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped tutorial output has no escape codes\n"
+    printf "    Got escape bytes in: %s\n" "$(echo "$tut_esc" | cat -v | head -3)"; ((failed++))
+fi
+
+# The --more-- pager pause is interactive-only: a piped man of a file longer
+# than the screen must print every line straight through, with no pause
+# swallowing input and no "-- more" prompt in the output.
+for i in $(seq 1 40); do echo "filler line $i"; done > "$tut_dir/Longpage.md"
+tut_pager=$(printf 'man Longpage\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_pager" == *"filler line 40"* && "$tut_pager" != *"-- more"* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped man never pauses at --more--\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped man never pauses at --more--\n"
+    printf "    Got:      %s\n" "$(echo "$tut_pager" | tail -3)"; ((failed++))
 fi
 
 # Unset BASICFORTH_DOCS — tutorial reports it gracefully
