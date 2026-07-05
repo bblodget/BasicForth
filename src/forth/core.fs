@@ -2032,6 +2032,12 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
 : (edit-run) ( -- status )                  \ open the temp file in the user's editor
     \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
     s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
+: (s=) ( a1 u1 a2 u2 -- f )                 \ exact string equality
+    rot 2dup <> if  2drop 2drop  false exit  then
+    drop                                     ( a1 a2 u )
+    0 ?do  over i + c@  over i + c@  <> if  2drop  false unloop exit  then  loop
+    2drop true ;
+variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor ran
 : edit ( "name" -- )
     parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
     (see-u) !  (see-a) !
@@ -2044,9 +2050,18 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     (see-a) @ (see-u) @ (src-by-name) 0= if
         ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
     (edit-write) 0= if  ." edit: cannot write temp file" cr exit  then
+    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( pre-a pre-u )
+    (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
     (edit-run) ?dup if                        ( status )
+        (ed-pre) @ free drop
         ." edit: editor exited with status " . cr exit  then
-    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( c-addr u )
+    (edit-read) 0= if
+        (ed-pre) @ free drop
+        ." edit: cannot read temp file" cr exit  then  ( c-addr u )
+    2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
+        drop free drop  (ed-pre) @ free drop
+        ." edit: unchanged" cr exit  then
+    (ed-pre) @ free drop
     true (skip-capture) !                     \ keep THIS `edit` command line out of the log
     (latest@) >r                              \ R: LATEST before recompiling
     2dup (eval+log)  drop free drop           \ redefine + log the word; release the slurp

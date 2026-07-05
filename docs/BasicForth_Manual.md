@@ -687,7 +687,9 @@ A `:` definition can span several lines; while one is open the prompt becomes
 `... ` until `;` closes it. **`edit <word>`** opens an existing definition in your
 editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth recompiles
 it — preserving your multi-line formatting — and updates every word that calls it.
-See `docs/Line_Editor.md` for the full key list and details.
+If you leave without changing the file (vi's `:q!`, for example), nothing is
+recompiled: `edit` compares the file to what it wrote, not just the editor's
+exit status. See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 
