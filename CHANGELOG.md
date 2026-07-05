@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `edit` with an untouched file is a no-op
+- Leaving the editor without saving (vi's `:q!`) exits with status **0**, so
+  `edit` re-submitted the unchanged source anyway — recompiling the word and
+  its callers. For a deferred word this was destructive: the defer line was
+  re-run, redefining the defer (and any siblings on the same line) as fresh
+  *uninitialized* words, silently dropping their `is` bindings. `edit` now
+  keeps the temp file's pre-editor image and compares after the editor
+  exits: identical bytes → `edit: unchanged`, nothing recompiled, bindings
+  intact. Only a real change is resubmitted and propagated.
+
 ### Tabs are whitespace
 - `parse-word` delimited on the space character only, so a source file with a
   real tab — a tab-indented definition, or a tab between tokens — failed to

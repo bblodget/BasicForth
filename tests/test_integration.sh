@@ -1929,6 +1929,32 @@ if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"
 else
     printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
 fi
+# An untouched temp file is a no-op: vi's :q! exits 0 (only :cq reports
+# failure), so edit compares the file image before/after the editor instead
+# of trusting the exit status. Nothing is resubmitted or propagated.
+eu_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$eu_dir/mod.fs"
+eu_out=$( cd "$eu_dir" && printf 'edit leaf\nmid .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$eu_dir"
+if [[ "$eu_out" == *"edit: unchanged"* && "$eu_out" != *"updated:"* && "$eu_out" == *"10"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit with an untouched file is a no-op\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit with an untouched file is a no-op\n    Got: %q\n" "$eu_out"; ((failed++))
+fi
+# ...which protects deferred words: edit <defer> + quit-without-saving used to
+# resubmit the defer line, redefining the defer as fresh (uninitialized) and
+# losing its binding. The binding must survive an aborted edit.
+ed_dir="$(mktemp -d)"
+printf 'defer render\n' > "$ed_dir/mod.fs"
+ed_out=$( cd "$ed_dir" && printf ':noname 42 . ; is render\nedit render\nrender\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ed_dir"
+if [[ "$ed_out" == *"edit: unchanged"* && "$ed_out" == *"42"* && "$ed_out" != *"uninitialized"* ]]; then
+    printf "  ${GREEN}PASS${NC}  aborted edit of a defer keeps its binding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  aborted edit of a defer keeps its binding\n    Got: %q\n" "$ed_out"; ((failed++))
+fi
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"
