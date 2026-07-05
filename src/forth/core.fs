@@ -846,12 +846,17 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 \ — NOT as a single EVALUATE, because a `\` comment would otherwise swallow the
 \ rest of the whole buffer (EVALUATE has no line boundaries). STATE persists
 \ across the per-line EVALUATEs, so a colon definition may span several lines.
+\ ALL loop bookkeeping lives in variables, never on the data stack: evaluated
+\ content may leave items between lines (a `:noname ... ; is x` group parks
+\ its xt on the stack until the closing line's `is` pops it), and anything of
+\ ours on the stack would be shadowed by them.
+variable (rd-n)                         \ bytes consumed by the current line
 : (rd-eval-lines) ( c-addr u -- )
     (rd-u) !  (rd-a) !
     begin (rd-u) @ 0> while
-        10 (rd-chpos)                   ( idx-of-newline-or-len )
-        (rd-a) @ over evaluate          ( consumed-so-far = idx )
-        dup (rd-u) @ < if 1+ then       ( consumed, +1 for the newline if present )
+        10 (rd-chpos)  dup (rd-n) !     ( idx-of-newline-or-len )
+        (rd-a) @ swap evaluate          ( )   \ only content's items remain
+        (rd-n) @  dup (rd-u) @ < if 1+ then   ( consumed, +1 for the newline )
         dup (rd-a) +!
         (rd-u) @ swap - (rd-u) !
     repeat ;
@@ -1889,13 +1894,19 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     repeat
     false ;
 
+variable (ev-d0)                            \ stack depth before the re-evaluation
 : (eval+log) ( c-addr u -- )                \ evaluate source as a new def + log it (srcid 0)
     dup (prop-max) > if  2drop exit  then    ( c-addr u )
     >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
     (log) cell+ @  >r                       ( u )       \ R: log-off
     (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
     (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
+    depth (ev-d0) !
     (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
+    begin depth (ev-d0) @ > while  drop  repeat        \ a definition group must
+                                            \ leave nothing: drop its leftovers
+                                            \ (they sit above our u) so the
+                                            \ caller's stack frame cannot shift
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
     drop  true (dirty) ! ;
 : (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it

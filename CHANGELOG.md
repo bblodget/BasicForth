@@ -23,6 +23,13 @@
   first. The old behavior — opening the `defer` declaration line and
   re-running it on save, which redefined every defer on that line as fresh
   and uninitialized — is gone.
+- Fixed a segfault when re-evaluating a **multi-line** `:noname` group
+  (`edit` of such a binding): the group parks its xt on the data stack
+  between lines, and the line-replay loop kept its own bookkeeping there
+  too — the xt shadowed it, corrupting the walk and eventually feeding a
+  buffer *length* to `free`. The loop now keeps all state in variables, and
+  `(eval+log)` drops any leftovers a malformed group leaves so a caller's
+  stack frame can never shift again.
 
 ### `edit` with an untouched file is a no-op
 - Leaving the editor without saving (vi's `:q!`) exits with status **0**, so
