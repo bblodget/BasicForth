@@ -909,6 +909,21 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 
+# Tabs are whitespace: a source file indented with real tabs (or with tabs
+# between tokens) must tokenize — parse-word treats every char <= 0x20 as a
+# delimiter, not just space.
+tab_file="$(mktemp)"
+printf ': tabbed\n\t7 8 + . ;\ntabbed\n: tab2 5\t6 + . ;\ntab2\nbye\n' > "$tab_file"
+tab_out=$(BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$tab_file" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+rm -f "$tab_file"
+if [[ "$tab_out" == *"15"* && "$tab_out" == *"11"* && "$tab_out" != *"?"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tab-indented source file loads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tab-indented source file loads\n"
+    printf "    Expected: 15 and 11, no errors\n    Got:      %s\n" "$(echo "$tab_out" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # Command-line file argument (argv[1])
 # Load core.fs via argv[1] (it's idempotent — reloading defines the same words)
 t0=$(date +%s.%N)

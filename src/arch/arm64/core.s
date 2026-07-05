@@ -1284,13 +1284,13 @@ forth_parse_word:
     ADR X9, to_in
     LDR X12, [X9]                // X12 = current offset
 
-    // Skip leading spaces
+    // Skip leading whitespace (space and all control chars: tab, CR, ...)
 .Lpw_skip:
     CMP X12, X11
     B.GE .Lpw_empty
     LDRB W13, [X10, X12]
     CMP W13, #' '
-    B.NE .Lpw_found
+    B.HI .Lpw_found              // unsigned: > 0x20 is a word char
     ADD X12, X12, #1
     B .Lpw_skip
 
@@ -1306,13 +1306,13 @@ forth_parse_word:
 .Lpw_found:
     ADD X14, X10, X12             // X14 = start of word
 
-    // Scan to end of word
+    // Scan to end of word (any char <= 0x20 delimits)
 .Lpw_scan:
     CMP X12, X11
     B.GE .Lpw_done
     LDRB W13, [X10, X12]
     CMP W13, #' '
-    B.EQ .Lpw_done
+    B.LS .Lpw_done
     ADD X12, X12, #1
     B .Lpw_scan
 

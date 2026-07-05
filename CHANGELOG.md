@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Tabs are whitespace
+- `parse-word` delimited on the space character only, so a source file with a
+  real tab — a tab-indented definition, or a tab between tokens — failed to
+  load with a baffling unknown-word error (`? <tab>W`). The tokenizer now
+  treats every character ≤ 0x20 (tab, CR, ...) as a delimiter, the classic
+  Forth rule. Explicit-delimiter parsing (`."`, `s"`, `(`) is unchanged.
+
 ### `random` is now xorshift64 — `rnd`'s low bits were broken
 - The old LCG returned its raw seed, and `rnd` reduces with `mod`, which
   uses the **low bits** — an LCG's weakest: bit 0 alternates with period 2,
