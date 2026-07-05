@@ -1981,6 +1981,23 @@ else
     printf "  ${RED}FAIL${NC}  edit on a defer follows the binding\n    Got: %q\n" "$ef_out"; ((failed++))
 fi
 
+# ...and editing a MULTI-LINE :noname binding: the group's xt sits on the data
+# stack BETWEEN the replayed lines, so (rd-eval-lines) must keep its loop
+# bookkeeping in variables — the xt used to shadow it, corrupt the walk, and
+# leak a cell that eventually fed a length to free (segfault). The edited
+# group must re-bind, and the stack must come back clean.
+em_dir="$(mktemp -d)"
+printf 'defer d\n: go2 . . ;\n' > "$em_dir/mod.fs"
+printf '#!/bin/sh\nsed -i "s/111/222/" "$1"\n' > "$em_dir/ed.sh" && chmod +x "$em_dir/ed.sh"
+em_out=$( cd "$em_dir" && printf ':noname 111\n7 go2 ; is d\nedit d\nd\n.( DEPTH=) depth . cr\nbye\nn\n' \
+    | EDITOR="$em_dir/ed.sh" BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$em_dir"
+if [[ "$em_out" == *"7 222"* && "$em_out" == *"DEPTH=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit of a multi-line :noname binding re-binds, stack clean\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit of a multi-line :noname binding\n    Expected: 7 222 and DEPTH=0\n    Got: %q\n" "$em_out"; ((failed++))
+fi
+
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"
