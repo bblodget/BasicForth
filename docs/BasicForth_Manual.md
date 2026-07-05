@@ -585,9 +585,13 @@ on:
 ```
 > tutorial Snake                \ start a lesson (name like man, case-insensitive)
 ...
-[ next = continue   back = previous   step 1 ]
-> next                          \ next step    (back = previous step)
+[ step 1:  next   back   step = replay   end-tutorial ]
+> next                          \ next step    (back = previous, step = replay)
 ```
+
+Each step opens on a cleared screen (interactive sessions only). `step` reprints
+the current step — handy after running something that drew over it — and
+`end-tutorial` leaves the tutorial without touching anything you defined.
 
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.

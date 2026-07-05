@@ -178,11 +178,14 @@ Run it, then peek at the state:
 We steer with the arrow keys. `key?` tells you whether a key is waiting (so the
 game never blocks), and `key` reads it. The arrow keys come back as the
 constants `KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT`. A `case` statement
-picks the matching branch:
+picks the matching branch, and `begin key? while ... repeat` drains *every*
+waiting key each frame — a held key autorepeats faster than frames tick, so
+draining lets your newest keypress win instead of queueing behind stale
+repeats:
 
     : go ( dx dy -- )  dy !  dx ! ;
     : input
-        key? if
+        begin key? while
             key case
                 KEY_UP    of  0 -1 go endof
                 KEY_DOWN  of  0  1 go endof
@@ -190,8 +193,10 @@ picks the matching branch:
                 KEY_RIGHT of  1  0 go endof
                 [char] q  of  true gameover ! endof
             endcase
-        then ;
+        repeat ;
 
+`begin ... while ... repeat` is a loop with its test in the middle: each pass,
+`while` checks `key?` and leaves the loop as soon as no key is waiting.
 `go` stores a direction (e.g. `0 -1` means "up": x unchanged, y decreasing).
 Unmatched keys are simply ignored. We'll feel this work once the loop runs.
 

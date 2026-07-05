@@ -1008,32 +1008,59 @@ sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\n
 sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
 
 # examples/chase.fs (the Chase tutorial's finished program) must load and its
-# top-down design must work headlessly. The "hunt" brain steps a monster one
-# cell toward the player on each axis: monster at (5,5), player at (10,8) -> (6,6).
+# top-down design must work headlessly. step-toward (the smart step every
+# brain shares) closes the LONGER axis only — never both (a diagonal pursuer
+# would outrun the player) — and x moves in 2-column strides (terminal cells
+# are ~2x tall as wide): monster (5,5), aim (10,8) -> (7,5).
 t0=$(date +%s.%N)
-ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 px ! 8 py !\n0 hunt\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
+ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 8 aim!\n0 step-toward\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/chase.fs"
-if [[ "$ch_hunt" == *"CHX=6"* && "$ch_hunt" == *"CHY=6"* ]]; then
-    printf "  ${GREEN}PASS${NC}  examples/chase.fs loads and the hunt brain chases\n"; ((passed++))
+if [[ "$ch_hunt" == *"CHX=7"* && "$ch_hunt" == *"CHY=5"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs step-toward strides x, one axis per frame\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  examples/chase.fs loads and the hunt brain chases\n"
-    printf "    Expected: CHX=6 CHY=6\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
+    printf "  ${RED}FAIL${NC}  examples/chase.fs step-toward strides x, one axis per frame\n"
+    printf "    Expected: CHX=7 CHY=5\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
-# Per-monster brains (the Pac-Man trick): init-game installs a different brain
-# token in each monster's slot, so step-monsters runs DIFFERENT minds per
-# monster. With the player at (20,10) heading right, two monsters sharing cell
-# (22,10) diverge: monster 0 (hunt) steps left toward the player -> x=21, while
-# monster 1 (ambush) aims 3 cells ahead of the player -> x=23.
-ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n1 pdx ! 0 pdy !\n22 0 mx! 10 0 my!\n22 1 mx! 10 1 my!\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" \
+# ...and once x is level with the aim, it switches to the y axis:
+# monster (10,5), aim (10,8) -> (10,6).
+ch_axis=$(printf 'include %s/examples/chase.fs\ninit-game\n10 0 mx! 5 0 my!\n10 8 aim!\n0 step-toward\n.( AXX=) 0 mx@ . .( AXY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
-if [[ "$ch_brains" == *"H0X=21"* && "$ch_brains" == *"A1X=23"* ]]; then
+if [[ "$ch_axis" == *"AXX=10"* && "$ch_axis" == *"AXY=6"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs step-toward switches to the shorter axis\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs step-toward switches to the shorter axis\n"
+    printf "    Expected: AXX=10 AXY=6\n    Got:      %s\n" "$(echo "$ch_axis" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Brains are dice + aim: hunt takes the smart step 50% of frames, drift 15%.
+# 200 one-step trials from (5,5) chasing a player at (10,8): the smart step is
+# x -> 7, a 2-column stride (p=.5+.5/6~.58 for hunt -> mean 117; p~.29 for drift ->
+# mean 58, wobble included). Bounds sit ~4.5 sigma out: stable, not flaky.
+ch_dice=$(printf 'include %s/examples/chase.fs\ninit-game\n10 px ! 8 py !\nvariable hh  variable dh\n: htrial 5 0 mx! 5 0 my! 0 hunt  0 mx@ 7 = if 1 hh +! then ;\n: dtrial 5 0 mx! 5 0 my! 0 drift 0 mx@ 7 = if 1 dh +! then ;\n: tally 200 0 do htrial dtrial loop ;\ntally\n.( HUNTOK=) hh @ 85 > . .( DRIFTOK=) dh @ 90 < . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_dice" == *"HUNTOK=-1"* && "$ch_dice" == *"DRIFTOK=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs hunt is sharp, drift is dim (dice)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs hunt is sharp, drift is dim (dice)\n"
+    printf "    Expected: HUNTOK=-1 DRIFTOK=-1\n    Got:      %s\n" "$(echo "$ch_dice" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Per-monster brains (the Pac-Man trick): step-monsters runs DIFFERENT minds
+# per monster — each slot's token, with that monster's index as argument.
+# Install two deterministic test brains (the live ones roll dice) and check
+# each slot ran its own.
+ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n: b0 ( i -- ) drop 100 0 mx! ;\n: b1 ( i -- ) drop 200 1 mx! ;\n%s b0 0 brain!  %s b1 1 brain!\n2 mcount !\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" "'" "'" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_brains" == *"H0X=100"* && "$ch_brains" == *"A1X=200"* ]]; then
     printf "  ${GREEN}PASS${NC}  examples/chase.fs runs a different brain per monster\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  examples/chase.fs runs a different brain per monster\n"
-    printf "    Expected: H0X=21 A1X=23\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
+    printf "    Expected: H0X=100 A1X=200\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
@@ -1045,6 +1072,20 @@ if [[ "$ch_caught" == *"CAUGHT=-1"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  examples/chase.fs ends the game when a monster catches you\n"
     printf "    Expected: CAUGHT=-1\n    Got:      %s\n" "$(echo "$ch_caught" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# input drains the whole key queue each frame, last key wins: three queued
+# DOWN arrows then a LEFT, one input call — the heading must be LEFT, not the
+# first stale DOWN. (The sleep lets the drain loop see an empty pipe and stop.)
+ch_drain=$({ printf 'include %s/examples/chase.fs\ninit-game\n: t input ." PDX=" pdx @ . ." PDY=" pdy @ . cr ;\n' "$REPO_ROOT"; \
+    printf 't\n\033[B\033[B\033[B\033[D'; sleep 0.5; printf 'bye\n'; } \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_drain" == *"PDX=-1"* && "$ch_drain" == *"PDY=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs input drains the queue; last key wins\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs input drains the queue; last key wins\n"
+    printf "    Expected: PDX=-1 PDY=0\n    Got:      %s\n" "$(echo "$ch_drain" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
@@ -2477,7 +2518,21 @@ tut_check "step heading is shown"          $'tutorial Lesson\nnext'          "##
 tut_check "REPL live between steps"        $'tutorial Lesson\n7 8 + .'       "15"
 tut_check "next before start hints"        "next"                            "start a tutorial first"
 tut_check "back before start hints"        "back"                            "start a tutorial first"
+tut_check "step before start hints"        "step"                            "start a tutorial first"
 tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+tut_check "end-tutorial confirms"          $'tutorial Lesson\nend-tutorial'  "tutorial ended"
+tut_check "end-tutorial then next hints"   $'tutorial Lesson\nend-tutorial\nnext' "start a tutorial first"
+tut_check "end-tutorial with none started" "end-tutorial"                    "no tutorial in progress"
+
+# step replays the current step: after next + step, step 2's content printed twice
+tut_replay=$(printf 'tutorial Lesson\nnext\nstep\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ $(echo "$tut_replay" | grep -c "content TWO here") -eq 2 ]]; then
+    printf "  ${GREEN}PASS${NC}  step replays the current step\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  step replays the current step\n"
+    printf "    Expected 'content TWO here' twice, got: %s\n" "$(echo "$tut_replay" | grep -c 'content TWO here')"; ((failed++))
+fi
 
 # back at step 1 stays at step 1 (does not underflow)
 tut_b1=$(printf 'tutorial Lesson\nback\n' | BASICFORTH_PATH="$FORTH_LIB" \
@@ -2487,6 +2542,30 @@ if [[ "$tut_b1" == *"step 1"* ]] && [[ "$tut_b1" != *"step 0"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  back at step 1 stays at step 1\n"
     printf "    Got:      %s\n" "$(echo "$tut_b1" | head -4)"; ((failed++))
+fi
+
+# Interactive sessions clear the screen per step, but piped input must stay
+# plain text: no escape bytes from the (tty?)-guarded page in (print-step).
+tut_esc=$(printf 'tutorial Lesson\nnext\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_esc" != *$'\x1b'* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped tutorial output has no escape codes\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped tutorial output has no escape codes\n"
+    printf "    Got escape bytes in: %s\n" "$(echo "$tut_esc" | cat -v | head -3)"; ((failed++))
+fi
+
+# The --more-- pager pause is interactive-only: a piped man of a file longer
+# than the screen must print every line straight through, with no pause
+# swallowing input and no "-- more" prompt in the output.
+for i in $(seq 1 40); do echo "filler line $i"; done > "$tut_dir/Longpage.md"
+tut_pager=$(printf 'man Longpage\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_pager" == *"filler line 40"* && "$tut_pager" != *"-- more"* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped man never pauses at --more--\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped man never pauses at --more--\n"
+    printf "    Got:      %s\n" "$(echo "$tut_pager" | tail -3)"; ((failed++))
 fi
 
 # Unset BASICFORTH_DOCS — tutorial reports it gracefully

@@ -1214,6 +1214,7 @@ variable (pg-quit)                       \ true once the user pressed q
     0 (pg-row) ! ;
 : (pg-line) ( c-addr u -- )
     type cr  1 (pg-row) +!
+    (tty?) 0= if exit then                 \ piped: no --more-- pause, ever
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
 \ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
 \ a read-error flag (true if read-line failed) rather than aborting — it is a
@@ -1489,6 +1490,7 @@ variable (ts-any)                          \ printed any line of the wanted step
     over 1+ c@ [char] # = and
     swap 2 + c@ bl = and ;
 : (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
+    (tty?) if page then
     0 (pg-row) ! false (pg-quit) !
     1 (ts-cur) !  false (ts-any) !
     >r
@@ -1542,15 +1544,15 @@ variable (ts-any)                          \ printed any line of the wanted step
     then
     (tut-existed) @ 0= if
         ." -- end of '" (tut-name) (tut-nlen) @ type ." ' --" cr
-        ." Type  back  to review, or  tutorial <name>  to start another." cr
+        ." Type  back  to review,  end-tutorial  to leave, or  tutorial <name>  to start another." cr
         (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
         exit
     then
-    cr ." [ next = continue   back = previous   step " (tut-step) @ . ." ]" cr ;
+    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step = replay   end-tutorial ]" cr ;
 : tutorial ( "name" -- )
     parse-word (tut-max) min                ( c-addr u )
     dup 0= if 2drop
-        ." usage: tutorial <name>   then  next / back  to move" cr
+        ." usage: tutorial <name>   then  next / back / step  to move" cr
         topics exit
     then
     dup (tut-nlen) !                        ( c-addr u )
@@ -1562,6 +1564,13 @@ variable (ts-any)                          \ printed any line of the wanted step
 : back ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
+: step ( -- )                              \ replay the current step
+    (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
+    (tut-go) ;
+: end-tutorial ( -- )                      \ drop the bookmark; definitions remain
+    (tut-nlen) @ 0= if ." (no tutorial in progress)" cr exit then
+    0 (tut-nlen) !
+    ." (tutorial ended -- your definitions remain)" cr ;
 
 \ ===== .MODULE : the words in your module =====
 \ WORDS dumps the whole dictionary (~330 built-ins); .MODULE shows just what YOU
