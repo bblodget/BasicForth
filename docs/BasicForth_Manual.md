@@ -156,10 +156,11 @@ At startup, BasicForth:
 `INCLUDE` parses the next word as a filename and loads it. Paths are
 relative to the current working directory (the build directory).
 
-For the compile-only `S"` form (e.g., inside a colon definition):
+`INCLUDED` takes the path as a string instead — `S"` works at the prompt
+(the string is returned in a transient buffer) as well as in a definition:
 
 ```
-> : load-snake s" ../../../examples/snake.fs" included ; load-snake
+> s" ../../../examples/snake.fs" included
 ```
 
 ### Executable Scripts (`#!`)
@@ -269,7 +270,9 @@ reports a problem without corrupting its stdout:
 : main ... ok? 0= if  s" input out of range" warn  1 bye-code  then ... ;
 ```
 
-(`S"` is compile-only, so build strings inside a definition as shown.)
+(`S"` also works interpreted — at the prompt it returns the string in a
+transient buffer, so `s" input out of range" warn` is fine outside a
+definition too.)
 
 Note: `write-file`/`write-line` loop over `write(2)` until **all** the bytes are
 written, so a short write never silently truncates output; the `ior` is non-zero
@@ -298,8 +301,7 @@ the ANS File-Access wordset:
 | `rename-file` | ( c-addr1 u1 c-addr2 u2 -- ior ) | rename/replace file1 → file2 (atomic) |
 
 Every operation returns an `ior` (`0` success, else the positive `errno`).
-A typical read-a-whole-file-in-chunks loop (`S"` is compile-only, so build the
-name inside a definition):
+A typical read-a-whole-file-in-chunks loop:
 
 ```forth
 create buf 4096 allot

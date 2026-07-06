@@ -19,8 +19,8 @@
 \ tools/sdl3off.c (SDL 3.4.12).
 
 \ --- library ---
-\ s" is compile-only, so the strings live in one binding word that runs at
-\ include time (bottom of this section).
+\ The strings live in one binding word that runs at include time (bottom of
+\ this section) so a re-run can rebind after the library state changes.
 0 value (sdl3)
 0 value (SDL_Init)            0 value (SDL_Quit)
 0 value (SDL_GetError)

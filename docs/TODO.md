@@ -331,9 +331,9 @@ docs/Graphics.md for the API.
   constants/offsets. Dummy-driver integration test (headless).
 - [x] Animation demo: `examples/bounce.fs` — bouncing square at the display
   refresh rate (vsync), ESC/q/close to quit
-- [ ] Interpreted `s"` (ANS File word set semantics: transient buffer) — the
-  compile-only gotcha bites every binding file; sdl3.fs had to wrap its
-  strings in a `(sdl-bind)` word
+- [x] Interpreted `s"` and `."` (ANS transient-buffer semantics) — STATE-smart
+  redefinitions in core.fs; two alternating 256-byte buffers; compile path
+  delegates to the ASM primitives so compiled code is unchanged
 - [ ] SDL3 in the Pumpkian board image (build from source; bookworm has no
   libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites
