@@ -213,6 +213,36 @@ variable (cmp-a2)  variable (cmp-u2)
     2dup = if 2drop 0
     else < if -1 else 1 then then ;
 
+\ Interpreted S" and ." — STATE-smart redefinitions of the ASM primitives.
+\ The ASM versions (xts captured below) are compile-only: they parse the
+\ string and compile it inline. These wrappers delegate to them when
+\ compiling (identical compiled code, so SEE still recognizes strings) and
+\ add interpretation semantics: S" returns the string in one of two
+\ alternating transient buffers (ANS 2012 — the string stays valid until
+\ the second-next interpreted S"), ." types it immediately.
+' s" constant (s"prim)
+' ." constant (."prim)
+256 constant (s"max)
+create (s"bufs) (s"max) 2* allot
+variable (s"flip)
+: (s"buf)   ( -- a )  \ alternate halves of (s"bufs) on each use
+    (s"flip) @ dup 0= (s"flip) !
+    if (s"bufs) (s"max) + else (s"bufs) then ;
+: (s"copy)  ( c-addr u -- buf u )  \ copy string into a transient buffer
+    dup (s"max) > abort" interpreted string too long"
+    (s"buf) swap                ( c-addr buf u )
+    dup >r over >r cmove r> r> ;
+\ The tokenizer leaves >IN pointing at the space after the S" token itself;
+\ skip it before PARSE (the ASM versions skip one leading space the same way).
+: (s"parse) ( "ccc<quote>" -- c-addr u )
+    source >in @ /string            ( a u )  \ unparsed rest of the line
+    if c@ 32 = if 1 >in +! then else drop then
+    [char] " parse ;
+: s"    ( Compiling: append inline string. Interpreting: -- c-addr u )
+    state @ if (s"prim) execute else (s"parse) (s"copy) then ; immediate
+: ."    ( Compiling: append inline string + TYPE. Interpreting: type now )
+    state @ if (."prim) execute else (s"parse) type then ; immediate
+
 \ Programming-Tools words (15)
 : ?     ( a-addr -- ) @ . ;
 

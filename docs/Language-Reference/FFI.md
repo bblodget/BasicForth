@@ -11,7 +11,9 @@ A complete example — the process id via libc:
         s" libc.so.6" dlopen  s" getpid" dlsym  >r 0 r> (ccall) ;
     pid .
 
-Note: `s"` is compile-only, so build calls inside `:` definitions.
+`s"` also works at the prompt, so one-off calls need no colon definition:
+
+    s" libc.so.6" dlopen s" getpid" dlsym 0 swap (ccall) .
 
 ## dlopen ( c-addr u -- handle )
 Load a shared library by name (searched on the system library path) or by

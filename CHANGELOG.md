@@ -126,6 +126,19 @@
   seams one at a time with `:noname ... ; is update` and bake them when
   settled. The Chase tutorial's closing step points here.
 
+### Interpreted `s"` and `."`
+- `s"` and `."` now work outside definitions — at the prompt, at the top
+  level of included files, and under `evaluate`. STATE-smart wrappers in
+  core.fs shadow the ASM primitives: when compiling they delegate to the
+  primitive (compiled code is byte-identical, `see` string recognition
+  unchanged); when interpreting, `s"` returns the string in one of **two
+  alternating 256-byte transient buffers** (ANS 2012 — valid until the
+  second-next interpreted `s"`) and `."` types immediately. Strings over
+  256 chars abort with `interpreted string too long`. `abort"` remains
+  compile-only. This removes the gotcha that forced sdl3.fs to wrap its
+  binding strings in a word — `s" file.fs" included`, `s" cmd" (system)`,
+  and one-off FFI calls now work straight from the prompt.
+
 ## v0.9.0 — 2026-07-03
 
 ### `compact` keeps final `is`/`to` bindings

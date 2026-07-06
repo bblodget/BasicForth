@@ -68,8 +68,8 @@ building the command in code:
     if  ." backup failed" cr  then ;
 ```
 
-(`s"` is compile-only, so `(system)` is most natural inside a `:` definition;
-`sh` exists precisely so you can run commands at the prompt without one.)
+(`s"` also works at the prompt — `s" ls -l" (system) drop` is fine — but
+`sh` remains the convenient way to run commands interactively.)
 
 ## How it works
 

@@ -444,6 +444,16 @@ assert_output "dot-paren clean stack" '.( hi) depth 0 = .'                     "
 assert_error  "s-quote no close" ': test s" no closing quote ;'                "unterminated string"
 assert_error  "dot-quote no close" ': test ." no closing quote ;'              "unterminated string"
 
+# Interpreted (STATE-smart) S" and ." — outside a definition S" returns the
+# string in one of two alternating transient buffers; ." types immediately.
+# Expected strings are chosen so they can't match the echoed input line.
+assert_output "s-quote interpreted"     's" hel" s" lo" type type'              "lohel"
+assert_output "s-quote buffer cycle"    's" one" s" two" s" three" type type'   "threetwo"
+assert_output "dot-quote interpreted"   '." AB" ." CD"'                         "ABCD"
+assert_output "s-quote interp leading space" 's"  pad" type ." |"'              " pad|"
+assert_output "s-quote empty interp"    's" " swap drop . ." <>"'               "0 <>"
+assert_error  "s-quote interp too long" 'create ebuf 320 allot ebuf 320 char x fill char s ebuf c! char " ebuf 1+ c! 32 ebuf 2 + c! char " ebuf 310 + c! ebuf 311 evaluate' "interpreted string too long"
+
 # =========================================================================
 section "PICK"
 # =========================================================================

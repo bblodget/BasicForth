@@ -148,7 +148,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | SPACES  | ( n -- )                                      | forth | (x)    | core.fs                  |
 | .       | ( n -- )                                      | asm   | (x)    | Print signed number      |
 | U.      | ( u -- )                                      | forth | (x)    | core.fs: 0 <# #S #> TYPE |
-| ."      | ( "ccc" -- )                                  | asm   | (x)    | Compile string + TYPE    |
+| ."      | ( "ccc" -- )                                  | both  | (x)    | Compile string + TYPE; interpreted: types now |
 | BL      | ( -- char )                                   | forth | (x)    | 32 (in core.fs)         |
 | CHAR    | ( "name" -- char )                            | forth | (x)    | core.fs                  |
 
@@ -229,7 +229,7 @@ Status: ( ) = not yet implemented, (x) = implemented
 | ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE)      |
 | QUIT          | ( -- )                                        | asm   | (x)    | Reset RSP, enter REPL    |
 | ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | (x)    | core.fs (always false)   |
-| S"            | ( "ccc" -- c-addr u )                         | asm   | (x)    | Inline string literal   |
+| S"            | ( "ccc" -- c-addr u )                         | both  | (x)    | Inline string literal; interpreted: transient buffer |
 
 ## Core Extension Words (6.2)
 
