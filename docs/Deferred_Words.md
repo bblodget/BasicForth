@@ -121,6 +121,14 @@ follows the same trail: a `:noname` action opens *its* source in your editor
 (re-running the edited group re-binds the defer); a named action prints
 "edit `<word>` instead"; an uninitialized defer tells you to `is` it first.
 
+`uses` and edit-propagation see through the anonymity the same way. A
+`:noname … ; is x` group that is the current action of a deferred word shows
+up in `uses` output as `(:noname is x)`, and when a word the group calls is
+edited, the group is re-run whole — the trailing `is` re-binds `x` to the
+freshly compiled action, so the fix reaches it like any other caller.
+Superseded groups (actions a defer has been re-pointed away from) are dead
+code: skipped by both.
+
 ## Persistence
 
 `save` records the `defer` declaration **and** any direct `is` assignment you

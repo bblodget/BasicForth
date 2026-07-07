@@ -2,12 +2,34 @@
 
 ## Unreleased
 
+### `uses` and edit-propagation see `:noname` actions
+- **`uses` now reports live anonymous actions.** A `:noname … ; is x` group
+  that is the *current* action of a deferred word is scanned like any
+  definition and shown as `(:noname is x)` — resolved by walking the deferred
+  words and matching the action cell to the anonymous entry's xt. Superseded
+  groups (actions a defer has been re-pointed away from) are dead code and
+  are not listed; `uses x` on the deferred word itself skips its own binding
+  group, matching the own-definition rule for named words.
+- **`edit` propagation reaches every `:noname`-bound defer.** When an edited
+  word is called from a live `:noname` group, the whole group is re-run —
+  the trailing `is` re-binds the defer to freshly compiled code — and the
+  report shows `(:noname is x)`. Previously the empty-name source lookup
+  accidentally matched only the *newest* anonymous entry, so with two
+  `:noname`-bound defers calling the edited word, one updated and the other
+  silently kept calling the old code. Superseded groups are skipped
+  (re-running one would drag the defer back to its old binding), and the
+  defer's own callers are never recompiled — they reach it through the
+  action cell.
+- `(word-src)` now refuses nameless entries outright, killing the accidental
+  newest-anon match at its root; anonymous sources are resolved per-entry
+  via the header's own metadata instead.
+
 ### `:noname` definitions carry real source metadata
 - `:noname` now builds a genuine dictionary entry — with an **empty name**
   (unfindable by construction: lookup compares lengths first and every typed
   token has length ≥ 1) and word-type code 3 — so an anonymous definition
   carries the same code pointer and source record as a named word.
-  `words`/`.module`/`uses` skip the nameless entries. What falls out:
+  `words`/`.module` skip the nameless entries. What falls out:
 - **`see` on a deferred word shows its `:noname` action in full**, straight
   from the recorded source — multi-line included. The old log-scanning
   heuristic (which could only show the group's last line) is gone.
