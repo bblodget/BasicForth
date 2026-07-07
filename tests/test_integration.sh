@@ -1998,6 +1998,44 @@ else
     printf "  ${RED}FAIL${NC}  edit of a multi-line :noname binding\n    Expected: 7 222 and DEPTH=0\n    Got: %q\n" "$em_out"; ((failed++))
 fi
 
+# USES and edit-propagation treat :noname actions first-class. A live anon
+# group (the CURRENT action of a deferred word) is reported as
+# "(:noname is <name>)" and recompiled when a word it calls is edited. BOTH
+# bindings must update — (word-src)'s empty-name lookup used to reach only the
+# NEWEST anon, leaving every other :noname-bound defer calling the old code.
+ap_dir="$(mktemp -d)"
+printf 'defer d1\ndefer d2\n: helper 100 + ;\n' > "$ap_dir/mod.fs"
+ap_out=$( cd "$ap_dir" && printf ':noname 5 helper . ; is d1\n:noname 7 helper . ; is d2\nuses helper\nuses d1\nedit helper\nd1\nd2\nbye\nn\n' \
+    | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ap_dir"
+if [[ "$ap_out" == *"helper is used by: (:noname is d2) (:noname is d1)"* \
+      && "$ap_out" == *"d1 is used by: (none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses reports live :noname actions (own binding skipped)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses on :noname actions\n    Got: %q\n" "$ap_out"; ((failed++))
+fi
+if [[ "$ap_out" == *"updated: (:noname is d1) (:noname is d2)"* \
+      && "$ap_out" == *"205"* && "$ap_out" == *"207"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit propagates into every :noname-bound defer\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit propagation into :noname actions\n    Expected: 205 and 207\n    Got: %q\n" "$ap_out"; ((failed++))
+fi
+# GUARD: only the CURRENT action's group is re-run — re-running a superseded
+# group would re-fire its `is` and clobber the newer binding backward. Also
+# transitive: helper2 (calls helper) goes dirty, and the anon group that calls
+# helper2 is re-run in turn (7 + 201 = 208).
+ag_dir="$(mktemp -d)"
+printf 'defer d\n: helper 100 + ;\n: helper2 helper 1+ ;\n' > "$ag_dir/mod.fs"
+ag_out=$( cd "$ag_dir" && printf ':noname 5 helper . ; is d\n:noname 7 helper2 . ; is d\nedit helper\nd\nbye\nn\n' \
+    | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ag_dir"
+ag_n=$(grep -o '(:noname' <<<"$ag_out" | wc -l)
+if [[ "$ag_out" == *"updated: helper2 (:noname is d)"* && "$ag_out" == *"208"* && "$ag_n" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  propagation skips superseded :noname groups (transitive ok)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  superseded :noname group guard\n    Expected: 'updated: helper2 (:noname is d)' once, then 208\n    Got: %q\n" "$ag_out"; ((failed++))
+fi
+
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"

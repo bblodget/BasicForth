@@ -1640,7 +1640,8 @@ variable (sw-mark)                          \ LATEST at end of core.fs (module s
 \ renaming something. It resolves each word's source the way SEE does — from the
 \ capture log for words typed at the REPL, or from the file for words LOADed /
 \ INCLUDEd — so it covers everything .MODULE lists, skipping only <word>'s own
-\ defining line.
+\ defining line. A :noname group that is the current action of a deferred word
+\ is covered too, reported as (:noname is <name>); superseded groups are not.
 variable (uses-xt)
 : (src-of) ( xt -- c-addr u true | false )  \ captured source span of xt, if any
     (uses-xt) !
@@ -1702,9 +1703,51 @@ variable (uf-srcid)  variable (uf-buf)  variable (uf-len)
     over (uf-len) @ swap -  min               ( off u )    \ u = min(len, uf-len-off)
     swap (uf-buf) @ +  swap  true ;
 
+\ --- header introspection: word type, code span, recorded source ---
+\ Every header (named or :noname) records its Flags2 type, code span, and source
+\ metadata; these read them back. (nt-src) resolves the recorded source from the
+\ capture log (srcid 0) or the source file. (anon-owner) answers "which deferred
+\ word currently runs this :noname?" — the identity USES and edit-propagation
+\ report a live anonymous definition by, as (:noname is <name>).
+: (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
+: (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup @  swap 8 + l@ ;
+: (xt>nt) ( xt -- nt true | false )          \ header owning this xt (incl. :noname)
+    (latest@)
+    begin dup while                          ( xt nt )
+        dup 8 + c@ 64 and 0= if
+            2dup (xt-of) = if  nip true exit  then
+        then
+        @
+    repeat
+    2drop  false ;
+: (nt-meta) ( nt -- off len srcid )          \ source-metadata fields of a header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup 16 + l@  over 14 + w@  rot 12 + w@ ;
+: (nt-src) ( nt -- c-addr u true | false )   \ a header's recorded source (log/file)
+    dup (nt-meta)                            ( nt off len srcid )
+    dup 0= if                                \ REPL word: source from the capture log
+        drop 2drop  (nt>code) drop  (src-of)  exit  then
+    >r >r >r drop r> r> r>  (file-span) ;    \ file word: (off len srcid)
+: (anon-owner) ( xt -- nt true | false )     \ deferred word whose CURRENT action is xt
+    (latest@)
+    begin dup while                          ( xt nt )
+        dup 8 + c@ 64 and 0= if
+            dup (nt-type) 1 = if
+                2dup (xt-of) defer@ = if  nip true exit  then
+            then
+        then
+        @
+    repeat
+    2drop  false ;
+
 variable (uses-t)  variable (uses-tu)  variable (uses-n)
 variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
 : (word-src) ( nt -- c-addr u true | false )  \ source of the in-force def named by nt
+    dup (sw-anon?) if  drop  false exit  then  \ :noname: no name to look up — an empty
+                                               \ name would MATCH the newest anon; use
+                                               \ (nt-src) for a specific anon's source
     dup (sw-name) (find-meta)                 ( nt xt off len srcid flag )
     0= if  2drop 2drop drop  false exit  then  \ name not currently defined
     (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !   ( nt )
@@ -1718,6 +1761,12 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
 : (uses-hit?) ( nt -- f )                   \ does this word reference the target?
     dup (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own def
     (word-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: (uses-anon?) ( nt -- f )                  \ live :noname group referencing the target?
+    dup (nt>code) drop (anon-owner) 0= if  drop  false exit  then  ( nt owner )
+    (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own `is` line
+    (nt-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: (.anon) ( nt -- )                         \ label a LIVE anon by its deferred word
+    ." (:noname is "  (nt>code) drop (anon-owner) drop (sw-name) type  ." )" ;
 : uses ( "name" -- )
     parse-word  dup 0= if  2drop  ." usage: uses <word>" cr  exit  then
     (uses-tu) !  (uses-t) !
@@ -1725,7 +1774,10 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     (uses-t) @ (uses-tu) @ type ."  is used by:"
     (latest@)
     begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
-        dup (sw-anon?) 0= if
+        dup (sw-anon?) if                    \ a :noname group: report it if it is the
+            dup (uses-anon?) if              \ CURRENT action of some deferred word
+                space  dup (.anon)  1 (uses-n) +!  then
+        else
             dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
         then
         @
@@ -1750,11 +1802,6 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     repeat
     drop 2drop  false ;
 
-: (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
-: (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
-    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
-    dup @  swap 8 + l@ ;
-
 \ (step-val?) real body: fetch a VALUE's contents by name, for the optional
 \ step argument of tutorial/step. Only type-2 (value) words execute — a value
 \ just pushes its cell, so this is side-effect free; anything else is refused
@@ -1771,27 +1818,10 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
         drop type ." : not a deferred word" cr abort  then
     nip nip  (xt-of) defer@ ;
 
-: (xt>nt) ( xt -- nt true | false )          \ header owning this xt (incl. :noname)
-    (latest@)
-    begin dup while                          ( xt nt )
-        dup 8 + c@ 64 and 0= if
-            2dup (xt-of) = if  nip true exit  then
-        then
-        @
-    repeat
-    2drop  false ;
 : (xt>name) ( xt -- c-addr u true | false )  \ NAME owning this xt (:noname skipped)
     (xt>nt) 0= if  false exit  then          ( nt )
     dup (sw-anon?) if  drop false exit  then
     (sw-name) true ;
-: (nt-meta) ( nt -- off len srcid )          \ source-metadata fields of a header
-    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
-    dup 16 + l@  over 14 + w@  rot 12 + w@ ;
-: (nt-src) ( nt -- c-addr u true | false )   \ a header's recorded source (log/file)
-    dup (nt-meta)                            ( nt off len srcid )
-    dup 0= if                                \ REPL word: source from the capture log
-        drop 2drop  (nt>code) drop  (src-of)  exit  then
-    >r >r >r drop r> r> r>  (file-span) ;    \ file word: (off len srcid)
 
 \ --- last direct-assignment line in the log targeting a given name ---
 variable (t2-fa) variable (t2-fu)            \ a line's first token
@@ -1859,7 +1889,9 @@ variable (sb-xt)  variable (sb-len)  variable (sb-act)
 \ (transitively) uses it. Walk the module words oldest-first (definition order is
 \ a valid dependency order) with a growing dirty set, recompiling each affected
 \ caller from its source (log or file, via (word-src)) and re-logging it so
-\ SEE/USES/SAVE stay correct.
+\ SEE/USES/SAVE stay correct. A :noname group whose anon is the CURRENT action
+\ of a deferred word is re-run whole (the trailing `is` re-binds); its defer is
+\ NOT added to the dirty set — callers reach it through the action cell.
 8192 constant (prop-max)                    \ max source bytes of one definition handled
 create (prop-src) (prop-max) allot          \ scratch copy (survives a log realloc)
 512 constant (prop-nmax)
@@ -1923,7 +1955,17 @@ variable (ev-d0)                            \ stack depth before the re-evaluati
         @
     repeat drop ;
 
+: (prop-anon) ( nt -- )                     \ re-run a live :noname group that calls a dirty word
+    dup (nt>code) drop (anon-owner) 0= if  drop exit  then   ( nt owner )
+    >r                                       \ superseded groups have no owner and are
+                                             \ skipped: re-running one would clobber a
+                                             \ NEWER binding of the same deferred word
+    (nt-src) 0= if  r> drop exit  then       ( c-addr u ) ( R: owner )
+    2dup (prop-mentions-dirty?) 0= if  2drop  r> drop  exit  then
+    (eval+log)  1 (prop-count) +!            \ re-fires the group's trailing `is`
+    space ." (:noname is "  r> (sw-name) type  ." )" ;
 : (prop-one) ( nt -- )                      \ recompile this word if it uses a dirty word
+    dup (sw-anon?) if  (prop-anon) exit  then   \ :noname group: re-run it (re-binds)
     dup (sw-name) (prop-name-dirty?) if  drop exit  then   \ already dirty → skip
     dup (word-src) 0= if  drop exit  then    ( nt c-addr u )
     (prop-mentions-dirty?) 0= if  drop exit  then  ( nt )

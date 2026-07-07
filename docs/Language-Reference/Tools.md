@@ -69,7 +69,10 @@ List the module words whose source mentions `<name>` as a whole token
 something. It reads each word's source the way `see` does — from the interactive
 capture log for words you typed, or from the file for words loaded via a startup
 argument, `load`, or `include` — so it covers everything `.module` lists.
-`<name>`'s own defining line is not counted.
+`<name>`'s own defining line is not counted. A `:noname … ; is x` group that
+is the current action of a deferred word is scanned too, reported as
+`(:noname is x)`; superseded groups are skipped, and so is the binding group
+of `<name>` itself when `<name>` is a deferred word.
 
     \ variable mcount  : step  mcount @ . ;  : tick  mcount 1+ . ;
     \ uses mcount

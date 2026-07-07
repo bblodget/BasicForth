@@ -92,6 +92,14 @@ It finds the callers with the same machinery as `uses`, and recompiles each from
 its source (capture log *or* file), re-logging it so `see`/`uses`/`save` stay
 correct.
 
+`:noname` actions are covered too: if the edited word is called from a
+`:noname … ; is x` group that is still `x`'s current action, the whole group is
+re-run — the trailing `is` re-binds the defer to freshly compiled code — and it
+appears in the report as `(:noname is x)`. A superseded group (an old action
+the defer has moved on from) is skipped: re-running it would drag the defer
+back to the old binding. The deferred word's own callers are never recompiled —
+they reach it through its action cell, which is the point of `defer`.
+
 ## Multi-line definitions
 
 A `:` definition can span several lines. While one is open (the compiler is

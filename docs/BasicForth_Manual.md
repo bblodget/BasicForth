@@ -462,6 +462,19 @@ capture log for words you typed, or from the file for words loaded as a startup
 argument, via `load`, or via `include` — so it covers everything
 `.module` lists. It skips `<word>`'s own defining line.
 
+Anonymous actions count too: a `:noname … ; is x` group that is the current
+action of a deferred word is scanned like any definition and reported by the
+word it powers:
+
+```
+> uses score
+score is used by: tick (:noname is on-win)
+```
+
+A superseded group — one whose deferred word has since been re-bound — is dead
+code and is not listed. And `uses x` on the deferred word itself skips `x`'s
+own binding group, just as a named word's own definition is skipped.
+
 ### Forgetting definitions (`marker`)
 
 `marker <name>` sets a restore point in the dictionary. Running `<name>` later
