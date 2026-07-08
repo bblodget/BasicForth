@@ -478,12 +478,68 @@ see docs/Persistence.md, Line_Editor.md, Deferred_Words.md, Shelling_Out.md.
   low bit alternated), tabs count as whitespace in the tokenizer, `edit`
   with an untouched file is a no-op (vi `:q!` exits 0).
 
+### Next: the editing-workflow arc (planned 2026-07-08)
+
+Motivating find: a plain interactive redefinition (`: helper 200 ;`) does NOT
+propagate — callers silently keep the old code (STC bakes call targets; only
+`edit` recompiles callers). Worse, it makes the three persistence views
+disagree: live behavior and `save`/`reload` keep callers on the old code,
+but `compact` emits the latest source at the word's original position, so
+callers would bind the NEW code. `:e` closes the gap and becomes the taught
+way to redefine. The full symmetry grid:
+
+|                        | inline | $EDITOR         |
+|------------------------|--------|-----------------|
+| new word               | `:`    | `define <word>` |
+| redefine + propagate   | `:e <word>` | `edit <word>` |
+
+- [ ] **Step 1a: `define <word>`** — open `$EDITOR` on a template
+  (`: word\n    ;`), evaluate + log on exit, exactly the modal-`edit`
+  machinery minus the source lookup. Refuse an existing word ("already
+  defined — use edit"), symmetric with `edit`'s errors.
+- [ ] **Step 1b: bare `edit`** (no argument) — open the *current module
+  file* in `$EDITOR`; on exit, if the file changed, `reload` it (unchanged →
+  no-op, reuse the `(s=)` compare). Dirty-guard first: unsaved captured
+  changes would be lost by the reload, so prompt "save first? (y/n)" like
+  `load`/`new`. Requires a current module.
+- [ ] **Step 2: `:e <word>`** — like `:` but the word must already exist,
+  and when the definition closes, run the propagation pass and report
+  `updated: ...`, re-logging recompiled callers (as `edit` does) so
+  live/reload/compact stay consistent. Mechanism: re-add the arm-flag
+  pattern (armed by `:e`, fired from `(capture-line)` when the group
+  closes) that modal `edit` retired. Docs: record the two top-down styles —
+  `defer` for behavior that varies at *runtime* (brain-swapping,
+  uninitialized-abort pedagogy), stubs + `:e`/`edit` for scaffolding you
+  fill in once.
+- [ ] **Step 3: structure-preserving `compact`** — text-process the save
+  file instead of re-emitting from the log: keep every non-definition line
+  verbatim (comments, blank lines, `is`/`to` lines), replace each word's
+  *first* definition group with its latest source, delete later duplicates.
+  Preserves the author's file layout. Edges: hoisting a rewritten
+  definition can create a forward reference (its new body calls a word
+  defined later in the file) — detect and warn; comment blocks above a
+  replaced definition may go stale — keep them anyway (documented caveat).
+- [ ] **Step 4: module-ownership architecture** — design doc BEFORE code.
+  Seed model: **module = file, `SrcId` = ownership, current module = save
+  target**. `.module` lists only current-module words (SrcId 0 interactive
+  captures belong to the current module); `edit`/`:e` refuse words owned by
+  another file with a hint ("orbit belongs to planets.fs — `module
+  planets.fs` to edit it"); new `module <file>` switches the edit/save
+  target *without* forgetting (unlike `load`). Hard question to settle in
+  the doc: persistence for included files' words — candidate: splice edits
+  directly into the owning file on disk (the span is in the header
+  metadata) so the capture log serves only interactive words; splicing
+  shifts every later word's offsets in that file, so metadata must be
+  refreshed. Propagation stays cross-module in memory; persistence is
+  per-owning-file. Steps 1–3 are safe to build first under
+  "current-module-only" rules.
+
 ### Open threads
 
 - [ ] **Pipes / output capture** (`pipe`/`dup2` platform work) — read a
   command's *output* back into Forth (today `(system)`/`sh` only stream to
   the terminal). Unlocks `history | grep`-style words and fzf pickers for
-  `edit`/`load`. The next real step in the shell vision.
+  `edit`/`load`. Queued behind the editing-workflow arc above.
 - [ ] `edit`'s temp file is the fixed `/tmp/basicforth-edit.fs`, so two
   sessions editing at once would collide — suffix it with the pid or `ms@`.
 - [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
@@ -491,8 +547,6 @@ see docs/Persistence.md, Line_Editor.md, Deferred_Words.md, Shelling_Out.md.
 - [ ] `man` doesn't map hyphens↔underscores, so some cross-references in the
   docs name topics that don't resolve (e.g. `man help-system` vs
   `Help_System.md`).
-- [ ] Structure-preserving `compact` — splice the latest definitions into the
-  original file text instead of dropping between-definition comments.
 
 ---
 
