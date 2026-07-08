@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### New word: `clearstack`
+- **`clearstack ( ... -- )`** discards everything on the data stack. Unlike
+  `abort` it is not an error path — it just empties the stack and carries on,
+  so it also works inside a running program or a loaded file. Documented in
+  `man stack` and the manual's stack-words table.
+
 ### `uses` and edit-propagation see `:noname` actions
 - **`uses` now reports live anonymous actions.** A `:noname … ; is x` group
   that is the *current* action of a deferred word is scanned like any

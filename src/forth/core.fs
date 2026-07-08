@@ -30,6 +30,7 @@
 : -ROT    rot rot ;
 : 2OVER   3 pick 3 pick ;
 : 2SWAP   rot >r rot r> ;
+: CLEARSTACK ( ... -- ) begin depth while drop repeat ;
 
 \ Derived arithmetic
 : 2*      1 lshift ;

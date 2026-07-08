@@ -793,12 +793,15 @@ BasicForth uses a data stack to pass values between words. Numbers are pushed
 onto the stack as they are entered. Stack manipulation words will be
 documented here as they become available in the interactive environment.
 
-### Stack Words (planned)
+### Stack Words
 
-| Word     | Effect             | Description                   |
-|----------|--------------------|-------------------------------|
-| `DUP`    | `( a -- a a )`     | Duplicate top of stack        |
-| `DROP`   | `( a -- )`         | Remove top of stack           |
-| `SWAP`   | `( a b -- b a )`   | Exchange top two items        |
-| `OVER`   | `( a b -- a b a )` | Copy second item to top       |
-| `.S`     | `( -- )`           | Display the stack (non-destructive) |
+| Word         | Effect             | Description                   |
+|--------------|--------------------|-------------------------------|
+| `DUP`        | `( a -- a a )`     | Duplicate top of stack        |
+| `DROP`       | `( a -- )`         | Remove top of stack           |
+| `SWAP`       | `( a b -- b a )`   | Exchange top two items        |
+| `OVER`       | `( a b -- a b a )` | Copy second item to top       |
+| `.S`         | `( -- )`           | Display the stack (non-destructive) |
+| `CLEARSTACK` | `( ... -- )`       | Discard everything on the stack |
+
+See `man stack` for the full set of stack manipulation words.

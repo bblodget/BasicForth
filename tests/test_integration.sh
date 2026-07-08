@@ -163,6 +163,8 @@ assert_output "depth empty"        "depth ."             "0  ok"
 assert_output "depth with items"   "1 2 3 depth ."       "3  ok"
 assert_output "?dup non-zero"      "5 ?dup . ."          "5 5  ok"
 assert_output "?dup zero"          "0 ?dup ."            "0  ok"
+assert_output "clearstack"         "1 2 3 clearstack depth ."  "0  ok"
+assert_output "clearstack empty"   "clearstack depth ."  "0  ok"
 
 # =========================================================================
 section "Stack Display"
