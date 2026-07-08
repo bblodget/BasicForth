@@ -338,7 +338,7 @@ docs/Graphics.md for the API.
   libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites
 - [ ] Font / text rendering (show characters on the framebuffer)
-- [ ] Sound output via SDL3 audio
+- [ ] Sound output via SDL3 audio (in progress on the `sdl3-audio` branch)
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
@@ -396,7 +396,7 @@ docs/Graphics.md for the API.
 
 ---
 
-## Shell-Like Words (pwd / cd / ls / cat / more) — NEXT
+## Shell-Like Words (pwd / cd / ls / cat / more) — COMPLETE
 
 Navigate and inspect the filesystem from the REPL — hop to another directory
 and list or read a file without leaving BasicForth. Most infrastructure already
@@ -431,6 +431,68 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
     Manual section; `platform_chdir`/`platform_getcwd` added to Platform_Layer.md;
     Persistence.md updated for the session.fs startup-dir pin. Documented limit:
     `parse-word` path tokens can't contain spaces in v1.
+
+---
+
+## Module System / Forth-as-Shell
+
+The vision: BasicForth as a *shell* with Forth as the shell language — `cd`
+around, `load` a module, interact with it live (`.module`, `see`/`edit`/run
+words, `save` back). Shipped across v0.9.0 (2026-07-04) and the merges since;
+see docs/Persistence.md, Line_Editor.md, Deferred_Words.md, Shelling_Out.md.
+
+### Shipped
+
+- [x] Named modules replace the magic `session.fs`: `save <name>` / bare
+  `save`, `load`, `new`, `reload`, `-session`; `.session` renamed `.module`;
+  capture turns on with a file argument.
+- [x] `uses <word>` — whole-token, case-insensitive reference search across
+  the module's sources (capture log or file), the "what do I touch if I
+  rename this?" tool.
+- [x] Modal `edit <word>`: spawns `$VISUAL`/`$EDITOR`/`vi` on a temp file via
+  the new `(system)` primitive (fork/execve/wait4; clone on ARM64), so
+  multi-line formatting survives; on save it recompiles the word and
+  **propagates** to every transitive caller (STC bakes call targets).
+- [x] `sh <command>` — run a shell line from the REPL (transient, not
+  captured); `(system)` is the underlying primitive.
+- [x] `compact <name>` — deduped, dependency-ordered, definitions-only
+  snapshot written next to the append-only `save` file; final `is`/`to`
+  bindings preserved.
+- [x] Dirty-guard: `new`/`load`/`bye` prompt "save first? (y/n)" when the
+  module has unsaved changes.
+- [x] Typed dictionary headers (Flags2 byte: code/defer/value/noname);
+  type-checked `is`/`to`; `defer@`/`action-of`; `see` reports a deferred
+  word's current binding.
+- [x] `:noname` headers — anonymous definitions carry real source metadata
+  (empty name, unfindable by construction), so `see`/`compact`/`edit` handle
+  `:noname`-bound defers exactly (multi-line included); fixed the multi-line
+  group re-evaluation segfault.
+- [x] `uses` + edit-propagation treat `:noname` actions first-class: live
+  groups reported as `(:noname is <name>)` and re-run on propagation, with a
+  guard so superseded groups are never re-fired.
+- [x] Tutorial UX: steps clear the screen; `tutorial <name> [step]` and
+  `step [n]` jump/replay (a `value` works as a bookmark argument);
+  `end-tutorial`; tty-only pager pause; Chase tutorial (24 steps) and
+  `examples/game-template.fs`.
+- [x] Robustness fixes found by live use: xorshift64 `rnd` (the old LCG's
+  low bit alternated), tabs count as whitespace in the tokenizer, `edit`
+  with an untouched file is a no-op (vi `:q!` exits 0).
+
+### Open threads
+
+- [ ] **Pipes / output capture** (`pipe`/`dup2` platform work) — read a
+  command's *output* back into Forth (today `(system)`/`sh` only stream to
+  the terminal). Unlocks `history | grep`-style words and fzf pickers for
+  `edit`/`load`. The next real step in the shell vision.
+- [ ] `edit`'s temp file is the fixed `/tmp/basicforth-edit.fs`, so two
+  sessions editing at once would collide — suffix it with the pid or `ms@`.
+- [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
+  `platform_key`), so unsaved work can be lost silently.
+- [ ] `man` doesn't map hyphens↔underscores, so some cross-references in the
+  docs name topics that don't resolve (e.g. `man help-system` vs
+  `Help_System.md`).
+- [ ] Structure-preserving `compact` — splice the latest definitions into the
+  original file text instead of dropping between-definition comments.
 
 ---
 
