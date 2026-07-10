@@ -2323,14 +2323,15 @@ forth_included:
     call platform_fstat             # RDI=fd → RAX=size
     mov %rax, %rbp                  # RBP = file size
     test %rbp, %rbp
-    jle .Lincl_empty                # empty (or fstat error) → nothing to map
+    js .Lincl_mmap_err              # fstat error (-errno) → report, don't fake "empty"
+    jz .Lincl_empty                 # empty file → nothing to map
 
     # mmap the file
     mov %rbx, %rdi                  # fd
     mov %rbp, %rsi                  # size
     call platform_mmap_file         # → RAX=addr
-    cmp $-1, %rax
-    je .Lincl_mmap_err
+    test %rax, %rax                 # raw mmap returns -errno on failure (ENODEV
+    js .Lincl_mmap_err              # for a directory), never just -1
 
     push %rax                       # save mmap addr
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `include <directory>` no longer segfaults
+- `include /tmp` (or any directory path) crashed: `open(2)` succeeds on a
+  directory, and the raw `mmap` syscall then fails returning **-errno**
+  (`-19`, ENODEV) — but `INCLUDED` checked for exactly `-1`, so the error
+  code was used as the file's base address. The mmap check now treats any
+  negative return as failure, and an `fstat` error is reported instead of
+  being silently treated as an empty file. `include /tmp` now prints
+  `Error: cannot open /tmp` and the session continues. Both architectures.
+
 ### Bare `edit` opens the module file
 - **`edit` with no word name** opens the current module file itself in the
   editor (in place on disk) and `reload`s it on a change — the edit-on-disk

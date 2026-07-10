@@ -2533,14 +2533,15 @@ forth_included:
     BL platform_fstat               // -> X0=size
     MOV X24, X0                     // X24 = file size
     CMP X24, #0
-    B.LE .Lincl_empty               // empty (or fstat error) → nothing to map
+    B.LT .Lincl_mmap_err            // fstat error (-errno) → report, don't fake "empty"
+    B.EQ .Lincl_empty               // empty file → nothing to map
 
     // mmap the file
     MOV X0, X23                     // fd
     MOV X1, X24                     // size
     BL platform_mmap_file           // -> X0=addr
-    CMN X0, #1                      // check for MAP_FAILED (-1)
-    B.EQ .Lincl_mmap_err
+    TBNZ X0, #63, .Lincl_mmap_err   // raw mmap returns -errno on failure (ENODEV
+                                    // for a directory), never just -1
 
     MOV X25, X0                     // X25 = mmap base address
 

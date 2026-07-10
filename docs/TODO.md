@@ -21,6 +21,14 @@ completed. See Planning.md for high-level vision and design decisions.
   because no caller passed `u = 0`. Found 2026-06 (same investigation). Fixed on
   the `fix-move-cmove` branch (drop all three cells; `0 CMOVE>` / `0 CMOVE`
   depth tests).
+- [x] **`include <directory>` segfaulted.** `open(2)` succeeds on a directory;
+  the raw `mmap` syscall then fails returning -errno (-19, ENODEV), but
+  `INCLUDED` checked for exactly -1 — so the error code became the file base
+  address. Also, an `fstat` error fell into the "empty file → success" path.
+  Both checks now route any negative return to the existing cannot-open error
+  path. Found 2026-07-06 (a test bug passed a directory to `include`), fixed
+  2026-07-10 on the `include-dir-segfault` branch (both architectures;
+  integration tests: error message + session survives).
 
 ---
 

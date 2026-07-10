@@ -932,6 +932,12 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 
+# INCLUDE of a directory must error, not segfault (open succeeds on a
+# directory; the raw mmap then fails with -ENODEV, which the old check —
+# exactly -1 — missed, so -19 was used as the file base address).
+assert_error  "include directory errors"    'include /tmp'                       "cannot open /tmp"
+assert_output "include directory recovers"  $'include /tmp\n." A." ." B." cr'    "A.B."
+
 # Tabs are whitespace: a source file indented with real tabs (or with tabs
 # between tokens) must tokenize — parse-word treats every char <= 0x20 as a
 # delimiter, not just space.
