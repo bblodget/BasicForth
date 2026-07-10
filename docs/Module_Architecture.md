@@ -1,6 +1,7 @@
 # Module Architecture — Log-Canonical vs File-Canonical
 
-**Status: DRAFT for discussion (2026-07-10). Nothing here is implemented.**
+**Status: AGREED 2026-07-10. Implementation not started — the staged plan
+at the bottom is the roadmap; docs/TODO.md tracks progress.**
 
 This is the design doc for the editing-workflow arc's Step 4 (module
 ownership), expanded to cover a more fundamental question that came out of
@@ -143,6 +144,12 @@ machinery stays in git history.
 - **Positioning the editor.** We know the word's byte offset; converting it
   to a line number lets `edit <word>` open vi/nano *at the word*
   (`+<line>`). Pure nicety, cheap with the span metadata in hand.
+- **Unique temp file.** Today's `edit <word>` uses the fixed
+  `/tmp/basicforth-edit.fs`, so two parallel BasicForth sessions editing at
+  the same moment clobber each other (a known v1 limitation). The rewrite
+  fixes it: suffix the temp path with the process id (a `getpid` syscall
+  wrapper) — unique per session, and self-describing when a stale file is
+  found in `/tmp`.
 
 ## Refinement candidate: do we need `save` at all?
 
@@ -230,13 +237,24 @@ carries a `SrcId` — ownership is tracked; we just don't use it yet.
 
 1. **Splice machinery**: replace a word's span in the file text, preserving
    everything else (absorbs Step 3). `save` adopts it. `compact` deprecated.
-2. **`edit <word>` v2**: temp-file UX + splice + reload; delete the
-   propagation pass and its helpers. Integration tests rewritten around
-   reload semantics.
+2. **`edit <word>` v2**: temp-file UX + splice + reload — with a **unique
+   temp path** (pid suffix) so parallel sessions can't clobber each other.
+   Integration tests rewritten around reload semantics.
 3. **`:e <word>`** (Step 2, redefined): inline redefine + splice + reload.
-4. **`module <file>`** + ownership rules (`.module` filter, foreign-word
+4. **Cleanup pass** — sweep out the log-canonical cruft once 2–3 prove
+   stable:
+   - core.fs: the propagation body (`(propagate)`, `(prop-*)`, the dirty-set
+     walk, `(prop-anon)` and the superseded-group guard) and anything only
+     it referenced (`(anon-owner)` etc. stay only if `uses` still needs
+     them); the old fixed `(edit-tmp)` path; `compact` and its helpers.
+   - Docs: rewrite Line_Editor.md's propagation section for reload
+     semantics; retire `compact` from Tools.md/the Manual/Persistence.md.
+   - Tests: drop or rewrite the propagation suites.
+   - TODO.md: close the absorbed open threads (fixed temp path,
+     structure-preserving compact).
+5. **`module <file>`** + ownership rules (`.module` filter, foreign-word
    refusal with hint, dependency splicing).
-5. **(gated on use testing)** auto-sync — the file stays in sync as you
+6. **(gated on use testing)** auto-sync — the file stays in sync as you
    type, explicit `save` and the dirty-guard retire; rollback-on-broken-
    reload if the fix loop proves insufficient.
 
