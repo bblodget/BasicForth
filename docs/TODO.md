@@ -497,11 +497,17 @@ way to redefine. The full symmetry grid:
   (`: word\n    ;`), evaluate + log on exit, exactly the modal-`edit`
   machinery minus the source lookup. Refuse an existing word ("already
   defined — use edit"), symmetric with `edit`'s errors.
-- [ ] **Step 1b: bare `edit`** (no argument) — open the *current module
+- [x] **Step 1b: bare `edit`** (no argument) — open the *current module
   file* in `$EDITOR`; on exit, if the file changed, `reload` it (unchanged →
   no-op, reuse the `(s=)` compare). Dirty-guard first: unsaved captured
   changes would be lost by the reload, so prompt "save first? (y/n)" like
   `load`/`new`. Requires a current module.
+> **NOTE (2026-07-10):** building Step 1b surfaced a simpler model —
+> reload-based editing makes propagation correct by construction and stops
+> the save file from accumulating redefinitions. Steps 2–4 are being
+> re-planned in **docs/Module_Architecture.md** (file-canonical proposal,
+> DRAFT under review); don't build them as written below until that lands.
+
 - [ ] **Step 2: `:e <word>`** — like `:` but the word must already exist,
   and when the definition closes, run the propagation pass and report
   `updated: ...`, re-logging recompiled callers (as `edit` does) so

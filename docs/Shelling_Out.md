@@ -71,6 +71,16 @@ building the command in code:
 (`s"` also works at the prompt — `s" ls -l" (system) drop` is fine — but
 `sh` remains the convenient way to run commands interactively.)
 
+**Don't put `sh` inside a colon definition.** `sh` parses the rest of the
+*input line* when it executes, so in `: my-ls sh ls ;` nothing is captured at
+compile time: `ls` compiles as the Forth word `ls`, and at runtime `sh` finds
+an empty rest-of-line and prints its usage. Inside definitions, always build
+the command as a string for `(system)`:
+
+```
+: my-ls  s" ls" (system) drop ;
+```
+
 ## How it works
 
 `(system)` is the Forth name for the `platform_system` call (see
