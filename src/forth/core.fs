@@ -2128,13 +2128,15 @@ variable (ld-pos)
 \ REPL redefinition, so SEE/USES/SAVE see the new source even for a word that was
 \ originally loaded from a file. The temp file is a fixed path, so two BasicForth
 \ sessions editing at the same moment would share it (a known v1 limitation).
+\ Bare `edit` (no name) opens the CURRENT MODULE FILE itself and reloads it on a
+\ change — the whole edit-on-disk loop (edit + reload) in one word.
 : (edit-tmp) ( -- c-addr u )  s" /tmp/basicforth-edit.fs" ;
 variable (er-fid)  variable (er-buf)  variable (er-len)
 : (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
     (edit-tmp) w/o create-file if  drop 2drop  false exit  then  ( src-addr src-u fid )
     dup >r  write-file  r> close-file drop  0= ;             \ ok? = (write ior = 0)
-: (edit-read) ( -- c-addr u true | false )  \ slurp the temp file into a fresh allocation
-    (edit-tmp) r/o open-file if  drop  false exit  then      ( fid )
+: (read-all) ( c-addr u -- a u2 true | false )  \ slurp a file into a fresh allocation
+    r/o open-file if  drop  false exit  then      ( fid )
     (er-fid) !
     (er-fid) @ file-size if  2drop  (er-fid) @ close-file drop  false exit  then  ( lo hi )
     drop  dup (er-len) !                     ( size )        \ assume < 4 GB
@@ -2144,9 +2146,17 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     (er-fid) @ close-file drop
     if  drop  (er-buf) @ free drop  false exit  then         ( u2 )
     (er-buf) @ swap true ;                   ( c-addr u2 true )
+: (edit-read) ( -- c-addr u true | false )  (edit-tmp) (read-all) ;
 : (edit-run) ( -- status )                  \ open the temp file in the user's editor
     \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
     s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
+create (em-cmd) (cf-max) 32 + allot          \ "editor '<module path>'" command line
+: (em-run) ( -- status )                    \ open the CURRENT MODULE FILE in the editor
+    (em-cmd) (sp-end) !
+    s" ${VISUAL:-${EDITOR:-vi}} '" (sp-add)
+    (cur-file@) (sp-add)
+    s" '" (sp-add)
+    (em-cmd)  (sp-end) @ over -  (system) ;
 : (s=) ( a1 u1 a2 u2 -- f )                 \ exact string equality
     rot 2dup <> if  2drop 2drop  false exit  then
     drop                                     ( a1 a2 u )
@@ -2174,6 +2184,28 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
     (latest@) r> = if
         (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
     true ;
+: (edit-module) ( -- )                      \ bare `edit`: open the module FILE, then reload
+    \ Edits the file in place on disk (no temp copy). The dirty-guard runs
+    \ BEFORE the editor opens: a y answer saves first, so the editor sees the
+    \ session's state; n edits the stale disk file and the reload discards
+    \ unsaved captures — the caller chose that. Unchanged file → no reload.
+    (session-on) @ 0= if  (msg:) ." no active session" cr  exit  then
+    (cur-file-len) @ 0= if  (msg:) ." no current file (load <file> first)" cr  exit  then
+    (dirty-guard) 0= if  exit  then
+    (cur-file@) (read-all) 0= if
+        (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( pre-a pre-u )
+    (ed-pu) !  (ed-pre) !
+    (em-run) ?dup if                         ( status )
+        (ed-pre) @ free drop
+        (msg:) ." editor exited with status " . cr  exit  then
+    (cur-file@) (read-all) 0= if
+        (ed-pre) @ free drop
+        (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( a u )
+    2dup (ed-pre) @ (ed-pu) @ (s=) if        \ file untouched → keep the session as-is
+        drop free drop  (ed-pre) @ free drop
+        (msg:) ." unchanged" cr  exit  then
+    drop free drop  (ed-pre) @ free drop
+    reload ;
 : (edit-defer) ( nt -- )                     \ edit what a deferred word RUNS
     (nt>code) (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
     (sb-act) @  (sb-xt) @  (sb-xt) @ (sb-len) @ +  within if
@@ -2189,9 +2221,10 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
         else drop then
     then
     ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr ;
-: edit ( "name" -- )
+: edit ( "name" | -- )
     s" edit" (msg-u) ! (msg-a) !
-    parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
+    parse-word dup 0= if  2drop  (edit-module) exit  then    \ bare: edit the module file
+
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
     0= if  2drop 2drop
