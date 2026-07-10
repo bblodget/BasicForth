@@ -405,8 +405,11 @@ up). `compact <name>` writes a **deduped** sibling (`game.fs` → `game.compact.
 — each word's latest source once — so you can `diff` it and adopt the clean one.
 Capture is interactive-only: a piped script captures nothing.
 
-For an edit/compile/run loop, edit the file in another terminal and type `reload`
-to pull the changes in (it forgets the module and re-reads the current file).
+For an edit/compile/run loop, type bare **`edit`** (no word name): it opens the
+current module file in your editor and `reload`s it when you save and quit
+(untouched → no reload). Or edit the file in another terminal and type `reload`
+yourself to pull the changes in (it forgets the module and re-reads the current
+file).
 Files stay pure definitions (the `-session`/`reload`/`load`/`save` lines are never
 written into them). When you have unsaved changes, `new`/`load`/`bye` ask
 "save first? (y/n)" at the terminal before discarding (`reload` doesn't — it
@@ -710,7 +713,8 @@ you at that word, an uninitialized defer tells you to `is` it first.
 **`define <word>`** is `edit` for a word that doesn't exist yet: it opens the
 editor on a `: word` / `;` template, and the saved definition is compiled and
 logged like one typed at the prompt (an existing word is refused — use
-`edit`). See `docs/Line_Editor.md` for the full key list and details.
+`edit`). Bare **`edit`** (no name) opens the whole module file and `reload`s
+it on change. See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

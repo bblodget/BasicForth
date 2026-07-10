@@ -2044,6 +2044,42 @@ else
     printf "  ${RED}FAIL${NC}  define with an untouched template\n    Got: %q\n" "$du_out"; ((failed++))
 fi
 
+# BARE EDIT: `edit` with no name opens the CURRENT MODULE FILE itself and
+# reloads on change — the edit-on-disk loop (edit + reload) in one word. The
+# reload replaces the session with the file's contents, so an unsaved
+# interactive definition is discarded (non-interactive dirty-guard proceeds
+# silently; at a terminal it prompts "save first?").
+be_dir="$(mktemp -d)"
+printf ': leaf 41 ;\n' > "$be_dir/mod.fs"
+be_out=$( cd "$be_dir" && printf 'leaf .\n: extra 7 ;\nedit\nleaf .\nextra\nbye\n' \
+    | EDITOR='sed -i s/41/52/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$be_dir"
+if [[ "$be_out" == *"41"* && "$be_out" == *"52"* && "$be_out" == *"? extra"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit opens the module file and reloads the change\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit opens the module file\n    Expected 41 then 52 and '? extra'\n    Got: %q\n" "$be_out"; ((failed++))
+fi
+# An untouched module file skips the reload, so the session (including
+# unsaved interactive definitions) is kept as-is.
+bu_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$bu_dir/mod.fs"
+bu_out=$( cd "$bu_dir" && printf ': extra 7 ;\nedit\nextra .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$bu_dir"
+if [[ "$bu_out" == *"edit: unchanged"* && "$bu_out" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit with an untouched file keeps the session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit with an untouched file\n    Got: %q\n" "$bu_out"; ((failed++))
+fi
+# Without a current module file there is nothing to open.
+bn_out=$( printf 'edit\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$bn_out" == *"edit: no current file"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit without a module explains itself\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit without a module\n    Got: %q\n" "$bn_out"; ((failed++))
+fi
+
 # USES and edit-propagation treat :noname actions first-class. A live anon
 # group (the CURRENT action of a deferred word) is reported as
 # "(:noname is <name>)" and recompiled when a word it calls is edited. BOTH

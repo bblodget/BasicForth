@@ -101,6 +101,19 @@ the defer has moved on from) is skipped: re-running it would drag the defer
 back to the old binding. The deferred word's own callers are never recompiled —
 they reach it through its action cell, which is the point of `defer`.
 
+### The whole file at once: bare `edit`
+
+`edit` with no word name opens the **current module file** itself in your
+editor, straight on disk (no temp copy), and `reload`s it when you save and
+quit — the edit-on-disk loop (edit in another terminal + `reload`) in one
+word. An untouched file skips the reload, so the session is kept exactly
+as-is. Because the reload replaces the session with the file's contents,
+unsaved captured changes would be lost — so if the module is dirty, bare
+`edit` asks "save first? (y/n)" *before* opening the editor: **y** saves, so
+the editor sees your session's state; **n** opens the stale disk file and the
+reload discards the unsaved work; any other key cancels. (Like `new`/`load`/
+`bye`, only a real terminal prompts — pipes and scripts proceed silently.)
+
 ## Defining a new word: `define`
 
 `define <name>` is `edit` for a word that doesn't exist yet. It opens your

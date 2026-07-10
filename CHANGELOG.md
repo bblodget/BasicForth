@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Bare `edit` opens the module file
+- **`edit` with no word name** opens the current module file itself in the
+  editor (in place on disk) and `reload`s it on a change — the edit-on-disk
+  loop (edit in another terminal + `reload`) in one word. An untouched file
+  skips the reload. A dirty module prompts "save first? (y/n)" *before* the
+  editor opens, so answering y lets the editor see the session's state.
+
 ### New word: `define`
 - **`define <word>`** opens `$VISUAL`/`$EDITOR`/`vi` on a fresh `: word` /
   `;` template and compiles + logs whatever you save — `edit` for a word
