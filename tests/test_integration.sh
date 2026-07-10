@@ -2010,6 +2010,40 @@ else
     printf "  ${RED}FAIL${NC}  edit of a multi-line :noname binding\n    Expected: 7 222 and DEPTH=0\n    Got: %q\n" "$em_out"; ((failed++))
 fi
 
+# DEFINE: `edit` for a word that doesn't exist yet — opens $EDITOR on a
+# ": name / ;" template, evaluates + logs the result (multi-line formatting
+# survives, `see` shows it, `save` persists it). The scripted editor writes a
+# two-line body over the template.
+df_dir="$(mktemp -d)"
+printf '#!/bin/sh\nprintf ": p100\\n    100 + ;\\n" > "$1"\n' > "$df_dir/ed.sh" && chmod +x "$df_dir/ed.sh"
+df_out=$( cd "$df_dir" && printf 'define p100\n5 p100 .\nsee p100\nsave m.fs\nbye\n' \
+    | EDITOR="$df_dir/ed.sh" BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 ;
+    echo "SAVED:" ; cat m.fs 2>/dev/null )
+rm -rf "$df_dir"
+if [[ "$df_out" == *"105"* && "$df_out" == *"SAVED:"*": p100"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define creates a new word in the editor; see/save cover it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define creates a new word in the editor\n    Expected 105 and p100 in the save file\n    Got: %q\n" "$df_out"; ((failed++))
+fi
+# define refuses an existing word (use edit) — the editor must NOT be spawned
+# (EDITOR=false would exit 1 and report "editor exited with status").
+dx_out=$( printf ': leaf 1 ;\ndefine leaf\nleaf .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$dx_out" == *"define: leaf is already defined"* && "$dx_out" == *"use edit"* \
+      && "$dx_out" != *"exited with status"* && "$dx_out" == *"1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define refuses an existing word without spawning the editor\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define refuses an existing word\n    Got: %q\n" "$dx_out"; ((failed++))
+fi
+# An untouched template is a no-op: nothing is defined, nothing is logged.
+du_out=$( printf 'define nope\nnope\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$du_out" == *"define: unchanged"* && "$du_out" == *"? nope"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define with an untouched template defines nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define with an untouched template\n    Got: %q\n" "$du_out"; ((failed++))
+fi
+
 # USES and edit-propagation treat :noname actions first-class. A live anon
 # group (the CURRENT action of a deferred word) is reported as
 # "(:noname is <name>)" and recompiled when a word it calls is edited. BOTH

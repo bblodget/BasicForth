@@ -3,9 +3,10 @@
 At an interactive terminal the BasicForth prompt is a small line editor, like
 the one a modern shell gives you: move around the line, fix a typo in the
 middle, and recall and re-run previous commands. Long lines scroll sideways, a
-`:` definition that spans lines gets a continuation prompt, and `edit <word>`
-opens an existing definition in your editor. Most of it is just how the prompt
-behaves — only `edit` is a word you type.
+`:` definition that spans lines gets a continuation prompt, `edit <word>`
+opens an existing definition in your editor, and `define <word>` opens the
+editor on a template for a new one. Most of it is just how the prompt
+behaves — only `edit` and `define` are words you type.
 
 ## Keys
 
@@ -99,6 +100,24 @@ appears in the report as `(:noname is x)`. A superseded group (an old action
 the defer has moved on from) is skipped: re-running it would drag the defer
 back to the old binding. The deferred word's own callers are never recompiled —
 they reach it through its action cell, which is the point of `defer`.
+
+## Defining a new word: `define`
+
+`define <name>` is `edit` for a word that doesn't exist yet. It opens your
+editor on a fresh template:
+
+```
+: name
+    ;
+```
+
+Fill in the body (and add more lines — multi-line formatting and comments
+survive, exactly as with `edit`), save, and quit; the definition is compiled
+and logged like one typed at the prompt, so `see`, `uses`, and `save` all
+cover it. Leaving the template untouched defines nothing (`define:
+unchanged`). The pair stays symmetric — `define` creates, `edit` revises: an
+existing word is refused with `is already defined — use edit`, and `edit` on
+a missing word tells you it's not found.
 
 ## Multi-line definitions
 
