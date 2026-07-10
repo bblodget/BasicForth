@@ -2154,24 +2154,25 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     2drop true ;
 variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor ran
 : (edit-src) ( src-addr src-u -- new? )     \ temp-file edit cycle; true if a def landed
-    (edit-write) 0= if  ." edit: cannot write temp file" cr  false exit  then
-    (edit-read) 0= if  ." edit: cannot read temp file" cr  false exit  then  ( pre-a pre-u )
+    \ Shared by `edit` and `define`; messages report via the (msg:) prefix.
+    (edit-write) 0= if  (msg:) ." cannot write temp file" cr  false exit  then
+    (edit-read) 0= if  (msg:) ." cannot read temp file" cr  false exit  then  ( pre-a pre-u )
     (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
     (edit-run) ?dup if                        ( status )
         (ed-pre) @ free drop
-        ." edit: editor exited with status " . cr  false exit  then
+        (msg:) ." editor exited with status " . cr  false exit  then
     (edit-read) 0= if
         (ed-pre) @ free drop
-        ." edit: cannot read temp file" cr  false exit  then  ( c-addr u )
+        (msg:) ." cannot read temp file" cr  false exit  then  ( c-addr u )
     2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
         drop free drop  (ed-pre) @ free drop
-        ." edit: unchanged" cr  false exit  then
+        (msg:) ." unchanged" cr  false exit  then
     (ed-pre) @ free drop
-    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
+    true (skip-capture) !                     \ keep THIS command line out of the log
     (latest@) >r                              \ R: LATEST before recompiling
     2dup (eval+log)  drop free drop           \ redefine + log; release the slurp
     (latest@) r> = if
-        ." edit: no change" cr  false exit  then   \ the source defined nothing new
+        (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
     true ;
 : (edit-defer) ( nt -- )                     \ edit what a deferred word RUNS
     (nt>code) (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
@@ -2189,6 +2190,7 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
     then
     ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr ;
 : edit ( "name" -- )
+    s" edit" (msg-u) ! (msg-a) !
     parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
@@ -2205,6 +2207,33 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
         ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
     (edit-src) 0= if  exit  then
     (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
+
+\ ===== DEFINE: open the editor on a fresh template to create a new word =====
+\ `define <name>` is `edit` for a word that doesn't exist yet: it opens your
+\ editor on the template ": name" / "    ;", and on save evaluates + logs
+\ whatever you wrote (multi-line formatting and comments survive — the same
+\ modal cycle as `edit`). An existing word is refused ("use edit"), keeping
+\ the pair symmetric: define creates, edit revises. No propagation pass — a
+\ brand-new word has no callers.
+create (def-buf) 64 allot                    \ template scratch (name is <= 31 chars)
+variable (def-n)
+: (def-c,) ( c -- )   (def-buf) (def-n) @ + c!  1 (def-n) +! ;
+: (def-s,) ( c-addr u -- )  0 ?do  dup i + c@ (def-c,)  loop  drop ;
+: (def-template) ( -- c-addr u )            \ ": name\n    ;\n" for the editor
+    0 (def-n) !
+    s" : " (def-s,)  (see-a) @ (see-u) @ (def-s,)  10 (def-c,)
+    s"     ;" (def-s,)  10 (def-c,)
+    (def-buf) (def-n) @ ;
+: define ( "name" -- )
+    s" define" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop  (msg:) ." needs a word name" cr  exit  then
+    dup 31 > if  2drop  (msg:) ." name too long (31 chars max)" cr  exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is already defined — use edit" cr  exit  then
+    2drop 2drop
+    (def-template) (edit-src) drop ;
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

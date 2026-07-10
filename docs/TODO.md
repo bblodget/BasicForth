@@ -493,7 +493,7 @@ way to redefine. The full symmetry grid:
 | new word               | `:`    | `define <word>` |
 | redefine + propagate   | `:e <word>` | `edit <word>` |
 
-- [ ] **Step 1a: `define <word>`** — open `$EDITOR` on a template
+- [x] **Step 1a: `define <word>`** — open `$EDITOR` on a template
   (`: word\n    ;`), evaluate + log on exit, exactly the modal-`edit`
   machinery minus the source lookup. Refuse an existing word ("already
   defined — use edit"), symmetric with `edit`'s errors.

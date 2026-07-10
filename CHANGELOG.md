@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### New word: `define`
+- **`define <word>`** opens `$VISUAL`/`$EDITOR`/`vi` on a fresh `: word` /
+  `;` template and compiles + logs whatever you save — `edit` for a word
+  that doesn't exist yet, so multi-line definitions with comments can be
+  written in a real editor from the start. An existing word is refused
+  ("use edit"); an untouched template defines nothing. The shared editor
+  cycle now reports under the command you typed (`edit:` / `define:`).
+
 ### New word: `clearstack`
 - **`clearstack ( ... -- )`** discards everything on the data stack. Unlike
   `abort` it is not an error path — it just empties the stack and carries on,
