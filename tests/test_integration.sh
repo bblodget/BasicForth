@@ -2918,6 +2918,9 @@ tut_check() {
 
 tut_check "tutorial shows step 1"          "tutorial Lesson"                 "intro line about FOO"
 tut_check "tutorial step 1 footer"         "tutorial Lesson"                 "step 1"
+# The footer shows progress: the scan counts the file's headings to EOF.
+tut_check "footer shows the step total"    "tutorial Lesson"                 "step 1/3"
+tut_check "footer total on a jump"         $'tutorial Lesson\nstep 3'        "step 3/3"
 tut_check "tutorial name is case-insens."  "tutorial lesson"                 "intro line about FOO"
 tut_check "next advances to step 2"        $'tutorial Lesson\nnext'          "content TWO here"
 tut_check "next twice reaches step 3"      $'tutorial Lesson\nnext\nnext'    "content THREE here"

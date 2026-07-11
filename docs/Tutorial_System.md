@@ -46,13 +46,13 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 # Snake — Build Your First Game
 ...
 
-[ step 1:  next   back   step [n] = replay/jump   end-tutorial ]
+[ step 1/24:  next   back   step [n] = replay/jump   end-tutorial ]
  ok
 > next
 ## The stack — Forth's workspace
 ...
 
-[ step 2:  next   back   step [n] = replay/jump   end-tutorial ]
+[ step 2/24:  next   back   step [n] = replay/jump   end-tutorial ]
  ok
 > : square dup * ;        \ try things between steps — the REPL is live
  ok

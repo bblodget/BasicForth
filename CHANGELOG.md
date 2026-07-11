@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Tutorial footer shows progress
+- The step footer now reads `[ step 7/24: ... ]` — the step scan continues
+  to the end of the file counting headings, so you can see how far along a
+  tutorial you are. The total appears once known (a scan interrupted by a
+  pager quit before EOF shows plain `step 7` until the next full step).
+
 ### New word: `:e` — retype a definition inline (stage 3)
 - **`:e <name>`** is `edit <name>` with the prompt as the editor: type the
   new definition inline (multi-line, with the usual `... ` continuation

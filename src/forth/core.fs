@@ -1572,6 +1572,8 @@ variable (ds-n)                            \ number of saved entries
 create (tut-name) (tut-max) allot         \ stable copy of the current tutorial name
 variable (tut-nlen)                        \ its length (0 = no tutorial started)
 variable (tut-step)                        \ current step (1-based)
+variable (tut-total)                       \ last step number in the file (0 = not
+                                           \ yet known — set when a scan reaches EOF)
 variable (tut-found)                       \ matching file located this pass?
 variable (tut-existed)                     \ requested step existed in the file?
 variable (ts-want)                         \ step (print-step) should print
@@ -1583,6 +1585,10 @@ variable (ts-any)                          \ printed any line of the wanted step
     over 1+ c@ [char] # = and
     swap 2 + c@ bl = and ;
 : (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
+    \ The scan continues past the wanted step to the END of the file, counting
+    \ the "## " headings, so the footer can show "step 7/24". The total is
+    \ recorded only when EOF is reached (an I/O error or a pager quit that
+    \ never gets there leaves the previous value).
     (tty?) if page then
     0 (pg-row) ! false (pg-quit) !
     1 (ts-cur) !  false (ts-any) !
@@ -1590,18 +1596,14 @@ variable (ts-any)                          \ printed any line of the wanted step
     begin
         (pg-buf@) (pg-bufsz) r@ read-line  ( u flag ior )
         if  2drop  r> close-file drop (ts-any) @ exit  then     \ I/O error
-        if                                 ( u )                \ got a line
-            (pg-buf@) over (tut-head?) if  \ heading: step boundary
-                1 (ts-cur) +!
-                (ts-cur) @ (ts-want) @ u> if
-                    drop r> close-file drop (ts-any) @ exit
-                then
-            then
-            (ts-cur) @ (ts-want) @ = if
-                (pg-buf@) swap (pg-line) true (ts-any) !
-            else drop then
-            (pg-quit) @ if r> close-file drop (ts-any) @ exit then
-        else  drop  r> close-file drop (ts-any) @ exit  then    \ EOF
+        0= if  drop  r> close-file drop                         \ EOF
+            (ts-cur) @ (tut-total) !
+            (ts-any) @ exit  then
+        ( u )                                                   \ got a line
+        (pg-buf@) over (tut-head?) if  1 (ts-cur) +!  then      \ step boundary
+        (ts-cur) @ (ts-want) @ =  (pg-quit) @ 0=  and if
+            (pg-buf@) swap (pg-line) true (ts-any) !
+        else  drop  then
     again ;
 : (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
     (tut-found) @ if 2drop exit then
@@ -1641,7 +1643,9 @@ variable (ts-any)                          \ printed any line of the wanted step
         (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
         exit
     then
-    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
+    cr ." [ step " (tut-step) @ 0 u.r
+    (tut-total) @ ?dup if  ." /" 0 u.r  then
+    ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
 defer (step-val?)                          \ ( a u -- n true | false ) value-name
 :noname 2drop false ; is (step-val?)       \ lookup; real body after (nt-by-name)
 : (step#?) ( -- n true | false )           \ parse optional step: number or value
@@ -1660,7 +1664,7 @@ defer (step-val?)                          \ ( a u -- n true | false ) value-nam
     then
     dup (tut-nlen) !                        ( c-addr u )
     >r (tut-name) r> cmove
-    1 (tut-step) !
+    1 (tut-step) !  0 (tut-total) !         \ total re-learned from the new file
     (step#?) if 1 max (tut-step) ! then     \ tutorial chase 10 = resume there
     (tut-go) ;
 : next ( -- )
