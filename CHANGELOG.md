@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### `save` honors bind vs mutate (the hyper-static principle)
+- **The saved file now replays to exactly the live session.** Forth's
+  dictionary is hyper-static: `:` never changes an existing definition, it
+  layers a new *binding*, and earlier words keep what they captured. `save`
+  now reflects that faithfully — the file text is kept byte-for-byte
+  (comments, layout, every binding in order) and the session's definitions
+  and direct `is`/`to` assignments append in the order they happened. A
+  plain `: thrust 25 ;` appends; words defined before it keep the old
+  `thrust`, live and after reload alike.
+- **`edit` is a *mutation* and no longer pollutes the file.** An edited
+  word's new text replaces the binding it actually edited — its newest
+  prior definition, whether in the file text or appended earlier this
+  session — and the propagation re-logs splice onto themselves, so edit
+  history never accumulates and saving twice is byte-identical. Previously
+  one edit appended the word plus every recompiled caller.
+  (Module_Architecture.md stage 1; mutations are tagged at capture time,
+  and the log/`see`/`uses` are untouched.)
+- **`compact` is deprecated** — mutations don't accumulate, and deduping
+  deliberate `:` rebindings would *rewire* them (earlier words would come
+  back bound to the latest definition — semantically wrong, not just
+  lossy). It remains temporarily and will be removed in the stage-4
+  cleanup.
+
 ### Bare `edit` opens the module file
 - **`edit` with no word name** opens the current module file itself in the
   editor (in place on disk) and `reload`s it on a change — the edit-on-disk

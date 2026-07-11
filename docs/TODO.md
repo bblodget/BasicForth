@@ -509,9 +509,11 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
 **file-canonical model, AGREED 2026-07-10 in docs/Module_Architecture.md**
 (that doc has the full rationale and hard cases). The staged roadmap:
 
-- [ ] **Stage 1: splice machinery** — replace a word's span in the file
-  text, preserving everything else; `save` adopts it (in-place, no more
-  accumulation); `compact` deprecated. Pure additive — doesn't touch `edit`.
+- [x] **Stage 1: splice machinery** — `save` honors bind vs mutate (the
+  hyper-static principle, added to Module_Architecture.md during this
+  stage): file text and `:` rebindings kept verbatim in order
+  (replay-faithful), `edit`-originated mutations (tagged at capture)
+  spliced over the binding they edited; `compact` deprecated.
 - [ ] **Stage 2: `edit <word>` v2** — temp-file UX + splice + reload
   (replaces propagation), with a **unique temp path** (pid suffix) so
   parallel sessions can't clobber each other. Tests rewritten around

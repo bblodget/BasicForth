@@ -2080,6 +2080,94 @@ else
     printf "  ${RED}FAIL${NC}  bare edit without a module\n    Got: %q\n" "$bn_out"; ((failed++))
 fi
 
+# SPLICE-SAVE (Module_Architecture stage 1, hyper-static): a plain `:`
+# redefinition is a NEW BINDING — earlier words keep the old one — so SAVE
+# appends it verbatim (replay-faithful) and keeps the file text untouched
+# (comments, layout, every binding in order). A second save is byte-identical.
+sp_dir="$(mktemp -d)"
+printf '\\ header comment\n: leaf 1 ;\n\n\\ mid doc\n: mid leaf 10 * ;\n' > "$sp_dir/mod.fs"
+sp_out=$( cd "$sp_dir" && printf ': leaf 2 ;\n: extra leaf 42 + ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; cp mod.fs s1
+    printf 'save\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1
+    cmp -s mod.fs s1 && echo "SAME"; echo "REPLAY:"
+    printf 'mid . extra .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+sp_n=$(grep -c ': leaf' <<<"$sp_out")
+if [[ "$sp_out" == *": leaf 1 ;"* && "$sp_out" == *"header comment"* && "$sp_out" == *"mid doc"* \
+      && "$sp_out" == *"SAME"* && "$sp_n" == "2" && "$sp_out" == *"REPLAY:"*"10 44"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save appends a : rebinding (hyper-static), file text untouched\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hyper-static append save\n    Got: %q (leaf defs: %s)\n" "$sp_out" "$sp_n"; ((failed++))
+fi
+rm -rf "$sp_dir"
+# Intermediate bindings are load-bearing: in `: a 1 ; : b a ; : a 2 ;` the
+# word b captured the FIRST a — the saved file must keep all three in order
+# (a last-wins dedup would write a file that doesn't even load).
+hs_dir="$(mktemp -d)"
+hs_out=$( cd "$hs_dir" && printf ': a 1 ;\n: b a ;\n: a 2 ;\nsave m.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1;
+    cat m.fs; echo "REPLAY:"
+    printf 'b . a .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth m.fs 2>&1 | sed -n 2p )
+if [[ "$hs_out" == *": a 1 ;"*": b a ;"*": a 2 ;"* && "$hs_out" == *"REPLAY:"*"1 2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save keeps every binding in order (a/b/a replays 1 2)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hyper-static binding order\n    Got: %q\n" "$hs_out"; ((failed++))
+fi
+rm -rf "$hs_dir"
+# EDIT is a MUTATION: the edited word's definition is replaced where it
+# stands, mutation history never accumulates, and the save is idempotent.
+# The propagation re-logs (unchanged text) splice onto themselves.
+se_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$se_dir/mod.fs"
+se_out=$( cd "$se_dir" && printf 'edit leaf\nsave\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; cp mod.fs s1
+    printf 'save\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1
+    cmp -s mod.fs s1 && echo "SAME" )
+se_want=$(printf ': leaf 2 ;\n: mid leaf 10 * ;\nSAME')
+if [[ "$se_out" == "$se_want" ]]; then
+    printf "  ${GREEN}PASS${NC}  edit mutates in place: zero accumulation, idempotent\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit splice\n    Got: %q\n    Want: %q\n" "$se_out" "$se_want"; ((failed++))
+fi
+rm -rf "$se_dir"
+# A mutation targets the binding it actually edited: after `: thrust 25 ;`
+# (a new binding in the tail), `edit thrust` must rewrite THAT binding, not
+# the file's original — climb keeps capturing the old thrust on replay.
+bm_dir="$(mktemp -d)"
+printf ': thrust 10 ;\n: climb thrust 2 * ;\n' > "$bm_dir/mod.fs"
+bm_out=$( cd "$bm_dir" && printf ': thrust 25 ;\nedit thrust\nsave\nbye\n' \
+    | EDITOR='sed -i s/25/30/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; echo "REPLAY:"
+    printf ': probe thrust . ; climb . probe\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+if [[ "$bm_out" == *": thrust 10 ;"*": climb thrust 2 * ;"*": thrust 30 ;"* \
+      && "$bm_out" != *"25"* && "$bm_out" == *"REPLAY:"*"20 30"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit after a rebinding mutates the tail binding, not the seed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit targets the edited binding\n    Got: %q\n" "$bm_out"; ((failed++))
+fi
+rm -rf "$bm_dir"
+# Assignments and :noname groups are order-dependent effects: SAVE keeps the
+# file's lines verbatim and appends the session's in the order they happened
+# (both groups; the later `is` wins on replay).
+sa_dir="$(mktemp -d)"
+printf 'defer brain\n10 value speed\n: hunt 1 ;\n' > "$sa_dir/mod.fs"
+printf "' hunt is brain\n" >> "$sa_dir/mod.fs"
+sa_out=$( cd "$sa_dir" && printf ':noname 2 ; is brain\n:noname 3 ; is brain\n25 to speed\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; echo "REPLAY:"
+    printf 'brain . speed .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+sa_hunt=$(grep -c "' hunt is brain" <<<"$sa_out")
+sa_anon=$(grep -c ':noname' <<<"$sa_out")
+sa_speed=$(grep -c '25 to speed' <<<"$sa_out")
+if [[ "$sa_hunt" == "1" && "$sa_anon" == "2" && "$sa_speed" == "1" \
+      && "$sa_out" == *"REPLAY:"*"3 25"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save keeps assignments and :noname groups in typed order\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  assignment/anon order\n    Got: %q\n" "$sa_out"; ((failed++))
+fi
+rm -rf "$sa_dir"
+
 # USES and edit-propagation treat :noname actions first-class. A live anon
 # group (the CURRENT action of a deferred word) is reported as
 # "(:noname is <name>)" and recompiled when a word it calls is edited. BOTH

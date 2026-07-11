@@ -497,6 +497,15 @@ create (nl) 10 c,                       \ a single newline byte
 create (dir)     3 cells allot          \ cell buffer: 3-cell records (see above)
 create (dir-rec) 3 cells allot          \ scratch: one record being built
 
+\ Parallel tag per (dir) record: true when the group came from a MUTATION verb
+\ ((eval+log) — edit's resubmit and its propagation re-logs) rather than a
+\ plain binding typed at the prompt. The splice-save uses it: mutations are
+\ spliced over the word's definition in the file; bindings append verbatim
+\ (Forth is hyper-static — see docs/Module_Architecture.md).
+create (dir-tags) 3 cells allot  (dir-tags) 3 cells erase
+variable (cap-tag)  0 (cap-tag) !
+create (tag-rec) 1 cells allot
+
 \ entry → the execution token FIND returns: load the CodePtr at the aligned
 \ offset align8(10 + name-len) past the entry. Mirrors FIND's xt calculation.
 : (xt-of) ( entry -- xt )
@@ -508,7 +517,9 @@ create (dir-rec) 3 cells allot          \ scratch: one record being built
     (dir-rec) 2 cells + !               \ rec[2] = xt
     (dir-rec) cell+ !                   \ rec[1] = log-len
     (dir-rec) !                         \ rec[0] = log-off
-    (dir-rec) 3 cells (dir) (buf-append) ;  \ append the 24-byte record
+    (dir-rec) 3 cells (dir) (buf-append)    \ append the 24-byte record
+    (cap-tag) @ (tag-rec) !
+    (tag-rec) 1 cells (dir-tags) (buf-append) ;  \ + its mutation tag
 
 \ (dir-add-group): index EVERY word newly defined in this group, not just the
 \ last. Walk the dictionary link chain (link is the first cell of each header)
@@ -564,6 +575,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
     false (skip-capture) !
+    false (cap-tag) !                   \ clear a tag stuck by an errored (eval+log)
     (assign?) drop                      \ clear a stale assign flag from an errored line
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -624,16 +636,26 @@ variable (path-a-len)  variable (path-b-len)
 
 \ (seed-log): reset the log + SEE index, then load the current file's bytes into
 \ the log so SAVE rewrites it cumulatively. Empty when there is no current file
-\ (a fresh session) or the file does not exist yet (a new file).
+\ (a fresh session) or the file does not exist yet (a new file). The seed's
+\ extent and origin are recorded so the splice-save can tell file text (kept,
+\ patched in place) from session captures (appended): log[0, seed-len) is a
+\ verbatim copy of (seed-path), so a file word's metadata span indexes it.
+variable (seed-len)                     \ bytes of (log) that mirror the file
+create (seed-path) (cf-max) allot       \ the file those bytes came from
+variable (seed-path-len)
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
+    (dir-tags) (buf-reset)
     false (dirty) !                     \ log now mirrors the file (or is empty)
+    0 (seed-len) !  0 (seed-path-len) !
     (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
     (cur-file@) r/o open-file           ( fileid ior )
     if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
-    close-file drop ;
+    close-file drop
+    (log) cell+ @ (seed-len) !
+    (cur-file@) dup (seed-path-len) !  (seed-path) swap cmove ;
 
 \ (session-init): boot hook, run once when entering the interactive REPL, with
 \ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
@@ -647,17 +669,18 @@ variable (path-a-len)  variable (path-b-len)
 \ plus interactive ones), since the startup file loads after core.fs but before
 \ this hook runs.
 
-\ SAVE <name> (bare SAVE → the current file): write the whole log to <name> in
+\ SAVE <name> (bare SAVE → the current file): write the module to <name> in
 \ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
 \ existing file. SAVE <name> also makes <name> the current file (save-as). A
 \ no-op when nothing has been captured, so it never litters an empty file.
-: (save) ( -- )                         \ write the log to the current file
-    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+\ The real body is the splice-save near EOF (it needs the introspection words),
+\ installed via (save-impl); until then the fallback writes the log verbatim.
+: (write-module) ( c-addr u -- )        \ atomic write to the current file
     (cur-file@) (name>paths)
-    (path-b) (path-b-len) @ w/o create-file   ( fileid ior )
-    abort" save: cannot create temp file"     ( fileid )
+    (path-b) (path-b-len) @ w/o create-file   ( c-addr u fileid ior )
+    abort" save: cannot create temp file"     ( c-addr u fileid )
     >r
-    (log) @ (log) cell+ @ r@ write-file ( ior )
+    r@ write-file                       ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
@@ -665,6 +688,11 @@ variable (path-a-len)  variable (path-b-len)
     abort" save: rename error"
     false (dirty) !
     ." saved to " (cur-file@) type cr ;
+variable (save-impl)  0 (save-impl) !   \ xt of the splice-save body (set near EOF)
+: (save) ( -- )
+    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+    (save-impl) @ ?dup if  execute exit  then
+    (log) @ (log) cell+ @ (write-module) ;
 
 : save ( "name" -- )
     parse-word dup if  (set-cur-file)
@@ -1970,7 +1998,9 @@ variable (ev-d0)                            \ stack depth before the re-evaluati
                                             \ leave nothing: drop its leftovers
                                             \ (they sit above our u) so the
                                             \ caller's stack frame cannot shift
+    true (cap-tag) !                        \ mark the record a MUTATION (splice on save)
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
+    false (cap-tag) !
     drop  true (dirty) ! ;
 : (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
     (word-src) 0= if  exit  then            ( c-addr u )
@@ -2267,6 +2297,197 @@ variable (def-n)
         (msg:) (see-a) @ (see-u) @ type ."  is already defined — use edit" cr  exit  then
     2drop 2drop
     (def-template) (edit-src) drop ;
+
+\ ===== Splice-save: SAVE honors bind vs mutate =====
+\ (Module_Architecture.md stage 1, under the hyper-static principle.)
+\ Forth's dictionary is hyper-static: `:` never changes a binding, it makes a
+\ new one, and earlier words keep what they captured — so the sequence of
+\ bindings IS the module's state, and SAVE keeps the seeded file text and the
+\ session's captures VERBATIM, in order (replay-faithful). The one exception
+\ is a MUTATION: a group logged by (eval+log) — edit's resubmit and its
+\ propagation re-logs, tagged in (dir-tags) — means "that text was wrong";
+\ its word's definition in the file text is REPLACED where it stands and the
+\ group is dropped from the appended tail, so mutation history never
+\ accumulates. Comments and layout survive untouched. The log itself is not
+\ modified, so SEE keeps working and a second SAVE is byte-identical.
+create (sv-out) 3 cells allot  (sv-out) 3 cells erase   \ output being built
+create (sv-pat) 3 cells allot  (sv-pat) 3 cells erase   \ patch records (4 cells:
+create (sv-rec) 4 cells allot                           \  log-off len repl-a repl-u)
+create (sv-tmp) 4 cells allot
+: (sv-pat-n) ( -- n )    (sv-pat) cell+ @ 4 cells / ;
+: (sv-pat@)  ( i -- rec ) 4 cells * (sv-pat) @ + ;
+: (sv-pat+)  ( off len repl-a repl-u -- )
+    (sv-rec) 3 cells + !  (sv-rec) 2 cells + !  (sv-rec) cell+ !  (sv-rec) !
+    (sv-rec) 4 cells (sv-pat) (buf-append) ;
+: (sv-pat-find) ( off -- rec true | false )  \ existing patch at this target?
+    (sv-pat-n) 0 ?do
+        dup i (sv-pat@) @ = if  drop  i (sv-pat@) true  unloop exit  then
+    loop  drop  false ;
+
+\ Does this header's span lie in the seed (= the seeded file's own text)?
+\ True only for file words whose source file is the one the log was seeded
+\ from, with the span inside the seeded byte range (a stale file is skipped).
+: (sv-seed-hdr?) ( nt -- off len true | false )
+    (nt-meta)                               ( off len srcid )
+    dup 0=  over 65535 =  or if  drop 2drop  false exit  then
+    (source-path)                           ( off len c-addr u )
+    (seed-path) (seed-path-len) @ (s=) 0= if  2drop  false exit  then
+    2dup +  (seed-len) @  u> if  2drop  false exit  then
+    true ;
+\ The NEWEST seed span carrying this name — the binding in force when the
+\ file loaded, i.e. the one a mutation conceptually edited. Earlier same-name
+\ spans are older bindings: hyper-static semantics, never touched.
+variable (sv-nm)  variable (sv-nu)
+: (sv-last-span) ( c-addr u -- off len true | false )
+    (sv-nu) !  (sv-nm) !
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (sw-anon?) 0= if
+            dup (sw-name) (sv-nm) @ (sv-nu) @ (ci=) if
+                dup (sv-seed-hdr?) if            ( nt off len )
+                    rot drop  true  exit  then
+            then
+        then
+        @
+    repeat
+    drop  false ;
+
+\ Collect the patches: walk the SEE records in capture order; each TAGGED
+\ (mutation) group becomes (a) a replacement of the span holding the binding
+\ it edited and (b) a deletion of the group from the tail. The edited binding
+\ is the name's newest PRIOR appearance: an untagged tail group when the word
+\ was rebound this session, else its newest seed span. Tagged priors are
+\ skipped — they are mutation history whose text already lives at the
+\ resolved target, so a later mutation of the same word updates the same
+\ replacement (last edit wins). A mutation with no target (an edited
+\ REPL-typed word never saved, or a target span shared with another
+\ definition — a multi-word line) stays in the tail, as does everything
+\ untagged. (eval+log) indexes the group WITHOUT its trailing newline, so
+\ the span is widened to cover the separator when punching it out of the
+\ tail, and the replacement borrows it when the text doesn't end in one.
+variable (sv-prev)                          \ previous record's span off (multi-word groups)
+variable (sv-go)  variable (sv-gl)          \ the tagged group's log-off / len
+: (sv-gl+) ( -- len )                       \ group len + its separator newline, if any
+    (sv-gl) @
+    (sv-go) @ over + (log) cell+ @ u< if
+        (log) @ (sv-go) @ + over + c@ 10 = if  1+  then
+    then ;
+: (sv-repl) ( -- a u )                      \ replacement text, newline-terminated
+    (log) @ (sv-go) @ +
+    (sv-gl) @ 2dup + 1- c@ 10 = if  exit  then
+    drop (sv-gl+) ;
+: (sv-rec-name?) ( rec -- f )               \ does this record define (sv-nm)?
+    2 cells + @ (xt>nt) 0= if  false exit  then   ( nt )
+    dup (sw-anon?) if  drop  false exit  then
+    (sw-name) (sv-nm) @ (sv-nu) @ (ci=) ;
+: (sv-sib?) ( j -- f )                      \ does record j share its span (multi-word line)?
+    dup 3 cells * (dir) @ + @  swap          ( off j )
+    dup 0> if
+        dup 1- 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
+    dup 1+  (dir) cell+ @ 3 cells /  < if
+        dup 1+ 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
+    2drop  false ;
+: (sv-prior?) ( i -- off len 1 | -1 | 0 )   \ newest untagged prior binding of (sv-nm)
+    begin  dup 0>  while
+        1-                                   ( j )
+        dup cells (dir-tags) @ + @ 0= if     \ bindings only; skip mutation history
+            dup 3 cells * (dir) @ +          ( j rec )
+            dup (sv-rec-name?) if
+                over (sv-sib?) if  2drop  -1 exit  then  \ multi-word line: leave in tail
+                nip  dup @  swap cell+ @  1  exit
+            then
+            drop
+        then
+    repeat
+    drop  0 ;
+: (sv-span-users) ( off -- n )              \ module headers stamped with this seed off
+    0 swap  (latest@)                        ( n off nt )
+    begin  dup (sw-mark) @ <>  over 0<>  and  while
+        dup (sw-anon?) 0= if
+            dup (sv-seed-hdr?) if            ( n off nt off2 len2 )
+                drop  2 pick = if  rot 1+ -rot  then
+            then
+        then
+        @
+    repeat
+    2drop ;
+: (sv-mutate) ( off len -- )                \ target span ← the tagged group's text
+    (sv-go) @ (sv-gl+) 0 0 (sv-pat+)        \ drop the group from the tail
+    over (sv-pat-find) if                    ( off len prec )
+        (sv-repl)  2 pick 3 cells + !  swap 2 cells + !  2drop   \ last edit wins
+    else
+        (sv-repl) (sv-pat+)                  \ new replacement
+    then ;
+: (sv-collect) ( -- )
+    -1 (sv-prev) !
+    (dir) cell+ @ 3 cells /  0 ?do
+        i 3 cells * (dir) @ +               ( rec )
+        dup @ (sv-prev) @ <> if             \ first record of its group
+            dup @ (sv-prev) !
+            i cells (dir-tags) @ + @ if     \ a mutation-verb group
+                dup @ (sv-go) !  dup cell+ @ (sv-gl) !
+                dup 2 cells + @ (xt>nt) if  ( rec nt )
+                    dup (sw-anon?) 0= if
+                        (sw-name) (sv-nu) !  (sv-nm) !
+                        i (sv-prior?)
+                        dup 1 = if  drop  (sv-mutate)  else
+                        0= if                \ no tail binding: the seed's newest span
+                            (sv-nm) @ (sv-nu) @ (sv-last-span) if   ( rec off len )
+                                over (sv-span-users) 1 > if  2drop  \ shared line: tail
+                                else  (sv-mutate)  then
+                            then
+                        then then
+                    else  drop  then        \ anon mutation: stays in the tail
+                then
+            then
+        then
+        drop
+    loop ;
+
+\ Sort the patch records by target offset (bubble; there are few).
+: (sv-swap) ( r1 r2 -- )
+    over (sv-tmp) 4 cells cmove
+    2dup swap 4 cells cmove
+    (sv-tmp) swap 4 cells cmove  drop ;
+variable (sv-sorted)
+: (sv-sort) ( -- )
+    begin
+        true (sv-sorted) !
+        (sv-pat-n) 1- 0 max 0 ?do
+            i (sv-pat@)  i 1+ (sv-pat@)     ( r1 r2 )
+            over @ over @ u> if  2dup (sv-swap)  false (sv-sorted) !  then
+            2drop
+        loop
+        (sv-sorted) @
+    until ;
+
+\ Emit the whole log — seed text plus captured tail — applying the sorted
+\ replacements/deletions where they fall. Everything between them is copied
+\ byte-for-byte.
+variable (sv-pos)                           \ read cursor into the log
+: (sv-emit) ( -- )
+    0 (sv-pos) !
+    (sv-pat-n) 0 ?do
+        i (sv-pat@)                          ( rec )
+        (log) @ (sv-pos) @ +                 ( rec gap-addr )
+        over @ (sv-pos) @ - 0 max            ( rec gap-addr gap-len )
+        (sv-out) (buf-append)                ( rec )   \ untouched text before the patch
+        dup 2 cells + @  over 3 cells + @    ( rec repl-a repl-u )
+        (sv-out) (buf-append)                ( rec )   \ the replacement (empty = delete)
+        dup @ over cell+ @ +  (sv-pos) @ max (sv-pos) !
+        drop
+    loop
+    (log) @ (sv-pos) @ +
+    (log) cell+ @ (sv-pos) @ - 0 max
+    (sv-out) (buf-append) ;
+
+: (save-splice) ( -- )
+    (sv-out) (buf-reset)  (sv-pat) (buf-reset)
+    (sv-collect)
+    (sv-sort)
+    (sv-emit)
+    (sv-out) @ (sv-out) cell+ @ (write-module) ;
+' (save-splice) (save-impl) !               \ SAVE's real body from here on
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST
