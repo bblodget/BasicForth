@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Pipes: capture a command's output, feed its stdin
+- New `open-pipe ( c-addr u fam -- fileid ior )` / `close-pipe ( fileid --
+  wretval wior )` (gforth-compatible): run `/bin/sh -c <cmd>` with a pipe
+  over its stdout (`r/o`) or stdin (`w/o`). The fileid is ordinary — the
+  existing `read-line`/`read-file`/`write-line`/`write-file` work on it
+  unchanged; `close-pipe` reaps the child and returns its exit status.
+  `r/w` is refused (EINVAL — deadlock trap); up to 8 pipes at once;
+  `close-pipe` on a non-pipe fd is EBADF. New platform calls
+  `platform_popen`/`platform_pclose` under `(popen)`/`(pclose)` primitives
+  (both architectures). See docs/Shelling_Out.md.
+
 ### `edit <word>` splices the module file and reloads (stage 2)
 - **An edit is now a file operation.** On save-and-quit, the edited word's
   new text is spliced into the module file over its definition (verified

@@ -4077,6 +4077,50 @@ forth_system:
     STR X0, [X19]
     RET
 
+// (popen) ( c-addr u fam -- fd|-errno )  spawn a shell command with a pipe
+// over its stdout (fam=r/o: read what it prints) or stdin (fam=w/o: write
+// what it reads); returns the fd of our end, a plain fileid that read-file/
+// read-line/write-file accept unchanged, or a negative errno. The command is
+// copied to the (system) NUL buffer. Close with (pclose), never close-file.
+.global forth_popen
+forth_popen:
+    STR X30, [SP, #-16]!
+    LDR X7, [X19]                   // fam
+    LDR X2, [X19, #CELL]            // u
+    LDR X1, [X19, #2*CELL]          // c-addr (src)
+    ADD X19, X19, #2*CELL           // pop 2 → TOS slot = result
+    MOV X3, #(SYS_CMD_MAX-1)
+    CMP X2, X3
+    CSEL X2, X2, X3, LS             // X2 = min(u, SYS_CMD_MAX-1)
+    ADR X4, sys_cmd_buf
+    MOV X5, #0
+.Lpopen_copy:
+    CMP X5, X2
+    B.GE .Lpopen_copied
+    LDRB W6, [X1, X5]
+    STRB W6, [X4, X5]
+    ADD X5, X5, #1
+    B .Lpopen_copy
+.Lpopen_copied:
+    STRB WZR, [X4, X2]             // NUL-terminate
+    MOV X0, X4                      // cmd ptr
+    MOV X1, X7                      // fam
+    BL platform_popen              // X0 = fd or -errno
+    LDR X30, [SP], #16
+    STR X0, [X19]
+    RET
+
+// (pclose) ( fd -- status|-errno )  close a (popen) fd and reap the child;
+// returns the child's exit status (0-255) or a negative errno.
+.global forth_pclose
+forth_pclose:
+    STR X30, [SP, #-16]!
+    LDR X0, [X19]
+    BL platform_pclose
+    LDR X30, [SP], #16
+    STR X0, [X19]
+    RET
+
 // (tty?) ( -- f )  true when stdin is a terminal. Gates the dirty-guard prompt:
 // an interactive session asks before discarding unsaved work; pipes and scripts
 // never do.
@@ -5257,7 +5301,9 @@ DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
-DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
+DEFWORD dict_popen,       "(popen)",      forth_popen,       dict_system
+DEFWORD dict_pclose,      "(pclose)",     forth_pclose,      dict_popen
+DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_pclose
 DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen

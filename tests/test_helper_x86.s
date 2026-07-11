@@ -164,6 +164,16 @@ platform_system:
     xor %eax, %eax              # return status 0 (not exercised by unit tests)
     ret
 
+.global platform_popen
+platform_popen:
+    mov $-9, %rax               # -EBADF: no pipes in the unit harness
+    ret
+
+.global platform_pclose
+platform_pclose:
+    mov $-9, %rax               # -EBADF: no pipes in the unit harness
+    ret
+
 .global platform_isatty
 platform_isatty:
     xor %eax, %eax              # not a tty (unit tests run headless)

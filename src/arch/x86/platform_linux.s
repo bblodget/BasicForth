@@ -20,6 +20,8 @@
 .equ SYS_fork,           57
 .equ SYS_execve,         59
 .equ SYS_wait4,          61
+.equ SYS_dup3,           292
+.equ SYS_pipe2,          293
 .equ SYS_clock_gettime,  228
 .equ SYS_getdents64,     217
 
@@ -729,6 +731,10 @@ platform_system:
     pop %rbx
     ret
 
+# An fd→pid table lets several pipes be open at once; pclose looks up which
+# child to reap by fd. PIPE_MAX concurrent pipes is plenty for a REPL.
+.equ PIPE_MAX, 8
+
 .section .rodata
 sh_path:   .asciz "/bin/sh"
 sh_dashc:  .asciz "-c"
@@ -736,7 +742,166 @@ sh_dashc:  .asciz "-c"
 .balign 8
 spawn_argv:   .space 32           # ["/bin/sh","-c",cmd,NULL]
 sys_wstatus:  .space 8            # wait4 status word
+pipe_fds:     .space 8            # int[2] filled by pipe2
+pipe_tab:     .space PIPE_MAX*16  # (fd, pid) pairs; pid == 0 → slot free
 .text
+
+# ---------- PIPES (popen / pclose) ----------
+
+# platform_popen ( RDI=NUL-terminated command, RSI=fam -- RAX=fd or -errno )
+# Run "/bin/sh -c <cmd>" with one end of a pipe replacing the child's stdout
+# (fam=R/O 0: we read what it prints) or stdin (fam=W/O 1: we write what it
+# reads). The returned fd is an ordinary fileid — platform_read_file /
+# platform_write_fd accept it unchanged. Any other fam → -EINVAL (R/W is
+# refused: one process blocking on both pipe directions is a deadlock trap).
+# Close with platform_pclose, which also reaps the child. Restores cooked
+# terminal mode around the spawn like platform_system; raw mode re-enters
+# lazily on the next interactive read.
+.global platform_popen
+platform_popen:
+    push %rbx
+    push %r12
+    push %r13
+    mov %rdi, %rbx                  # cmd ptr
+    mov %rsi, %r12                  # fam
+    cmp $1, %r12
+    ja .Lpo_einval                  # fam must be R/O (0) or W/O (1)
+    # claim a free table slot (pid == 0) before doing anything visible
+    lea pipe_tab(%rip), %r13
+    xor %ecx, %ecx
+.Lpo_slot:
+    cmpq $0, 8(%r13)
+    je .Lpo_have_slot
+    add $16, %r13
+    inc %ecx
+    cmp $PIPE_MAX, %ecx
+    jb .Lpo_slot
+    mov $-24, %rax                  # -EMFILE: all pipe slots busy
+    jmp .Lpo_ret
+.Lpo_have_slot:
+    call platform_restore_term      # terminal → cooked for the child
+    lea pipe_fds(%rip), %rdi
+    xor %esi, %esi                  # flags = 0
+    mov $SYS_pipe2, %rax
+    syscall
+    test %rax, %rax
+    js .Lpo_ret                     # pipe2 failed → -errno
+    # build argv = ["/bin/sh", "-c", cmd, NULL]
+    lea sh_path(%rip), %rax
+    mov %rax, spawn_argv+0(%rip)
+    lea sh_dashc(%rip), %rax
+    mov %rax, spawn_argv+8(%rip)
+    mov %rbx, spawn_argv+16(%rip)
+    movq $0, spawn_argv+24(%rip)
+    mov $SYS_fork, %rax
+    syscall
+    test %rax, %rax
+    js .Lpo_fork_err
+    jnz .Lpo_parent
+    # ---- child ----
+    # wire the pipe over stdout (fam=0) or stdin (fam=1), shed both raw ends
+    movl pipe_fds+4(%rip), %edi     # write end
+    mov $STDOUT, %esi
+    test %r12, %r12
+    jz .Lpo_dup
+    movl pipe_fds(%rip), %edi       # read end
+    mov $STDIN, %esi
+.Lpo_dup:
+    xor %edx, %edx                  # flags = 0
+    mov $SYS_dup3, %rax
+    syscall
+    movl pipe_fds(%rip), %edi
+    mov $SYS_close, %rax
+    syscall
+    movl pipe_fds+4(%rip), %edi
+    mov $SYS_close, %rax
+    syscall
+    lea sh_path(%rip), %rdi
+    lea spawn_argv(%rip), %rsi
+    mov start_envp(%rip), %rdx
+    mov $SYS_execve, %rax
+    syscall
+    mov $127, %rdi                  # execve returned → _exit(127)
+    mov $SYS_exit_group, %rax
+    syscall
+    # ---- parent ----
+.Lpo_parent:
+    mov %rax, 8(%r13)               # record child pid → slot claimed
+    test %r12, %r12
+    jz .Lpo_keep_read
+    movl pipe_fds+4(%rip), %eax     # keep write end (feed child's stdin)
+    movl pipe_fds(%rip), %edi       # close read end
+    jmp .Lpo_close_other
+.Lpo_keep_read:
+    movl pipe_fds(%rip), %eax       # keep read end (child's stdout)
+    movl pipe_fds+4(%rip), %edi     # close write end
+.Lpo_close_other:
+    mov %rax, (%r13)                # record our fd
+    mov $SYS_close, %rax
+    syscall
+    mov (%r13), %rax                # return the fd
+    jmp .Lpo_ret
+.Lpo_fork_err:
+    mov %rax, %r12                  # keep -errno across the cleanup closes
+    movl pipe_fds(%rip), %edi
+    mov $SYS_close, %rax
+    syscall
+    movl pipe_fds+4(%rip), %edi
+    mov $SYS_close, %rax
+    syscall
+    mov %r12, %rax
+    jmp .Lpo_ret
+.Lpo_einval:
+    mov $-22, %rax                  # -EINVAL: fam out of range
+.Lpo_ret:
+    pop %r13
+    pop %r12
+    pop %rbx
+    ret
+
+# platform_pclose ( RDI=fd -- RAX=exit status or -errno )
+# Close our end of the pipe (a W/O child sees EOF on its stdin), reap the
+# child with wait4, and return its exit status (0-255). An fd that did not
+# come from platform_popen returns -EBADF; close-file would close the fd but
+# leak a zombie child, which is why the Forth layer documents close-pipe as
+# the only correct way to finish a pipe.
+.global platform_pclose
+platform_pclose:
+    push %rbx
+    mov %rdi, %rbx                  # fd
+    lea pipe_tab(%rip), %r10
+    xor %ecx, %ecx
+.Lpc_find:
+    cmpq $0, 8(%r10)                # slot in use?
+    je .Lpc_next
+    cmp %rbx, (%r10)
+    je .Lpc_found
+.Lpc_next:
+    add $16, %r10
+    inc %ecx
+    cmp $PIPE_MAX, %ecx
+    jb .Lpc_find
+    mov $-9, %rax                   # -EBADF: not a live popen fd
+    jmp .Lpc_ret
+.Lpc_found:
+    mov %rbx, %rdi
+    mov $SYS_close, %rax
+    syscall                         # close before waiting: child sees EOF
+    mov 8(%r10), %rdi               # child pid
+    movq $0, 8(%r10)                # free the slot
+    lea sys_wstatus(%rip), %rsi
+    xor %edx, %edx                  # options = 0
+    xor %r10, %r10                  # rusage = NULL
+    mov $SYS_wait4, %rax
+    syscall
+    test %rax, %rax
+    js .Lpc_ret                     # wait4 failed → -errno
+    movl sys_wstatus(%rip), %eax    # WEXITSTATUS: (status >> 8) & 0xff
+    sarl $8, %eax
+    movzbl %al, %eax
+.Lpc_ret:
+    pop %rbx
+    ret
 
 # platform_fstat ( RDI=fd -- RAX=size )
 # Returns file size via fstat, or a negative errno if the fstat syscall fails.

@@ -3717,6 +3717,43 @@ forth_system:
     mov %rax, (%r15)
     ret
 
+# (popen) ( c-addr u fam -- fd|-errno )  spawn a shell command with a pipe
+# over its stdout (fam=r/o: read what it prints) or stdin (fam=w/o: write
+# what it reads); returns the fd of our end, a plain fileid that read-file/
+# read-line/write-file accept unchanged, or a negative errno. The command is
+# copied to the (system) NUL buffer. Close with (pclose), never close-file.
+.global forth_popen
+forth_popen:
+    push %rbx
+    mov (%r15), %rbx               # fam
+    mov CELL(%r15), %rcx           # u
+    mov 2*CELL(%r15), %rsi         # c-addr (src)
+    add $2*CELL, %r15              # pop 2 → TOS slot = result
+    cmp $SYS_CMD_MAX-1, %rcx
+    jbe .Lpopen_len_ok
+    mov $SYS_CMD_MAX-1, %rcx
+.Lpopen_len_ok:
+    lea sys_cmd_buf(%rip), %rdi
+    mov %rcx, %rdx                 # remember length for the NUL terminator
+    cld
+    rep movsb
+    lea sys_cmd_buf(%rip), %rdi
+    movb $0, (%rdi,%rdx)           # NUL-terminate
+    mov %rbx, %rsi                 # fam
+    call platform_popen            # → RAX = fd or -errno
+    mov %rax, (%r15)
+    pop %rbx
+    ret
+
+# (pclose) ( fd -- status|-errno )  close a (popen) fd and reap the child;
+# returns the child's exit status (0-255) or a negative errno.
+.global forth_pclose
+forth_pclose:
+    mov (%r15), %rdi
+    call platform_pclose
+    mov %rax, (%r15)
+    ret
+
 # (tty?) ( -- f )  true when stdin is a terminal. Gates the dirty-guard prompt:
 # an interactive session asks before discarding unsaved work; pipes and scripts
 # never do.
@@ -4811,7 +4848,9 @@ DEFWORD dict_ioctl,       "(ioctl)",      forth_ioctl,       dict_lstore
 DEFWORD dict_mmap_dev,    "(mmap-dev)",   forth_mmap_dev,    dict_ioctl
 DEFWORD dict_tty,         "(tty?)",       forth_tty,         dict_mmap_dev
 DEFWORD dict_system,      "(system)",     forth_system,      dict_tty
-DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_system
+DEFWORD dict_popen,       "(popen)",      forth_popen,       dict_system
+DEFWORD dict_pclose,      "(pclose)",     forth_pclose,      dict_popen
+DEFWORD dict_defer_fetch, "defer@",       forth_defer_fetch, dict_pclose
 DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen

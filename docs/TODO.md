@@ -550,10 +550,14 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
 
 ### Open threads
 
-- [ ] **Pipes / output capture** (`pipe`/`dup2` platform work) — read a
-  command's *output* back into Forth (today `(system)`/`sh` only stream to
-  the terminal). Unlocks `history | grep`-style words and fzf pickers for
-  `edit`/`load`. Queued behind the editing-workflow arc above.
+- [x] **Pipes / output capture** — `open-pipe ( c-addr u fam -- fileid ior )`
+  / `close-pipe ( fileid -- wretval wior )` (gforth-compatible) run a command
+  with a pipe over its stdout (`r/o`) or stdin (`w/o`); the fileid works with
+  the ordinary `read-line`/`write-line`, and `close-pipe` reaps the child and
+  returns its exit status. `platform_popen`/`platform_pclose` +
+  `(popen)`/`(pclose)`, both arches. Unlocks `history | grep`-style words and
+  fzf pickers for `edit`/`load` (still to build, module arc). See
+  docs/Shelling_Out.md.
 - [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
   `platform_key`), so unsaved work can be lost silently.
 - [ ] `man` doesn't map hyphens↔underscores, so some cross-references in the

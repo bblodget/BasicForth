@@ -163,6 +163,16 @@ platform_system:
     MOV X0, #0                      // return status 0 (not exercised by unit tests)
     RET
 
+.global platform_popen
+platform_popen:
+    MOV X0, #-9                     // -EBADF: no pipes in the unit harness
+    RET
+
+.global platform_pclose
+platform_pclose:
+    MOV X0, #-9                     // -EBADF: no pipes in the unit harness
+    RET
+
 .global platform_isatty
 platform_isatty:
     MOV X0, #0                      // not a tty (unit tests run headless)

@@ -60,6 +60,15 @@ the Forth layer) is written against them and nothing else.
    `stdin`/`stdout`/`stderr` (0/1/2) are abstract handles the platform layer
    defines and consumes — identity with the OS fd on POSIX backends.
 
+5. **Pipe handles share the fileid namespace with file handles.** A handle
+   returned by `platform_popen` must be accepted by `platform_read_file` /
+   `platform_write_fd` unchanged — that unification is what lets the Forth
+   layer reuse `read-file`/`read-line`/`write-file` on pipes with zero new
+   words. Free on POSIX (everything is an fd) and on Windows (`ReadFile`
+   works on pipe HANDLEs); a backend that cannot unify them cannot offer
+   `open-pipe` (fine — a backend without processes omits it entirely, like
+   `platform_system`).
+
 ## Current API
 
 ### platform_emit
@@ -336,6 +345,40 @@ passed to `execve`, so the child inherits `$EDITOR`/`$PATH`/`$TERM`. ARM64 has n
 | **Input**    | X0 = NUL-terminated command string             | RDI = NUL-terminated command string          |
 | **Output**   | X0 = exit status (0-255), or -1 on fork/exec   | RAX = exit status (0-255), or -1 on fork/exec |
 | **Syscall**  | clone #220, execve #221, wait4 #260            | fork #57, execve #59, wait4 #61              |
+
+### platform_popen
+
+Run a shell command (`/bin/sh -c <cmd>`) with one end of a pipe replacing the
+child's **stdout** (fam = R/O 0: read what it prints) or **stdin** (fam = W/O
+1: write what it reads), returning the fd of our end. The fd is an ordinary
+fileid (contract rule 5): `platform_read_file` / `platform_write_fd` accept it
+unchanged. Any other fam → `-EINVAL` (R/W is refused — one process blocking on
+both pipe directions is a deadlock trap). An fd→pid table (8 slots) lets
+several pipes be open at once; all slots busy → `-EMFILE`. Terminal handling
+and environment inheritance are as in `platform_system`. Backs the Forth
+`(popen)` primitive under `open-pipe`. See **Shelling_Out.md**.
+
+|              | ARM64                                          | x86-64                                       |
+|--------------|------------------------------------------------|----------------------------------------------|
+| **Input**    | X0 = NUL-terminated command, X1 = fam          | RDI = NUL-terminated command, RSI = fam      |
+| **Output**   | X0 = fd, or -errno                             | RAX = fd, or -errno                          |
+| **Syscall**  | pipe2 #59, dup3 #24, clone #220, execve #221   | pipe2 #293, dup3 #292, fork #57, execve #59  |
+
+### platform_pclose
+
+Close a `platform_popen` fd (a W/O child sees EOF on its stdin), reap the
+child with `wait4`, and return its exit status (0-255). The fd is looked up in
+the fd→pid table; an fd that did not come from `platform_popen` (or was
+already pclose'd) returns `-EBADF`. `platform_close_file` on a pipe fd would
+close it but leak a zombie child — which is why the Forth layer documents
+`close-pipe` as the only correct way to finish a pipe. Backs the Forth
+`(pclose)` primitive under `close-pipe`.
+
+|              | ARM64                                          | x86-64                                       |
+|--------------|------------------------------------------------|----------------------------------------------|
+| **Input**    | X0 = fd from platform_popen                    | RDI = fd from platform_popen                 |
+| **Output**   | X0 = exit status (0-255), or -errno            | RAX = exit status (0-255), or -errno         |
+| **Syscall**  | close #57, wait4 #260                          | close #3, wait4 #61                          |
 
 ### platform_mmap_file
 
