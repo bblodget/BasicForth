@@ -4,9 +4,10 @@ At an interactive terminal the BasicForth prompt is a small line editor, like
 the one a modern shell gives you: move around the line, fix a typo in the
 middle, and recall and re-run previous commands. Long lines scroll sideways, a
 `:` definition that spans lines gets a continuation prompt, `edit <word>`
-opens an existing definition in your editor, and `define <word>` opens the
-editor on a template for a new one. Most of it is just how the prompt
-behaves — only `edit` and `define` are words you type.
+opens an existing definition in your editor, `define <word>` opens the
+editor on a template for a new one, and `:e <word>` lets you retype a
+definition inline. Most of it is just how the prompt behaves — only `edit`,
+`define`, and `:e` are words you type.
 
 ## Keys
 
@@ -103,6 +104,30 @@ unsaved captured changes would be lost — so if the module is dirty, bare
 the editor sees your session's state; **n** opens the stale disk file and the
 reload discards the unsaved work; any other key cancels. (Like `new`/`load`/
 `bye`, only a real terminal prompts — pipes and scripts proceed silently.)
+
+## Retyping a definition inline: `:e`
+
+`:e <name>` is `edit <name>` with the prompt as the editor: type the new
+definition right there — multi-line works, with the same `... ` continuation
+prompt as `:` — and when `;` closes it, the text is spliced into the module
+file over the word's newest definition and the module reloads:
+
+```
+> :e triple 3 * 1+ ;       # retype it; on ; the file is updated and reloaded
+ ok
+> see triple               # the file (and every caller) has the new text
+```
+
+Same mutation semantics and guards as `edit`: the word must already exist
+and live in the module file (unsaved work prompts "save first? (y/n)" at a
+terminal, and is refused in a script), a deferred word redirects you to its
+action, and a refusal discards the rest of the input line — it was the
+definition body. If the file changed on disk mid-definition, the splice is
+refused and your new definition stays live as an unsaved binding.
+
+The full verb grid: `:` **binds** a new definition (earlier words keep the
+old one — hyper-static), `define` creates one in the editor, `:e` **fixes**
+one inline, `edit` fixes one in the editor.
 
 ## Defining a new word: `define`
 

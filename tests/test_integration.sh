@@ -2131,6 +2131,64 @@ else
     printf "  ${RED}FAIL${NC}  bare edit without a module\n    Got: %q\n" "$bn_out"; ((failed++))
 fi
 
+# :e — inline mutation: retype a definition at the prompt; on ; it splices
+# the module file over the word's newest definition and reloads. Callers are
+# rebuilt by the reload and the session ends clean.
+ce_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$ce_dir/mod.fs"
+ce_out=$( cd "$ce_dir" && printf 'mid .\n:e leaf 3 ;\nmid .\n(dirty) @ .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$ce_dir"
+if [[ "$ce_out" == *"30"* && "$ce_out" == *"0  ok"* && "$ce_out" == *"FILE:"*": leaf 3 ;"*": mid leaf 10 * ;"* \
+      && "$ce_out" != *": leaf 1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e splices the file and reloads — callers live, clean\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  :e basic splice\n    Got: %q\n" "$ce_out"; ((failed++))
+fi
+# Multi-line :e: the whole formatted group (comments, indentation) lands in
+# the file, exactly as typed.
+cm2_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$cm2_dir/mod.fs"
+cm2_out=$( cd "$cm2_dir" && printf ':e leaf\n  \\ doubled now\n  2 * ;\n5 leaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$cm2_dir"
+if [[ "$cm2_out" == *"10"* && "$cm2_out" == *"FILE:"*"doubled now"*"2 * ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  multi-line :e keeps formatting in the file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  multi-line :e\n    Got: %q\n" "$cm2_out"; ((failed++))
+fi
+# Refusals flush the rest of the input line (it was the definition body), so
+# nothing lands on the stack: unknown word, deferred word, unsaved session.
+cf_dir="$(mktemp -d)"
+printf ': leaf 1 ;\ndefer d\n' > "$cf_dir/mod.fs"
+cf_out=$( cd "$cf_dir" && printf ':e nosuch 1 ;\ndepth .\n:e d 1 ;\ndepth .\n: w 1 ;\n:e leaf 9 ;\ndepth .\nleaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$cf_dir"
+cf_z=$(grep -c '^0  ok' <<<"$(grep -A0 'ok' <<<"$cf_out" | grep '^0')")
+if [[ "$cf_out" == *"not defined"* && "$cf_out" == *"is deferred"* \
+      && "$cf_out" == *":e: unsaved changes — save first"* && "$cf_out" == *"1  ok"* \
+      && "$cf_out" != *"stack underflow"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e refusals flush the line (unknown/defer/unsaved)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  :e refusal flush\n    Got: %q\n" "$cf_out"; ((failed++))
+fi
+# An errored :e definition disarms: the next definition is a plain binding,
+# not a splice — leaf and the file stay untouched.
+cx_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$cx_dir/mod.fs"
+cx_out=$( cd "$cx_dir" && printf ':e leaf\n  nosuchword ;\n: other 42 ;\nother .\nleaf .\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$cx_dir"
+if [[ "$cx_out" == *"? nosuchword"* && "$cx_out" == *"42"* && "$cx_out" == *"1  ok"* \
+      && "$cx_out" == *"FILE:"*": leaf 1 ;"* && "$cx_out" != *"other"*"FILE"*"other"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an errored :e disarms — next definition binds normally\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  errored :e disarm\n    Got: %q\n" "$cx_out"; ((failed++))
+fi
+
 # SPLICE-SAVE (Module_Architecture stage 1, hyper-static): a plain `:`
 # redefinition is a NEW BINDING — earlier words keep the old one — so SAVE
 # appends it verbatim (replay-faithful) and keeps the file text untouched

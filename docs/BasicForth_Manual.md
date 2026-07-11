@@ -747,8 +747,10 @@ first.
 **`define <word>`** is `edit` for a word that doesn't exist yet: it opens the
 editor on a `: word` / `;` template, and the saved definition is compiled and
 logged like one typed at the prompt (an existing word is refused — use
-`edit`). Bare **`edit`** (no name) opens the whole module file and `reload`s
-it on change. See `docs/Line_Editor.md` for the full key list and details.
+`edit`). **`:e <word>`** is `edit` without the editor: retype the definition
+inline (multi-line works) and on `;` the file is spliced and reloaded. Bare
+**`edit`** (no name) opens the whole module file and `reload`s it on change.
+See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 

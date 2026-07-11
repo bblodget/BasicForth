@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### New word: `:e` — retype a definition inline (stage 3)
+- **`:e <name>`** is `edit <name>` with the prompt as the editor: type the
+  new definition inline (multi-line, with the usual `... ` continuation
+  prompt), and when `;` closes it the text is spliced into the module file
+  over the word's newest definition and the module reloads — same mutation
+  semantics and guards as `edit`. A deferred word redirects to its action;
+  unsaved work prompts at a terminal and is refused in a script; a refusal
+  discards the rest of the input line (it was the definition body). If the
+  file changed on disk mid-definition, the new definition stays live as an
+  unsaved binding instead. The verb grid is complete: `:` binds, `define`
+  creates in the editor, `:e` fixes inline, `edit` fixes in the editor.
+
 ### Pipes: capture a command's output, feed its stdin
 - New `open-pipe ( c-addr u fam -- fileid ior )` / `close-pipe ( fileid --
   wretval wior )` (gforth-compatible): run `/bin/sh -c <cmd>` with a pipe
