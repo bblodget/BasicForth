@@ -613,12 +613,27 @@ stat_buf:
 
 .text
 
-// platform_open_file_mode ( X0=path X1=len X2=flags X3=mode -- X0=fd )
-// Copies path to scratch buffer, null-terminates, opens with the given flags
-// and mode. Returns fd (>=0) or negative errno. The copy uses X9-X11 so the
-// incoming X2 (flags) and X3 (mode) survive for the openat call.
-.global platform_open_file_mode
-platform_open_file_mode:
+// The one distinguished error value callers above the boundary may compare
+// against (see Platform_Layer.md "Return-value contract"): the open calls
+// return this when the file does not exist. Every other error magnitude is
+// opaque above the platform layer — sign/zero tests only.
+.section .rodata
+.balign 8
+.global platform_err_not_found
+platform_err_not_found: .quad -2    // -ENOENT
+
+// fam → native open(2) flags. fam is the backend-neutral file-access enum
+// (0=read 1=write 2=read/write — see Platform_Layer.md); only the platform
+// layer turns it into OS flag bits. Identity on Linux, but the translation
+// is explicit so the decision lives below the boundary.
+fam_flags: .quad O_RDONLY, O_WRONLY, O_RDWR
+.text
+
+// .Lopen_at ( X0=path X1=len X2=native flags X3=mode -- X0=fd )
+// Internal: copies path to scratch buffer, null-terminates, openat()s with
+// the given NATIVE flags and mode. Returns fd (>=0) or negative errno. The
+// copy uses X9-X11 so the incoming X2 (flags) and X3 (mode) survive.
+.Lopen_at:
     STP X29, X30, [SP, #-16]!
 
     // Copy path to scratch buffer and null-terminate
@@ -646,22 +661,41 @@ platform_open_file_mode:
     LDP X29, X30, [SP], #16
     RET
 
+// platform_open_file_mode ( X0=path X1=len X2=fam -- X0=fd )
+// Open an existing file by abstract fam. Out-of-range fam fails like a
+// failed open, with -EINVAL.
+.global platform_open_file_mode
+platform_open_file_mode:
+    CMP X2, #2
+    B.HI .Lfam_bad
+    ADR X9, fam_flags
+    LDR X2, [X9, X2, LSL #3]       // translate fam → native flags
+    MOV X3, #0                     // mode unused for plain open
+    B .Lopen_at
+.Lfam_bad:
+    MOV X0, #-22                   // -EINVAL
+    RET
+
 // platform_open_file ( X0=path X1=len -- X0=fd )
 // Thin wrapper: open existing file read-only (used by INCLUDED).
 .global platform_open_file
 platform_open_file:
-    MOV X2, #O_RDONLY              // flags
+    MOV X2, #O_RDONLY              // native flags
     MOV X3, #0                     // mode
-    B platform_open_file_mode
+    B .Lopen_at
 
 // platform_create_file ( X0=path X1=len X2=fam -- X0=fd )
-// Create or truncate a file: open with fam | O_CREAT | O_TRUNC, mode 0666.
+// Create or truncate a file: translated fam | O_CREAT | O_TRUNC, mode 0666.
 .global platform_create_file
 platform_create_file:
+    CMP X2, #2
+    B.HI .Lfam_bad
+    ADR X9, fam_flags
+    LDR X2, [X9, X2, LSL #3]       // translate fam → native flags
     MOV X9, #(O_CREAT | O_TRUNC)
-    ORR X2, X2, X9                 // flags = fam | O_CREAT | O_TRUNC
+    ORR X2, X2, X9
     MOV X3, #CREATE_MODE           // mode
-    B platform_open_file_mode
+    B .Lopen_at
 
 // platform_rename ( X0=old X1=old_len X2=new X3=new_len -- X0=0 or -errno )
 // Copies both paths into null-terminated scratch buffers, then renameat() —

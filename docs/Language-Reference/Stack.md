@@ -66,6 +66,14 @@ Push the number of items currently on the stack (before `depth` ran).
 
     1 2 3 depth .s    \ <4> 1 2 3 3
 
+## clearstack ( ... -- )
+Discard everything on the stack. Handy at the prompt when experiments have
+left junk behind. Unlike `abort`, it is not an error path — it just empties
+the stack and carries on, so it is safe inside a running program or a loaded
+file.
+
+    1 2 3 clearstack .s    \ <0>
+
 ## 2dup       ( x1 x2 -- x1 x2 x1 x2 )
 Duplicate the top *pair* of items.
 

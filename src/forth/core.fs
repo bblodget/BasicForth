@@ -30,6 +30,7 @@
 : -ROT    rot rot ;
 : 2OVER   3 pick 3 pick ;
 : 2SWAP   rot >r rot r> ;
+: CLEARSTACK ( ... -- ) begin depth while drop repeat ;
 
 \ Derived arithmetic
 : 2*      1 lshift ;
@@ -213,6 +214,36 @@ variable (cmp-a2)  variable (cmp-u2)
     2dup = if 2drop 0
     else < if -1 else 1 then then ;
 
+\ Interpreted S" and ." — STATE-smart redefinitions of the ASM primitives.
+\ The ASM versions (xts captured below) are compile-only: they parse the
+\ string and compile it inline. These wrappers delegate to them when
+\ compiling (identical compiled code, so SEE still recognizes strings) and
+\ add interpretation semantics: S" returns the string in one of two
+\ alternating transient buffers (ANS 2012 — the string stays valid until
+\ the second-next interpreted S"), ." types it immediately.
+' s" constant (s"prim)
+' ." constant (."prim)
+256 constant (s"max)
+create (s"bufs) (s"max) 2* allot
+variable (s"flip)
+: (s"buf)   ( -- a )  \ alternate halves of (s"bufs) on each use
+    (s"flip) @ dup 0= (s"flip) !
+    if (s"bufs) (s"max) + else (s"bufs) then ;
+: (s"copy)  ( c-addr u -- buf u )  \ copy string into a transient buffer
+    dup (s"max) > abort" interpreted string too long"
+    (s"buf) swap                ( c-addr buf u )
+    dup >r over >r cmove r> r> ;
+\ The tokenizer leaves >IN pointing at the space after the S" token itself;
+\ skip it before PARSE (the ASM versions skip one leading space the same way).
+: (s"parse) ( "ccc<quote>" -- c-addr u )
+    source >in @ /string            ( a u )  \ unparsed rest of the line
+    if c@ 32 = if 1 >in +! then else drop then
+    [char] " parse ;
+: s"    ( Compiling: append inline string. Interpreting: -- c-addr u )
+    state @ if (s"prim) execute else (s"parse) (s"copy) then ; immediate
+: ."    ( Compiling: append inline string + TYPE. Interpreting: type now )
+    state @ if (."prim) execute else (s"parse) type then ; immediate
+
 \ Programming-Tools words (15)
 : ?     ( a-addr -- ) @ . ;
 
@@ -252,9 +283,16 @@ variable (dump-addr)  variable (dump-len)
 132 constant KEY_LEFT
 
 \ Random number generator (Linear Congruential Generator)
-\ seed = (seed * 1103515245 + 12345) mod 2^64
-variable seed  ms@ seed !
-: random ( -- n ) seed @ 1103515245 * 12345 + dup seed ! ;
+\ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
+\ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
+\ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
+variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 0
+: random ( -- n )
+    seed @
+    dup 13 lshift xor
+    dup  7 rshift xor
+    dup 17 lshift xor
+    dup seed ! ;
 : rnd    ( n -- 0..n-1 ) random swap mod abs ;
 
 \ Double-Number words (8)
@@ -268,7 +306,9 @@ variable seed  ms@ seed !
 : D<    ( d1 d2 -- flag ) d- d0< ;
 : D.    ( d -- ) dup >r dabs <# #s r> sign #> type space ;
 
-\ File-output words (fileid = raw OS file descriptor)
+\ File-output words. A fileid is an abstract handle whose values the
+\ platform layer defines and consumes (identity with the OS fd on POSIX
+\ backends); these three are the standard streams every backend provides.
 0 constant stdin
 1 constant stdout
 2 constant stderr
@@ -327,8 +367,10 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
             then
         again ;
 
-\ File-access methods (fam): the values passed to OPEN-FILE / CREATE-FILE.
-\ They are the OS open() flags; BIN is a no-op (Linux has no text/binary mode).
+\ File-access methods (fam): backend-neutral access codes passed to
+\ OPEN-FILE / CREATE-FILE — 0=read 1=write 2=read/write. The platform layer
+\ translates them to native open() flags (see Platform_Layer.md); BIN is a
+\ no-op (no text/binary distinction on Linux).
 0 constant r/o
 1 constant w/o
 2 constant r/w
@@ -342,10 +384,16 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ Allocations are page-granular, so this suits a few large buffers rather than
 \ many tiny ones; the interface can be re-backed by a finer allocator later.
 
+\ The "invalid argument" ior these words synthesize for rejects. The value
+\ matches the backend's errno (Linux EINVAL) because real platform failures
+\ surface their errno as the ior — see Platform_Layer.md "Return-value
+\ contract". Callers must treat ior magnitudes as opaque (test zero/non-zero).
+22 constant EINVAL
+
 \ ALLOCATE ( u -- a-addr ior )  reserve u bytes; ior 0 on success. A zero-size
 \ request is rejected with a non-zero ior (no allocation), matching gforth.
 : allocate ( u -- a-addr ior )
-    dup 0= if  drop 0 22 exit  then   \ reject 0 bytes (EINVAL); nothing mapped
+    dup 0= if  drop 0 EINVAL exit  then   \ reject 0 bytes; nothing mapped
     cell+ dup (mmap-anon)             ( total addr )  \ map header + payload
     dup 0< if  nip negate 0 swap exit  then           ( 0 errno )  \ mmap failed
     tuck !                            ( base )  \ stash total length in header
@@ -355,7 +403,7 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ A null a-addr (e.g. a failed ALLOCATE's result) is rejected with a non-zero
 \ ior instead of dereferencing the header at a-addr - cell.
 : free ( a-addr -- ior )
-    dup 0= if  drop 22 exit  then     \ reject null (EINVAL); don't deref
+    dup 0= if  drop EINVAL exit  then \ reject null; don't deref
     1 cells -                         ( base )  \ step back to the header
     dup @ (munmap)                    ( n )    \ unmap base for its stored length
     negate ;                          \ 0 stays 0; -errno → positive ior
@@ -365,7 +413,7 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ original block is unchanged and a-addr2 = a-addr1. A null a-addr1 is rejected
 \ with a non-zero ior (it would otherwise deref a wild header).
 : resize ( a-addr1 u -- a-addr2 ior )
-    over 0= if  drop 22 exit  then    ( 0 ior )  \ reject null a-addr1
+    over 0= if  drop EINVAL exit  then  ( 0 ior )  \ reject null a-addr1
     over 1 cells - @ 1 cells -        ( a1 u olduser )  \ old payload byte count
     over min >r                       ( a1 u )  \ R: bytes to copy = min(u,old)
     dup allocate                      ( a1 u a2 ior )
@@ -459,6 +507,15 @@ create (nl) 10 c,                       \ a single newline byte
 create (dir)     3 cells allot          \ cell buffer: 3-cell records (see above)
 create (dir-rec) 3 cells allot          \ scratch: one record being built
 
+\ Parallel tag per (dir) record: true when the group came from a MUTATION verb
+\ ((eval+log) — edit's resubmit and its propagation re-logs) rather than a
+\ plain binding typed at the prompt. The splice-save uses it: mutations are
+\ spliced over the word's definition in the file; bindings append verbatim
+\ (Forth is hyper-static — see docs/Module_Architecture.md).
+create (dir-tags) 3 cells allot  (dir-tags) 3 cells erase
+variable (cap-tag)  0 (cap-tag) !
+create (tag-rec) 1 cells allot
+
 \ entry → the execution token FIND returns: load the CodePtr at the aligned
 \ offset align8(10 + name-len) past the entry. Mirrors FIND's xt calculation.
 : (xt-of) ( entry -- xt )
@@ -470,7 +527,9 @@ create (dir-rec) 3 cells allot          \ scratch: one record being built
     (dir-rec) 2 cells + !               \ rec[2] = xt
     (dir-rec) cell+ !                   \ rec[1] = log-len
     (dir-rec) !                         \ rec[0] = log-off
-    (dir-rec) 3 cells (dir) (buf-append) ;  \ append the 24-byte record
+    (dir-rec) 3 cells (dir) (buf-append)    \ append the 24-byte record
+    (cap-tag) @ (tag-rec) !
+    (tag-rec) 1 cells (dir-tags) (buf-append) ;  \ + its mutation tag
 
 \ (dir-add-group): index EVERY word newly defined in this group, not just the
 \ last. Walk the dictionary link chain (link is the first cell of each header)
@@ -526,6 +585,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
     false (skip-capture) !
+    false (cap-tag) !                   \ clear a tag stuck by an errored (eval+log)
     (assign?) drop                      \ clear a stale assign flag from an errored line
     state @ if  drop exit  then
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -586,16 +646,26 @@ variable (path-a-len)  variable (path-b-len)
 
 \ (seed-log): reset the log + SEE index, then load the current file's bytes into
 \ the log so SAVE rewrites it cumulatively. Empty when there is no current file
-\ (a fresh session) or the file does not exist yet (a new file).
+\ (a fresh session) or the file does not exist yet (a new file). The seed's
+\ extent and origin are recorded so the splice-save can tell file text (kept,
+\ patched in place) from session captures (appended): log[0, seed-len) is a
+\ verbatim copy of (seed-path), so a file word's metadata span indexes it.
+variable (seed-len)                     \ bytes of (log) that mirror the file
+create (seed-path) (cf-max) allot       \ the file those bytes came from
+variable (seed-path-len)
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
+    (dir-tags) (buf-reset)
     false (dirty) !                     \ log now mirrors the file (or is empty)
+    0 (seed-len) !  0 (seed-path-len) !
     (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
     (cur-file@) r/o open-file           ( fileid ior )
     if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
-    close-file drop ;
+    close-file drop
+    (log) cell+ @ (seed-len) !
+    (cur-file@) dup (seed-path-len) !  (seed-path) swap cmove ;
 
 \ (session-init): boot hook, run once when entering the interactive REPL, with
 \ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
@@ -609,17 +679,18 @@ variable (path-a-len)  variable (path-b-len)
 \ plus interactive ones), since the startup file loads after core.fs but before
 \ this hook runs.
 
-\ SAVE <name> (bare SAVE → the current file): write the whole log to <name> in
+\ SAVE <name> (bare SAVE → the current file): write the module to <name> in
 \ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
 \ existing file. SAVE <name> also makes <name> the current file (save-as). A
 \ no-op when nothing has been captured, so it never litters an empty file.
-: (save) ( -- )                         \ write the log to the current file
-    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+\ The real body is the splice-save near EOF (it needs the introspection words),
+\ installed via (save-impl); until then the fallback writes the log verbatim.
+: (write-module) ( c-addr u -- )        \ atomic write to the current file
     (cur-file@) (name>paths)
-    (path-b) (path-b-len) @ w/o create-file   ( fileid ior )
-    abort" save: cannot create temp file"     ( fileid )
+    (path-b) (path-b-len) @ w/o create-file   ( c-addr u fileid ior )
+    abort" save: cannot create temp file"     ( c-addr u fileid )
     >r
-    (log) @ (log) cell+ @ r@ write-file ( ior )
+    r@ write-file                       ( ior )
     abort" save: write error"
     r> close-file                       \ deferred write errors can surface here
     abort" save: close error"           \ (e.g. ENOSPC on NFS) — don't publish
@@ -627,6 +698,11 @@ variable (path-a-len)  variable (path-b-len)
     abort" save: rename error"
     false (dirty) !
     ." saved to " (cur-file@) type cr ;
+variable (save-impl)  0 (save-impl) !   \ xt of the splice-save body (set near EOF)
+: (save) ( -- )
+    (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
+    (save-impl) @ ?dup if  execute exit  then
+    (log) @ (log) cell+ @ (write-module) ;
 
 : save ( "name" -- )
     parse-word dup if  (set-cur-file)
@@ -839,12 +915,17 @@ variable (rd-a)  variable (rd-u)        \ the source span REDO is walking
 \ — NOT as a single EVALUATE, because a `\` comment would otherwise swallow the
 \ rest of the whole buffer (EVALUATE has no line boundaries). STATE persists
 \ across the per-line EVALUATEs, so a colon definition may span several lines.
+\ ALL loop bookkeeping lives in variables, never on the data stack: evaluated
+\ content may leave items between lines (a `:noname ... ; is x` group parks
+\ its xt on the stack until the closing line's `is` pops it), and anything of
+\ ours on the stack would be shadowed by them.
+variable (rd-n)                         \ bytes consumed by the current line
 : (rd-eval-lines) ( c-addr u -- )
     (rd-u) !  (rd-a) !
     begin (rd-u) @ 0> while
-        10 (rd-chpos)                   ( idx-of-newline-or-len )
-        (rd-a) @ over evaluate          ( consumed-so-far = idx )
-        dup (rd-u) @ < if 1+ then       ( consumed, +1 for the newline if present )
+        10 (rd-chpos)  dup (rd-n) !     ( idx-of-newline-or-len )
+        (rd-a) @ swap evaluate          ( )   \ only content's items remain
+        (rd-n) @  dup (rd-u) @ < if 1+ then   ( consumed, +1 for the newline )
         dup (rd-a) +!
         (rd-u) @ swap - (rd-u) !
     repeat ;
@@ -1214,6 +1295,7 @@ variable (pg-quit)                       \ true once the user pressed q
     0 (pg-row) ! ;
 : (pg-line) ( c-addr u -- )
     type cr  1 (pg-row) +!
+    (tty?) 0= if exit then                 \ piped: no --more-- pause, ever
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
 \ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
 \ a read-error flag (true if read-line failed) rather than aborting — it is a
@@ -1489,6 +1571,7 @@ variable (ts-any)                          \ printed any line of the wanted step
     over 1+ c@ [char] # = and
     swap 2 + c@ bl = and ;
 : (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
+    (tty?) if page then
     0 (pg-row) ! false (pg-quit) !
     1 (ts-cur) !  false (ts-any) !
     >r
@@ -1542,26 +1625,50 @@ variable (ts-any)                          \ printed any line of the wanted step
     then
     (tut-existed) @ 0= if
         ." -- end of '" (tut-name) (tut-nlen) @ type ." ' --" cr
-        ." Type  back  to review, or  tutorial <name>  to start another." cr
+        ." Type  back  to review,  end-tutorial  to leave, or  tutorial <name>  to start another." cr
         (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
         exit
     then
-    cr ." [ next = continue   back = previous   step " (tut-step) @ . ." ]" cr ;
-: tutorial ( "name" -- )
+    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
+defer (step-val?)                          \ ( a u -- n true | false ) value-name
+:noname 2drop false ; is (step-val?)       \ lookup; real body after (nt-by-name)
+: (step#?) ( -- n true | false )           \ parse optional step: number or value
+    >in @ >r  parse-word                    ( a u )
+    dup 0= if 2drop r> drop false exit then
+    2dup 0 0 2swap >number nip              ( a u ud u2 )
+    0= if  drop nip nip  r> drop  true exit  then   \ fully numeric: ( n true )
+    2drop                                   ( a u )
+    (step-val?) if  r> drop  true exit  then        \ a value's contents
+    r> >in !  false ;                       \ neither: un-parse it
+: tutorial ( "name" ["step"] -- )
     parse-word (tut-max) min                ( c-addr u )
     dup 0= if 2drop
-        ." usage: tutorial <name>   then  next / back  to move" cr
+        ." usage: tutorial <name> [step]   then  next / back / step  to move" cr
         topics exit
     then
     dup (tut-nlen) !                        ( c-addr u )
     >r (tut-name) r> cmove
-    1 (tut-step) !  (tut-go) ;
+    1 (tut-step) !
+    (step#?) if 1 max (tut-step) ! then     \ tutorial chase 10 = resume there
+    (tut-go) ;
 : next ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     1 (tut-step) +! (tut-go) ;
 : back ( -- )
     (tut-nlen) @ 0= if ." (start a tutorial first: tutorial <name>)" cr exit then
     (tut-step) @ 1 > if -1 (tut-step) +! then (tut-go) ;
+: step ( ["step"] -- )                     \ replay current step; step 10 = jump
+    (step#?)                                ( n true | false )
+    (tut-nlen) @ 0= if
+        if drop then
+        ." (start a tutorial first: tutorial <name>)" cr exit
+    then
+    if 1 max (tut-step) ! then
+    (tut-go) ;
+: end-tutorial ( -- )                      \ drop the bookmark; definitions remain
+    (tut-nlen) @ 0= if ." (no tutorial in progress)" cr exit then
+    0 (tut-nlen) !
+    ." (tutorial ended -- your definitions remain)" cr ;
 
 \ ===== .MODULE : the words in your module =====
 \ WORDS dumps the whole dictionary (~330 built-ins); .MODULE shows just what YOU
@@ -1575,14 +1682,18 @@ variable (sw-mark)                          \ LATEST at end of core.fs (module s
 
 : (sw-name) ( nt -- c-addr u )              \ name slice of a dictionary entry
     dup 10 +  swap 8 + c@ 31 and ;
+: (sw-anon?) ( nt -- f )                    \ :noname entry (empty name)?
+    8 + c@ 31 and 0= ;
 : (sw-end?) ( nt -- nt f )                  \ true when nt is the boundary or chain end
     dup (sw-mark) @ =  over 0= or ;
 : (sw-count) ( -- n )
     0 (latest@)
-    begin (sw-end?) 0= while  swap 1+ swap  @  repeat  drop ;
+    begin (sw-end?) 0= while
+        dup (sw-anon?) 0= if  swap 1+ swap  then  @  repeat  drop ;
 : (sw-list) ( -- )
     (latest@)
-    begin (sw-end?) 0= while  dup (sw-name) type space  @  repeat  drop  cr ;
+    begin (sw-end?) 0= while
+        dup (sw-anon?) 0= if  dup (sw-name) type space  then  @  repeat  drop  cr ;
 
 : .module ( -- )
     (sw-count) ?dup 0= if
@@ -1598,7 +1709,8 @@ variable (sw-mark)                          \ LATEST at end of core.fs (module s
 \ renaming something. It resolves each word's source the way SEE does — from the
 \ capture log for words typed at the REPL, or from the file for words LOADed /
 \ INCLUDEd — so it covers everything .MODULE lists, skipping only <word>'s own
-\ defining line.
+\ defining line. A :noname group that is the current action of a deferred word
+\ is covered too, reported as (:noname is <name>); superseded groups are not.
 variable (uses-xt)
 : (src-of) ( xt -- c-addr u true | false )  \ captured source span of xt, if any
     (uses-xt) !
@@ -1660,9 +1772,51 @@ variable (uf-srcid)  variable (uf-buf)  variable (uf-len)
     over (uf-len) @ swap -  min               ( off u )    \ u = min(len, uf-len-off)
     swap (uf-buf) @ +  swap  true ;
 
+\ --- header introspection: word type, code span, recorded source ---
+\ Every header (named or :noname) records its Flags2 type, code span, and source
+\ metadata; these read them back. (nt-src) resolves the recorded source from the
+\ capture log (srcid 0) or the source file. (anon-owner) answers "which deferred
+\ word currently runs this :noname?" — the identity USES and edit-propagation
+\ report a live anonymous definition by, as (:noname is <name>).
+: (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
+: (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup @  swap 8 + l@ ;
+: (xt>nt) ( xt -- nt true | false )          \ header owning this xt (incl. :noname)
+    (latest@)
+    begin dup while                          ( xt nt )
+        dup 8 + c@ 64 and 0= if
+            2dup (xt-of) = if  nip true exit  then
+        then
+        @
+    repeat
+    2drop  false ;
+: (nt-meta) ( nt -- off len srcid )          \ source-metadata fields of a header
+    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
+    dup 16 + l@  over 14 + w@  rot 12 + w@ ;
+: (nt-src) ( nt -- c-addr u true | false )   \ a header's recorded source (log/file)
+    dup (nt-meta)                            ( nt off len srcid )
+    dup 0= if                                \ REPL word: source from the capture log
+        drop 2drop  (nt>code) drop  (src-of)  exit  then
+    >r >r >r drop r> r> r>  (file-span) ;    \ file word: (off len srcid)
+: (anon-owner) ( xt -- nt true | false )     \ deferred word whose CURRENT action is xt
+    (latest@)
+    begin dup while                          ( xt nt )
+        dup 8 + c@ 64 and 0= if
+            dup (nt-type) 1 = if
+                2dup (xt-of) defer@ = if  nip true exit  then
+            then
+        then
+        @
+    repeat
+    2drop  false ;
+
 variable (uses-t)  variable (uses-tu)  variable (uses-n)
 variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
 : (word-src) ( nt -- c-addr u true | false )  \ source of the in-force def named by nt
+    dup (sw-anon?) if  drop  false exit  then  \ :noname: no name to look up — an empty
+                                               \ name would MATCH the newest anon; use
+                                               \ (nt-src) for a specific anon's source
     dup (sw-name) (find-meta)                 ( nt xt off len srcid flag )
     0= if  2drop 2drop drop  false exit  then  \ name not currently defined
     (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !   ( nt )
@@ -1676,6 +1830,12 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
 : (uses-hit?) ( nt -- f )                   \ does this word reference the target?
     dup (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own def
     (word-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: (uses-anon?) ( nt -- f )                  \ live :noname group referencing the target?
+    dup (nt>code) drop (anon-owner) 0= if  drop  false exit  then  ( nt owner )
+    (sw-name) (uses-t) @ (uses-tu) @ (ci=) if  drop false exit  then  \ skip its own `is` line
+    (nt-src) if  (uses-t) @ (uses-tu) @ (word-in?)  else  false  then ;
+: (.anon) ( nt -- )                         \ label a LIVE anon by its deferred word
+    ." (:noname is "  (nt>code) drop (anon-owner) drop (sw-name) type  ." )" ;
 : uses ( "name" -- )
     parse-word  dup 0= if  2drop  ." usage: uses <word>" cr  exit  then
     (uses-tu) !  (uses-t) !
@@ -1683,7 +1843,12 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     (uses-t) @ (uses-tu) @ type ."  is used by:"
     (latest@)
     begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
-        dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        dup (sw-anon?) if                    \ a :noname group: report it if it is the
+            dup (uses-anon?) if              \ CURRENT action of some deferred word
+                space  dup (.anon)  1 (uses-n) +!  then
+        else
+            dup (uses-hit?) if  space  dup (sw-name) type  1 (uses-n) +!  then
+        then
         @
     repeat  drop
     (uf-free)                                  \ release the cached source file
@@ -1706,10 +1871,14 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
     repeat
     drop 2drop  false ;
 
-: (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
-: (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
-    dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
-    dup @  swap 8 + l@ ;
+\ (step-val?) real body: fetch a VALUE's contents by name, for the optional
+\ step argument of tutorial/step. Only type-2 (value) words execute — a value
+\ just pushes its cell, so this is side-effect free; anything else is refused
+\ and the caller un-parses the token.
+:noname ( c-addr u -- n true | false )
+    (nt-by-name) 0= if false exit then       ( nt )
+    dup (nt-type) 2 <> if drop false exit then
+    (nt>code) drop execute  true ;  is (step-val?)
 
 : action-of ( "name" -- xt )                 \ a deferred word's current action
     parse-word 2dup (nt-by-name) 0= if
@@ -1718,15 +1887,10 @@ variable (uh-xt)  variable (uh-off)  variable (uh-len)  variable (uh-srcid)
         drop type ." : not a deferred word" cr abort  then
     nip nip  (xt-of) defer@ ;
 
-: (xt>name) ( xt -- c-addr u true | false )  \ name owning this xt, if any
-    (latest@)
-    begin dup while                          ( xt nt )
-        dup 8 + c@ 64 and 0= if
-            2dup (xt-of) = if  nip (sw-name) true exit  then
-        then
-        @
-    repeat
-    2drop  false ;
+: (xt>name) ( xt -- c-addr u true | false )  \ NAME owning this xt (:noname skipped)
+    (xt>nt) 0= if  false exit  then          ( nt )
+    dup (sw-anon?) if  drop false exit  then
+    (sw-name) true ;
 
 \ --- last direct-assignment line in the log targeting a given name ---
 variable (t2-fa) variable (t2-fu)            \ a line's first token
@@ -1778,10 +1942,14 @@ variable (sb-xt)  variable (sb-len)  variable (sb-act)
         ." \ currently: uninitialized" cr  exit  then   \ still the uninit stub
     (sb-act) @ (xt>name) if                  ( c-addr u )
         ." \ currently: ' " type ."  is " (see-a) @ (see-u) @ type cr  exit  then
-    (see-a) @ (sb-t) !  (see-u) @ (sb-tu) !
-    (last-assign?) if                        \ a :noname — show its logged line
-        ." \ currently set by: " (sb-a) @ (sb-u) @ type cr  exit  then
-    ." \ currently: an unnamed word (no logged assignment)" cr ;
+    (sb-act) @ (xt>nt) if                    ( nt )    \ a :noname — its own header
+        dup (sw-anon?) if                    \ carries the recorded source
+            (nt-src) if
+                ." \ currently: " cr  type  (uf-free)  exit  then
+            (uf-free)
+        else drop then
+    then
+    ." \ currently: an unnamed word (no recorded source)" cr ;
 ' (see-binding) is (see-post)
 
 \ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
@@ -1790,7 +1958,9 @@ variable (sb-xt)  variable (sb-len)  variable (sb-act)
 \ (transitively) uses it. Walk the module words oldest-first (definition order is
 \ a valid dependency order) with a growing dirty set, recompiling each affected
 \ caller from its source (log or file, via (word-src)) and re-logging it so
-\ SEE/USES/SAVE stay correct.
+\ SEE/USES/SAVE stay correct. A :noname group whose anon is the CURRENT action
+\ of a deferred word is re-run whole (the trailing `is` re-binds); its defer is
+\ NOT added to the dirty set — callers reach it through the action cell.
 8192 constant (prop-max)                    \ max source bytes of one definition handled
 create (prop-src) (prop-max) allot          \ scratch copy (survives a log realloc)
 512 constant (prop-nmax)
@@ -1825,14 +1995,22 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
     repeat
     false ;
 
+variable (ev-d0)                            \ stack depth before the re-evaluation
 : (eval+log) ( c-addr u -- )                \ evaluate source as a new def + log it (srcid 0)
     dup (prop-max) > if  2drop exit  then    ( c-addr u )
     >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
     (log) cell+ @  >r                       ( u )       \ R: log-off
     (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
     (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
+    depth (ev-d0) !
     (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
+    begin depth (ev-d0) @ > while  drop  repeat        \ a definition group must
+                                            \ leave nothing: drop its leftovers
+                                            \ (they sit above our u) so the
+                                            \ caller's stack frame cannot shift
+    true (cap-tag) !                        \ mark the record a MUTATION (splice on save)
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
+    false (cap-tag) !
     drop  true (dirty) ! ;
 : (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
     (word-src) 0= if  exit  then            ( c-addr u )
@@ -1848,7 +2026,17 @@ variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
         @
     repeat drop ;
 
+: (prop-anon) ( nt -- )                     \ re-run a live :noname group that calls a dirty word
+    dup (nt>code) drop (anon-owner) 0= if  drop exit  then   ( nt owner )
+    >r                                       \ superseded groups have no owner and are
+                                             \ skipped: re-running one would clobber a
+                                             \ NEWER binding of the same deferred word
+    (nt-src) 0= if  r> drop exit  then       ( c-addr u ) ( R: owner )
+    2dup (prop-mentions-dirty?) 0= if  2drop  r> drop  exit  then
+    (eval+log)  1 (prop-count) +!            \ re-fires the group's trailing `is`
+    space ." (:noname is "  r> (sw-name) type  ." )" ;
 : (prop-one) ( nt -- )                      \ recompile this word if it uses a dirty word
+    dup (sw-anon?) if  (prop-anon) exit  then   \ :noname group: re-run it (re-binds)
     dup (sw-name) (prop-name-dirty?) if  drop exit  then   \ already dirty → skip
     dup (word-src) 0= if  drop exit  then    ( nt c-addr u )
     (prop-mentions-dirty?) 0= if  drop exit  then  ( nt )
@@ -1902,6 +2090,11 @@ variable (ld-pos)
     r> drop
     (sp-end) @ (path-a) - (path-a-len) ! ;
 : (compact-one) ( nt -- )                   \ write this word's source if not already written
+    dup (sw-anon?) if                        \ :noname: each is unique — emit its
+        (nt-src) if                          \ whole group (it ends in `is <name>`,
+            (cmp-fid) @ write-file abort" compact: write error"   \ so replaying
+            (nl) 1 (cmp-fid) @ write-file abort" compact: write error"  \ rebinds)
+        then  exit  then
     (sw-name) 2dup (cmp-seen?) if  2drop exit  then
     2dup (cmp-seen+)
     (src-by-name) if                         ( src-addr src-u )
@@ -1917,6 +2110,10 @@ variable (ld-pos)
     dup (nt-type)  dup 1 =  swap 2 =  or  0= if  drop exit  then
     dup dup (sw-name) (nt-by-name) 0= if  2drop exit  then   ( nt nt nt' )
     = 0= if  drop exit  then                 ( nt )   \ shadowed entry → skip
+    dup (nt-type) 1 = if                     \ defer bound to a :noname? its
+        dup (nt>code) drop defer@            ( nt act )   \ emitted group already
+        (xt>nt) if  (sw-anon?) if  drop exit  then  then  \ carries the binding
+    then                                     ( nt )
     (sw-name)  (sb-tu) !  (sb-t) !
     (last-assign?) 0= if  exit  then          \ never directly assigned
     (sb-a) @ (sb-u) @ (cmp-fid) @ write-file abort" compact: write error"
@@ -1961,23 +2158,32 @@ variable (ld-pos)
     dup 0= if  2drop  ." usage: sh <command>" cr exit  then
     (system) drop ;
 
-\ ===== EDIT: open a word's source in an external editor, then recompile =====
+\ ===== EDIT: open a word's source in an external editor, then splice+reload =====
 \ `edit <name>` writes the word's current source to a temp file, opens it in your
-\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit re-reads the file,
-\ recompiles the word from it (preserving your multi-line formatting — unlike a
-\ one-line REPL recall), and PROPAGATES the change to every module word that uses
-\ it (subroutine threading bakes call targets, so callers must be recompiled too,
-\ just as the redo/IS machinery handles). The edited definition is logged like a
-\ REPL redefinition, so SEE/USES/SAVE see the new source even for a word that was
-\ originally loaded from a file. The temp file is a fixed path, so two BasicForth
-\ sessions editing at the same moment would share it (a known v1 limitation).
-: (edit-tmp) ( -- c-addr u )  s" /tmp/basicforth-edit.fs" ;
+\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit SPLICES the new
+\ text into the module file over the binding it edited, then RELOADS the module
+\ — an edit is a MUTATION ("that text was wrong"), and reload rebuilds every
+\ caller by construction (words are defined before use in a file), so no
+\ propagation pass is needed and the file never accumulates edit history. The
+\ binding must live in the module file: if it was typed this session (or the
+\ file layout is newer than the header metadata), edit first CONVERGES — the
+\ dirty-guard offers "save first? (y/n)", then a reload re-stamps everything —
+\ and retries. The temp file sits next to the module ("<module>.edit", removed
+\ afterwards), so parallel sessions collide only when editing the SAME module —
+\ which is already a conflict. Bare `edit` (no name) opens the CURRENT MODULE
+\ FILE itself and reloads it on a change.
+create (et-path) (cf-max) 8 + allot          \ "<module>.edit"
+: (edit-tmp) ( -- c-addr u )                \ module-adjacent temp path
+    (cur-file-len) @ 0= if  s" /tmp/basicforth-edit.fs" exit  then   \ scratch (define)
+    (et-path) (sp-end) !
+    (cur-file@) (sp-add)  s" .edit" (sp-add)
+    (et-path)  (sp-end) @ over - ;
 variable (er-fid)  variable (er-buf)  variable (er-len)
 : (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
     (edit-tmp) w/o create-file if  drop 2drop  false exit  then  ( src-addr src-u fid )
     dup >r  write-file  r> close-file drop  0= ;             \ ok? = (write ior = 0)
-: (edit-read) ( -- c-addr u true | false )  \ slurp the temp file into a fresh allocation
-    (edit-tmp) r/o open-file if  drop  false exit  then      ( fid )
+: (read-all) ( c-addr u -- a u2 true | false )  \ slurp a file into a fresh allocation
+    r/o open-file if  drop  false exit  then      ( fid )
     (er-fid) !
     (er-fid) @ file-size if  2drop  (er-fid) @ close-file drop  false exit  then  ( lo hi )
     drop  dup (er-len) !                     ( size )        \ assume < 4 GB
@@ -1987,11 +2193,161 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     (er-fid) @ close-file drop
     if  drop  (er-buf) @ free drop  false exit  then         ( u2 )
     (er-buf) @ swap true ;                   ( c-addr u2 true )
-: (edit-run) ( -- status )                  \ open the temp file in the user's editor
-    \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
-    s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
-: edit ( "name" -- )
-    parse-word dup 0= if  2drop  ." edit: needs a word name" cr  exit  then
+: (edit-read) ( -- c-addr u true | false )  (edit-tmp) (read-all) ;
+create (em-cmd) (cf-max) 64 + allot          \ "editor '<path>'" command line
+: (run-editor) ( path-a path-u -- status )  \ open <path> in $VISUAL/$EDITOR/vi
+    (em-cmd) (sp-end) !
+    s" ${VISUAL:-${EDITOR:-vi}} '" (sp-add)
+    (sp-add)                                 \ the path (single-quoted)
+    s" '" (sp-add)
+    (em-cmd)  (sp-end) @ over -  (system) ;
+: (edit-run) ( -- status )  (edit-tmp) (run-editor) ;
+: (em-run)   ( -- status )  (cur-file@) (run-editor) ;
+: (edit-rm) ( -- )                          \ remove the temp file (best effort)
+    (edit-tmp)                               ( path-a path-u )  \ materialize BEFORE
+    (em-cmd) (sp-end) !                      \ moving (sp-end) — (edit-tmp) uses it too
+    s" rm -f '" (sp-add)
+    (sp-add)                                 \ the path
+    s" '" (sp-add)
+    (em-cmd)  (sp-end) @ over -  (system) drop ;
+: (s=) ( a1 u1 a2 u2 -- f )                 \ exact string equality
+    rot 2dup <> if  2drop 2drop  false exit  then
+    drop                                     ( a1 a2 u )
+    0 ?do  over i + c@  over i + c@  <> if  2drop  false unloop exit  then  loop
+    2drop true ;
+variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor ran
+: (edit-cycle) ( src-a src-u -- new-a new-u true | false )   \ the temp-file round trip
+    \ Shared by `edit` and `define`; messages report via the (msg:) prefix.
+    (edit-write) 0= if  (msg:) ." cannot write temp file" cr  false exit  then
+    (edit-read) 0= if  (msg:) ." cannot read temp file" cr  false exit  then  ( pre-a pre-u )
+    (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
+    (edit-run) ?dup if                        ( status )
+        (ed-pre) @ free drop  (edit-rm)
+        (msg:) ." editor exited with status " . cr  false exit  then
+    (edit-read) 0= if
+        (ed-pre) @ free drop  (edit-rm)
+        (msg:) ." cannot read temp file" cr  false exit  then  ( c-addr u )
+    (edit-rm)
+    2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
+        drop free drop  (ed-pre) @ free drop
+        (msg:) ." unchanged" cr  false exit  then
+    (ed-pre) @ free drop
+    true ;
+: (edit-src) ( src-addr src-u -- new? )     \ DEFINE's cycle: evaluate + log the result
+    (edit-cycle) 0= if  false exit  then      ( new-a new-u )
+    true (skip-capture) !                     \ keep THIS command line out of the log
+    (latest@) >r                              \ R: LATEST before compiling
+    2dup (eval+log)  drop free drop           \ compile + log; release the slurp
+    (latest@) r> = if
+        (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
+    true ;
+: (edit-module) ( -- )                      \ bare `edit`: open the module FILE, then reload
+    \ Edits the file in place on disk (no temp copy). The dirty-guard runs
+    \ BEFORE the editor opens: a y answer saves first, so the editor sees the
+    \ session's state; n edits the stale disk file and the reload discards
+    \ unsaved captures — the caller chose that. Unchanged file → no reload.
+    (session-on) @ 0= if  (msg:) ." no active session" cr  exit  then
+    (cur-file-len) @ 0= if  (msg:) ." no current file (load <file> first)" cr  exit  then
+    (dirty-guard) 0= if  exit  then
+    (cur-file@) (read-all) 0= if
+        (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( pre-a pre-u )
+    (ed-pu) !  (ed-pre) !
+    (em-run) ?dup if                         ( status )
+        (ed-pre) @ free drop
+        (msg:) ." editor exited with status " . cr  exit  then
+    (cur-file@) (read-all) 0= if
+        (ed-pre) @ free drop
+        (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( a u )
+    2dup (ed-pre) @ (ed-pu) @ (s=) if        \ file untouched → keep the session as-is
+        drop free drop  (ed-pre) @ free drop
+        (msg:) ." unchanged" cr  exit  then
+    drop free drop  (ed-pre) @ free drop
+    reload ;
+
+\ --- the splice: file[off, off+len) ← the editor's text, atomically, verified ---
+: (edit-span?) ( nt -- off len true | false )   \ nt's span, in the CURRENT module file
+    (nt-meta)                                ( off len srcid )
+    dup 0=  over 65535 =  or if  drop 2drop  false exit  then
+    (source-path)  (cur-file@) (s=) 0= if  2drop  false exit  then
+    true ;
+variable (es-off)  variable (es-len)         \ the target span in the file
+variable (es-src)  variable (es-su)          \ the text the span must still hold
+variable (es-na)   variable (es-nu)          \ the replacement (editor) text
+variable (es-fa)   variable (es-fu)          \ the module file image
+variable (es-fid)
+: (es-put) ( c-addr u -- ok? )  (es-fid) @ write-file 0= ;
+: (es-write) ( -- ok? )                      \ [0,off) + new (+ nl) + [off+len,end) → .new+rename
+    (cur-file@) (name>paths)
+    (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
+    (es-fid) !
+    (es-fa) @  (es-off) @  (es-put)
+    (es-na) @  (es-nu) @  (es-put)  and
+    (es-nu) @ 0<>  over and
+    if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
+        (nl) 1 (es-put) drop  then  then     \ spliced text must end its line
+    (es-fa) @ (es-off) @ + (es-len) @ +      ( ok? post-a )
+    (es-fu) @  (es-off) @ (es-len) @ +  -    ( ok? post-a post-u )
+    (es-put)  and
+    (es-fid) @ close-file 0=  and            ( ok? )
+    dup 0= if  exit  then
+    (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file 0= and ;
+: (edit-splice) ( -- ok? )                   \ verify the span, then rewrite the file
+    (cur-file@) (read-all) 0= if
+        (msg:) ." cannot read " (cur-file@) type cr  false exit  then
+    (es-fu) !  (es-fa) !
+    (es-off) @ (es-len) @ +  (es-fu) @  u>
+    if  true  else
+        (es-fa) @ (es-off) @ +  (es-len) @  (es-src) @ (es-su) @  (s=) 0=
+    then
+    if  (es-fa) @ free drop
+        (msg:) ." file changed on disk — nothing spliced (reload and retry)" cr
+        false exit  then
+    (es-write)                               ( ok? )
+    (es-fa) @ free drop
+    dup 0= if  (msg:) ." cannot write " (cur-file@) type cr  then ;
+: (edit-guard?) ( -- proceed? )             \ an edit ends in a reload, which discards
+    \ unsaved captures — so guard first: y saves (the reload then replays the
+    \ saved work), n discards, anything else cancels. Non-interactive sessions
+    \ REFUSE instead of silently discarding; a script must `save` before `edit`.
+    (dirty) @ 0= if  true exit  then
+    (tty?) 0= if  ." edit: unsaved changes — save first" cr  false exit  then
+    (dirty-guard) ;
+: (edit-target) ( nt -- )                   \ temp-edit nt's source, splice the file, reload
+    (edit-guard?) 0= if  drop  exit  then
+    dup (edit-span?) 0= if  drop  exit  then  ( nt off len )
+    (es-len) !  (es-off) !                   ( nt )
+    (nt-src) 0= if  (msg:) ." cannot read source" cr  exit  then   ( src-a src-u )
+    2dup (es-su) !  (es-src) !                \ points into the source-file cache:
+    (edit-cycle) 0= if  (uf-free)  exit  then \ keep (uf-buf) alive through the splice
+    2dup (es-nu) !  (es-na) !                 ( new-a new-u )
+    (edit-splice)                             ( new-a new-u ok? )
+    -rot drop free drop                       \ release the editor text
+    (uf-free)
+    if  reload  then ;
+: (edit-defer) ( nt -- handled? )            \ edit what a deferred word RUNS
+    (nt>code) (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
+    (sb-act) @  (sb-xt) @  (sb-xt) @ (sb-len) @ +  within if
+        ." edit: " (see-a) @ (see-u) @ type ."  is uninitialized — set it first:  ' <word> is "
+        (see-a) @ (see-u) @ type cr  true exit  then
+    (sb-act) @ (xt>name) if                  ( c-addr u )   \ bound to a named word
+        ." edit: " (see-a) @ (see-u) @ type ."  is deferred — its action is "
+        2dup type ." ; edit " type ."  instead" cr  true exit  then
+    (sb-act) @ (xt>nt) if                    ( nt' )   \ bound to a :noname — edit
+        dup (sw-anon?) if                    \ ITS group; the reload re-binds
+            dup (edit-span?) if  2drop  (edit-target)  true exit  then
+            drop  false exit                  \ group not in the file yet → converge
+        then  drop
+    then
+    ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr
+    true ;
+: (edit-try) ( -- handled? )                 \ dispatch when the binding is reachable
+    (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )
+    dup (nt-type) 1 = if  (edit-defer)  exit  then   \ deferred: follow the binding
+    dup (edit-span?) if  2drop  (edit-target)  true exit  then
+    drop  false ;
+: edit ( "name" | -- )
+    s" edit" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop  (edit-module) exit  then    \ bare: edit the module file
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
     0= if  2drop 2drop
@@ -1999,18 +2355,233 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     dup 65535 = if  2drop 2drop
         ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
     2drop 2drop                              \ done with the meta cells
-    (see-a) @ (see-u) @ (src-by-name) 0= if
-        ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
-    (edit-write) 0= if  ." edit: cannot write temp file" cr exit  then
-    (edit-run) ?dup if                        ( status )
-        ." edit: editor exited with status " . cr exit  then
-    (edit-read) 0= if  ." edit: cannot read temp file" cr exit  then  ( c-addr u )
-    true (skip-capture) !                     \ keep THIS `edit` command line out of the log
-    (latest@) >r                              \ R: LATEST before recompiling
-    2dup (eval+log)  drop free drop           \ redefine + log the word; release the slurp
-    (latest@) r> = if
-        ." edit: no change" cr exit  then     \ the edited source defined nothing new
-    (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
+    (cur-file-len) @ 0= if
+        ." edit: no current file — save <name> first, then edit" cr exit  then
+    (edit-try) if  exit  then
+    \ the binding isn't in the module file (typed this session, or the file
+    \ is newer than the metadata) → guard, reload to converge, and retry
+    (edit-guard?) 0= if  exit  then
+    reload
+    (edit-try) if  exit  then
+    ." edit: " (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr ;
+
+\ ===== DEFINE: open the editor on a fresh template to create a new word =====
+\ `define <name>` is `edit` for a word that doesn't exist yet: it opens your
+\ editor on the template ": name" / "    ;", and on save evaluates + logs
+\ whatever you wrote (multi-line formatting and comments survive — the same
+\ modal cycle as `edit`). An existing word is refused ("use edit"), keeping
+\ the pair symmetric: define creates, edit revises. No propagation pass — a
+\ brand-new word has no callers.
+create (def-buf) 64 allot                    \ template scratch (name is <= 31 chars)
+variable (def-n)
+: (def-c,) ( c -- )   (def-buf) (def-n) @ + c!  1 (def-n) +! ;
+: (def-s,) ( c-addr u -- )  0 ?do  dup i + c@ (def-c,)  loop  drop ;
+: (def-template) ( -- c-addr u )            \ ": name\n    ;\n" for the editor
+    0 (def-n) !
+    s" : " (def-s,)  (see-a) @ (see-u) @ (def-s,)  10 (def-c,)
+    s"     ;" (def-s,)  10 (def-c,)
+    (def-buf) (def-n) @ ;
+: define ( "name" -- )
+    s" define" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop  (msg:) ." needs a word name" cr  exit  then
+    dup 31 > if  2drop  (msg:) ." name too long (31 chars max)" cr  exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is already defined — use edit" cr  exit  then
+    2drop 2drop
+    (def-template) (edit-src) drop ;
+
+\ ===== Splice-save: SAVE honors bind vs mutate =====
+\ (Module_Architecture.md stage 1, under the hyper-static principle.)
+\ Forth's dictionary is hyper-static: `:` never changes a binding, it makes a
+\ new one, and earlier words keep what they captured — so the sequence of
+\ bindings IS the module's state, and SAVE keeps the seeded file text and the
+\ session's captures VERBATIM, in order (replay-faithful). The one exception
+\ is a MUTATION: a group logged by (eval+log) — edit's resubmit and its
+\ propagation re-logs, tagged in (dir-tags) — means "that text was wrong";
+\ its word's definition in the file text is REPLACED where it stands and the
+\ group is dropped from the appended tail, so mutation history never
+\ accumulates. Comments and layout survive untouched. The log itself is not
+\ modified, so SEE keeps working and a second SAVE is byte-identical.
+create (sv-out) 3 cells allot  (sv-out) 3 cells erase   \ output being built
+create (sv-pat) 3 cells allot  (sv-pat) 3 cells erase   \ patch records (4 cells:
+create (sv-rec) 4 cells allot                           \  log-off len repl-a repl-u)
+create (sv-tmp) 4 cells allot
+: (sv-pat-n) ( -- n )    (sv-pat) cell+ @ 4 cells / ;
+: (sv-pat@)  ( i -- rec ) 4 cells * (sv-pat) @ + ;
+: (sv-pat+)  ( off len repl-a repl-u -- )
+    (sv-rec) 3 cells + !  (sv-rec) 2 cells + !  (sv-rec) cell+ !  (sv-rec) !
+    (sv-rec) 4 cells (sv-pat) (buf-append) ;
+: (sv-pat-find) ( off -- rec true | false )  \ existing patch at this target?
+    (sv-pat-n) 0 ?do
+        dup i (sv-pat@) @ = if  drop  i (sv-pat@) true  unloop exit  then
+    loop  drop  false ;
+
+\ Does this header's span lie in the seed (= the seeded file's own text)?
+\ True only for file words whose source file is the one the log was seeded
+\ from, with the span inside the seeded byte range (a stale file is skipped).
+: (sv-seed-hdr?) ( nt -- off len true | false )
+    (nt-meta)                               ( off len srcid )
+    dup 0=  over 65535 =  or if  drop 2drop  false exit  then
+    (source-path)                           ( off len c-addr u )
+    (seed-path) (seed-path-len) @ (s=) 0= if  2drop  false exit  then
+    2dup +  (seed-len) @  u> if  2drop  false exit  then
+    true ;
+\ The NEWEST seed span carrying this name — the binding in force when the
+\ file loaded, i.e. the one a mutation conceptually edited. Earlier same-name
+\ spans are older bindings: hyper-static semantics, never touched.
+variable (sv-nm)  variable (sv-nu)
+: (sv-last-span) ( c-addr u -- off len true | false )
+    (sv-nu) !  (sv-nm) !
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (sw-anon?) 0= if
+            dup (sw-name) (sv-nm) @ (sv-nu) @ (ci=) if
+                dup (sv-seed-hdr?) if            ( nt off len )
+                    rot drop  true  exit  then
+            then
+        then
+        @
+    repeat
+    drop  false ;
+
+\ Collect the patches: walk the SEE records in capture order; each TAGGED
+\ (mutation) group becomes (a) a replacement of the span holding the binding
+\ it edited and (b) a deletion of the group from the tail. The edited binding
+\ is the name's newest PRIOR appearance: an untagged tail group when the word
+\ was rebound this session, else its newest seed span. Tagged priors are
+\ skipped — they are mutation history whose text already lives at the
+\ resolved target, so a later mutation of the same word updates the same
+\ replacement (last edit wins). A mutation with no target (an edited
+\ REPL-typed word never saved, or a target span shared with another
+\ definition — a multi-word line) stays in the tail, as does everything
+\ untagged. (eval+log) indexes the group WITHOUT its trailing newline, so
+\ the span is widened to cover the separator when punching it out of the
+\ tail, and the replacement borrows it when the text doesn't end in one.
+variable (sv-prev)                          \ previous record's span off (multi-word groups)
+variable (sv-go)  variable (sv-gl)          \ the tagged group's log-off / len
+: (sv-gl+) ( -- len )                       \ group len + its separator newline, if any
+    (sv-gl) @
+    (sv-go) @ over + (log) cell+ @ u< if
+        (log) @ (sv-go) @ + over + c@ 10 = if  1+  then
+    then ;
+: (sv-repl) ( -- a u )                      \ replacement text, newline-terminated
+    (log) @ (sv-go) @ +
+    (sv-gl) @ 2dup + 1- c@ 10 = if  exit  then
+    drop (sv-gl+) ;
+: (sv-rec-name?) ( rec -- f )               \ does this record define (sv-nm)?
+    2 cells + @ (xt>nt) 0= if  false exit  then   ( nt )
+    dup (sw-anon?) if  drop  false exit  then
+    (sw-name) (sv-nm) @ (sv-nu) @ (ci=) ;
+: (sv-sib?) ( j -- f )                      \ does record j share its span (multi-word line)?
+    dup 3 cells * (dir) @ + @  swap          ( off j )
+    dup 0> if
+        dup 1- 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
+    dup 1+  (dir) cell+ @ 3 cells /  < if
+        dup 1+ 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
+    2drop  false ;
+: (sv-prior?) ( i -- off len 1 | -1 | 0 )   \ newest untagged prior binding of (sv-nm)
+    begin  dup 0>  while
+        1-                                   ( j )
+        dup cells (dir-tags) @ + @ 0= if     \ bindings only; skip mutation history
+            dup 3 cells * (dir) @ +          ( j rec )
+            dup (sv-rec-name?) if
+                over (sv-sib?) if  2drop  -1 exit  then  \ multi-word line: leave in tail
+                nip  dup @  swap cell+ @  1  exit
+            then
+            drop
+        then
+    repeat
+    drop  0 ;
+: (sv-span-users) ( off -- n )              \ module headers stamped with this seed off
+    0 swap  (latest@)                        ( n off nt )
+    begin  dup (sw-mark) @ <>  over 0<>  and  while
+        dup (sw-anon?) 0= if
+            dup (sv-seed-hdr?) if            ( n off nt off2 len2 )
+                drop  2 pick = if  rot 1+ -rot  then
+            then
+        then
+        @
+    repeat
+    2drop ;
+: (sv-mutate) ( off len -- )                \ target span ← the tagged group's text
+    (sv-go) @ (sv-gl+) 0 0 (sv-pat+)        \ drop the group from the tail
+    over (sv-pat-find) if                    ( off len prec )
+        (sv-repl)  2 pick 3 cells + !  swap 2 cells + !  2drop   \ last edit wins
+    else
+        (sv-repl) (sv-pat+)                  \ new replacement
+    then ;
+: (sv-collect) ( -- )
+    -1 (sv-prev) !
+    (dir) cell+ @ 3 cells /  0 ?do
+        i 3 cells * (dir) @ +               ( rec )
+        dup @ (sv-prev) @ <> if             \ first record of its group
+            dup @ (sv-prev) !
+            i cells (dir-tags) @ + @ if     \ a mutation-verb group
+                dup @ (sv-go) !  dup cell+ @ (sv-gl) !
+                dup 2 cells + @ (xt>nt) if  ( rec nt )
+                    dup (sw-anon?) 0= if
+                        (sw-name) (sv-nu) !  (sv-nm) !
+                        i (sv-prior?)
+                        dup 1 = if  drop  (sv-mutate)  else
+                        0= if                \ no tail binding: the seed's newest span
+                            (sv-nm) @ (sv-nu) @ (sv-last-span) if   ( rec off len )
+                                over (sv-span-users) 1 > if  2drop  \ shared line: tail
+                                else  (sv-mutate)  then
+                            then
+                        then then
+                    else  drop  then        \ anon mutation: stays in the tail
+                then
+            then
+        then
+        drop
+    loop ;
+
+\ Sort the patch records by target offset (bubble; there are few).
+: (sv-swap) ( r1 r2 -- )
+    over (sv-tmp) 4 cells cmove
+    2dup swap 4 cells cmove
+    (sv-tmp) swap 4 cells cmove  drop ;
+variable (sv-sorted)
+: (sv-sort) ( -- )
+    begin
+        true (sv-sorted) !
+        (sv-pat-n) 1- 0 max 0 ?do
+            i (sv-pat@)  i 1+ (sv-pat@)     ( r1 r2 )
+            over @ over @ u> if  2dup (sv-swap)  false (sv-sorted) !  then
+            2drop
+        loop
+        (sv-sorted) @
+    until ;
+
+\ Emit the whole log — seed text plus captured tail — applying the sorted
+\ replacements/deletions where they fall. Everything between them is copied
+\ byte-for-byte.
+variable (sv-pos)                           \ read cursor into the log
+: (sv-emit) ( -- )
+    0 (sv-pos) !
+    (sv-pat-n) 0 ?do
+        i (sv-pat@)                          ( rec )
+        (log) @ (sv-pos) @ +                 ( rec gap-addr )
+        over @ (sv-pos) @ - 0 max            ( rec gap-addr gap-len )
+        (sv-out) (buf-append)                ( rec )   \ untouched text before the patch
+        dup 2 cells + @  over 3 cells + @    ( rec repl-a repl-u )
+        (sv-out) (buf-append)                ( rec )   \ the replacement (empty = delete)
+        dup @ over cell+ @ +  (sv-pos) @ max (sv-pos) !
+        drop
+    loop
+    (log) @ (sv-pos) @ +
+    (log) cell+ @ (sv-pos) @ - 0 max
+    (sv-out) (buf-append) ;
+
+: (save-splice) ( -- )
+    (sv-out) (buf-reset)  (sv-pat) (buf-reset)
+    (sv-collect)
+    (sv-sort)
+    (sv-emit)
+    (sv-out) @ (sv-out) cell+ @ (write-module) ;
+' (save-splice) (save-impl) !               \ SAVE's real body from here on
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

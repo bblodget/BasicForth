@@ -3,9 +3,10 @@
 At an interactive terminal the BasicForth prompt is a small line editor, like
 the one a modern shell gives you: move around the line, fix a typo in the
 middle, and recall and re-run previous commands. Long lines scroll sideways, a
-`:` definition that spans lines gets a continuation prompt, and `edit <word>`
-opens an existing definition in your editor. Most of it is just how the prompt
-behaves — only `edit` is a word you type.
+`:` definition that spans lines gets a continuation prompt, `edit <word>`
+opens an existing definition in your editor, and `define <word>` opens the
+editor on a template for a new one. Most of it is just how the prompt
+behaves — only `edit` and `define` are words you type.
 
 ## Keys
 
@@ -41,56 +42,85 @@ width.
 ## Editing a definition: `edit`
 
 `edit <name>` opens a word's source in your editor; when you save and quit,
-BasicForth recompiles it:
+BasicForth **splices the new text into the module file** over the definition
+you edited and **reloads the module**, so the change is on disk and live
+everywhere in one step:
 
 ```
-> : triple 3 * ;
- ok
 > edit triple              # opens $EDITOR on triple's source — edit, save, quit
+saved to /home/you/game.fs
  ok
-> triple                   # the new definition is live
+> triple                   # the new definition is live, and so is every caller
 ```
 
-It writes the word's current source to a temp file and launches your editor —
-`$VISUAL`, then `$EDITOR`, then `vi` if neither is set. The terminal returns to
-its normal (cooked) mode for the editor and the prompt re-engages raw mode when
-you come back, so a full-screen editor (vim, nano, …) behaves normally. On a
-clean exit BasicForth re-reads the file, recompiles the word, and propagates the
-change (below). If the editor exits non-zero (e.g. `:cq` in vim), the word is
-left unchanged.
+It writes the word's current source to a temp file next to the module
+(`<module>.edit`, removed afterwards) and launches your editor — `$VISUAL`,
+then `$EDITOR`, then `vi` if neither is set. The terminal returns to its
+normal (cooked) mode for the editor and the prompt re-engages raw mode when
+you come back, so a full-screen editor (vim, nano, …) behaves normally. If
+you leave without changing the file (vi's `:q!`), or the editor exits
+non-zero (vim's `:cq`), nothing happens — no splice, no reload, the session
+untouched.
 
-Because the source is a real multi-line file, your **formatting is preserved** —
-indentation, line breaks, and `\` comments all survive the round-trip. (An
-earlier version flattened each definition onto one editable input line; the
-external editor removed that limitation.)
+Because the source is a real multi-line file, your **formatting is
+preserved** — indentation, line breaks, and `\` comments all survive the
+round-trip.
 
-`edit` works for words you defined this session (source from the capture log) and
-for file-loaded words — `core.fs`, `include`d files — read from their source file
-via the dictionary's source metadata, the same way `see` finds them. For a
-file-loaded word the edited version is logged like a REPL redefinition, so a later
-`save` persists it. An assembly primitive or an unknown name reports a short
-message instead of opening the editor.
+An edit is a **mutation** ("that text was wrong"), so it operates on the
+module file: the binding you edit is the word's newest definition *in the
+file*. A word you typed this session and haven't saved isn't there yet — at
+a terminal `edit` offers "save first? (y/n)" and converges; in a piped
+script it refuses (`edit: unsaved changes — save first`) rather than
+silently discarding anything. An assembly primitive or an unknown name
+reports a short message instead of opening the editor; a scratch session
+(no module file) is told to `save <name>` first.
 
-The temp file is a fixed path (`/tmp/basicforth-edit.fs`), so two BasicForth
-sessions editing at the same moment would share it.
-
-### The edit goes live everywhere (propagation)
+### The edit goes live everywhere (reload)
 
 BasicForth is subroutine-threaded: redefining a word does **not** update the
-words that already call it (their call targets are compiled in). So after you
-save, `edit` **recompiles every module word that transitively uses the one you
-edited**, in dependency order, and prints what it touched:
+words that already call it (their call targets are compiled in). `edit`
+solves this by **reloading the module** after the splice: in a Forth file
+every word is defined before its callers, so the reload rebuilds every
+caller of the edited word *by construction* — transitive chains,
+`:noname … ; is x` bindings (the group replays and the last `is` wins), all
+of it, with no bookkeeping.
+
+The trade-off: a reload resets **runtime state** — variables reload
+uninitialized, values return to their file-time contents. Growth stays hot
+(`define`, `:`, and `' word is defer` swaps never reload); it is *revising*
+a definition that restarts the module. See docs/Module_Architecture.md for
+the full model.
+
+### The whole file at once: bare `edit`
+
+`edit` with no word name opens the **current module file** itself in your
+editor, straight on disk (no temp copy), and `reload`s it when you save and
+quit — the edit-on-disk loop (edit in another terminal + `reload`) in one
+word. An untouched file skips the reload, so the session is kept exactly
+as-is. Because the reload replaces the session with the file's contents,
+unsaved captured changes would be lost — so if the module is dirty, bare
+`edit` asks "save first? (y/n)" *before* opening the editor: **y** saves, so
+the editor sees your session's state; **n** opens the stale disk file and the
+reload discards the unsaved work; any other key cancels. (Like `new`/`load`/
+`bye`, only a real terminal prompts — pipes and scripts proceed silently.)
+
+## Defining a new word: `define`
+
+`define <name>` is `edit` for a word that doesn't exist yet. It opens your
+editor on a fresh template:
 
 ```
-> edit install-brains      # change all three ghosts to ' drift, save + quit
-updated: init-game setup chase
- ok
-> chase                    # the change is live — no manual recompiling
+: name
+    ;
 ```
 
-It finds the callers with the same machinery as `uses`, and recompiles each from
-its source (capture log *or* file), re-logging it so `see`/`uses`/`save` stay
-correct.
+Fill in the body (and add more lines — multi-line formatting and comments
+survive, exactly as with `edit`), save, and quit; the definition is compiled
+and logged like one typed at the prompt, so `see`, `uses`, and `save` all
+cover it. Leaving the template untouched defines nothing (`define:
+unchanged`). The pair stays symmetric — `define` creates, `edit` revises: an
+existing word is refused with `is already defined — use edit`, and `edit` on
+a missing word tells you it's not found.
 
 ## Multi-line definitions
 

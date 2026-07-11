@@ -12,17 +12,21 @@ load back (BASIC's `SAVE`/`LOAD`). Capture runs in an interactive session. See
 
 ## save ( "name" -- )  /  save ( -- )
 `save <name>` writes the module to `<name>` (relative to the current directory)
-and makes it the current file; bare `save` re-writes the current file. Writes
-the whole loaded file verbatim (comments and all) plus your edits, so
-redefinitions accumulate. Writes atomically, so a failure never corrupts an
-existing file.
+and makes it the current file; bare `save` re-writes the current file. The
+file text is kept byte-for-byte (comments, layout, every definition in order)
+and the session's definitions and direct `is`/`to` assignments append in the
+order they happened, so the file **replays to exactly the live state** — a
+plain `:` redefinition appends (earlier words keep the binding they captured;
+Forth is hyper-static). The exception: a word changed with **`edit`** is a
+*mutation* — its definition is replaced where it stands, so edit history
+never accumulates and saving twice is byte-identical. Writes atomically, so
+a failure never corrupts an existing file.
 
 ## compact ( "name" -- )  /  compact ( -- )
-Write a **deduped** snapshot of the module — each word's latest source once, in
-dependency order, then each `value`/deferred word's **final direct `to`/`is`
-assignment** — to a sibling **`<base>.compact<.ext>`** (e.g. `game.fs` →
-`game.compact.fs`), so you can `diff` it against `save`'s output. Drops the
-file's between-definition comments. Bare `compact` uses the current file's name.
+**Deprecated** — mutations no longer accumulate, and deduping deliberate
+`:` rebindings would *rewire* them (earlier words would come back bound to
+the latest definition). Still writes the old definitions-only snapshot to a
+sibling **`<base>.compact<.ext>`**; will be removed in a later cleanup.
 
 ## load ( "name" -- )
 Open `<file>` as the module — forget the old one, load the new one, make it
@@ -69,7 +73,10 @@ List the module words whose source mentions `<name>` as a whole token
 something. It reads each word's source the way `see` does — from the interactive
 capture log for words you typed, or from the file for words loaded via a startup
 argument, `load`, or `include` — so it covers everything `.module` lists.
-`<name>`'s own defining line is not counted.
+`<name>`'s own defining line is not counted. A `:noname … ; is x` group that
+is the current action of a deferred word is scanned too, reported as
+`(:noname is x)`; superseded groups are skipped, and so is the binding group
+of `<name>` itself when `<name>` is a deferred word.
 
     \ variable mcount  : step  mcount @ . ;  : tick  mcount 1+ . ;
     \ uses mcount

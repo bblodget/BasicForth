@@ -156,10 +156,11 @@ At startup, BasicForth:
 `INCLUDE` parses the next word as a filename and loads it. Paths are
 relative to the current working directory (the build directory).
 
-For the compile-only `S"` form (e.g., inside a colon definition):
+`INCLUDED` takes the path as a string instead — `S"` works at the prompt
+(the string is returned in a transient buffer) as well as in a definition:
 
 ```
-> : load-snake s" ../../../examples/snake.fs" included ; load-snake
+> s" ../../../examples/snake.fs" included
 ```
 
 ### Executable Scripts (`#!`)
@@ -269,7 +270,9 @@ reports a problem without corrupting its stdout:
 : main ... ok? 0= if  s" input out of range" warn  1 bye-code  then ... ;
 ```
 
-(`S"` is compile-only, so build strings inside a definition as shown.)
+(`S"` also works interpreted — at the prompt it returns the string in a
+transient buffer, so `s" input out of range" warn` is fine outside a
+definition too.)
 
 Note: `write-file`/`write-line` loop over `write(2)` until **all** the bytes are
 written, so a short write never silently truncates output; the `ior` is non-zero
@@ -298,8 +301,7 @@ the ANS File-Access wordset:
 | `rename-file` | ( c-addr1 u1 c-addr2 u2 -- ior ) | rename/replace file1 → file2 (atomic) |
 
 Every operation returns an `ior` (`0` success, else the positive `errno`).
-A typical read-a-whole-file-in-chunks loop (`S"` is compile-only, so build the
-name inside a definition):
+A typical read-a-whole-file-in-chunks loop:
 
 ```forth
 create buf 4096 allot
@@ -397,14 +399,22 @@ current directory.
 
 `save` records the *source* of your definitions (not a memory image), so a module
 file is a readable, editable Forth file. Only definitions are captured —
-transient actions like `5 double .` are not — and saving is idempotent and
-cumulative (it rewrites the whole file plus your edits, so redefinitions pile
-up). `compact <name>` writes a **deduped** sibling (`game.fs` → `game.compact.fs`)
-— each word's latest source once — so you can `diff` it and adopt the clean one.
-Capture is interactive-only: a piped script captures nothing.
+transient actions like `5 double .` are not. The saved file **replays to
+exactly the live session**: the file text is kept as-is (comments and layout
+survive) and your definitions append in the order you typed them. A plain `:`
+redefinition *appends* — earlier words keep the definition they captured
+(Forth is **hyper-static**; that's a feature, like a local rebinding). A word
+changed with **`edit`** is different: that's a *fix*, so its definition is
+replaced where it stands and edit history never accumulates — saving twice
+writes a byte-identical file. Capture is interactive-only: a piped script
+captures nothing. (`compact` is deprecated: fixes don't accumulate, and
+deduping deliberate rebindings would change what earlier words mean.)
 
-For an edit/compile/run loop, edit the file in another terminal and type `reload`
-to pull the changes in (it forgets the module and re-reads the current file).
+For an edit/compile/run loop, type bare **`edit`** (no word name): it opens the
+current module file in your editor and `reload`s it when you save and quit
+(untouched → no reload). Or edit the file in another terminal and type `reload`
+yourself to pull the changes in (it forgets the module and re-reads the current
+file).
 Files stay pure definitions (the `-session`/`reload`/`load`/`save` lines are never
 written into them). When you have unsaved changes, `new`/`load`/`bye` ask
 "save first? (y/n)" at the terminal before discarding (`reload` doesn't — it
@@ -461,6 +471,19 @@ Like `see`, it finds each word's source either way — from the interactive
 capture log for words you typed, or from the file for words loaded as a startup
 argument, via `load`, or via `include` — so it covers everything
 `.module` lists. It skips `<word>`'s own defining line.
+
+Anonymous actions count too: a `:noname … ; is x` group that is the current
+action of a deferred word is scanned like any definition and reported by the
+word it powers:
+
+```
+> uses score
+score is used by: tick (:noname is on-win)
+```
+
+A superseded group — one whose deferred word has since been re-bound — is dead
+code and is not listed. And `uses x` on the deferred word itself skips `x`'s
+own binding group, just as a named word's own definition is skipped.
 
 ### Forgetting definitions (`marker`)
 
@@ -604,9 +627,17 @@ on:
 ```
 > tutorial Snake                \ start a lesson (name like man, case-insensitive)
 ...
-[ next = continue   back = previous   step 1 ]
-> next                          \ next step    (back = previous step)
+[ step 1:  next   back   step [n] = replay/jump   end-tutorial ]
+> next                          \ next step    (back = previous, step = replay)
+> step 7                        \ jump straight to step 7
 ```
+
+Each step opens on a cleared screen (interactive sessions only). `step` reprints
+the current step — handy after running something that drew over it — and
+`end-tutorial` leaves the tutorial without touching anything you defined. To
+resume a lesson later, note the step number in the footer and start with
+`tutorial Snake 10` — or keep a bookmark in your module: `11 value tstep`
+(persisted by `save`, updated with `to tstep`), then `tutorial Snake tstep`.
 
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.
@@ -696,9 +727,21 @@ Enter. A line wider than the terminal **scrolls sideways** instead of wrapping.
 
 A `:` definition can span several lines; while one is open the prompt becomes
 `... ` until `;` closes it. **`edit <word>`** opens an existing definition in your
-editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth recompiles
-it — preserving your multi-line formatting — and updates every word that calls it.
-See `docs/Line_Editor.md` for the full key list and details.
+editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth **splices
+the new text into the module file** and **reloads the module**, so the change is
+on disk and every caller is rebuilt — multi-line formatting preserved. (The
+reload resets runtime state — variables and values return to their file-time
+contents.) If you leave without changing the file (vi's `:q!`, for example),
+nothing happens: `edit` compares the file to what it wrote, not just the
+editor's exit status. On a **deferred word**, `edit` follows the binding: a
+`:noname` action opens *its* source (the reload re-binds the defer), a named
+action points you at that word, an uninitialized defer tells you to `is` it
+first.
+**`define <word>`** is `edit` for a word that doesn't exist yet: it opens the
+editor on a `: word` / `;` template, and the saved definition is compiled and
+logged like one typed at the prompt (an existing word is refused — use
+`edit`). Bare **`edit`** (no name) opens the whole module file and `reload`s
+it on change. See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers
 
@@ -784,12 +827,15 @@ BasicForth uses a data stack to pass values between words. Numbers are pushed
 onto the stack as they are entered. Stack manipulation words will be
 documented here as they become available in the interactive environment.
 
-### Stack Words (planned)
+### Stack Words
 
-| Word     | Effect             | Description                   |
-|----------|--------------------|-------------------------------|
-| `DUP`    | `( a -- a a )`     | Duplicate top of stack        |
-| `DROP`   | `( a -- )`         | Remove top of stack           |
-| `SWAP`   | `( a b -- b a )`   | Exchange top two items        |
-| `OVER`   | `( a b -- a b a )` | Copy second item to top       |
-| `.S`     | `( -- )`           | Display the stack (non-destructive) |
+| Word         | Effect             | Description                   |
+|--------------|--------------------|-------------------------------|
+| `DUP`        | `( a -- a a )`     | Duplicate top of stack        |
+| `DROP`       | `( a -- )`         | Remove top of stack           |
+| `SWAP`       | `( a b -- b a )`   | Exchange top two items        |
+| `OVER`       | `( a b -- a b a )` | Copy second item to top       |
+| `.S`         | `( -- )`           | Display the stack (non-destructive) |
+| `CLEARSTACK` | `( ... -- )`       | Discard everything on the stack |
+
+See `man stack` for the full set of stack manipulation words.

@@ -25,6 +25,41 @@ platform-independent.
   arguments and return values. The Forth-level wrappers in core.s handle
   pushing and popping the data stack.
 
+## Return-Value Contract
+
+Every backend must honor these rules; code above the boundary (core.s and
+the Forth layer) is written against them and nothing else.
+
+1. **Success is zero or positive; failure is `-errno`** (a negative value
+   whose magnitude is the platform's error code). This includes calls that
+   return resources: an fd, a size, or an mmap address is never negative on
+   success, so callers detect failure with a **sign test** — never by
+   comparing against `-1` or any other specific value. (A `cmp $-1` on a raw
+   mmap return shipped a segfault on `include <directory>`; the raw syscall
+   returned `-19`.)
+
+2. **Error magnitudes are opaque above the boundary.** The magnitude *is*
+   the ANS `ior` (callers negate it), and `ior` is system-dependent by the
+   standard — so portable code may test it for zero/non-zero and report it,
+   but never compare it to a specific number. On Linux the magnitude is the
+   errno; another backend may use its own numbering.
+
+3. **One distinguished value: "file not found."** `INCLUDED` must
+   distinguish not-found (try the next `BASICFORTH_PATH` segment; silent
+   skip for a missing `core.fs`) from every other open failure (report it).
+   The platform layer therefore exports the comparable value as a data
+   symbol, **`platform_err_not_found`** (`-2` = `-ENOENT` on Linux); core.s
+   compares against the symbol, never against a literal. A new backend sets
+   it to whatever its `platform_open_file` returns for a missing file.
+
+4. **Abstract input enums are translated below the boundary.** The
+   file-access method `fam` (`r/o`=0, `w/o`=1, `r/w`=2) is a backend-neutral
+   enum; `platform_open_file_mode` / `platform_create_file` translate it to
+   native open flags (identity on Linux, but the translation is explicit).
+   An out-of-range fam fails like a failed open (`-EINVAL`). Likewise
+   `stdin`/`stdout`/`stderr` (0/1/2) are abstract handles the platform layer
+   defines and consumes — identity with the OS fd on POSIX backends.
+
 ## Current API
 
 ### platform_emit
@@ -225,32 +260,36 @@ See [Error_Handling.md](Error_Handling.md) for details.
 
 ### platform_open_file_mode
 
-Open a file with caller-supplied flags and mode. Copies the path to a scratch
-buffer, null-terminates it, and calls openat. Backs `OPEN-FILE`/`CREATE-FILE`.
+Open an existing file by abstract access method (`fam`: 0=read 1=write
+2=read/write — see the Return-Value Contract). Translates the fam to native
+open flags, copies the path to a scratch buffer, null-terminates it, and
+calls openat. An out-of-range fam returns -EINVAL. Backs `OPEN-FILE`.
 
 |              | ARM64                                      | x86-64                                     |
 |--------------|--------------------------------------------|--------------------------------------------|
-| **Input**    | X0 = path, X1 = len, X2 = flags, X3 = mode | RSI = path, RDX = len, R8 = flags, R9 = mode |
+| **Input**    | X0 = path, X1 = len, X2 = fam              | RSI = path, RDX = len, R8 = fam            |
 | **Output**   | X0 = fd (or negative errno)                | RAX = fd (or negative errno)               |
 | **Syscall**  | openat(AT_FDCWD, path, flags, mode) #56    | openat(AT_FDCWD, path, flags, mode) #257   |
 
 ### platform_open_file
 
-Open an existing file read-only. Thin wrapper: sets flags = O_RDONLY, mode = 0
-and jumps to `platform_open_file_mode`, so `forth_included` is unchanged.
+Open an existing file read-only. Thin wrapper: sets native flags = O_RDONLY,
+mode = 0 (no fam translation needed) and jumps to the shared open path, so
+`forth_included` is unchanged.
 
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|
 | **Input**    | X0 = path, X1 = length            | RSI = path, RDX = length           |
 | **Output**   | X0 = fd (or negative errno)        | RAX = fd (or negative errno)       |
 
-Returns -2 (ENOENT) if file not found.
+Returns the `platform_err_not_found` value (-2 = -ENOENT on Linux) if the
+file does not exist — the one error magnitude callers may compare against.
 
 ### platform_create_file
 
-Create or truncate a file, then open it. Wrapper that ORs `O_CREAT | O_TRUNC`
-into the given access method, sets mode 0666, and jumps to
-`platform_open_file_mode`. Backs `CREATE-FILE`.
+Create or truncate a file, then open it. Translates the fam to native flags,
+ORs in `O_CREAT | O_TRUNC`, sets mode 0666, and jumps to the shared open
+path. An out-of-range fam returns -EINVAL. Backs `CREATE-FILE`.
 
 |              | ARM64                              | x86-64                             |
 |--------------|------------------------------------|-------------------------------------|

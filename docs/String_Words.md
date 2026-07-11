@@ -1,9 +1,12 @@
 # BasicForth — String Words
 
 BasicForth provides string output and inline string literals. TYPE is
-an ASM primitive that writes strings to stdout. S" and ." are compile-time
-words that embed string data inline in compiled definitions, using a
+an ASM primitive that writes strings to stdout. Inside a definition,
+S" and ." embed string data inline in the compiled code, using a
 runtime helper to skip past the data and push the address and length.
+At the interpreter prompt (and at the top level of included files) they
+also work directly: S" returns the string in a transient buffer and ."
+types it immediately (see "Interpreted S" and ."" below).
 
 ## TYPE
 
@@ -15,11 +18,18 @@ word — all other string printing builds on it.
 
 ## S" — String Literal
 
-`S" ( -- c-addr u )` — IMMEDIATE, COMPILE_ONLY
+`S" ( -- c-addr u )` — IMMEDIATE (STATE-smart)
 
-At compile time, S" parses the input buffer for the closing `"` and
+When compiling, S" parses the input buffer for the closing `"` and
 compiles the string data inline in the definition. At runtime, it pushes
-the address and length of the inline string onto the data stack.
+the address and length of the inline string onto the data stack. When
+interpreting, it returns the string in a transient buffer (see
+"Interpreted S" and ."" below).
+
+The ASM primitive handles the compile path; a STATE-smart wrapper in
+core.fs (which shadows it) adds the interpretation semantics and
+delegates compilation to the primitive, so compiled code is identical
+either way.
 
 ### Compiled Output
 
@@ -71,10 +81,11 @@ x86-64 has no alignment requirement for instructions.
 
 ## ." — Print String Literal
 
-`." ( -- )` — IMMEDIATE, COMPILE_ONLY
+`." ( -- )` — IMMEDIATE (STATE-smart)
 
 Like S" but also compiles a call to TYPE after the string data. The
 string is printed at runtime without leaving anything on the stack.
+When interpreting, ." types the string immediately.
 
 For `: greet ." Hello!" ;`:
 
@@ -89,6 +100,35 @@ CALL forth_type              ; 5 bytes — prints the string
 Both S" and ." share the same compile-time helper (`compile_s_quote`)
 that parses the input and emits the inline data. ." simply adds an
 extra `CALL/BL forth_type` at the end.
+
+## Interpreted S" and ."
+
+Outside a definition — at the prompt, at the top level of an included
+file, or in an EVALUATE'd string — S" and ." work directly:
+
+```forth
+s" hello.txt" included        \ no colon definition needed
+." Loading..." cr
+```
+
+This is implemented by STATE-smart wrappers in core.fs that shadow the
+ASM primitives. When STATE is compiling they EXECUTE the primitive
+(which parses and compiles the inline string exactly as before); when
+interpreting:
+
+- **S"** parses to the closing `"` and copies the string into one of
+  **two alternating transient buffers** of 256 bytes each, then pushes
+  the buffer address and length. Per ANS Forth 2012, the string remains
+  valid until the *second-next* interpreted S" — so two strings can be
+  live at once (`s" abc" s" def" compare`), but the third reuses the
+  first buffer. Copying matters because the input buffer itself is
+  overwritten by the next line.
+- **."** parses to the closing `"` and TYPEs it immediately, straight
+  from the input buffer (no copy needed).
+
+A string longer than 256 characters aborts with
+`interpreted string too long`. ABORT" remains compile-only (ANS leaves
+its interpretation semantics undefined).
 
 ## COUNT
 
@@ -124,12 +164,13 @@ overflow the dictionary, `dict_full` is triggered.
 Write u characters starting at c-addr to stdout.
 
 ### S" ( -- c-addr u )
-Compile-time: parse to closing `"`, compile inline string data.
-Runtime: push string address and length.
+Compiling: parse to closing `"`, compile inline string data; at runtime
+push string address and length. Interpreting: parse to closing `"`,
+return the string in a transient buffer (two alternate, 256 bytes each).
 
 ### ." ( -- )
-Compile-time: parse to closing `"`, compile inline string data + TYPE.
-Runtime: print the string.
+Compiling: parse to closing `"`, compile inline string data + TYPE; the
+string prints at runtime. Interpreting: type the string immediately.
 
 ### COUNT ( c-addr -- c-addr+1 u )
 Convert counted string to address-length pair. Defined in core.fs.
@@ -147,6 +188,10 @@ greet   \ prints: Hello, World!
 \ Build a string and print it
 : test  s" BasicForth" type ;
 test    \ prints: BasicForth
+
+\ Interpreted use — no colon definition needed
+s" BasicForth" type      \ prints: BasicForth
+." Hello from the prompt" cr
 
 \ Multiple strings in one definition
 : banner  ." *** " ." Welcome " ." ***" cr ;

@@ -163,6 +163,8 @@ assert_output "depth empty"        "depth ."             "0  ok"
 assert_output "depth with items"   "1 2 3 depth ."       "3  ok"
 assert_output "?dup non-zero"      "5 ?dup . ."          "5 5  ok"
 assert_output "?dup zero"          "0 ?dup ."            "0  ok"
+assert_output "clearstack"         "1 2 3 clearstack depth ."  "0  ok"
+assert_output "clearstack empty"   "clearstack depth ."  "0  ok"
 
 # =========================================================================
 section "Stack Display"
@@ -443,6 +445,16 @@ assert_output "dot-paren"         '.( Hello World!)'                           "
 assert_output "dot-paren clean stack" '.( hi) depth 0 = .'                     "-1"
 assert_error  "s-quote no close" ': test s" no closing quote ;'                "unterminated string"
 assert_error  "dot-quote no close" ': test ." no closing quote ;'              "unterminated string"
+
+# Interpreted (STATE-smart) S" and ." — outside a definition S" returns the
+# string in one of two alternating transient buffers; ." types immediately.
+# Expected strings are chosen so they can't match the echoed input line.
+assert_output "s-quote interpreted"     's" hel" s" lo" type type'              "lohel"
+assert_output "s-quote buffer cycle"    's" one" s" two" s" three" type type'   "threetwo"
+assert_output "dot-quote interpreted"   '." AB" ." CD"'                         "ABCD"
+assert_output "s-quote interp leading space" 's"  pad" type ." |"'              " pad|"
+assert_output "s-quote empty interp"    's" " swap drop . ." <>"'               "0 <>"
+assert_error  "s-quote interp too long" 'create ebuf 320 allot ebuf 320 char x fill char s ebuf c! char " ebuf 1+ c! 32 ebuf 2 + c! char " ebuf 310 + c! ebuf 311 evaluate' "interpreted string too long"
 
 # =========================================================================
 section "PICK"
@@ -833,10 +845,21 @@ assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a d
 sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
     | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
 if [[ "$sb_out" == *"currently: uninitialized"* && "$sb_out" == *"currently: ' one is d"* \
-      && "$sb_out" == *"currently set by: :noname 42 . ; is d"* ]]; then
+      && "$sb_out" == *":noname 42 . ; is d"* ]]; then
     printf "  ${GREEN}PASS${NC}  see reports a defer's binding (uninit/named/:noname)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  see defer-binding report\n    Got: %q\n" "$sb_out"; ((failed++))
+fi
+
+# ...and a MULTI-LINE :noname binding: see prints the whole recorded group
+# (the old log-line heuristic showed only the final line), via the anonymous
+# header's own source metadata.
+sbm_out=$(printf 'defer d\n:noname 40\n  2 + . ; is d\nsee d\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+if [[ "$sbm_out" == *":noname 40"* && "$sbm_out" == *"2 + . ; is d"* ]]; then
+    printf "  ${GREEN}PASS${NC}  see shows a multi-line :noname binding in full\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  see multi-line :noname binding\n    Got: %q\n" "$sbm_out"; ((failed++))
 fi
 
 # ?DO
@@ -947,6 +970,27 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 
+# INCLUDE of a directory must error, not segfault (open succeeds on a
+# directory; the raw mmap then fails with -ENODEV, which the old check —
+# exactly -1 — missed, so -19 was used as the file base address).
+assert_error  "include directory errors"    'include /tmp'                       "cannot open /tmp"
+assert_output "include directory recovers"  $'include /tmp\n." A." ." B." cr'    "A.B."
+
+# Tabs are whitespace: a source file indented with real tabs (or with tabs
+# between tokens) must tokenize — parse-word treats every char <= 0x20 as a
+# delimiter, not just space.
+tab_file="$(mktemp)"
+printf ': tabbed\n\t7 8 + . ;\ntabbed\n: tab2 5\t6 + . ;\ntab2\nbye\n' > "$tab_file"
+tab_out=$(BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$tab_file" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+rm -f "$tab_file"
+if [[ "$tab_out" == *"15"* && "$tab_out" == *"11"* && "$tab_out" != *"?"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tab-indented source file loads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tab-indented source file loads\n"
+    printf "    Expected: 15 and 11, no errors\n    Got:      %s\n" "$(echo "$tab_out" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
 # Command-line file argument (argv[1])
 # Load core.fs via argv[1] (it's idempotent — reloading defines the same words)
 t0=$(date +%s.%N)
@@ -1046,32 +1090,59 @@ sm_collide "eating onto the tail ends the game" '0 dx ! -1 dy !\n5 fx ! 5 fy !\n
 sm_collide "running into the body ends the game" '1 dx ! 0 dy !\n1 fx ! 1 fy !\ntick\n' "-1"
 
 # examples/chase.fs (the Chase tutorial's finished program) must load and its
-# top-down design must work headlessly. The "hunt" brain steps a monster one
-# cell toward the player on each axis: monster at (5,5), player at (10,8) -> (6,6).
+# top-down design must work headlessly. step-toward (the smart step every
+# brain shares) closes the LONGER axis only — never both (a diagonal pursuer
+# would outrun the player) — and x moves in 2-column strides (terminal cells
+# are ~2x tall as wide): monster (5,5), aim (10,8) -> (7,5).
 t0=$(date +%s.%N)
-ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 px ! 8 py !\n0 hunt\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
+ch_hunt=$(printf 'include %s/examples/chase.fs\ninit-game\n5 0 mx! 5 0 my!\n10 8 aim!\n0 step-toward\n.( CHX=) 0 mx@ . .( CHY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/chase.fs"
-if [[ "$ch_hunt" == *"CHX=6"* && "$ch_hunt" == *"CHY=6"* ]]; then
-    printf "  ${GREEN}PASS${NC}  examples/chase.fs loads and the hunt brain chases\n"; ((passed++))
+if [[ "$ch_hunt" == *"CHX=7"* && "$ch_hunt" == *"CHY=5"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs step-toward strides x, one axis per frame\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  examples/chase.fs loads and the hunt brain chases\n"
-    printf "    Expected: CHX=6 CHY=6\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
+    printf "  ${RED}FAIL${NC}  examples/chase.fs step-toward strides x, one axis per frame\n"
+    printf "    Expected: CHX=7 CHY=5\n    Got:      %s\n" "$(echo "$ch_hunt" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
-# Per-monster brains (the Pac-Man trick): init-game installs a different brain
-# token in each monster's slot, so step-monsters runs DIFFERENT minds per
-# monster. With the player at (20,10) heading right, two monsters sharing cell
-# (22,10) diverge: monster 0 (hunt) steps left toward the player -> x=21, while
-# monster 1 (ambush) aims 3 cells ahead of the player -> x=23.
-ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n1 pdx ! 0 pdy !\n22 0 mx! 10 0 my!\n22 1 mx! 10 1 my!\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" \
+# ...and once x is level with the aim, it switches to the y axis:
+# monster (10,5), aim (10,8) -> (10,6).
+ch_axis=$(printf 'include %s/examples/chase.fs\ninit-game\n10 0 mx! 5 0 my!\n10 8 aim!\n0 step-toward\n.( AXX=) 0 mx@ . .( AXY=) 0 my@ . cr\nbye\n' "$REPO_ROOT" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
-if [[ "$ch_brains" == *"H0X=21"* && "$ch_brains" == *"A1X=23"* ]]; then
+if [[ "$ch_axis" == *"AXX=10"* && "$ch_axis" == *"AXY=6"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs step-toward switches to the shorter axis\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs step-toward switches to the shorter axis\n"
+    printf "    Expected: AXX=10 AXY=6\n    Got:      %s\n" "$(echo "$ch_axis" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Brains are dice + aim: hunt takes the smart step 50% of frames, drift 15%.
+# 200 one-step trials from (5,5) chasing a player at (10,8): the smart step is
+# x -> 7, a 2-column stride (p=.5+.5/6~.58 for hunt -> mean 117; p~.29 for drift ->
+# mean 58, wobble included). Bounds sit ~4.5 sigma out: stable, not flaky.
+ch_dice=$(printf 'include %s/examples/chase.fs\ninit-game\n10 px ! 8 py !\nvariable hh  variable dh\n: htrial 5 0 mx! 5 0 my! 0 hunt  0 mx@ 7 = if 1 hh +! then ;\n: dtrial 5 0 mx! 5 0 my! 0 drift 0 mx@ 7 = if 1 dh +! then ;\n: tally 200 0 do htrial dtrial loop ;\ntally\n.( HUNTOK=) hh @ 85 > . .( DRIFTOK=) dh @ 90 < . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_dice" == *"HUNTOK=-1"* && "$ch_dice" == *"DRIFTOK=-1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs hunt is sharp, drift is dim (dice)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs hunt is sharp, drift is dim (dice)\n"
+    printf "    Expected: HUNTOK=-1 DRIFTOK=-1\n    Got:      %s\n" "$(echo "$ch_dice" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# Per-monster brains (the Pac-Man trick): step-monsters runs DIFFERENT minds
+# per monster — each slot's token, with that monster's index as argument.
+# Install two deterministic test brains (the live ones roll dice) and check
+# each slot ran its own.
+ch_brains=$(printf 'include %s/examples/chase.fs\ninit-game\n: b0 ( i -- ) drop 100 0 mx! ;\n: b1 ( i -- ) drop 200 1 mx! ;\n%s b0 0 brain!  %s b1 1 brain!\n2 mcount !\nstep-monsters\n.( H0X=) 0 mx@ . .( A1X=) 1 mx@ . cr\nbye\n' "$REPO_ROOT" "'" "'" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_brains" == *"H0X=100"* && "$ch_brains" == *"A1X=200"* ]]; then
     printf "  ${GREEN}PASS${NC}  examples/chase.fs runs a different brain per monster\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  examples/chase.fs runs a different brain per monster\n"
-    printf "    Expected: H0X=21 A1X=23\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
+    printf "    Expected: H0X=100 A1X=200\n    Got:      %s\n" "$(echo "$ch_brains" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
@@ -1083,6 +1154,48 @@ if [[ "$ch_caught" == *"CAUGHT=-1"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  examples/chase.fs ends the game when a monster catches you\n"
     printf "    Expected: CAUGHT=-1\n    Got:      %s\n" "$(echo "$ch_caught" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# input drains the whole key queue each frame, last key wins: three queued
+# DOWN arrows then a LEFT, one input call — the heading must be LEFT, not the
+# first stale DOWN. (The sleep lets the drain loop see an empty pipe and stop.)
+ch_drain=$({ printf 'include %s/examples/chase.fs\ninit-game\n: t input ." PDX=" pdx @ . ." PDY=" pdy @ . cr ;\n' "$REPO_ROOT"; \
+    printf 't\n\033[B\033[B\033[B\033[D'; sleep 1; printf 'bye\n'; } \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$ch_drain" == *"PDX=-1"* && "$ch_drain" == *"PDY=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/chase.fs input drains the queue; last key wins\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/chase.fs input drains the queue; last key wins\n"
+    printf "    Expected: PDX=-1 PDY=0\n    Got:      %s\n" "$(echo "$ch_drain" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# examples/game-template.fs must load and run out of the box: the stubs make
+# `game` a working (blank) frame loop. Make done? end after one frame and
+# FRAME instant, then run the whole engine headlessly — finish's stub prints
+# "done." and control returns to the interpreter.
+t0=$(date +%s.%N)
+gt_run=$(printf 'include %s/examples/game-template.fs\n0 to FRAME\n:noname true ; is done?\ngame\n.( TPLOK=1) cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "examples/game-template.fs"
+if [[ "$gt_run" == *"done."* && "$gt_run" == *"TPLOK=1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/game-template.fs runs a full frame out of the box\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/game-template.fs runs a full frame out of the box\n"
+    printf "    Expected: done. + TPLOK=1\n    Got:      %s\n" "$(echo "$gt_run" | tr -dc '[:print:]' | tail -c 80)"
+    ((failed++))
+fi
+
+# The template's seams accept the intended workflow: FRAME is a value (to
+# tunes it) and each seam is a deferred word an is can retarget.
+gt_seam=$(printf 'include %s/examples/game-template.fs\n90 to FRAME\n.( FR=) FRAME . cr\n:noname 7 ;\nis update\nupdate\n.( UPD=) . cr\nbye\n' "$REPO_ROOT" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+if [[ "$gt_seam" == *"FR=90"* && "$gt_seam" == *"UPD=7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  examples/game-template.fs seams retarget with to/is\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  examples/game-template.fs seams retarget with to/is\n"
+    printf "    Expected: FR=90 UPD=7\n    Got:      %s\n" "$(echo "$gt_seam" | tr -dc '[:print:]' | tail -c 80)"
     ((failed++))
 fi
 
@@ -1465,6 +1578,11 @@ if [[ "$fa_out" == *"MISS=2"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  open-file missing → ior 2\n    Expected: MISS=2\n    Got:      %s\n" "$fa_out"; ((failed++))
 fi
+
+# fam is an abstract enum translated by the platform layer; an out-of-range
+# fam must fail like a failed open with ior EINVAL, not reach the OS as
+# arbitrary flag bits.
+assert_output "open-file bad fam -> EINVAL"  's" nofile.xyz" 7 open-file swap drop einval = .'  "-1"
 if [[ "$fa_disk" == "WROTE" ]]; then
     printf "  ${GREEN}PASS${NC}  create-file + write-file roundtrip\n"; ((passed++))
 else
@@ -1867,22 +1985,273 @@ if [[ "$gone_out" == *"7"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
 fi
-# EDIT-propagation: editing a word recompiles its transitive callers, so the
-# change goes live everywhere (subroutine threading otherwise leaves callers
-# calling the old word). leaf=1 → mid=leaf*10 → top prints mid; after editing
-# leaf to 2, `top` must print 20, and the report must name the recompiled callers.
-# `edit` spawns $EDITOR on the word's temp file — here a non-interactive sed that
-# rewrites leaf's source from 1 to 2.
+# EDIT is splice + reload: the edited word's new text replaces its definition
+# in the module file and the reload rebuilds every caller by construction —
+# leaf=1 → mid=leaf*10 → top prints mid; after editing leaf to 2, `top` must
+# print 20 and the FILE must hold the new text with no history and no temp
+# droppings. `edit` spawns $EDITOR on "<module>.edit" — here a sed.
 ep_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
 ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\ntop\nbye\n' \
-    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 ;
+    echo "FILE:"; cat mod.fs; ls mod.fs.edit 2>/dev/null && echo "TEMP-LEFT" )
+ep_n=$(grep -c ': leaf' <<<"$ep_out")
 rm -rf "$ep_dir"
-if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"20"* ]]; then
-    printf "  ${GREEN}PASS${NC}  edit recompiles transitive callers — the change goes live\n"; ((passed++))
+if [[ "$ep_out" == *"20"* && "$ep_out" == *"FILE:"*": leaf 2 ;"* && "$ep_n" == "1" \
+      && "$ep_out" != *"TEMP-LEFT"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit splices the file and reloads — callers live, no droppings\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  edit splice+reload\n    Expected 20, leaf 2 spliced once, no temp file\n    Got: %q\n" "$ep_out"; ((failed++))
 fi
+# An untouched temp file is a no-op: vi's :q! exits 0 (only :cq reports
+# failure), so edit compares the file image before/after the editor instead
+# of trusting the exit status. Nothing is resubmitted or propagated.
+eu_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$eu_dir/mod.fs"
+eu_out=$( cd "$eu_dir" && printf 'edit leaf\nmid .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$eu_dir"
+if [[ "$eu_out" == *"edit: unchanged"* && "$eu_out" != *"updated:"* && "$eu_out" == *"10"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit with an untouched file is a no-op\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit with an untouched file is a no-op\n    Got: %q\n" "$eu_out"; ((failed++))
+fi
+# ...which protects deferred words: edit <defer> + quit-without-saving used to
+# resubmit the defer line, redefining the defer as fresh (uninitialized) and
+# losing its binding. The binding must survive an aborted edit.
+ed_dir="$(mktemp -d)"
+printf 'defer render\n' > "$ed_dir/mod.fs"
+ed_out=$( cd "$ed_dir" && printf ':noname 42 . ; is render\nsave\nedit render\nrender\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ed_dir"
+if [[ "$ed_out" == *"edit: unchanged"* && "$ed_out" == *"42"* && "$ed_out" != *"uninitialized"* ]]; then
+    printf "  ${GREEN}PASS${NC}  aborted edit of a defer keeps its binding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  aborted edit of a defer keeps its binding\n    Got: %q\n" "$ed_out"; ((failed++))
+fi
+# edit on a DEFERRED word follows the binding. Three flows: an uninitialized
+# defer explains itself; a named action redirects to that word; a :noname
+# action opens ITS source — saving re-binds the defer live (no propagation:
+# callers go through the defer).
+ef_dir="$(mktemp -d)"
+printf 'defer d\n' > "$ef_dir/mod.fs"
+ef_out=$( cd "$ef_dir" && printf 'edit d\n: w1 7 . ;\n'\'' w1 is d\nedit d\n:noname 42 . ; is d\nsave\nedit d\nd\nbye\nn\n' \
+    | EDITOR='sed -i s/42/43/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ef_dir"
+if [[ "$ef_out" == *"is uninitialized"* && "$ef_out" == *"edit w1 instead"* && "$ef_out" == *"43"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit on a defer follows the binding (uninit/named/:noname)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit on a defer follows the binding\n    Got: %q\n" "$ef_out"; ((failed++))
+fi
+
+# ...and editing a MULTI-LINE :noname binding: the group's xt sits on the data
+# stack BETWEEN the replayed lines, so (rd-eval-lines) must keep its loop
+# bookkeeping in variables — the xt used to shadow it, corrupt the walk, and
+# leak a cell that eventually fed a length to free (segfault). The edited
+# group must re-bind, and the stack must come back clean.
+em_dir="$(mktemp -d)"
+printf 'defer d\n: go2 . . ;\n' > "$em_dir/mod.fs"
+printf '#!/bin/sh\nsed -i "s/111/222/" "$1"\n' > "$em_dir/ed.sh" && chmod +x "$em_dir/ed.sh"
+em_out=$( cd "$em_dir" && printf ':noname 111\n7 go2 ; is d\nsave\nedit d\nd\n.( DEPTH=) depth . cr\nbye\nn\n' \
+    | EDITOR="$em_dir/ed.sh" BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$em_dir"
+if [[ "$em_out" == *"7 222"* && "$em_out" == *"DEPTH=0"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit of a multi-line :noname binding re-binds, stack clean\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit of a multi-line :noname binding\n    Expected: 7 222 and DEPTH=0\n    Got: %q\n" "$em_out"; ((failed++))
+fi
+
+# DEFINE: `edit` for a word that doesn't exist yet — opens $EDITOR on a
+# ": name / ;" template, evaluates + logs the result (multi-line formatting
+# survives, `see` shows it, `save` persists it). The scripted editor writes a
+# two-line body over the template.
+df_dir="$(mktemp -d)"
+printf '#!/bin/sh\nprintf ": p100\\n    100 + ;\\n" > "$1"\n' > "$df_dir/ed.sh" && chmod +x "$df_dir/ed.sh"
+df_out=$( cd "$df_dir" && printf 'define p100\n5 p100 .\nsee p100\nsave m.fs\nbye\n' \
+    | EDITOR="$df_dir/ed.sh" BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 ;
+    echo "SAVED:" ; cat m.fs 2>/dev/null )
+rm -rf "$df_dir"
+if [[ "$df_out" == *"105"* && "$df_out" == *"SAVED:"*": p100"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define creates a new word in the editor; see/save cover it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define creates a new word in the editor\n    Expected 105 and p100 in the save file\n    Got: %q\n" "$df_out"; ((failed++))
+fi
+# define refuses an existing word (use edit) — the editor must NOT be spawned
+# (EDITOR=false would exit 1 and report "editor exited with status").
+dx_out=$( printf ': leaf 1 ;\ndefine leaf\nleaf .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$dx_out" == *"define: leaf is already defined"* && "$dx_out" == *"use edit"* \
+      && "$dx_out" != *"exited with status"* && "$dx_out" == *"1"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define refuses an existing word without spawning the editor\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define refuses an existing word\n    Got: %q\n" "$dx_out"; ((failed++))
+fi
+# An untouched template is a no-op: nothing is defined, nothing is logged.
+du_out=$( printf 'define nope\nnope\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$du_out" == *"define: unchanged"* && "$du_out" == *"? nope"* ]]; then
+    printf "  ${GREEN}PASS${NC}  define with an untouched template defines nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  define with an untouched template\n    Got: %q\n" "$du_out"; ((failed++))
+fi
+
+# BARE EDIT: `edit` with no name opens the CURRENT MODULE FILE itself and
+# reloads on change — the edit-on-disk loop (edit + reload) in one word. The
+# reload replaces the session with the file's contents, so an unsaved
+# interactive definition is discarded (non-interactive dirty-guard proceeds
+# silently; at a terminal it prompts "save first?").
+be_dir="$(mktemp -d)"
+printf ': leaf 41 ;\n' > "$be_dir/mod.fs"
+be_out=$( cd "$be_dir" && printf 'leaf .\n: extra 7 ;\nedit\nleaf .\nextra\nbye\n' \
+    | EDITOR='sed -i s/41/52/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$be_dir"
+if [[ "$be_out" == *"41"* && "$be_out" == *"52"* && "$be_out" == *"? extra"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit opens the module file and reloads the change\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit opens the module file\n    Expected 41 then 52 and '? extra'\n    Got: %q\n" "$be_out"; ((failed++))
+fi
+# An untouched module file skips the reload, so the session (including
+# unsaved interactive definitions) is kept as-is.
+bu_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$bu_dir/mod.fs"
+bu_out=$( cd "$bu_dir" && printf ': extra 7 ;\nedit\nextra .\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$bu_dir"
+if [[ "$bu_out" == *"edit: unchanged"* && "$bu_out" == *"7"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit with an untouched file keeps the session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit with an untouched file\n    Got: %q\n" "$bu_out"; ((failed++))
+fi
+# Without a current module file there is nothing to open.
+bn_out=$( printf 'edit\nbye\n' \
+    | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$bn_out" == *"edit: no current file"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit without a module explains itself\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  bare edit without a module\n    Got: %q\n" "$bn_out"; ((failed++))
+fi
+
+# SPLICE-SAVE (Module_Architecture stage 1, hyper-static): a plain `:`
+# redefinition is a NEW BINDING — earlier words keep the old one — so SAVE
+# appends it verbatim (replay-faithful) and keeps the file text untouched
+# (comments, layout, every binding in order). A second save is byte-identical.
+sp_dir="$(mktemp -d)"
+printf '\\ header comment\n: leaf 1 ;\n\n\\ mid doc\n: mid leaf 10 * ;\n' > "$sp_dir/mod.fs"
+sp_out=$( cd "$sp_dir" && printf ': leaf 2 ;\n: extra leaf 42 + ;\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; cp mod.fs s1
+    printf 'save\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1
+    cmp -s mod.fs s1 && echo "SAME"; echo "REPLAY:"
+    printf 'mid . extra .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+sp_n=$(grep -c ': leaf' <<<"$sp_out")
+if [[ "$sp_out" == *": leaf 1 ;"* && "$sp_out" == *"header comment"* && "$sp_out" == *"mid doc"* \
+      && "$sp_out" == *"SAME"* && "$sp_n" == "2" && "$sp_out" == *"REPLAY:"*"10 44"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save appends a : rebinding (hyper-static), file text untouched\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hyper-static append save\n    Got: %q (leaf defs: %s)\n" "$sp_out" "$sp_n"; ((failed++))
+fi
+rm -rf "$sp_dir"
+# Intermediate bindings are load-bearing: in `: a 1 ; : b a ; : a 2 ;` the
+# word b captured the FIRST a — the saved file must keep all three in order
+# (a last-wins dedup would write a file that doesn't even load).
+hs_dir="$(mktemp -d)"
+hs_out=$( cd "$hs_dir" && printf ': a 1 ;\n: b a ;\n: a 2 ;\nsave m.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1;
+    cat m.fs; echo "REPLAY:"
+    printf 'b . a .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth m.fs 2>&1 | sed -n 2p )
+if [[ "$hs_out" == *": a 1 ;"*": b a ;"*": a 2 ;"* && "$hs_out" == *"REPLAY:"*"1 2"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save keeps every binding in order (a/b/a replays 1 2)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hyper-static binding order\n    Got: %q\n" "$hs_out"; ((failed++))
+fi
+rm -rf "$hs_dir"
+# EDIT is a MUTATION: the edited word's definition is replaced where it
+# stands, mutation history never accumulates, and the save is idempotent.
+# The propagation re-logs (unchanged text) splice onto themselves.
+se_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$se_dir/mod.fs"
+se_out=$( cd "$se_dir" && printf 'edit leaf\nsave\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; cp mod.fs s1
+    printf 'save\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1
+    cmp -s mod.fs s1 && echo "SAME" )
+se_want=$(printf ': leaf 2 ;\n: mid leaf 10 * ;\nSAME')
+if [[ "$se_out" == "$se_want" ]]; then
+    printf "  ${GREEN}PASS${NC}  edit mutates in place: zero accumulation, idempotent\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit splice\n    Got: %q\n    Want: %q\n" "$se_out" "$se_want"; ((failed++))
+fi
+rm -rf "$se_dir"
+# A mutation targets the binding it actually edited: after `: thrust 25 ;`
+# (a new binding in the tail), `edit thrust` must rewrite THAT binding, not
+# the file's original — climb keeps capturing the old thrust on replay.
+bm_dir="$(mktemp -d)"
+printf ': thrust 10 ;\n: climb thrust 2 * ;\n' > "$bm_dir/mod.fs"
+bm_out=$( cd "$bm_dir" && printf ': thrust 25 ;\nsave\nedit thrust\nbye\n' \
+    | EDITOR='sed -i s/25/30/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; echo "REPLAY:"
+    printf ': probe thrust . ; climb . probe\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+if [[ "$bm_out" == *": thrust 10 ;"*": climb thrust 2 * ;"*": thrust 30 ;"* \
+      && "$bm_out" != *"25"* && "$bm_out" == *"REPLAY:"*"20 30"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit after a rebinding mutates the tail binding, not the seed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit targets the edited binding\n    Got: %q\n" "$bm_out"; ((failed++))
+fi
+rm -rf "$bm_dir"
+# Assignments and :noname groups are order-dependent effects: SAVE keeps the
+# file's lines verbatim and appends the session's in the order they happened
+# (both groups; the later `is` wins on replay).
+sa_dir="$(mktemp -d)"
+printf 'defer brain\n10 value speed\n: hunt 1 ;\n' > "$sa_dir/mod.fs"
+printf "' hunt is brain\n" >> "$sa_dir/mod.fs"
+sa_out=$( cd "$sa_dir" && printf ':noname 2 ; is brain\n:noname 3 ; is brain\n25 to speed\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
+    cat mod.fs; echo "REPLAY:"
+    printf 'brain . speed .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
+sa_hunt=$(grep -c "' hunt is brain" <<<"$sa_out")
+sa_anon=$(grep -c ':noname' <<<"$sa_out")
+sa_speed=$(grep -c '25 to speed' <<<"$sa_out")
+if [[ "$sa_hunt" == "1" && "$sa_anon" == "2" && "$sa_speed" == "1" \
+      && "$sa_out" == *"REPLAY:"*"3 25"* ]]; then
+    printf "  ${GREEN}PASS${NC}  save keeps assignments and :noname groups in typed order\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  assignment/anon order\n    Got: %q\n" "$sa_out"; ((failed++))
+fi
+rm -rf "$sa_dir"
+
+# USES treats :noname actions first-class, and an edit reaches every
+# :noname-bound defer through the reload: both groups (saved into the file)
+# replay against the edited helper, so BOTH bindings pick up the new code.
+ap_dir="$(mktemp -d)"
+printf 'defer d1\ndefer d2\n: helper 100 + ;\n' > "$ap_dir/mod.fs"
+ap_out=$( cd "$ap_dir" && printf ':noname 5 helper . ; is d1\n:noname 7 helper . ; is d2\nuses helper\nuses d1\nsave\nedit helper\nd1\nd2\nbye\nn\n' \
+    | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ap_dir"
+if [[ "$ap_out" == *"helper is used by: (:noname is d2) (:noname is d1)"* \
+      && "$ap_out" == *"d1 is used by: (none)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  uses reports live :noname actions (own binding skipped)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  uses on :noname actions\n    Got: %q\n" "$ap_out"; ((failed++))
+fi
+if [[ "$ap_out" == *"205"* && "$ap_out" == *"207"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit reaches every :noname-bound defer via the reload\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  edit into :noname actions\n    Expected: 205 and 207\n    Got: %q\n" "$ap_out"; ((failed++))
+fi
+# Superseded :noname groups stay harmless under reload semantics: both saved
+# groups replay in order, the LAST `is` wins, and the transitive chain
+# (helper2 calls the edited helper) is rebuilt by construction (7+201 = 208).
+ag_dir="$(mktemp -d)"
+printf 'defer d\n: helper 100 + ;\n: helper2 helper 1+ ;\n' > "$ag_dir/mod.fs"
+ag_out=$( cd "$ag_dir" && printf ':noname 5 helper . ; is d\n:noname 7 helper2 . ; is d\nsave\nedit helper\nd\nbye\nn\n' \
+    | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ag_dir"
+if [[ "$ag_out" == *"208"* && "$ag_out" != *"205"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload keeps the last :noname binding (transitive ok)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  superseded :noname group under reload\n    Expected 208 (last binding wins)\n    Got: %q\n" "$ag_out"; ((failed++))
+fi
+
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
 # append SAVE keeps both versions, but COMPACT emits only the latest, once.
 cp_dir="$(mktemp -d)"
@@ -1912,6 +2281,21 @@ if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;
     printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  compact dedup\n    Expected one ': x 9 ;', no ': x 1 ;'\n    Got (%s defs): %q\n" "$cp_count" "$cp_body"; ((failed++))
+fi
+# COMPACT with a MULTI-LINE :noname binding: the anonymous definition's whole
+# group is emitted (replaying it rebinds the defer). The old line-based
+# scanner emitted only the group's LAST line — a file that failed to load.
+cm_dir="$(mktemp -d)"
+printf 'defer g\n' > "$cm_dir/mod.fs"
+( cd "$cm_dir" && printf ':noname 20\n  2 + . ; is g\ncompact mod.fs\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+cm_out=$( printf 'g\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$cm_dir/mod.compact.fs" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
+rm -rf "$cm_dir"
+if [[ "$cm_out" == *"22"* && "$cm_out" != *"uninitialized"* ]]; then
+    printf "  ${GREEN}PASS${NC}  compact replays a multi-line :noname binding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  compact multi-line :noname binding\n    Got: %q\n" "$cm_out"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
@@ -2487,7 +2871,29 @@ tut_check "step heading is shown"          $'tutorial Lesson\nnext'          "##
 tut_check "REPL live between steps"        $'tutorial Lesson\n7 8 + .'       "15"
 tut_check "next before start hints"        "next"                            "start a tutorial first"
 tut_check "back before start hints"        "back"                            "start a tutorial first"
+tut_check "step before start hints"        "step"                            "start a tutorial first"
 tut_check "unknown tutorial name"          "tutorial nope"                   "no tutorial named nope"
+tut_check "tutorial name+step starts there" "tutorial Lesson 2"              "content TWO here"
+tut_check "tutorial step arg in footer"    "tutorial Lesson 3"               "step 3"
+tut_check "step N jumps"                   $'tutorial Lesson\nstep 3'        "content THREE here"
+tut_check "step past end reports end"      $'tutorial Lesson\nstep 9'        "end of 'Lesson'"
+tut_check "step non-number is un-parsed"   $'tutorial Lesson\nstep cr 7 8 + .'  "15"
+tut_check "tutorial takes a value bookmark" $'3 value spot\ntutorial Lesson spot' "content THREE here"
+tut_check "step takes a value name"        $'tutorial Lesson\n2 value spot\nstep spot' "content TWO here"
+tut_check "step refuses a variable"        $'tutorial Lesson\nvariable vv 2 vv !\nstep vv drop .( VOK=1)' "VOK=1"
+tut_check "end-tutorial confirms"          $'tutorial Lesson\nend-tutorial'  "tutorial ended"
+tut_check "end-tutorial then next hints"   $'tutorial Lesson\nend-tutorial\nnext' "start a tutorial first"
+tut_check "end-tutorial with none started" "end-tutorial"                    "no tutorial in progress"
+
+# step replays the current step: after next + step, step 2's content printed twice
+tut_replay=$(printf 'tutorial Lesson\nnext\nstep\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ $(echo "$tut_replay" | grep -c "content TWO here") -eq 2 ]]; then
+    printf "  ${GREEN}PASS${NC}  step replays the current step\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  step replays the current step\n"
+    printf "    Expected 'content TWO here' twice, got: %s\n" "$(echo "$tut_replay" | grep -c 'content TWO here')"; ((failed++))
+fi
 
 # back at step 1 stays at step 1 (does not underflow)
 tut_b1=$(printf 'tutorial Lesson\nback\n' | BASICFORTH_PATH="$FORTH_LIB" \
@@ -2497,6 +2903,30 @@ if [[ "$tut_b1" == *"step 1"* ]] && [[ "$tut_b1" != *"step 0"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  back at step 1 stays at step 1\n"
     printf "    Got:      %s\n" "$(echo "$tut_b1" | head -4)"; ((failed++))
+fi
+
+# Interactive sessions clear the screen per step, but piped input must stay
+# plain text: no escape bytes from the (tty?)-guarded page in (print-step).
+tut_esc=$(printf 'tutorial Lesson\nnext\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_esc" != *$'\x1b'* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped tutorial output has no escape codes\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped tutorial output has no escape codes\n"
+    printf "    Got escape bytes in: %s\n" "$(echo "$tut_esc" | cat -v | head -3)"; ((failed++))
+fi
+
+# The --more-- pager pause is interactive-only: a piped man of a file longer
+# than the screen must print every line straight through, with no pause
+# swallowing input and no "-- more" prompt in the output.
+for i in $(seq 1 40); do echo "filler line $i"; done > "$tut_dir/Longpage.md"
+tut_pager=$(printf 'man Longpage\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
+if [[ "$tut_pager" == *"filler line 40"* && "$tut_pager" != *"-- more"* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped man never pauses at --more--\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped man never pauses at --more--\n"
+    printf "    Got:      %s\n" "$(echo "$tut_pager" | tail -3)"; ((failed++))
 fi
 
 # Unset BASICFORTH_DOCS — tutorial reports it gracefully
@@ -2801,16 +3231,24 @@ ed_nf=$(printf 'edit nosuchxyz\nbye\n' | BASICFORTH_SESSION=1 timeout 2 $FORTH 2
     && { printf "  ${GREEN}PASS${NC}  edit reports not found\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit reports not found\n    Got: %s\n" "$(echo "$ed_nf"|head -3)"; ((failed++)); }
 
-# An external edit takes effect: sed rewrites ee's body from 1 to 7.
-ed_ch=$(printf ': ee 1 ;\nedit ee\nee .\nbye\n' \
-    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+# An external edit takes effect: sed rewrites ee's body from 1 to 7 in the
+# module file, and the reload makes it live. (edit needs a module file: a
+# scratch-session word is refused with "save <name> first".)
+ed_dir=$(mktemp -d)
+printf ': ee 1 ;\n' > "$ed_dir/mod.fs"
+ed_ch=$( cd "$ed_dir" && printf 'edit ee\nee .\nbye\n' \
+    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1)
+rm -rf "$ed_dir"
 [[ "$ed_ch" == *"7  ok"* ]] \
     && { printf "  ${GREEN}PASS${NC}  edit applies an external editor's changes\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit applies an external edit\n    Got: %s\n" "$(echo "$ed_ch"|head -5)"; ((failed++)); }
 
-# An aborting editor (non-zero exit) leaves the word unchanged.
-ed_ab=$(printf ': eb 1 ;\nedit eb\neb .\nbye\n' \
-    | EDITOR=false BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+# An aborting editor (non-zero exit) leaves the word (and file) unchanged.
+ed_dir=$(mktemp -d)
+printf ': eb 1 ;\n' > "$ed_dir/mod.fs"
+ed_ab=$( cd "$ed_dir" && printf 'edit eb\neb .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1)
+rm -rf "$ed_dir"
 [[ "$ed_ab" == *"edit: editor exited with status 1"* && "$ed_ab" == *"1  ok"* ]] \
     && { printf "  ${GREEN}PASS${NC}  edit reports an aborted editor, word unchanged\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit aborted-editor handling\n    Got: %s\n" "$(echo "$ed_ab"|head -5)"; ((failed++)); }
@@ -2859,16 +3297,17 @@ sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0
 section "Dirty guard"
 # =========================================================================
 # (dirty) tracks unsaved log changes: clean at start, set by a definition,
-# cleared by save, set again by an edit. The save-first prompt itself only
+# cleared by save — and an edit ends CLEAN too (it writes the file and
+# reloads, which reseeds the log). The save-first prompt itself only
 # engages at a real terminal (PTY suite); here we verify the bookkeeping.
 dg_dir="$(mktemp -d)"
-dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\nbye\n' \
+dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\ndgw .\nbye\n' \
     | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 rm -rf "$dg_dir"
-if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"-1  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save / edit\n"; ((passed++))
+if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"0  ok"*"2  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save; edit ends clean (reloaded)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, -1\n    Got: %q\n" "$dg_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, 0, 2\n    Got: %q\n" "$dg_out"; ((failed++))
 fi
 # In a pipe the guard never prompts: a dirty new/bye proceeds silently (no
 # prompt text, no byte of input consumed as an answer).

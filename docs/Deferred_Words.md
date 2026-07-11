@@ -103,9 +103,31 @@ defer monster-brain
 
 The report has three forms: `uninitialized` (nothing installed yet — read
 straight from the action cell), `' <word> is <name>` (bound to a named word —
-also read from the cell), or `set by: <line>` (a `:noname` — recovered from the
-capture log's last direct assignment to that name, so it is a best-effort
-report: an `is` performed *inside* another word leaves no logged line).
+also read from the cell), or — for a `:noname` action — the **full recorded
+source** of the anonymous definition, multi-line included:
+
+```
+> see render
+defer render
+\ currently:
+:noname gx @ gy @ [char] $ draw
+   px @ py @ [char] @ draw ; is render
+```
+
+This works because `:noname` builds a real (nameless, unfindable) dictionary
+entry carrying the same source metadata as a named word, so the action's xt
+leads straight to its source — no heuristics. `edit` on a deferred word
+follows the same trail: a `:noname` action opens *its* source in your editor
+(re-running the edited group re-binds the defer); a named action prints
+"edit `<word>` instead"; an uninitialized defer tells you to `is` it first.
+
+`uses` and edit-propagation see through the anonymity the same way. A
+`:noname … ; is x` group that is the current action of a deferred word shows
+up in `uses` output as `(:noname is x)`, and when a word the group calls is
+edited, the group is re-run whole — the trailing `is` re-binds `x` to the
+freshly compiled action, so the fix reaches it like any other caller.
+Superseded groups (actions a defer has been re-pointed away from) are dead
+code: skipped by both.
 
 ## Persistence
 

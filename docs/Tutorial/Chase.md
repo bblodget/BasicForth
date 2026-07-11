@@ -150,6 +150,10 @@ using two counted loops (top/bottom, then sides), exactly as in Snake:
         W 2 + 0 do  i 0 [char] # draw   i H 1+ [char] # draw  loop
         H 2 + 0 do  0 i [char] # draw   W 1+ i [char] # draw  loop ;
 
+State and walls in hand — next, the real `setup`. Type `next`.
+
+## The real setup
+
 `new-game` puts the player in the middle, standing still. Then we fill the
 **real** `setup`: hide the cursor, start a new game, draw the walls:
 
@@ -161,17 +165,26 @@ Run it on its own to admire the arena (the player joins once the loop draws it):
 
     setup
 
-Type `next`.
+One side effect: `setup` hid the terminal cursor (`cursor-off`), so your prompt
+has no cursor right now. Bring it back while you experiment:
 
-## Moving — input, stepping, and the real frame
+    cursor-on
 
-Now steering. `input` reads an arrow key and sets the *heading* (`pdx`/`pdy`);
+The finished game restores it automatically — that's `finish`'s job, coming in
+the collisions step. Type `next`.
+
+## Steering — reading the keys
+
+Now steering. `input` reads the arrow keys and sets the *heading* (`pdx`/`pdy`);
 the player keeps moving that way every frame until you change it. `q` ends the
-game. Unmatched keys are ignored:
+game. One subtlety: holding a key makes the terminal **autorepeat** it far
+faster than frames tick, so reading a single key per frame would queue a
+backlog — a new keypress would wait behind every stale repeat. So `input`
+drains **all** pending keys each frame; the last one wins:
 
     : go ( dx dy -- )  pdy !  pdx ! ;
     :noname
-        key? if
+        begin key? while
             key case
                 KEY_UP    of  0 -1 go endof
                 KEY_DOWN  of  0  1 go endof
@@ -179,16 +192,24 @@ game. Unmatched keys are ignored:
                 KEY_RIGHT of  1  0 go endof
                 [char] q  of  true caught ! endof
             endcase
-        then ;  is input
+        repeat ;  is input
 
-`step-player` advances by the heading, clamped so you can't cross a wall
-(`1 max W min` keeps the column in `1..W`). The real `erase` and `render` are a
-pair: erase blanks the player's *old* cell, render draws the *new* one — that
-split is why the player leaves no trail:
+The heading is *set* now, but nothing applies it to the player's position yet —
+that's stepping, next. Type `next`.
+
+## Moving — stepping and the real frame
+
+`step-player` advances by the heading, clamped so you can't cross a wall. One
+wrinkle first: terminal cells are about **twice as tall as they are wide**, so
+a one-row step *looks* twice as long as a one-column step. The fix (Snake uses
+the same trick): x moves in **2-column strides**, and every x stays on the
+even grid. The real `erase` and `render` are a pair: erase blanks the player's
+*old* cell, render draws the *new* one — that split is why the player leaves
+no trail:
 
     : step-player
-        px @ pdx @ + 1 max W min px !
-        py @ pdy @ + 1 max H min py ! ;
+        px @ pdx @ 2 * +  2 max W min  px !    \ 2-column stride
+        py @ pdy @ +      1 max H min  py ! ;
 
     :noname  px @ py @ bl draw ;               is erase
     :noname  px @ py @ [char] @ draw ;         is render
@@ -206,12 +227,13 @@ up with the gold next. Type `next`.
 ## Gold
 
 Gold sits still; stepping onto it scores a point and a new piece appears. Define
-its state as we use it:
+its state as we use it — and spawn gold on an **even column**, the grid the
+player actually walks (remember the 2-column stride):
 
     variable gx  variable gy         \ gold position
     variable score
 
-    : spawn-gold   W rnd 1+ gx !  H rnd 1+ gy ! ;
+    : spawn-gold   W 2 / rnd 1+ 2 *  gx !  H rnd 1+ gy ! ;
     : eat?
         px @ gx @ =  py @ gy @ =  and
         if  1 score +!  spawn-gold  then ;
@@ -227,7 +249,12 @@ the real `done?` (we're done when `caught`):
     :noname  step-player  eat? ;  is update
     :noname  caught @ ;           is done?
 
-One catch — and it's a Forth lesson worth the whole tutorial. `setup` was
+Ready to play? Almost — there's a catch, and it's worth its own step. Type
+`next`.
+
+## Refresh the seam — a Forth lesson
+
+The catch is a Forth lesson worth the whole tutorial. `setup` was
 compiled with a **direct call** to the `new-game` that existed back in the board
 step. Redefining `new-game` makes a *new* word; it does not rewire words already
 compiled to call the old one (that's subroutine threading — it's why BasicForth
@@ -263,17 +290,24 @@ like Snake's body ring. `mcount` says how many are live:
     : mx! ( x i -- )  cells mxs + ! ;
     : my! ( y i -- )  cells mys + ! ;
 
-`nudge-x` / `nudge-y` move monster `i` one step on an axis, clamped to the arena
-so a monster can't climb the wall:
+`nudge-x` / `nudge-y` move monster `i` one step on an axis, clamped to the
+arena so a monster can't climb the wall. Monsters obey the same 2-column
+stride as the player, so `nudge-x` doubles the step — monster x stays on the
+even grid and exact-match collisions keep working:
 
-    : nudge-x ( i step -- )  over mx@ + 1 max W min swap mx! ;
-    : nudge-y ( i step -- )  over my@ + 1 max H min swap my! ;
+    : nudge-x ( i step -- )  2 *  over mx@ + 2 max W min swap mx! ;
+    : nudge-y ( i step -- )        over my@ + 1 max H min swap my! ;
 
-`place-monster` scatters monster `i` to a corner, `draw-monsters` paints them
-all, and `new-game` fields one monster for now:
+The table and its movers are ready — type `next` to put a monster on the board.
+
+## Fielding the first monster
+
+`place-monster` scatters monster `i` to a corner (an even column, like every
+x), `draw-monsters` paints them all, and `new-game` fields one monster for
+now:
 
     : place-monster ( i -- )
-        dup 2 mod    if W 1- else 2 then  over mx!
+        dup 2 mod    if W 2 - else 2 then  over mx!
         dup 2 / 2 mod if H 1- else 2 then  swap my! ;
     : draw-monsters  mcount @ 0 ?do  i mx@ i my@ [char] M draw  loop ;
 
@@ -288,18 +322,55 @@ all, and `new-game` fields one monster for now:
 
 Type `next` to give that monster a brain.
 
-## The brain — a deferred seam
+## The brain — one fair step
 
-A *brain* is a word that takes a monster's index and moves it one step. Our
-first brain, `hunt`, steps toward the player on each axis. `toward` returns the
-sign of `target - current` — that's `-1`, `0`, or `+1`:
+A *brain* is a word that takes a monster's index and moves it one step. Rule
+one of any chase game: **a pursuer must never be faster than you**. You move
+one cell per frame along *one* axis — so a brain gets one axis per frame too.
+(Stepping both axes at once is a diagonal move: strictly faster, and no one
+could ever escape.)
+
+A pursuing brain picks an **aim point**, then closes the *longer* axis by one.
+`toward` returns the sign of `target - current` — `-1`, `0`, or `+1`:
 
     : sgn ( n -- -1|0|1 )   dup 0> if drop 1 else 0< if -1 else 0 then then ;
     : toward ( cur target -- step )  swap - sgn ;
 
-    : hunt ( i -- )
-        dup  dup mx@ px @ toward  nudge-x
-        dup my@ py @ toward  nudge-y ;
+    variable tx  variable ty             \ where the current brain is aiming
+    : aim! ( x y -- )  ty !  tx ! ;
+    : step-toward ( i -- )               \ one step toward (tx,ty), one axis
+        dup mx@ tx @ - abs  over my@ ty @ - abs  > if
+            dup dup mx@ tx @ toward nudge-x
+        else
+            dup dup my@ ty @ toward nudge-y
+        then drop ;
+
+Aim and step in hand — but there's a rule two coming: *perfect* pursuit is no
+fun either. Type `next`.
+
+## No brain is perfect — dice
+
+A pursuer that always takes the best step is a homing missile, not a game.
+Give the brains dice: each frame, a brain takes the smart step only *pct%* of
+the time — otherwise it takes one random one-axis step, a `wobble`. Those
+fumbles are your chance to cut around a chaser:
+
+    : wobble ( i -- )                \ one random one-axis step
+        2 rnd if  dup 3 rnd 1- nudge-x  else  dup 3 rnd 1- nudge-y  then
+        drop ;
+    : pursue ( i pct -- )            \ pct%: smart step toward (tx,ty), else wobble
+        100 rnd > if  step-toward  else  wobble  then ;
+
+A brain is now two choices: **where it aims** and **how sharp it is**. Our
+first brain, `hunt`, aims straight at the player — and even taking the smart
+step only half the time, it presses hard (the numbers here came from
+playtesting; tune them to taste):
+
+    : hunt ( i -- )  px @ py @ aim!  50 pursue ;
+
+Type `next` to wire brains into the game.
+
+## The brain — a deferred seam
 
 Here's the design move. We don't call `hunt` from the game directly — we drive
 the monsters through a *deferred* `monster-brain`, so we can swap their mind
@@ -346,12 +417,11 @@ Type `next` to meet the reason we built it this way.
 ## Swap the brain, live
 
 The monster runs through `monster-brain`, a deferred word — so we can replace
-its mind *without recompiling the game*. Define a lazier brain that drifts at
-random:
+its mind *without recompiling the game*. Define a lazier brain: same aim,
+barely any sharpness — it mostly wobbles, but about one frame in seven it
+lunges at you. Dim, not blind:
 
-    : drift ( i -- )
-        dup 3 rnd 1- nudge-x
-        3 rnd 1- nudge-y ;
+    : drift ( i -- )  px @ py @ aim!  15 pursue ;
 
 Now swap it in and play again — same `chase`, completely different monster:
 
@@ -392,12 +462,15 @@ Now `step-monsters` runs **each monster's own** brain. For monster `i` it pushes
 
     : step-monsters  mcount @ 0 ?do  i  i brain@  execute  loop ;
 
-Give us a second personality — `ambush` aims a few cells *ahead* of the player,
-to cut you off:
+Give us a second personality. Remember: a brain is an aim point and a
+sharpness. `ambush` aims a few cells *ahead* of the player's heading, to cut
+you off — slightly jitterier than `hunt`:
 
-    : ambush ( i -- )
-        dup  dup mx@  px @ pdx @ 3 * +  toward  nudge-x
-        dup my@  py @ pdy @ 3 * +  toward  nudge-y ;
+    : ambush ( i -- )  px @ pdx @ 3 * +  py @ pdy @ 3 * +  aim!  40 pursue ;
+
+Every monster can now run its own mind — type `next` to hand the minds out.
+
+## Three monsters, three minds
 
 `install-brains` hands each monster a different mind, and `new-game` now fields
 three of them:
@@ -462,11 +535,18 @@ it:
 - **More monsters:** bump the count in `new-game` (up to `MAXM`) and hand each a
   brain in `install-brains`.
 - **New brains:** write a `patrol` that paces a row, or a `flee` that runs from
-  you — each is just a `( i -- )` word you drop into a `mbrain` slot.
-- **Tune the chase:** lower `FRAME` for speed, or move monsters every *other*
-  frame so they're beatable.
+  you — each is just a `( i -- )` word you drop into a `mbrain` slot, and a
+  pursuer is often nothing more than an aim point and a sharpness
+  (`aim!  <pct> pursue`).
+- **Tune the chase:** lower `FRAME` for speed, raise `hunt`'s 50 for a
+  killer (or drop it for a pushover).
 - **Toward Pac-Man:** add **walls** inside the arena and have brains route
   around them. That's real maze pathfinding — the natural next project.
+
+And when you start your **next** game, don't start from nothing:
+`examples/game-template.fs` is this chapter's skeleton with all eight seams
+deferred and runnable stubs installed — open it, `save mygame.fs`, and fill
+the seams top-down, just like you did here.
 
 The finished program is `examples/chase.fs`. For any word used here, the
 Language Reference has a page per topic — try `man defining-words` (for `defer`,

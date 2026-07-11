@@ -21,6 +21,14 @@ completed. See Planning.md for high-level vision and design decisions.
   because no caller passed `u = 0`. Found 2026-06 (same investigation). Fixed on
   the `fix-move-cmove` branch (drop all three cells; `0 CMOVE>` / `0 CMOVE`
   depth tests).
+- [x] **`include <directory>` segfaulted.** `open(2)` succeeds on a directory;
+  the raw `mmap` syscall then fails returning -errno (-19, ENODEV), but
+  `INCLUDED` checked for exactly -1 — so the error code became the file base
+  address. Also, an `fstat` error fell into the "empty file → success" path.
+  Both checks now route any negative return to the existing cannot-open error
+  path. Found 2026-07-06 (a test bug passed a directory to `include`), fixed
+  2026-07-10 on the `include-dir-segfault` branch (both architectures;
+  integration tests: error message + session survives).
 
 ---
 
@@ -331,9 +339,9 @@ docs/Graphics.md for the API.
   constants/offsets. Dummy-driver integration test (headless).
 - [x] Animation demo: `examples/bounce.fs` — bouncing square at the display
   refresh rate (vsync), ESC/q/close to quit
-- [ ] Interpreted `s"` (ANS File word set semantics: transient buffer) — the
-  compile-only gotcha bites every binding file; sdl3.fs had to wrap its
-  strings in a `(sdl-bind)` word
+- [x] Interpreted `s"` and `."` (ANS transient-buffer semantics) — STATE-smart
+  redefinitions in core.fs; two alternating 256-byte buffers; compile path
+  delegates to the ASM primitives so compiled code is unchanged
 - [ ] SDL3 in the Pumpkian board image (build from source; bookworm has no
   libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites
@@ -400,7 +408,7 @@ docs/Graphics.md for the API.
 
 ---
 
-## Shell-Like Words (pwd / cd / ls / cat / more) — NEXT
+## Shell-Like Words (pwd / cd / ls / cat / more) — COMPLETE
 
 Navigate and inspect the filesystem from the REPL — hop to another directory
 and list or read a file without leaving BasicForth. Most infrastructure already
@@ -435,6 +443,122 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
     Manual section; `platform_chdir`/`platform_getcwd` added to Platform_Layer.md;
     Persistence.md updated for the session.fs startup-dir pin. Documented limit:
     `parse-word` path tokens can't contain spaces in v1.
+
+---
+
+## Module System / Forth-as-Shell
+
+The vision: BasicForth as a *shell* with Forth as the shell language — `cd`
+around, `load` a module, interact with it live (`.module`, `see`/`edit`/run
+words, `save` back). Shipped across v0.9.0 (2026-07-04) and the merges since;
+see docs/Persistence.md, Line_Editor.md, Deferred_Words.md, Shelling_Out.md.
+
+### Shipped
+
+- [x] Named modules replace the magic `session.fs`: `save <name>` / bare
+  `save`, `load`, `new`, `reload`, `-session`; `.session` renamed `.module`;
+  capture turns on with a file argument.
+- [x] `uses <word>` — whole-token, case-insensitive reference search across
+  the module's sources (capture log or file), the "what do I touch if I
+  rename this?" tool.
+- [x] Modal `edit <word>`: spawns `$VISUAL`/`$EDITOR`/`vi` on a temp file via
+  the new `(system)` primitive (fork/execve/wait4; clone on ARM64), so
+  multi-line formatting survives; on save it recompiles the word and
+  **propagates** to every transitive caller (STC bakes call targets).
+- [x] `sh <command>` — run a shell line from the REPL (transient, not
+  captured); `(system)` is the underlying primitive.
+- [x] `compact <name>` — deduped, dependency-ordered, definitions-only
+  snapshot written next to the append-only `save` file; final `is`/`to`
+  bindings preserved.
+- [x] Dirty-guard: `new`/`load`/`bye` prompt "save first? (y/n)" when the
+  module has unsaved changes.
+- [x] Typed dictionary headers (Flags2 byte: code/defer/value/noname);
+  type-checked `is`/`to`; `defer@`/`action-of`; `see` reports a deferred
+  word's current binding.
+- [x] `:noname` headers — anonymous definitions carry real source metadata
+  (empty name, unfindable by construction), so `see`/`compact`/`edit` handle
+  `:noname`-bound defers exactly (multi-line included); fixed the multi-line
+  group re-evaluation segfault.
+- [x] `uses` + edit-propagation treat `:noname` actions first-class: live
+  groups reported as `(:noname is <name>)` and re-run on propagation, with a
+  guard so superseded groups are never re-fired.
+- [x] Tutorial UX: steps clear the screen; `tutorial <name> [step]` and
+  `step [n]` jump/replay (a `value` works as a bookmark argument);
+  `end-tutorial`; tty-only pager pause; Chase tutorial (24 steps) and
+  `examples/game-template.fs`.
+- [x] Robustness fixes found by live use: xorshift64 `rnd` (the old LCG's
+  low bit alternated), tabs count as whitespace in the tokenizer, `edit`
+  with an untouched file is a no-op (vi `:q!` exits 0).
+
+### Next: the editing-workflow arc (planned 2026-07-08)
+
+Motivating find: a plain interactive redefinition (`: helper 200 ;`) does NOT
+propagate — callers silently keep the old code (STC bakes call targets; only
+`edit` recompiles callers). Worse, it makes the three persistence views
+disagree: live behavior and `save`/`reload` keep callers on the old code,
+but `compact` emits the latest source at the word's original position, so
+callers would bind the NEW code. `:e` closes the gap and becomes the taught
+way to redefine. The full symmetry grid:
+
+|                        | inline | $EDITOR         |
+|------------------------|--------|-----------------|
+| new word               | `:`    | `define <word>` |
+| redefine + propagate   | `:e <word>` | `edit <word>` |
+
+- [x] **Step 1a: `define <word>`** — open `$EDITOR` on a template
+  (`: word\n    ;`), evaluate + log on exit, exactly the modal-`edit`
+  machinery minus the source lookup. Refuse an existing word ("already
+  defined — use edit"), symmetric with `edit`'s errors.
+- [x] **Step 1b: bare `edit`** (no argument) — open the *current module
+  file* in `$EDITOR`; on exit, if the file changed, `reload` it (unchanged →
+  no-op, reuse the `(s=)` compare). Dirty-guard first: unsaved captured
+  changes would be lost by the reload, so prompt "save first? (y/n)" like
+  `load`/`new`. Requires a current module.
+
+Building Step 1b surfaced a simpler model — reload-based editing makes
+propagation correct by construction and stops the save file from
+accumulating redefinitions. The original Steps 2–4 were re-planned as the
+**file-canonical model, AGREED 2026-07-10 in docs/Module_Architecture.md**
+(that doc has the full rationale and hard cases). The staged roadmap:
+
+- [x] **Stage 1: splice machinery** — `save` honors bind vs mutate (the
+  hyper-static principle, added to Module_Architecture.md during this
+  stage): file text and `:` rebindings kept verbatim in order
+  (replay-faithful), `edit`-originated mutations (tagged at capture)
+  spliced over the binding they edited; `compact` deprecated.
+- [x] **Stage 2: `edit <word>` v2** — temp-file UX + splice + reload
+  (replaces propagation). The edit targets the word's newest definition in
+  the module file, verifies the span still holds the expected text before
+  rewriting (atomic .new+rename), and reloads; the dirty-guard runs before
+  any reload (non-interactive sessions refuse instead of discarding).
+  Deviation from plan: the temp path is module-adjacent (`<module>.edit`,
+  removed after) rather than pid-suffixed — no new syscall, and collisions
+  then require two sessions editing the SAME module, which is already a
+  conflict. Propagation is now uncalled (deleted in Stage 4).
+- [ ] **Stage 3: `:e <word>`** — inline redefine + splice + reload.
+- [ ] **Stage 4: cleanup pass** — sweep the log-canonical cruft once 2–3
+  prove stable: the propagation body in core.fs, `compact` + helpers, the
+  fixed `(edit-tmp)` path; rewrite Line_Editor.md's propagation section;
+  drop/rewrite the propagation tests.
+- [ ] **Stage 5: `module <file>` + ownership** — `.module` filters by
+  SrcId, foreign-word refusal with a hint, dependency edits splice into
+  their own file (one reload propagates through the `include` chain).
+- [ ] **Stage 6 (gated on use testing): auto-sync** — the file stays in
+  sync as you type; explicit `save` and the dirty-guard retire;
+  rollback-on-broken-reload if the fix loop proves insufficient.
+  Checkpointing convention meanwhile: **git through `sh`**.
+
+### Open threads
+
+- [ ] **Pipes / output capture** (`pipe`/`dup2` platform work) — read a
+  command's *output* back into Forth (today `(system)`/`sh` only stream to
+  the terminal). Unlocks `history | grep`-style words and fzf pickers for
+  `edit`/`load`. Queued behind the editing-workflow arc above.
+- [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
+  `platform_key`), so unsaved work can be lost silently.
+- [ ] `man` doesn't map hyphens↔underscores, so some cross-references in the
+  docs name topics that don't resolve (e.g. `man help-system` vs
+  `Help_System.md`).
 
 ---
 

@@ -4,21 +4,26 @@ In BasicForth a string is usually an address/length pair on the stack:
 `( c-addr u )` — a start address and a byte count. `s"` makes one, `type` prints
 one, and the rest read, compare, and copy them.
 
-`s"` and `."` are **compile-only**, so the examples wrap them in a short word you
-then run.
+`s"` and `."` work both ways: inside a definition they compile the string
+into the word; at the prompt they act immediately.
 
-## ." ( -- )  (compile-only)
-Compile a string that is printed when the word runs. The text runs from after the
-space to the closing `"`.
+## ." ( -- )
+Inside a definition: compile a string that is printed when the word runs. At
+the prompt: print it right away. The text runs from after the space to the
+closing `"`.
 
     : greet  ." hello" ;
     greet             \ hello
+    ." hi there"      \ hi there
 
-## s" ( -- c-addr u )  (compile-only)
-Compile a string and, at run time, push its address and length.
+## s" ( -- c-addr u )
+Inside a definition: compile a string and, at run time, push its address and
+length. At the prompt: push the string via a transient buffer — valid until
+the second-next interpreted `s"` (two can be live at once; max 256 chars).
 
     : msg  s" abc" type ;
     msg               \ abc
+    s" abc" type      \ abc
 
 ## type ( c-addr u -- )
 Print `u` characters starting at `c-addr`.

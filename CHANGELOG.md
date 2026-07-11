@@ -1,5 +1,265 @@
 # Changelog
 
+## Unreleased
+
+### `edit <word>` splices the module file and reloads (stage 2)
+- **An edit is now a file operation.** On save-and-quit, the edited word's
+  new text is spliced into the module file over its definition (verified
+  against the expected text, written atomically) and the module reloads —
+  the change is on disk and every caller is rebuilt by construction, with
+  no propagation pass and no after-edit "unsaved changes" state. Editing a
+  deferred word's `:noname` action splices *its* group; the reload
+  re-binds. The trade-off: the reload resets runtime state (variables,
+  values) — growth (`define`, `:`, defer swaps) stays hot; only revising a
+  definition restarts the module.
+- **The dirty-guard runs before any edit-reload**: y saves first (the
+  reload replays the saved work), n discards, anything else cancels.
+  Non-interactive sessions refuse (`edit: unsaved changes — save first`)
+  instead of silently discarding. A word typed this session must be saved
+  before it can be edited; a scratch session is told to `save <name>`
+  first.
+- **The temp file is module-adjacent** (`<module>.edit`, removed after the
+  cycle) instead of the fixed `/tmp/basicforth-edit.fs`, so parallel
+  sessions no longer clobber each other's edits.
+- The propagation machinery (`(propagate)`, the dirty-set walk, the anon
+  group re-runs) is now uncalled and will be deleted in the stage-4
+  cleanup; `uses` is unaffected.
+
+### `save` honors bind vs mutate (the hyper-static principle)
+- **The saved file now replays to exactly the live session.** Forth's
+  dictionary is hyper-static: `:` never changes an existing definition, it
+  layers a new *binding*, and earlier words keep what they captured. `save`
+  now reflects that faithfully — the file text is kept byte-for-byte
+  (comments, layout, every binding in order) and the session's definitions
+  and direct `is`/`to` assignments append in the order they happened. A
+  plain `: thrust 25 ;` appends; words defined before it keep the old
+  `thrust`, live and after reload alike.
+- **`edit` is a *mutation* and no longer pollutes the file.** An edited
+  word's new text replaces the binding it actually edited — its newest
+  prior definition, whether in the file text or appended earlier this
+  session — and the propagation re-logs splice onto themselves, so edit
+  history never accumulates and saving twice is byte-identical. Previously
+  one edit appended the word plus every recompiled caller.
+  (Module_Architecture.md stage 1; mutations are tagged at capture time,
+  and the log/`see`/`uses` are untouched.)
+- **`compact` is deprecated** — mutations don't accumulate, and deduping
+  deliberate `:` rebindings would *rewire* them (earlier words would come
+  back bound to the latest definition — semantically wrong, not just
+  lossy). It remains temporarily and will be removed in the stage-4
+  cleanup.
+
+### Platform boundary tightened (Platform_Layer_Review findings #1–#4, #6)
+- **Return-value contract written down** (Platform_Layer.md): platform calls
+  return 0/positive on success, -errno on failure; callers above the boundary
+  use sign/zero tests only, and error magnitudes are opaque — with exactly one
+  sanctioned exception, the new **`platform_err_not_found`** data symbol the
+  platform layer exports (-ENOENT on Linux).
+- **`INCLUDED` no longer hardcodes ENOENT**: the `BASICFORTH_PATH` fallback
+  compared the open error against a literal `-2` in core.s (both arches); it
+  now compares against `platform_err_not_found`, so a backend with different
+  error numbering keeps the path search working.
+- **`fam` is now an abstract enum translated below the boundary**:
+  `platform_open_file_mode` / `platform_create_file` take `r/o`=0 `w/o`=1
+  `r/w`=2 and translate to native open flags via a table (identity on Linux,
+  but the decision now lives in the platform layer). An out-of-range fam
+  fails like a failed open with ior EINVAL instead of reaching the OS as
+  arbitrary flag bits.
+- **Named the magic numbers**: the three hardcoded `22`s in
+  ALLOCATE/FREE/RESIZE are now a single `EINVAL` constant, and
+  `stdin`/`stdout`/`stderr` are documented as abstract handles the platform
+  layer defines (identity with the OS fd on POSIX).
+- Finding #5 (`/tmp`, `$EDITOR`, `/` in `edit`/`define`) is recorded and
+  deferred until a second hosted OS is attempted.
+
+### `include <directory>` no longer segfaults
+- `include /tmp` (or any directory path) crashed: `open(2)` succeeds on a
+  directory, and the raw `mmap` syscall then fails returning **-errno**
+  (`-19`, ENODEV) — but `INCLUDED` checked for exactly `-1`, so the error
+  code was used as the file's base address. The mmap check now treats any
+  negative return as failure, and an `fstat` error is reported instead of
+  being silently treated as an empty file. `include /tmp` now prints
+  `Error: cannot open /tmp` and the session continues. Both architectures.
+
+### Bare `edit` opens the module file
+- **`edit` with no word name** opens the current module file itself in the
+  editor (in place on disk) and `reload`s it on a change — the edit-on-disk
+  loop (edit in another terminal + `reload`) in one word. An untouched file
+  skips the reload. A dirty module prompts "save first? (y/n)" *before* the
+  editor opens, so answering y lets the editor see the session's state.
+
+### New word: `define`
+- **`define <word>`** opens `$VISUAL`/`$EDITOR`/`vi` on a fresh `: word` /
+  `;` template and compiles + logs whatever you save — `edit` for a word
+  that doesn't exist yet, so multi-line definitions with comments can be
+  written in a real editor from the start. An existing word is refused
+  ("use edit"); an untouched template defines nothing. The shared editor
+  cycle now reports under the command you typed (`edit:` / `define:`).
+
+### New word: `clearstack`
+- **`clearstack ( ... -- )`** discards everything on the data stack. Unlike
+  `abort` it is not an error path — it just empties the stack and carries on,
+  so it also works inside a running program or a loaded file. Documented in
+  `man stack` and the manual's stack-words table.
+
+### `uses` and edit-propagation see `:noname` actions
+- **`uses` now reports live anonymous actions.** A `:noname … ; is x` group
+  that is the *current* action of a deferred word is scanned like any
+  definition and shown as `(:noname is x)` — resolved by walking the deferred
+  words and matching the action cell to the anonymous entry's xt. Superseded
+  groups (actions a defer has been re-pointed away from) are dead code and
+  are not listed; `uses x` on the deferred word itself skips its own binding
+  group, matching the own-definition rule for named words.
+- **`edit` propagation reaches every `:noname`-bound defer.** When an edited
+  word is called from a live `:noname` group, the whole group is re-run —
+  the trailing `is` re-binds the defer to freshly compiled code — and the
+  report shows `(:noname is x)`. Previously the empty-name source lookup
+  accidentally matched only the *newest* anonymous entry, so with two
+  `:noname`-bound defers calling the edited word, one updated and the other
+  silently kept calling the old code. Superseded groups are skipped
+  (re-running one would drag the defer back to its old binding), and the
+  defer's own callers are never recompiled — they reach it through the
+  action cell.
+- `(word-src)` now refuses nameless entries outright, killing the accidental
+  newest-anon match at its root; anonymous sources are resolved per-entry
+  via the header's own metadata instead.
+
+### `:noname` definitions carry real source metadata
+- `:noname` now builds a genuine dictionary entry — with an **empty name**
+  (unfindable by construction: lookup compares lengths first and every typed
+  token has length ≥ 1) and word-type code 3 — so an anonymous definition
+  carries the same code pointer and source record as a named word.
+  `words`/`.module` skip the nameless entries. What falls out:
+- **`see` on a deferred word shows its `:noname` action in full**, straight
+  from the recorded source — multi-line included. The old log-scanning
+  heuristic (which could only show the group's last line) is gone.
+- **`compact` replays `:noname` bindings correctly.** The whole
+  `:noname ... ; is x` group is emitted as a definition (re-running it
+  re-binds), and no separate assignment line is appended for a defer whose
+  action is anonymous. Previously a *multi-line* `:noname` binding compacted
+  to just its last line — a file that failed to load.
+- **`edit` on a deferred word follows the binding**: a `:noname` action opens
+  *its* source in your editor, and saving re-binds the defer (no caller
+  recompilation needed — callers go through the defer). A named action
+  prints "edit `<word>` instead"; an uninitialized defer says to `is` it
+  first. The old behavior — opening the `defer` declaration line and
+  re-running it on save, which redefined every defer on that line as fresh
+  and uninitialized — is gone.
+- Fixed a segfault when re-evaluating a **multi-line** `:noname` group
+  (`edit` of such a binding): the group parks its xt on the data stack
+  between lines, and the line-replay loop kept its own bookkeeping there
+  too — the xt shadowed it, corrupting the walk and eventually feeding a
+  buffer *length* to `free`. The loop now keeps all state in variables, and
+  `(eval+log)` drops any leftovers a malformed group leaves so a caller's
+  stack frame can never shift again.
+
+### `edit` with an untouched file is a no-op
+- Leaving the editor without saving (vi's `:q!`) exits with status **0**, so
+  `edit` re-submitted the unchanged source anyway — recompiling the word and
+  its callers. For a deferred word this was destructive: the defer line was
+  re-run, redefining the defer (and any siblings on the same line) as fresh
+  *uninitialized* words, silently dropping their `is` bindings. `edit` now
+  keeps the temp file's pre-editor image and compares after the editor
+  exits: identical bytes → `edit: unchanged`, nothing recompiled, bindings
+  intact. Only a real change is resubmitted and propagated.
+
+### Tabs are whitespace
+- `parse-word` delimited on the space character only, so a source file with a
+  real tab — a tab-indented definition, or a tab between tokens — failed to
+  load with a baffling unknown-word error (`? <tab>W`). The tokenizer now
+  treats every character ≤ 0x20 (tab, CR, ...) as a delimiter, the classic
+  Forth rule. Explicit-delimiter parsing (`."`, `s"`, `(`) is unchanged.
+
+### `random` is now xorshift64 — `rnd`'s low bits were broken
+- The old LCG returned its raw seed, and `rnd` reduces with `mod`, which
+  uses the **low bits** — an LCG's weakest: bit 0 alternates with period 2,
+  so `2 rnd` flip-flopped deterministically and small moduli cycled. In
+  Chase this made `wobble`'s coin-flip axis choice alternate and skewed the
+  brains' dice, seed-dependently (caught by a statistical test flaking per
+  run). `random` is now Marsaglia xorshift64 (13/7/17): same speed, every
+  output bit well-mixed. Seed still comes from `ms@`, forced nonzero.
+
+### Chase: fair, imperfect monsters
+- `hunt` and `ambush` stepped **both** axes every frame — a diagonal move,
+  strictly faster than the player's one-axis step, so escape was impossible.
+  Brains are now built on a shared aim point: `aim!` sets where a brain is
+  aiming and `step-toward` closes the **longer** axis by one, so a pursuer
+  moves exactly as fast as you.
+- And no brain is perfect: `pursue ( i pct -- )` takes the smart step only
+  *pct*% of frames, otherwise one random one-axis `wobble` — the fumbles are
+  the player's fighting chance. Every brain is now a one-liner of aim +
+  sharpness, with values settled by playtesting: `hunt` 50%, `ambush` 40%,
+  `drift` 15% (it wanders, but lunges about one frame in seven — dim, not
+  blind). New tutorial step "No brain is perfect — dice" teaches the
+  pattern; `examples/chase.fs` matches.
+- Equal *visual* speed on both axes: terminal cells are ~2x taller than
+  wide, so vertical movement looked twice as fast. Chase now moves x in
+  **2-column strides** (the same trick `snake.fs` uses) — player, monsters,
+  and gold all live on the even-column grid, so exact-match collisions still
+  work.
+
+### Game input: drain the key queue every frame
+- Holding an arrow key autorepeats far faster than frames tick; the games
+  read **one** key per frame, so a new direction had to wait for the stale
+  backlog to unwind, one repeat per frame. `input` in `examples/chase.fs` /
+  `snake-mini.fs` (and `get-key` in `snake.fs`) now drains **all** pending
+  keys each frame — `begin key? while ... repeat` — so the last key wins and
+  steering is immediate. Both tutorials teach the pattern, and the game
+  template's `input` seam comment hints it.
+
+### Tutorial UX: cleared steps, `step`, `end-tutorial`
+- `tutorial` / `next` / `back` now clear the screen before printing a step
+  (interactive sessions only — piped input stays plain text). Each step reads
+  like a fresh page, the `--More--` pager's line count finally matches the
+  real screen, and the display recovers cleanly after steps that draw with
+  `at-xy` (like playing Chase mid-tutorial).
+- New **`step`** replays the current step — handy after running something
+  that drew over it. New **`end-tutorial`** leaves the tutorial: it forgets
+  which step `next` would show and nothing else — your definitions remain
+  (unlike `-session`, it touches no dictionary state). The step footer now
+  advertises all four: `[ step 6:  next   back   step = replay
+  end-tutorial ]`.
+- The `--more--` pager pause is now **interactive-only**: piped `man` and
+  `tutorial` output prints straight through instead of silently eating input
+  lines as pager keystrokes.
+- Resume where you left off: **`tutorial <name> [step]`** starts at a given
+  step — `tutorial chase 10` picks up yesterday's session — and **`step [n]`**
+  jumps straight to step *n* (bare `step` still replays the current one).
+  The argument may also be the name of a **`value`**, identified by its
+  word-type tag and read side-effect-free — the bookmark pattern:
+  `11 value tstep` in your saved module, `tutorial chase tstep` tomorrow
+  (`to tstep` as you advance; `save` persists it). Variables are refused —
+  `save` doesn't persist a variable's contents. Anything that isn't a number
+  or a value is left for the interpreter.
+- The Chase tutorial's five over-long steps were each split in two (22 steps
+  now), so every step fits in half–two-thirds of a screen with room to type
+  below — the sharpened authoring rule is in docs/Tutorial_System.md. Step
+  "The real setup" also now tells you `cursor-on` brings the cursor back
+  after running `setup` by hand.
+
+### `examples/game-template.fs` — a starting point for your own game
+- The Chase tutorial's skeleton, generalized into a blank-slate template: the
+  frame-loop engine (`play`, `game`) with all eight seams deferred (`setup`,
+  `finish`, `input`, `erase`, `update`, `render`, `frame-wait`, `done?`) and
+  runnable stubs installed, so `game` works out of the box — a blank frame
+  loop that exits on any key. `FRAME` is a `value` (tune live with
+  `90 to FRAME`). Workflow: `basicforth game-template.fs`, then
+  `save mygame.fs` first (save-as, so the template stays clean), then replace
+  seams one at a time with `:noname ... ; is update` and bake them when
+  settled. The Chase tutorial's closing step points here.
+
+### Interpreted `s"` and `."`
+- `s"` and `."` now work outside definitions — at the prompt, at the top
+  level of included files, and under `evaluate`. STATE-smart wrappers in
+  core.fs shadow the ASM primitives: when compiling they delegate to the
+  primitive (compiled code is byte-identical, `see` string recognition
+  unchanged); when interpreting, `s"` returns the string in one of **two
+  alternating 256-byte transient buffers** (ANS 2012 — valid until the
+  second-next interpreted `s"`) and `."` types immediately. Strings over
+  256 chars abort with `interpreted string too long`. `abort"` remains
+  compile-only. This removes the gotcha that forced sdl3.fs to wrap its
+  binding strings in a word — `s" file.fs" included`, `s" cmd" (system)`,
+  and one-off FFI calls now work straight from the prompt.
+
 ## v0.9.0 — 2026-07-03
 
 ### `compact` keeps final `is`/`to` bindings

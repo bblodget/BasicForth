@@ -55,8 +55,8 @@ create by MAXLEN cells allot     \ body y positions (ring buffer)
     hx @     2 bx!  hy @ 2 by! ;
 
 : go ( dx dy -- )  dy !  dx ! ;
-: input
-    key? if
+: input                          \ drain the queue; last key wins
+    begin key? while
         key case
             KEY_UP    of  0 -1 go endof
             KEY_DOWN  of  0  1 go endof
@@ -64,7 +64,7 @@ create by MAXLEN cells allot     \ body y positions (ring buffer)
             KEY_RIGHT of  1  0 go endof
             [char] q  of  true gameover ! endof
         endcase
-    then ;
+    repeat ;
 
 : ahead   hx @ dx @ + nx !   hy @ dy @ + ny ! ;
 
