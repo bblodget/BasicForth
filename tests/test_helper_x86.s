@@ -314,3 +314,11 @@ forth_version_str:
     sub $8, %r15
     movq $hv_len, (%r15)
     ret
+
+# Data symbol owned by platform_linux.s in the real binary: the distinguished
+# "file not found" error value INCLUDED compares against (Platform_Layer.md).
+.section .rodata
+.balign 8
+.global platform_err_not_found
+platform_err_not_found: .quad -2
+.text

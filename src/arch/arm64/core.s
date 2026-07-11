@@ -2755,8 +2755,12 @@ forth_included:
     B .Lincl_pop_regs
 
 .Lincl_open_err:
-    // Check for ENOENT (-2) — try BASICFORTH_PATH fallback
-    CMN X0, #2
+    // Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
+    // the one comparable error value (platform_err_not_found); every other
+    // magnitude is opaque up here — sign/zero tests only (Platform_Layer.md).
+    ADR X9, platform_err_not_found
+    LDR X9, [X9]
+    CMP X0, X9
     B.NE .Lincl_open_other
 
     // BASICFORTH_PATH is a colon-separated list of directories. Try each in
@@ -3829,8 +3833,8 @@ forth_write_file:
 .global forth_open_file
 forth_open_file:
     STP X29, X30, [SP, #-16]!
-    LDR X2, [X19]                   // flags = fam (R/O=0, W/O=1, R/W=2 = OS flags)
-    MOV X3, #0                      // mode = 0
+    LDR X2, [X19]                   // fam (abstract: R/O=0 W/O=1 R/W=2; the
+                                    //   platform layer maps it to OS flags)
     LDR X1, [X19, #CELL]            // u (path length)
     LDR X0, [X19, #2*CELL]          // c-addr (path)
     ADD X19, X19, #CELL             // pop fam → ( c-addr u )

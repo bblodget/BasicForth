@@ -306,7 +306,9 @@ variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 
 : D<    ( d1 d2 -- flag ) d- d0< ;
 : D.    ( d -- ) dup >r dabs <# #s r> sign #> type space ;
 
-\ File-output words (fileid = raw OS file descriptor)
+\ File-output words. A fileid is an abstract handle whose values the
+\ platform layer defines and consumes (identity with the OS fd on POSIX
+\ backends); these three are the standard streams every backend provides.
 0 constant stdin
 1 constant stdout
 2 constant stderr
@@ -365,8 +367,10 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
             then
         again ;
 
-\ File-access methods (fam): the values passed to OPEN-FILE / CREATE-FILE.
-\ They are the OS open() flags; BIN is a no-op (Linux has no text/binary mode).
+\ File-access methods (fam): backend-neutral access codes passed to
+\ OPEN-FILE / CREATE-FILE — 0=read 1=write 2=read/write. The platform layer
+\ translates them to native open() flags (see Platform_Layer.md); BIN is a
+\ no-op (no text/binary distinction on Linux).
 0 constant r/o
 1 constant w/o
 2 constant r/w
@@ -380,10 +384,16 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ Allocations are page-granular, so this suits a few large buffers rather than
 \ many tiny ones; the interface can be re-backed by a finer allocator later.
 
+\ The "invalid argument" ior these words synthesize for rejects. The value
+\ matches the backend's errno (Linux EINVAL) because real platform failures
+\ surface their errno as the ior — see Platform_Layer.md "Return-value
+\ contract". Callers must treat ior magnitudes as opaque (test zero/non-zero).
+22 constant EINVAL
+
 \ ALLOCATE ( u -- a-addr ior )  reserve u bytes; ior 0 on success. A zero-size
 \ request is rejected with a non-zero ior (no allocation), matching gforth.
 : allocate ( u -- a-addr ior )
-    dup 0= if  drop 0 22 exit  then   \ reject 0 bytes (EINVAL); nothing mapped
+    dup 0= if  drop 0 EINVAL exit  then   \ reject 0 bytes; nothing mapped
     cell+ dup (mmap-anon)             ( total addr )  \ map header + payload
     dup 0< if  nip negate 0 swap exit  then           ( 0 errno )  \ mmap failed
     tuck !                            ( base )  \ stash total length in header
@@ -393,7 +403,7 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ A null a-addr (e.g. a failed ALLOCATE's result) is rejected with a non-zero
 \ ior instead of dereferencing the header at a-addr - cell.
 : free ( a-addr -- ior )
-    dup 0= if  drop 22 exit  then     \ reject null (EINVAL); don't deref
+    dup 0= if  drop EINVAL exit  then \ reject null; don't deref
     1 cells -                         ( base )  \ step back to the header
     dup @ (munmap)                    ( n )    \ unmap base for its stored length
     negate ;                          \ 0 stays 0; -errno → positive ior
@@ -403,7 +413,7 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
 \ original block is unchanged and a-addr2 = a-addr1. A null a-addr1 is rejected
 \ with a non-zero ior (it would otherwise deref a wild header).
 : resize ( a-addr1 u -- a-addr2 ior )
-    over 0= if  drop 22 exit  then    ( 0 ior )  \ reject null a-addr1
+    over 0= if  drop EINVAL exit  then  ( 0 ior )  \ reject null a-addr1
     over 1 cells - @ 1 cells -        ( a1 u olduser )  \ old payload byte count
     over min >r                       ( a1 u )  \ R: bytes to copy = min(u,old)
     dup allocate                      ( a1 u a2 ior )

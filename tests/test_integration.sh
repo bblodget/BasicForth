@@ -1540,6 +1540,11 @@ if [[ "$fa_out" == *"MISS=2"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  open-file missing → ior 2\n    Expected: MISS=2\n    Got:      %s\n" "$fa_out"; ((failed++))
 fi
+
+# fam is an abstract enum translated by the platform layer; an out-of-range
+# fam must fail like a failed open with ior EINVAL, not reach the OS as
+# arbitrary flag bits.
+assert_output "open-file bad fam -> EINVAL"  's" nofile.xyz" 7 open-file swap drop einval = .'  "-1"
 if [[ "$fa_disk" == "WROTE" ]]; then
     printf "  ${GREEN}PASS${NC}  create-file + write-file roundtrip\n"; ((passed++))
 else

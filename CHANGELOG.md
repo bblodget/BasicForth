@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Platform boundary tightened (Platform_Layer_Review findings #1–#4, #6)
+- **Return-value contract written down** (Platform_Layer.md): platform calls
+  return 0/positive on success, -errno on failure; callers above the boundary
+  use sign/zero tests only, and error magnitudes are opaque — with exactly one
+  sanctioned exception, the new **`platform_err_not_found`** data symbol the
+  platform layer exports (-ENOENT on Linux).
+- **`INCLUDED` no longer hardcodes ENOENT**: the `BASICFORTH_PATH` fallback
+  compared the open error against a literal `-2` in core.s (both arches); it
+  now compares against `platform_err_not_found`, so a backend with different
+  error numbering keeps the path search working.
+- **`fam` is now an abstract enum translated below the boundary**:
+  `platform_open_file_mode` / `platform_create_file` take `r/o`=0 `w/o`=1
+  `r/w`=2 and translate to native open flags via a table (identity on Linux,
+  but the decision now lives in the platform layer). An out-of-range fam
+  fails like a failed open with ior EINVAL instead of reaching the OS as
+  arbitrary flag bits.
+- **Named the magic numbers**: the three hardcoded `22`s in
+  ALLOCATE/FREE/RESIZE are now a single `EINVAL` constant, and
+  `stdin`/`stdout`/`stderr` are documented as abstract handles the platform
+  layer defines (identity with the OS fd on POSIX).
+- Finding #5 (`/tmp`, `$EDITOR`, `/` in `edit`/`define`) is recorded and
+  deferred until a second hosted OS is attempted.
+
 ### `include <directory>` no longer segfaults
 - `include /tmp` (or any directory path) crashed: `open(2)` succeeds on a
   directory, and the raw `mmap` syscall then fails returning **-errno**
