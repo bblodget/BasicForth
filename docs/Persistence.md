@@ -187,15 +187,14 @@ inside a defining word.
 
 Other notes:
 
-- **Mutation (splice) details.** An `edit` replaces the binding it actually
-  edited: the word's newest prior definition — a binding appended earlier
-  this session if you rebound it, else its newest definition in the file
-  text. Older same-name definitions are older bindings and are never
-  touched. Editing the same word again updates the same spot (last edit
-  wins). A mutation with no clean target — an edited word that was never
-  saved, an edited `:noname` action, or a definition sharing its source
-  line with another — appends instead (still replay-correct, just not
-  deduped). `is`/`to` assignment lines and `:noname ... ; is x` groups are
+- **Mutation (splice) details.** An `edit` happens directly on the module
+  file (stage 2): the new text replaces the word's newest definition in the
+  file — verified against the expected text, written atomically — and the
+  module reloads. Older same-name definitions are older bindings and are
+  never touched; editing again rewrites the same spot, so edit history
+  never exists. A word typed this session must be saved before it can be
+  edited (the terminal prompts; a script must `save` explicitly).
+  `is`/`to` assignment lines and `:noname ... ; is x` groups are
   order-dependent effects: the file's stay put, the session's append in the
   order they happened, and the last one wins on replay.
 - **`compact` is deprecated** — and for a stronger reason than redundancy:

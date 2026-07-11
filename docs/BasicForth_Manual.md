@@ -708,13 +708,16 @@ Enter. A line wider than the terminal **scrolls sideways** instead of wrapping.
 
 A `:` definition can span several lines; while one is open the prompt becomes
 `... ` until `;` closes it. **`edit <word>`** opens an existing definition in your
-editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth recompiles
-it — preserving your multi-line formatting — and updates every word that calls it.
-If you leave without changing the file (vi's `:q!`, for example), nothing is
-recompiled: `edit` compares the file to what it wrote, not just the editor's
-exit status. On a **deferred word**, `edit` follows the binding: a `:noname`
-action opens *its* source (saving re-binds the defer), a named action points
-you at that word, an uninitialized defer tells you to `is` it first.
+editor (`$VISUAL`/`$EDITOR`/`vi`); when you save and quit, BasicForth **splices
+the new text into the module file** and **reloads the module**, so the change is
+on disk and every caller is rebuilt — multi-line formatting preserved. (The
+reload resets runtime state — variables and values return to their file-time
+contents.) If you leave without changing the file (vi's `:q!`, for example),
+nothing happens: `edit` compares the file to what it wrote, not just the
+editor's exit status. On a **deferred word**, `edit` follows the binding: a
+`:noname` action opens *its* source (the reload re-binds the defer), a named
+action points you at that word, an uninitialized defer tells you to `is` it
+first.
 **`define <word>`** is `edit` for a word that doesn't exist yet: it opens the
 editor on a `: word` / `;` template, and the saved definition is compiled and
 logged like one typed at the prompt (an existing word is refused — use

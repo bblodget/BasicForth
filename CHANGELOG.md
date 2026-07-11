@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### `edit <word>` splices the module file and reloads (stage 2)
+- **An edit is now a file operation.** On save-and-quit, the edited word's
+  new text is spliced into the module file over its definition (verified
+  against the expected text, written atomically) and the module reloads —
+  the change is on disk and every caller is rebuilt by construction, with
+  no propagation pass and no after-edit "unsaved changes" state. Editing a
+  deferred word's `:noname` action splices *its* group; the reload
+  re-binds. The trade-off: the reload resets runtime state (variables,
+  values) — growth (`define`, `:`, defer swaps) stays hot; only revising a
+  definition restarts the module.
+- **The dirty-guard runs before any edit-reload**: y saves first (the
+  reload replays the saved work), n discards, anything else cancels.
+  Non-interactive sessions refuse (`edit: unsaved changes — save first`)
+  instead of silently discarding. A word typed this session must be saved
+  before it can be edited; a scratch session is told to `save <name>`
+  first.
+- **The temp file is module-adjacent** (`<module>.edit`, removed after the
+  cycle) instead of the fixed `/tmp/basicforth-edit.fs`, so parallel
+  sessions no longer clobber each other's edits.
+- The propagation machinery (`(propagate)`, the dirty-set walk, the anon
+  group re-runs) is now uncalled and will be deleted in the stage-4
+  cleanup; `uses` is unaffected.
+
 ### `save` honors bind vs mutate (the hyper-static principle)
 - **The saved file now replays to exactly the live session.** Forth's
   dictionary is hyper-static: `:` never changes an existing definition, it
