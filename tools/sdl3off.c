@@ -30,6 +30,16 @@ int main(void) {
   printf("key.down offset=%zu\n", offsetof(SDL_KeyboardEvent, down));
   printf("key.repeat offset=%zu\n", offsetof(SDL_KeyboardEvent, repeat));
 
+  printf("\n-- audio --\n");
+  printf("SDL_INIT_AUDIO=0x%x\n", (unsigned)SDL_INIT_AUDIO);
+  printf("SDL_AUDIO_S16LE=0x%x\n", (unsigned)SDL_AUDIO_S16LE);
+  printf("SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK=0x%x\n",
+         (unsigned)SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+  printf("sizeof(SDL_AudioSpec)=%zu\n", sizeof(SDL_AudioSpec));
+  printf("spec.format offset=%zu\n", offsetof(SDL_AudioSpec, format));
+  printf("spec.channels offset=%zu\n", offsetof(SDL_AudioSpec, channels));
+  printf("spec.freq offset=%zu\n", offsetof(SDL_AudioSpec, freq));
+
   printf("\n-- keycodes --\n");
   printf("SDLK_ESCAPE=0x%x SDLK_SPACE=0x%x SDLK_Q=0x%x\n",
          (unsigned)SDLK_ESCAPE, (unsigned)SDLK_SPACE, (unsigned)SDLK_Q);

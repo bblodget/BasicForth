@@ -3,10 +3,11 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ The first desktop-window graphics demo: a yellow square bouncing around a
-\ window, one frame per display refresh (vsync). ESC, q, or closing the
-\ window quits.
+\ window, one frame per display refresh (vsync), with a blip on every wall
+\ hit. ESC, q, or closing the window quits.
 \
 \ Usage: include graphics.fs  include ffi.fs  include sdl3.fs
+\        include sound.fs
 \        include examples/bounce.fs
 \        bounce
 
@@ -18,11 +19,13 @@ variable b-x   variable b-y
 variable b-dx  variable b-dy
 variable b-done
 
+: b-blip ( -- )  660 30 tone ;          \ no-op if the audio device isn't open
+
 \ Advance one axis: pos += d, bouncing off 0 and max-b-size.
 : (b-axis) ( d-var pos-var max -- )
     >r  dup @  2 pick @ +               ( d-var pos-var new ) ( r: max )
     dup 0 <  over b-size + r> > or if   \ off either edge: flip d, stay put
-        drop drop  dup @ negate swap !
+        drop drop  dup @ negate swap !  b-blip
     else
         swap !  drop
     then ;
@@ -48,11 +51,11 @@ variable b-done
     repeat ;
 
 : bounce ( -- )
-    b-w b-h sdl-open
+    b-w b-h sdl-open  snd-open? drop   \ no audio -> blips are no-ops
     40 b-x !  30 b-y !  4 b-dx !  3 b-dy !
     false b-done !
     begin  b-frame  b-events  b-step  b-done @  until
-    sdl-close ;
+    snd-close  sdl-close ;   \ sound first: sdl-close's SDL_Quit ends audio too
 
 \ Fixed-frame variant for automated tests (no events, then clean close).
 : bounce-frames ( n -- )

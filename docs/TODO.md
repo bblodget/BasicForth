@@ -338,7 +338,11 @@ docs/Graphics.md for the API.
   libsdl3 package) — done in the Pumpkian repo
 - [ ] More primitives: lines, circles, blit/sprites
 - [ ] Font / text rendering (show characters on the framebuffer)
-- [ ] Sound output via SDL3 audio
+- [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
+  `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
+  `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
+  soundless via `snd-open? drop`); wall blips in bounce.fs; dummy-driver
+  integration tests; docs/Sound.md + `man sound`
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 

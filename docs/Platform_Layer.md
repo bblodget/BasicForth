@@ -158,12 +158,17 @@ Restore the terminal and exit the process with a caller-supplied status.
 |--------------|----------------------------------|----------------------------------|
 | **Input**    | X0 = exit status                 | RDI = exit status                |
 | **Output**   | does not return                  | does not return                  |
-| **Syscall**  | exit(status) — SYS_exit #93      | exit(status) — SYS_exit #60     |
+| **Syscall**  | exit_group(status) — SYS_exit_group #94 | exit_group(status) — SYS_exit_group #231 |
 
 Calls `platform_restore_term` first (preserving the status across the call),
 then the exit syscall. This is the only safe way to exit — calling exit
 directly would leave the terminal in raw mode. Backs the Forth word `BYE-CODE`
 and the non-zero exit taken when a startup script errors.
+
+Uses `exit_group`, not plain `exit`: `exit` ends only the calling thread, and
+since the FFI brought in SDL (whose audio/video backends spawn threads), a
+plain-`exit` `bye` with a device still open would leave the process alive —
+main thread defunct, SDL threads running, the parent shell waiting forever.
 
 ### platform_bye
 
@@ -173,7 +178,7 @@ Restore the terminal and exit with status 0.
 |--------------|--------------------------|--------------------------|
 | **Input**    | none                     | none                     |
 | **Output**   | does not return          | does not return          |
-| **Syscall**  | exit(0) — SYS_exit #93   | exit(0) — SYS_exit #60  |
+| **Syscall**  | exit_group(0) — SYS_exit_group #94 | exit_group(0) — SYS_exit_group #231 |
 
 A thin wrapper: sets status 0 and jumps to `platform_exit`. Backs the Forth
 word `BYE`, which prints "Goodbye!" before calling it.
@@ -637,7 +642,7 @@ VMIN and VTIME are at c_cc indices 6 and 5 respectively on both platforms.
 | nanosleep     |     101 |       35 | (&timespec_req, &timespec_rem)       |
 | clock_gettime |     113 |      228 | (clockid, &timespec)                 |
 | openat        |      56 |      257 | (dirfd, path, flags, mode)           |
-| exit          |      93 |       60 | (status)                             |
+| exit_group    |      94 |      231 | (status) — all threads, see platform_exit |
 | fork          |     n/a |       57 | () — x86 only; ARM64 uses clone      |
 | clone         |     220 |      n/a | (flags, stack, ptid, tls, ctid)      |
 | execve        |     221 |       59 | (path, argv, envp)                   |

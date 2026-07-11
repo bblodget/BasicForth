@@ -7,7 +7,9 @@
 .equ SYS_ioctl,          29
 .equ SYS_read,           63
 .equ SYS_write,          64
-.equ SYS_exit,           93
+.equ SYS_exit_group,     94     // not SYS_exit (93): that ends only the calling
+                                // thread, and SDL spawns audio/video threads
+                                // that would keep a bye'd process alive
 .equ SYS_clone,          220
 .equ SYS_execve,         221
 .equ SYS_wait4,          260
@@ -344,7 +346,7 @@ platform_exit:
     STP X0, X30, [SP, #-16]!        // preserve status + LR across the call
     BL platform_restore_term
     LDP X0, X30, [SP], #16
-    MOV X8, #SYS_exit
+    MOV X8, #SYS_exit_group
     SVC #0
 
 // Restore terminal and exit with status 0.
@@ -452,7 +454,7 @@ platform_init_guard_pages:
     MOV X8, #SYS_write
     SVC #0
     MOV X0, #1
-    MOV X8, #SYS_exit
+    MOV X8, #SYS_exit_group
     SVC #0
 
 // SIGSEGV signal handler
@@ -750,7 +752,7 @@ platform_system:
     MOV X8, #SYS_execve
     SVC #0
     MOV X0, #127                    // execve returned → exit(127)
-    MOV X8, #SYS_exit
+    MOV X8, #SYS_exit_group
     SVC #0
     // ---- parent ----  (X0 = child pid)
 .Lsys_parent:
