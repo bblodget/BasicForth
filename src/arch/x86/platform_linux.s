@@ -566,12 +566,27 @@ stat_buf:
 
 .text
 
-# platform_open_file_mode ( RSI=path RDX=len R8=flags R9=mode -- RAX=fd )
-# Copies path to scratch buffer, null-terminates, opens with the given open
-# flags and mode. Returns fd (>=0) or negative errno on failure. R8/R9 survive
-# the path copy (rep movsb only touches RDI/RSI/RCX).
-.global platform_open_file_mode
-platform_open_file_mode:
+# The one distinguished error value callers above the boundary may compare
+# against (see Platform_Layer.md "Return-value contract"): the open calls
+# return this when the file does not exist. Every other error magnitude is
+# opaque above the platform layer — sign/zero tests only.
+.section .rodata
+.balign 8
+.global platform_err_not_found
+platform_err_not_found: .quad -2    # -ENOENT
+
+# fam → native open(2) flags. fam is the backend-neutral file-access enum
+# (0=read 1=write 2=read/write — see Platform_Layer.md); only the platform
+# layer turns it into OS flag bits. Identity on Linux, but the translation
+# is explicit so the decision lives below the boundary.
+fam_flags: .quad O_RDONLY, O_WRONLY, O_RDWR
+.text
+
+# .Lopen_at ( RSI=path RDX=len R8=native flags R9=mode -- RAX=fd )
+# Internal: copies path to scratch buffer, null-terminates, openat()s with
+# the given NATIVE flags and mode. Returns fd (>=0) or negative errno.
+# R8/R9 survive the path copy (rep movsb only touches RDI/RSI/RCX).
+.Lopen_at:
     # Copy path to scratch buffer and null-terminate
     lea path_scratch(%rip), %rdi
     mov %rdx, %rcx              # count = len
@@ -592,21 +607,38 @@ platform_open_file_mode:
     syscall
     ret
 
+# platform_open_file_mode ( RSI=path RDX=len R8=fam -- RAX=fd )
+# Open an existing file by abstract fam. Out-of-range fam fails like a
+# failed open, with -EINVAL.
+.global platform_open_file_mode
+platform_open_file_mode:
+    cmp $2, %r8
+    ja .Lfam_bad
+    mov fam_flags(,%r8,8), %r8  # translate fam → native flags
+    xor %r9d, %r9d              # mode unused for plain open
+    jmp .Lopen_at
+.Lfam_bad:
+    mov $-22, %rax              # -EINVAL
+    ret
+
 # platform_open_file ( RSI=path RDX=len -- RAX=fd )
 # Thin wrapper: open existing file read-only (used by INCLUDED).
 .global platform_open_file
 platform_open_file:
-    xor %r8d, %r8d             # flags = O_RDONLY (0)
+    xor %r8d, %r8d             # native flags = O_RDONLY
     xor %r9d, %r9d             # mode = 0
-    jmp platform_open_file_mode
+    jmp .Lopen_at
 
 # platform_create_file ( RSI=path RDX=len R8=fam -- RAX=fd )
-# Create or truncate a file: open with fam | O_CREAT | O_TRUNC, mode 0666.
+# Create or truncate a file: translated fam | O_CREAT | O_TRUNC, mode 0666.
 .global platform_create_file
 platform_create_file:
+    cmp $2, %r8
+    ja .Lfam_bad
+    mov fam_flags(,%r8,8), %r8  # translate fam → native flags
     or $(O_CREAT | O_TRUNC), %r8
     mov $CREATE_MODE, %r9
-    jmp platform_open_file_mode
+    jmp .Lopen_at
 
 # platform_rename ( RDI=old RSI=old_len RDX=new RCX=new_len -- RAX=0 or -errno )
 # Copies both paths into null-terminated scratch buffers, then renameat() —

@@ -2507,8 +2507,10 @@ forth_included:
     jmp .Lincl_pop_regs
 
 .Lincl_open_err:
-    # Check for ENOENT (-2) — try BASICFORTH_PATH fallback
-    cmp $-2, %rax
+    # Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
+    # the one comparable error value (platform_err_not_found); every other
+    # magnitude is opaque up here — sign/zero tests only (Platform_Layer.md).
+    cmp platform_err_not_found(%rip), %rax
     jne .Lincl_open_other
 
     # BASICFORTH_PATH is a colon-separated list of directories. Try each in
@@ -3498,8 +3500,8 @@ forth_write_file:
 # fam is the access method from R/O (0), W/O (1) or R/W (2).
 .global forth_open_file
 forth_open_file:
-    mov (%r15), %r8                 # flags = fam (R/O=0, W/O=1, R/W=2 = OS flags)
-    xor %r9d, %r9d                  # mode = 0
+    mov (%r15), %r8                 # fam (abstract: R/O=0 W/O=1 R/W=2; the
+                                    #   platform layer maps it to OS flags)
     mov CELL(%r15), %rdx            # u (path length)
     mov 2*CELL(%r15), %rsi          # c-addr (path)
     add $CELL, %r15                 # pop fam → ( c-addr u )
