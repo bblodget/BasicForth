@@ -151,6 +151,22 @@ Defer filesystem *mutators* (`mkdir rm cp touch`) as a separate, riskier class �
 a later decision, not part of this. Limitation: path tokens come from
 `parse-word`, so paths containing spaces won't work in v1.
 
+## Raw ALSA Audio for Appliance Mode
+
+Sound today is SDL3 audio (`sound.fs`, docs/Sound.md) — the right call on a
+desktop, where PipeWire holds the hardware PCM device open and a direct
+`open("/dev/snd/pcm*")` fails with EBUSY, the same fight-the-compositor
+problem that killed the DRM/KMS display backend.
+
+But in a future **appliance / PID-1 mode** (BasicForth as the whole system, no
+sound server running) the calculus flips: `/dev/snd/pcmC*D*p` is free, and a
+raw ALSA-ioctl backend — `open` + `SNDRV_PCM_IOCTL_*` through the existing
+`(ioctl)` gateway, mirroring how drm.fs drove the display — would give sound
+with zero dependencies. The fiddly part is `snd_pcm_hw_params` (a ~600-byte
+struct of masks/intervals); a `tools/sndoff.c` offset dumper would pin it
+down, like drmoff.c/sdl3off.c did. Same words (`snd-open tone beep snd-wait
+snd-close`) backed by a different file, so programs wouldn't care.
+
 ## Programming Adventures Youtube Channel
 
 This is not really a wild idea, but instead of having the Youtube channel

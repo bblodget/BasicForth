@@ -565,6 +565,25 @@ it with up to 6 integer/pointer arguments in C parameter order:
 This is how the SDL3 graphics backend reaches the display. C code has no
 safety net — see `man ffi` and `docs/FFI.md`.
 
+## Sound (SDL3 audio)
+
+Square-wave tones through the default playback device, queued so your code
+keeps running while they play:
+
+```
+> include ffi.fs  include sound.fs
+ ok
+> snd-open  440 200 tone  beep  snd-wait  snd-close
+ ok
+```
+
+`tone ( freq ms -- )` returns immediately; `snd-wait` blocks until the queue
+drains (use it before `bye`). With no device open the sound words are silent
+no-ops — games open with `snd-open? drop` to run soundless on a system with
+no audio instead of aborting. See `man sound` and `docs/Sound.md`; for
+graphics, `docs/Graphics.md` and the bouncing-square demo `examples/bounce.fs`
+(which blips off the walls).
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

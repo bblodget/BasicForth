@@ -72,7 +72,7 @@ unreasonably painful:
 | Memory     | mmap                     | —                        | Syscalls    |
 | Files      | open/read/write/lseek    | —                        | Syscalls    |
 | Graphics   | DRM/KMS ioctl (2D)       | SDL3 (+ SDL_GPU for 3D)  | SDL3 — the compositor owns the desktop display (see Graphics Direction) |
-| Sound      | ALSA ioctl               | SDL3 audio / PipeWire    | SDL3 likely (comes free with the graphics dependency) |
+| Sound      | ALSA ioctl               | SDL3 audio / PipeWire    | SDL3 — the sound server owns the hw PCM device, same story as the display (sound.fs) |
 | Threading  | clone() syscall          | pthread                  | TBD         |
 
 The build already links with `gcc -nostartfiles` (dynamic, own `_start`);
@@ -366,7 +366,7 @@ See **Graphics Direction** (Design Decisions) for the philosophy and roadmap.
   prerequisite for any library
 - SDL3 display backend behind the surface API: window (desktop) or KMSDRM
   (console/appliance), vsync'd present, keyboard/mouse/gamepad input
-- Sound output via SDL3 audio
+- Sound output via SDL3 audio (`sound.fs`: queued square-wave tones) — done
 - SDL_GPU 3D backend behind the same surface API
 - Game demos (snake, sprites)
 

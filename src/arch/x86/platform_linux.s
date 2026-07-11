@@ -14,7 +14,9 @@
 .equ SYS_ioctl,          16
 .equ SYS_read,           0
 .equ SYS_write,          1
-.equ SYS_exit,           60
+.equ SYS_exit_group,     231    # not SYS_exit (60): that ends only the calling
+                                # thread, and SDL spawns audio/video threads
+                                # that would keep a bye'd process alive
 .equ SYS_fork,           57
 .equ SYS_execve,         59
 .equ SYS_wait4,          61
@@ -298,7 +300,7 @@ platform_exit:
     push %rdi                   # preserve status across the ioctl call
     call platform_restore_term
     pop %rdi
-    mov $SYS_exit, %rax
+    mov $SYS_exit_group, %rax
     syscall
 
 .global platform_bye
@@ -406,7 +408,7 @@ platform_init_guard_pages:
     lea msg_guard_fail(%rip), %rsi
     mov $msg_guard_fail_len, %rdx
     syscall
-    mov $SYS_exit, %rax
+    mov $SYS_exit_group, %rax
     mov $1, %rdi
     syscall
 
@@ -707,7 +709,7 @@ platform_system:
     mov $SYS_execve, %rax
     syscall
     mov $127, %rdi                  # execve returned → _exit(127)
-    mov $SYS_exit, %rax
+    mov $SYS_exit_group, %rax
     syscall
     # ---- parent ----
 .Lsys_parent:

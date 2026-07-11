@@ -528,6 +528,44 @@ else
     fi
 fi
 
+# SDL3 audio — same skip rules, dummy audio driver so no sound hardware is
+# required. tone before snd-open must be a silent no-op (depth unchanged);
+# after snd-open the stream is live and tone queues PCM (tone aborts via
+# snd-error if SDL_PutAudioStreamData fails).
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (no libSDL3 in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
+else
+    snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open? . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_out" | grep -q '0 -1 0 put-ok'; then
+        printf "  ${GREEN}PASS${NC}  SDL3 audio open+tone (queued PCM via dummy audio driver)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  SDL3 audio open+tone\n    Got: %q\n" "$snd_out"; ((failed++))
+    fi
+    # No working audio (bogus driver): snd-open? must return false without
+    # aborting, and tone must stay a no-op — a game degrades to soundless.
+    snd_na=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? . 300 50 tone depth . .\" na-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=nosuchdriver BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_na" | grep -q '0 0 na-ok'; then
+        printf "  ${GREEN}PASS${NC}  SDL3 audio unavailable -> soundless no-op\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  SDL3 audio unavailable -> soundless no-op\n    Got: %q\n" "$snd_na"; ((failed++))
+    fi
+    # bye with the audio device still open must end the whole process. SDL
+    # spawns threads, so a plain SYS_exit (only the calling thread) leaves a
+    # zombie main thread + live SDL threads and the parent waits forever;
+    # platform_exit uses SYS_exit_group. timeout kills a hang -> status 124.
+    printf 'include %s/ffi.fs\ninclude %s/sound.fs\nsnd-open beep\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH >/dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+        printf "  ${GREEN}PASS${NC}  bye exits with audio open (exit_group ends SDL threads)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  bye exits with audio open (process lingered or errored)\n"; ((failed++))
+    fi
+fi
+
 # =========================================================================
 section "Dynamic Memory (heap)"
 # =========================================================================
