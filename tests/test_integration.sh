@@ -3294,6 +3294,39 @@ sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0
     || { printf "  ${RED}FAIL${NC}  (system) status\n    Got: %s\n" "$(echo "$sy_out"|head -4)"; ((failed++)); }
 
 # =========================================================================
+section "Pipes (open-pipe / close-pipe)"
+# =========================================================================
+# r/o pipe: read a command's stdout with the ordinary read-line, EOF is a
+# clean 0/false/0, and close-pipe reaps the child (wretval wior = 0 0).
+pp_out=$(printf 'variable pf\ns" printf %s" r/o open-pipe . pf !\npad 80 pf @ read-line drop drop pad swap type cr\npad 80 pf @ read-line drop drop pad swap type cr\npad 80 pf @ read-line . . . cr\npf @ close-pipe . .\nbye\n' \
+    "'aa\\nbb\\n'" | timeout 5 $FORTH 2>&1)
+[[ "$pp_out" == *"aa"* && "$pp_out" == *"bb"* && "$pp_out" == *"0 0 0 "* && "$pp_out" == *"0 0  ok"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  r/o pipe: read-line captures output, clean EOF, clean close\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  r/o pipe capture\n    Got: %s\n" "$(echo "$pp_out"|head -8)"; ((failed++)); }
+# close-pipe returns the child's exit status as wretval ( -- wretval wior ).
+assert_output "close-pipe returns the child exit status" \
+    's" exit 3" r/o open-pipe drop close-pipe . .' "0 3"
+# w/o pipe: what we write-line becomes the child's stdin.
+pw_dir="$(mktemp -d)"
+pw_out=$(printf 's" cat > %s/pipe.txt" w/o open-pipe . variable pw pw !\ns" fed through a pipe" pw @ write-line .\npw @ close-pipe . .\nbye\n' \
+    "$pw_dir" | timeout 5 $FORTH 2>&1)
+pw_file="$(cat "$pw_dir/pipe.txt" 2>/dev/null)"
+rm -rf "$pw_dir"
+[[ "$pw_out" == *"0 0  ok"* && "$pw_file" == "fed through a pipe" ]] \
+    && { printf "  ${GREEN}PASS${NC}  w/o pipe: write-line feeds the child's stdin\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  w/o pipe\n    File: %q\n    Got: %s\n" "$pw_file" "$(echo "$pw_out"|head -5)"; ((failed++)); }
+# Two pipes can be open at once; each close reaps its own child.
+p2_out=$(printf 'variable p1 variable p2\ns" echo one" r/o open-pipe drop p1 !\ns" echo two" r/o open-pipe drop p2 !\npad 80 p1 @ read-line drop drop pad swap type cr\npad 80 p2 @ read-line drop drop pad swap type cr\np1 @ close-pipe + . p2 @ close-pipe + .\nbye\n' \
+    | timeout 5 $FORTH 2>&1)
+[[ "$p2_out" == *"one"* && "$p2_out" == *"two"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  two pipes open at once, each reads its own child\n"; ((passed++)); } \
+    || { printf "  ${RED}FAIL${NC}  two pipes\n    Got: %s\n" "$(echo "$p2_out"|head -6)"; ((failed++)); }
+# r/w is refused with EINVAL (deadlock trap), and an fd that never came from
+# open-pipe gets EBADF from close-pipe (close-file would leak a zombie).
+assert_output "open-pipe r/w -> EINVAL" 's" true" r/w open-pipe swap drop einval = .' "-1"
+assert_output "close-pipe on a non-pipe fd -> EBADF" '99 close-pipe . .' "9 0"
+
+# =========================================================================
 section "Dirty guard"
 # =========================================================================
 # (dirty) tracks unsaved log changes: clean at start, set by a definition,

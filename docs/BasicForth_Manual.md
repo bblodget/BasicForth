@@ -707,6 +707,13 @@ terminal and nothing is captured to your module. The underlying primitive,
 code. BasicForth runs these as separate programs (spawn, not link), so it stays a
 small static binary. See `docs/Shelling_Out.md`.
 
+To capture a command's output in code (or feed its stdin), use
+`open-pipe ( c-addr u fam -- fileid ior )`: with `r/o` the fileid reads what
+the command prints (via the ordinary `read-line`/`read-file`), with `w/o` it
+writes to the command's stdin. Finish with
+`close-pipe ( fileid -- wretval wior )` — it also reaps the command and
+returns its exit status. See `docs/Shelling_Out.md` for examples.
+
 ## The Prompt
 
 BasicForth presents an interactive prompt:

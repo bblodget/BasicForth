@@ -99,6 +99,46 @@ Platform_Layer.md):
 Everything is **synchronous**: the command runs to completion, sharing your
 terminal, before the prompt returns.
 
+## Pipes — capture output, feed input
+
+`open-pipe` runs a command with one end of a pipe replacing its stdout or
+stdin, and hands you the other end as an ordinary fileid — so the file words
+you already know (`read-line`, `read-file`, `write-line`, `write-file`) work
+on it unchanged. Signatures follow gforth:
+
+    open-pipe  ( c-addr u fam -- fileid ior )
+    close-pipe ( fileid -- wretval wior )    \ wretval = child's exit status
+
+With `r/o` you **read what the command prints**:
+
+    variable pf
+    s" git rev-parse --short HEAD" r/o open-pipe drop pf !
+    pad 80 pf @ read-line drop drop   ( -- u )
+    pad swap type                     \ e.g. 503f5a0
+    pf @ close-pipe 2drop
+
+With `w/o` you **write what the command reads**:
+
+    s" sort > sorted.txt" w/o open-pipe drop pf !
+    s" banana" pf @ write-line drop
+    s" apple"  pf @ write-line drop
+    pf @ close-pipe 2drop             \ EOF → sort runs → sorted.txt
+
+Rules of the road:
+
+- **Finish with `close-pipe`, never `close-file`.** `close-pipe` closes the
+  fd *and reaps the child*, returning its exit status; `close-file` would
+  close the fd but leak a zombie process. A fileid that didn't come from
+  `open-pipe` (or was already closed) gets ior 9 (EBADF).
+- **`r/w` is refused** (ior 22, EINVAL). One process blocking on both
+  directions of a pipe is a classic deadlock; use two pipes or a temp file.
+- **Drain before you close.** A child that prints more than the kernel's pipe
+  buffer (~64 KB) blocks until you read; read to EOF (flag 0) first.
+- Reading returns exactly what the command wrote — `read-line` gives it to
+  you a line at a time, terminators stripped, flag false at EOF.
+- Up to 8 pipes can be open at once (a 9th `open-pipe` returns ior 24,
+  EMFILE).
+
 ## What you can and can't do (yet)
 
 Available now:
@@ -107,12 +147,8 @@ Available now:
 - Branch on whether it succeeded (the exit status).
 - Open files in your `$EDITOR` — `edit <word>` is built on this (see
   Line_Editor.md).
-
-Not yet — these need pipes (`pipe`/`dup2`), a planned next step:
-
-- **Capturing a command's output into Forth** (e.g. read `git rev-parse` into a
-  string). Today output goes to the terminal, not back onto the stack.
-- **Feeding Forth data into a command's stdin** (`… | grep`, `… | fzf`).
+- Capture a command's output into Forth, or feed Forth data to its stdin
+  (`open-pipe`/`close-pipe`, above).
 
 ## Limitations and gotchas
 
@@ -121,16 +157,16 @@ Not yet — these need pipes (`pipe`/`dup2`), a planned next step:
 - **It is a shell.** The command goes to `/bin/sh -c`, so shell metacharacters
   are interpreted. When you build a command string from data, mind quoting (and,
   for untrusted data, injection) — the same caution as any `system()`.
-- **No output capture yet** (see above).
 - **`sh` reads to end of line**, so it consumes the rest of the input line —
   put other Forth words on their own line.
 
 ## Roadmap
 
-The spawn primitive is the foundation; the shell-like experience grows from it:
+The spawn and pipe primitives are the foundation; the shell-like experience
+grows from them:
 
-- `pipe`/`dup2` → capture command output into Forth, and pipe Forth data out
-  (`history | grep`, picking with `fzf`).
+- Words built on `open-pipe`: `history | grep`-style filters, and picking
+  with `fzf` for `edit`/`load`.
 - A `!` alias for `sh`, and quality-of-life around recall.
 - Tab-completion presented through `fzf` (candidates are the dictionary, so
   generation stays native).

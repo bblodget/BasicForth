@@ -78,6 +78,21 @@ computed). Use it inside definitions.
 
     \ : load  s" game.fs" included ;
 
+## open-pipe ( c-addr u fam -- fileid ior )
+Run a shell command with a pipe over its stdout (`r/o`: read what it prints)
+or stdin (`w/o`: write what it reads). The fileid works with `read-file`,
+`read-line`, `write-file`, `write-line`. `r/w` is refused (ior 22). Finish
+with `close-pipe`, not `close-file`.
+
+    \ s" ls" r/o open-pipe drop   ( -- fileid )
+
+## close-pipe ( fileid -- wretval wior )
+Close an `open-pipe` fileid and reap the command; `wretval` is its exit
+status. The only correct way to finish a pipe (`close-file` would leak a
+zombie process).
+
+    \ fileid close-pipe 2drop
+
 ## See Also
 
 - `man strings` — building the filename and buffer strings these words take.

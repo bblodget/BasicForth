@@ -2158,6 +2158,21 @@ variable (ld-pos)
     dup 0= if  2drop  ." usage: sh <command>" cr exit  then
     (system) drop ;
 
+\ ===== Pipes: run a command and capture its output (or feed its input) =====
+\ open-pipe spawns `/bin/sh -c <cmd>` with one end of a pipe replacing the
+\ child's stdout (r/o: read what it prints) or stdin (w/o: write what it
+\ reads). The fileid it returns is ordinary — read-file, read-line, write-file
+\ and write-line all work on it unchanged. Finish with close-pipe, NOT
+\ close-file: close-pipe also reaps the child and returns its exit status
+\ (close-file would leak a zombie process). r/w is refused (EINVAL ior): one
+\ process blocking on both directions of a pipe is a deadlock trap. A child
+\ that prints more than the kernel's pipe buffer (~64 KB) blocks until we
+\ read, so drain the pipe before close-pipe. Signatures follow gforth.
+: open-pipe  ( c-addr u fam -- fileid ior )
+    (popen)  dup 0< if  negate 0 swap  else  0  then ;
+: close-pipe ( fileid -- wretval wior )   \ wretval = child's exit status
+    (pclose) dup 0< if  negate 0 swap  else  0  then ;
+
 \ ===== EDIT: open a word's source in an external editor, then splice+reload =====
 \ `edit <name>` writes the word's current source to a temp file, opens it in your
 \ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit SPLICES the new

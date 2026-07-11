@@ -13,6 +13,8 @@
 .equ SYS_clone,          220
 .equ SYS_execve,         221
 .equ SYS_wait4,          260
+.equ SYS_dup3,           24
+.equ SYS_pipe2,          59
 .equ SIGCHLD,            17
 .equ SYS_clock_gettime,  113
 .equ SYS_getdents64,     61
@@ -807,6 +809,10 @@ platform_system:
     LDP X29, X30, [SP], #16
     RET
 
+// An fd→pid table lets several pipes be open at once; pclose looks up which
+// child to reap by fd. PIPE_MAX concurrent pipes is plenty for a REPL.
+.equ PIPE_MAX, 8
+
 .section .rodata
 sh_path:   .asciz "/bin/sh"
 sh_dashc:  .asciz "-c"
@@ -814,7 +820,180 @@ sh_dashc:  .asciz "-c"
 .balign 8
 spawn_argv:   .space 32           // ["/bin/sh","-c",cmd,NULL]
 sys_wstatus:  .space 8            // wait4 status word
+pipe_fds:     .space 8            // int[2] filled by pipe2
+pipe_tab:     .space PIPE_MAX*16  // (fd, pid) pairs; pid == 0 → slot free
 .text
+
+// ---------- PIPES (popen / pclose) ----------
+
+// platform_popen ( X0=NUL-terminated command, X1=fam -- X0=fd or -errno )
+// Run "/bin/sh -c <cmd>" with one end of a pipe replacing the child's stdout
+// (fam=R/O 0: we read what it prints) or stdin (fam=W/O 1: we write what it
+// reads). The returned fd is an ordinary fileid — platform_read_file /
+// platform_write_fd accept it unchanged. Any other fam → -EINVAL (R/W is
+// refused: one process blocking on both pipe directions is a deadlock trap).
+// Close with platform_pclose, which also reaps the child. Restores cooked
+// terminal mode around the spawn like platform_system; raw mode re-enters
+// lazily on the next interactive read. Fork via clone(SIGCHLD) as in
+// platform_system (AArch64 has no fork syscall).
+.global platform_popen
+platform_popen:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STP X20, X21, [SP, #-16]!
+    STP X22, X23, [SP, #-16]!
+    MOV X20, X0                     // cmd ptr
+    MOV X21, X1                     // fam
+    CMP X21, #1
+    B.HI .Lpo_einval                // fam must be R/O (0) or W/O (1)
+    // claim a free table slot (pid == 0) before doing anything visible
+    ADR X22, pipe_tab
+    MOV X9, #0
+.Lpo_slot:
+    LDR X10, [X22, #8]
+    CBZ X10, .Lpo_have_slot
+    ADD X22, X22, #16
+    ADD X9, X9, #1
+    CMP X9, #PIPE_MAX
+    B.LO .Lpo_slot
+    MOV X0, #-24                    // -EMFILE: all pipe slots busy
+    B .Lpo_ret
+.Lpo_have_slot:
+    BL platform_restore_term        // terminal → cooked for the child
+    ADR X0, pipe_fds
+    MOV X1, #0                      // flags = 0
+    MOV X8, #SYS_pipe2
+    SVC #0
+    TBNZ X0, #63, .Lpo_ret          // pipe2 failed → -errno
+    // build argv = ["/bin/sh", "-c", cmd, NULL]
+    ADR X1, sh_path
+    ADR X2, spawn_argv
+    STR X1, [X2, #0]
+    ADR X1, sh_dashc
+    STR X1, [X2, #8]
+    STR X20, [X2, #16]
+    STR XZR, [X2, #24]
+    // clone(SIGCHLD, 0, 0, 0, 0)
+    MOV X0, #SIGCHLD
+    MOV X1, #0
+    MOV X2, #0
+    MOV X3, #0
+    MOV X4, #0
+    MOV X8, #SYS_clone
+    SVC #0
+    CMP X0, #0
+    B.LT .Lpo_fork_err              // clone failed → -errno
+    B.GT .Lpo_parent                // X0 = child pid → parent
+    // ---- child ----
+    // wire the pipe over stdout (fam=0) or stdin (fam=1), shed both raw ends
+    ADR X9, pipe_fds
+    CBNZ X21, .Lpo_child_wo
+    LDR W0, [X9, #4]                // write end
+    MOV X1, #STDOUT
+    B .Lpo_child_dup
+.Lpo_child_wo:
+    LDR W0, [X9]                    // read end
+    MOV X1, #STDIN
+.Lpo_child_dup:
+    MOV X2, #0                      // flags = 0
+    MOV X8, #SYS_dup3
+    SVC #0
+    ADR X9, pipe_fds
+    LDR W0, [X9]
+    MOV X8, #SYS_close
+    SVC #0
+    ADR X9, pipe_fds
+    LDR W0, [X9, #4]
+    MOV X8, #SYS_close
+    SVC #0
+    ADR X0, sh_path
+    ADR X1, spawn_argv
+    ADR X2, start_envp
+    LDR X2, [X2]
+    MOV X8, #SYS_execve
+    SVC #0
+    MOV X0, #127                    // execve returned → exit(127)
+    MOV X8, #SYS_exit_group
+    SVC #0
+    // ---- parent ----  (X0 = child pid)
+.Lpo_parent:
+    STR X0, [X22, #8]               // record child pid → slot claimed
+    ADR X9, pipe_fds
+    CBNZ X21, .Lpo_keep_write
+    LDR W10, [X9]                   // keep read end (child's stdout)
+    LDR W0, [X9, #4]                // close write end
+    B .Lpo_close_other
+.Lpo_keep_write:
+    LDR W10, [X9, #4]               // keep write end (feed child's stdin)
+    LDR W0, [X9]                    // close read end
+.Lpo_close_other:
+    STR X10, [X22]                  // record our fd
+    MOV X8, #SYS_close
+    SVC #0
+    LDR X0, [X22]                   // return the fd
+    B .Lpo_ret
+.Lpo_fork_err:
+    MOV X23, X0                     // keep -errno across the cleanup closes
+    ADR X9, pipe_fds
+    LDR W0, [X9]
+    MOV X8, #SYS_close
+    SVC #0
+    ADR X9, pipe_fds
+    LDR W0, [X9, #4]
+    MOV X8, #SYS_close
+    SVC #0
+    MOV X0, X23
+    B .Lpo_ret
+.Lpo_einval:
+    MOV X0, #-22                    // -EINVAL: fam out of range
+.Lpo_ret:
+    LDP X22, X23, [SP], #16
+    LDP X20, X21, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// platform_pclose ( X0=fd -- X0=exit status or -errno )
+// Close our end of the pipe (a W/O child sees EOF on its stdin), reap the
+// child with wait4, and return its exit status (0-255). An fd that did not
+// come from platform_popen returns -EBADF; close-file would close the fd but
+// leak a zombie child, which is why the Forth layer documents close-pipe as
+// the only correct way to finish a pipe.
+.global platform_pclose
+platform_pclose:
+    MOV X9, X0                      // fd
+    ADR X10, pipe_tab
+    MOV X11, #0
+.Lpc_find:
+    LDR X12, [X10, #8]              // slot in use?
+    CBZ X12, .Lpc_next
+    LDR X12, [X10]
+    CMP X12, X9
+    B.EQ .Lpc_found
+.Lpc_next:
+    ADD X10, X10, #16
+    ADD X11, X11, #1
+    CMP X11, #PIPE_MAX
+    B.LO .Lpc_find
+    MOV X0, #-9                     // -EBADF: not a live popen fd
+    RET
+.Lpc_found:
+    MOV X0, X9
+    MOV X8, #SYS_close
+    SVC #0                          // close before waiting: child sees EOF
+    LDR X0, [X10, #8]               // child pid
+    STR XZR, [X10, #8]              // free the slot
+    ADR X1, sys_wstatus
+    MOV X2, #0                      // options = 0
+    MOV X3, #0                      // rusage = NULL
+    MOV X8, #SYS_wait4
+    SVC #0
+    TBNZ X0, #63, .Lpc_done         // wait4 failed → -errno
+    ADR X0, sys_wstatus             // WEXITSTATUS: (status >> 8) & 0xff
+    LDR W0, [X0]
+    ASR W0, W0, #8
+    AND X0, X0, #0xff
+.Lpc_done:
+    RET
 
 // platform_fstat ( X0=fd -- X0=size )
 // Returns file size via fstat, or a negative errno if the fstat syscall fails.
