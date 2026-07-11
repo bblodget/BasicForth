@@ -167,18 +167,25 @@ machinery stays in git history.
 
 ## Hard cases
 
-- **Dirty session at edit time.** `edit <word>`/`:e` end in a reload, which
-  discards unsaved captures — so like bare `edit`, they must run the
-  dirty-guard *first* ("save first? (y/n)"). Under this model saving is
-  clean (no accumulation), so a future refinement could be to auto-save
-  before every edit and drop the prompt. Start with the prompt; loosen
-  later if it feels naggy.
+- **Dirty session at edit time.** *Resolved by use testing (2026-07-11):
+  the prompt felt naggy, exactly as anticipated — mutations now
+  **auto-save** (and reload, so metadata is fresh) with no prompt. An edit
+  implies the file is current; checkpoints are git's job (`sh git commit`).
+  The discard verbs (`new`/`load`/`bye`) keep their save-first prompt: they
+  throw work away by intent, so a last-chance question is right there.*
 - **Words with no file (scratch sessions).** A session started bare has no
   current file, and a REPL-defined word isn't on disk. Proposal:
   `edit <word>`/`:e` in a scratch session say "no current file — save
   <name> first". (Today's temp-file edit + propagation would be retired
   with everything else; scratch sessions keep `see`, redefinition,
   `define`, and can adopt a file at any time with `save <name>`.)
+- **Forward references from a mutation.** *Resolved (2026-07-11):* an
+  edited definition that newly calls a word defined *later* in the file
+  (e.g. a helper the auto-save just appended) would forward-reference if
+  spliced in place — so it is **moved to the end**, after its dependency
+  (old span deleted, new text appended, with a note). Detection is a token
+  scan of the new text against later-defined module words; a mention inside
+  a comment can false-positive, costing only the in-place layout.
 - **A broken edit.** Splice + reload with a syntax error leaves a partial
   module and drops to the REPL (existing reload behavior). The loop is
   `edit` → fix → save — same as any compiler error. Acceptable; a future

@@ -2096,19 +2096,18 @@ else
 fi
 
 # BARE EDIT: `edit` with no name opens the CURRENT MODULE FILE itself and
-# reloads on change — the edit-on-disk loop (edit + reload) in one word. The
-# reload replaces the session with the file's contents, so an unsaved
-# interactive definition is discarded (non-interactive dirty-guard proceeds
-# silently; at a terminal it prompts "save first?").
+# reloads on change — the edit-on-disk loop (edit + reload) in one word.
+# Unsaved work is AUTO-SAVED first (an edit implies the file is current), so
+# the editor sees it and the reload replays it.
 be_dir="$(mktemp -d)"
 printf ': leaf 41 ;\n' > "$be_dir/mod.fs"
-be_out=$( cd "$be_dir" && printf 'leaf .\n: extra 7 ;\nedit\nleaf .\nextra\nbye\n' \
+be_out=$( cd "$be_dir" && printf 'leaf .\n: extra 7 ;\nedit\nleaf .\nextra .\nbye\n' \
     | EDITOR='sed -i s/41/52/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$be_dir"
-if [[ "$be_out" == *"41"* && "$be_out" == *"52"* && "$be_out" == *"? extra"* ]]; then
-    printf "  ${GREEN}PASS${NC}  bare edit opens the module file and reloads the change\n"; ((passed++))
+if [[ "$be_out" == *"41"* && "$be_out" == *"52"* && "$be_out" == *"7"* && "$be_out" == *"saved to"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit auto-saves, opens the module file, reloads\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  bare edit opens the module file\n    Expected 41 then 52 and '? extra'\n    Got: %q\n" "$be_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  bare edit auto-save + reload\n    Expected 41, 52, extra=7 kept\n    Got: %q\n" "$be_out"; ((failed++))
 fi
 # An untouched module file skips the reload, so the session (including
 # unsaved interactive definitions) is kept as-is.
@@ -2160,19 +2159,37 @@ else
     printf "  ${RED}FAIL${NC}  multi-line :e\n    Got: %q\n" "$cm2_out"; ((failed++))
 fi
 # Refusals flush the rest of the input line (it was the definition body), so
-# nothing lands on the stack: unknown word, deferred word, unsaved session.
+# nothing lands on the stack: unknown word, deferred word. An unsaved session
+# is no refusal at all — the mutation auto-saves and proceeds.
 cf_dir="$(mktemp -d)"
 printf ': leaf 1 ;\ndefer d\n' > "$cf_dir/mod.fs"
-cf_out=$( cd "$cf_dir" && printf ':e nosuch 1 ;\ndepth .\n:e d 1 ;\ndepth .\n: w 1 ;\n:e leaf 9 ;\ndepth .\nleaf .\nbye\n' \
+cf_out=$( cd "$cf_dir" && printf ':e nosuch 1 ;\ndepth .\n:e d 1 ;\ndepth .\n: w 6 ;\n:e leaf 9 ;\ndepth .\nleaf .\nw .\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$cf_dir"
-cf_z=$(grep -c '^0  ok' <<<"$(grep -A0 'ok' <<<"$cf_out" | grep '^0')")
 if [[ "$cf_out" == *"not defined"* && "$cf_out" == *"is deferred"* \
-      && "$cf_out" == *":e: unsaved changes — save first"* && "$cf_out" == *"1  ok"* \
+      && "$cf_out" == *"saved to"* && "$cf_out" == *"9"* && "$cf_out" == *"6"* \
       && "$cf_out" != *"stack underflow"* ]]; then
-    printf "  ${GREEN}PASS${NC}  :e refusals flush the line (unknown/defer/unsaved)\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  :e refusals flush; dirty session auto-saves and proceeds\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  :e refusal flush\n    Got: %q\n" "$cf_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  :e refusal/auto-save\n    Got: %q\n" "$cf_out"; ((failed++))
+fi
+
+# The forward-reference move: a mutation whose new text calls a word defined
+# LATER in the file (here: helper, auto-saved to the end moments before)
+# cannot be spliced in place — it is MOVED to the end, after its dependency,
+# and the reload succeeds.
+fw_dir="$(mktemp -d)"
+printf ': hunt 1 ;\ndefer brain\n' > "$fw_dir/mod.fs"
+fw_out=$( cd "$fw_dir" && printf ': helper 5 ;\n:e hunt helper 2 * ;\nhunt .\n(dirty) @ .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$fw_dir"
+fw_file="${fw_out#*FILE:}"
+if [[ "$fw_out" == *"moved to the end"* && "$fw_out" == *"10"* && "$fw_out" == *"0  ok"* \
+      && "$fw_file" == *": helper 5 ;"*": hunt helper 2 * ;"* && "$fw_file" != *": hunt 1 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e moves a definition past its new dependency (no fwd ref)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  forward-reference move\n    Got: %q\n" "$fw_out"; ((failed++))
 fi
 # An errored :e definition disarms: the next definition is a plain binding,
 # not a splice — leaf and the file stay untouched.

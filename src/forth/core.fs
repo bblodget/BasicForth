@@ -2197,9 +2197,9 @@ variable (ld-pos)
 \ caller by construction (words are defined before use in a file), so no
 \ propagation pass is needed and the file never accumulates edit history. The
 \ binding must live in the module file: if it was typed this session (or the
-\ file layout is newer than the header metadata), edit first CONVERGES — the
-\ dirty-guard offers "save first? (y/n)", then a reload re-stamps everything —
-\ and retries. The temp file sits next to the module ("<module>.edit", removed
+\ file layout is newer than the header metadata), edit first CONVERGES —
+\ unsaved work is auto-saved (a mutation implies the file is current), a
+\ reload re-stamps everything — and retries. The temp file sits next to the module ("<module>.edit", removed
 \ afterwards), so parallel sessions collide only when editing the SAME module —
 \ which is already a conflict. Bare `edit` (no name) opens the CURRENT MODULE
 \ FILE itself and reloads it on a change.
@@ -2273,13 +2273,12 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
         (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
     true ;
 : (edit-module) ( -- )                      \ bare `edit`: open the module FILE, then reload
-    \ Edits the file in place on disk (no temp copy). The dirty-guard runs
-    \ BEFORE the editor opens: a y answer saves first, so the editor sees the
-    \ session's state; n edits the stale disk file and the reload discards
-    \ unsaved captures — the caller chose that. Unchanged file → no reload.
+    \ Edits the file in place on disk (no temp copy). Unsaved work is
+    \ auto-saved BEFORE the editor opens, so it sees the session's state.
+    \ Unchanged file → no reload.
     (session-on) @ 0= if  (msg:) ." no active session" cr  exit  then
     (cur-file-len) @ 0= if  (msg:) ." no current file (load <file> first)" cr  exit  then
-    (dirty-guard) 0= if  exit  then
+    (dirty) @ if  (save)  then               \ the editor must see the session's state
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( pre-a pre-u )
     (ed-pu) !  (ed-pre) !
@@ -2307,21 +2306,53 @@ variable (es-na)   variable (es-nu)          \ the replacement (editor) text
 variable (es-fa)   variable (es-fu)          \ the module file image
 variable (es-fid)
 : (es-put) ( c-addr u -- ok? )  (es-fid) @ write-file 0= ;
-: (es-write) ( -- ok? )                      \ [0,off) + new (+ nl) + [off+len,end) → .new+rename
-    (cur-file@) (name>paths)
-    (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
-    (es-fid) !
-    (es-fa) @  (es-off) @  (es-put)
+: (es-put-new) ( ok -- ok )                  \ the new text, newline-terminated
     (es-na) @  (es-nu) @  (es-put)  and
     (es-nu) @ 0<>  over and
     if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
-        (nl) 1 (es-put) drop  then  then     \ spliced text must end its line
+        (nl) 1 (es-put) drop  then  then ;
+variable (es-app)                            \ true: delete the span, APPEND the text —
+                                             \ used when the new text calls a word
+                                             \ defined later in the file (in place
+                                             \ would forward-reference and break the
+                                             \ reload; at the end it follows its deps)
+: (es-write) ( -- ok? )                      \ splice (or move) → .new + rename
+    (cur-file@) (name>paths)
+    (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
+    (es-fid) !
+    (es-fa) @  (es-off) @  (es-put)          \ [0, off)
+    (es-app) @ 0= if  (es-put-new)  then     \ in place: the new text here
     (es-fa) @ (es-off) @ + (es-len) @ +      ( ok? post-a )
     (es-fu) @  (es-off) @ (es-len) @ +  -    ( ok? post-a post-u )
-    (es-put)  and
+    (es-put)  and                            \ [off+len, end)
+    (es-app) @ if
+        (es-fu) @ if
+            (es-fa) @ (es-fu) @ + 1- c@ 10 <> if  (nl) 1 (es-put) drop  then
+        then
+        (es-put-new)                         \ moved: the new text at the end
+    then
     (es-fid) @ close-file 0=  and            ( ok? )
     dup 0= if  exit  then
     (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file 0= and ;
+: (es-fwd?) ( -- f )                         \ new text calls a word defined AFTER the span?
+    \ Token scan over the new text per later-defined module word — a mention
+    \ inside a comment can false-positive, which only costs the in-place
+    \ layout (the definition still lands correctly, at the end).
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (sw-anon?) 0= if
+            dup (edit-span?) if              ( nt off2 len2 )
+                drop
+                (es-off) @ (es-len) @ +  swap u>  0= if   \ off2 >= span end
+                    dup (sw-name)            ( nt name nu )
+                    (es-na) @ (es-nu) @ 2swap (word-in?) if
+                        drop  true exit  then
+                then
+            then
+        then
+        @
+    repeat
+    drop  false ;
 : (edit-splice) ( -- ok? )                   \ verify the span, then rewrite the file
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  false exit  then
@@ -2333,18 +2364,21 @@ variable (es-fid)
     if  (es-fa) @ free drop
         (msg:) ." file changed on disk — nothing spliced (reload and retry)" cr
         false exit  then
+    (es-fwd?) (es-app) !
+    (es-app) @ if
+        (msg:) ." note: moved to the end of the file (it uses later definitions)" cr
+    then
     (es-write)                               ( ok? )
     (es-fa) @ free drop
     dup 0= if  (msg:) ." cannot write " (cur-file@) type cr  then ;
-: (edit-guard?) ( -- proceed? )             \ a mutation ends in a reload, which discards
-    \ unsaved captures — so guard first: y saves (the reload then replays the
-    \ saved work), n discards, anything else cancels. Non-interactive sessions
-    \ REFUSE instead of silently discarding; a script must save before editing.
-    (dirty) @ 0= if  true exit  then
-    (tty?) 0= if  (msg:) ." unsaved changes — save first" cr  false exit  then
-    (dirty-guard) ;
+: (edit-sync) ( -- )                        \ a mutation targets the FILE, so bring it
+    \ up to date first: unsaved work is auto-saved and the module reloaded (no
+    \ prompt — an edit implies the file is current, and the reload re-stamps
+    \ the source metadata so spans and the forward-reference check are exact).
+    \ The discard verbs (new/load/bye) keep the save-first prompt; snapshots
+    \ are git's job (sh git commit).
+    (dirty) @ if  (save)  reload  then ;
 : (edit-target) ( nt -- )                   \ temp-edit nt's source, splice the file, reload
-    (edit-guard?) 0= if  drop  exit  then
     dup (edit-span?) 0= if  drop  exit  then  ( nt off len )
     (es-len) !  (es-off) !                   ( nt )
     (nt-src) 0= if  (msg:) ." cannot read source" cr  exit  then   ( src-a src-u )
@@ -2388,10 +2422,10 @@ variable (es-fid)
     2drop 2drop                              \ done with the meta cells
     (cur-file-len) @ 0= if
         ." edit: no current file — save <name> first, then edit" cr exit  then
+    (edit-sync)                              \ unsaved work → auto-save + reload
     (edit-try) if  exit  then
-    \ the binding isn't in the module file (typed this session, or the file
-    \ is newer than the metadata) → guard, reload to converge, and retry
-    (edit-guard?) 0= if  exit  then
+    \ the binding isn't in the module file (saved earlier, metadata stale)
+    \ → reload to converge, and retry
     reload
     (edit-try) if  exit  then
     ." edit: " (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr ;
@@ -2668,12 +2702,14 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     swap cmove                               \ survives (uf-buf) reuse until completion
     (uf-free)
     true ;
-: (ce-go) ( nt -- )                         \ guard, arm, and open the definition
-    (edit-guard?) 0= if  drop  (ce-flush)  exit  then
+: (ce-go) ( nt -- )                         \ arm the hook and open the definition
     dup (edit-span?) 0= if  drop  (ce-flush)  exit  then   ( nt off len )
     (ce-arm!) 0= if  (ce-flush)  exit  then
     0 (def-n) !  s" : " (def-s,)  (see-a) @ (see-u) @ (def-s,)
     true (ce-armed) !
+    false (skip-capture) !                   \ (edit-sync)'s reload armed the skip for
+                                             \ THIS line — but the :e group must reach
+                                             \ the completion hook, not be discarded
     (def-buf) (def-n) @ evaluate ;           \ opens ": <name>"; the line continues in it
 : (ce-try) ( -- handled? )
     (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )
@@ -2696,9 +2732,10 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     2drop 2drop
     (cur-file-len) @ 0= if
         (msg:) ." no current file — save <name> first, then :e" cr  (ce-flush) exit  then
+    (edit-sync)                              \ unsaved work → auto-save + reload
     (ce-try) if  exit  then
-    \ the binding isn't in the module file → guard, reload to converge, retry
-    (edit-guard?) 0= if  (ce-flush)  exit  then
+    \ the binding isn't in the module file (saved earlier, metadata stale)
+    \ → reload to converge, and retry
     reload
     (ce-try) if  exit  then
     (msg:) (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr

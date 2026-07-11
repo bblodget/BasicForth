@@ -69,10 +69,13 @@ round-trip.
 
 An edit is a **mutation** ("that text was wrong"), so it operates on the
 module file: the binding you edit is the word's newest definition *in the
-file*. A word you typed this session and haven't saved isn't there yet — at
-a terminal `edit` offers "save first? (y/n)" and converges; in a piped
-script it refuses (`edit: unsaved changes — save first`) rather than
-silently discarding anything. An assembly primitive or an unknown name
+file*. Unsaved session work is **auto-saved** (and the module reloaded)
+before the edit proceeds — an edit implies the file is current, so there is
+no prompt; if you want checkpoints to return to, that's what
+`sh git commit` is for. And if the new text calls a word defined *later* in
+the file (say, a helper you typed moments ago that the auto-save appended),
+the definition is **moved to the end**, after its dependency, instead of
+spliced in place — a note says so. An assembly primitive or an unknown name
 reports a short message instead of opening the editor; a scratch session
 (no module file) is told to `save <name>` first.
 
@@ -98,12 +101,10 @@ the full model.
 editor, straight on disk (no temp copy), and `reload`s it when you save and
 quit — the edit-on-disk loop (edit in another terminal + `reload`) in one
 word. An untouched file skips the reload, so the session is kept exactly
-as-is. Because the reload replaces the session with the file's contents,
-unsaved captured changes would be lost — so if the module is dirty, bare
-`edit` asks "save first? (y/n)" *before* opening the editor: **y** saves, so
-the editor sees your session's state; **n** opens the stale disk file and the
-reload discards the unsaved work; any other key cancels. (Like `new`/`load`/
-`bye`, only a real terminal prompts — pipes and scripts proceed silently.)
+as-is. Unsaved session work is **auto-saved** before the editor opens, so
+it sees your module's real state and the reload replays it. (`new`/`load`/
+`bye` still prompt "save first? (y/n)" — those *discard* by intent; an edit
+converges.)
 
 ## Retyping a definition inline: `:e`
 
@@ -119,11 +120,12 @@ file over the word's newest definition and the module reloads:
 ```
 
 Same mutation semantics and guards as `edit`: the word must already exist
-and live in the module file (unsaved work prompts "save first? (y/n)" at a
-terminal, and is refused in a script), a deferred word redirects you to its
-action, and a refusal discards the rest of the input line — it was the
-definition body. If the file changed on disk mid-definition, the splice is
-refused and your new definition stays live as an unsaved binding.
+(unsaved session work is auto-saved and reloaded first), a deferred word
+redirects you to its action, and a refusal discards the rest of the input
+line — it was the definition body. A new dependency on a later-defined word
+moves the definition to the end of the file, like `edit`. If the file
+changed on disk mid-definition, the splice is refused and your new
+definition stays live as an unsaved binding.
 
 The full verb grid: `:` **binds** a new definition (earlier words keep the
 old one — hyper-static), `define` creates one in the editor, `:e` **fixes**

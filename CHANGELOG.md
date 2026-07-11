@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Mutations auto-save; forward references move to the end
+- **`edit <word>`, `:e`, and bare `edit` no longer prompt "save first?"** —
+  unsaved session work is auto-saved (and for the word mutations, the
+  module reloaded so spans are fresh) before the edit proceeds. An edit
+  implies the file is current; snapshots are git's job (`sh git commit`).
+  The discard verbs (`new`/`load`/`bye`) keep their prompt — they throw
+  work away by intent. Scripts no longer need an explicit `save` before
+  editing.
+- **A mutation that newly calls a later-defined word is moved, not
+  spliced.** If the edited definition now uses a word defined further down
+  the file (e.g. a helper you typed moments ago that the auto-save
+  appended), splicing in place would forward-reference and break the
+  reload — so the definition is moved to the end, after its dependency,
+  with a note. The file always reloads cleanly.
+
 ### Tutorial footer shows progress
 - The step footer now reads `[ step 7/24: ... ]` — the step scan continues
   to the end of the file counting headings, so you can see how far along a
