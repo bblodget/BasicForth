@@ -72,10 +72,11 @@ module file: the binding you edit is the word's newest definition *in the
 file*. Unsaved session work is **auto-saved** (and the module reloaded)
 before the edit proceeds — an edit implies the file is current, so there is
 no prompt; if you want checkpoints to return to, that's what
-`sh git commit` is for. And if the new text calls a word defined *later* in
+`sh git commit` is for. If the new text calls a word defined *later* in
 the file (say, a helper you typed moments ago that the auto-save appended),
-the definition is **moved to the end**, after its dependency, instead of
-spliced in place — a note says so. An assembly primitive or an unknown name
+a **warning names it** — the splice still happens in place, the reload's
+line error shows where, and the fix is bare `edit`: move the helper above
+its user. An assembly primitive or an unknown name
 reports a short message instead of opening the editor; a scratch session
 (no module file) is told to `save <name>` first.
 
@@ -123,7 +124,7 @@ Same mutation semantics and guards as `edit`: the word must already exist
 (unsaved session work is auto-saved and reloaded first), a deferred word
 redirects you to its action, and a refusal discards the rest of the input
 line — it was the definition body. A new dependency on a later-defined word
-moves the definition to the end of the file, like `edit`. If the file
+warns and splices in place, like `edit`. If the file
 changed on disk mid-definition, the splice is refused and your new
 definition stays live as an unsaved binding.
 

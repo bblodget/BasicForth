@@ -2174,22 +2174,22 @@ else
     printf "  ${RED}FAIL${NC}  :e refusal/auto-save\n    Got: %q\n" "$cf_out"; ((failed++))
 fi
 
-# The forward-reference move: a mutation whose new text calls a word defined
-# LATER in the file (here: helper, auto-saved to the end moments before)
-# cannot be spliced in place — it is MOVED to the end, after its dependency,
-# and the reload succeeds.
+# Forward-reference warning: a mutation whose new text calls a word defined
+# LATER in the file (here: helper, auto-saved to the end moments before) is
+# spliced in place anyway, with a warning naming the culprit — the reload's
+# line error then points at the fix (bare edit, move helper up).
 fw_dir="$(mktemp -d)"
-printf ': hunt 1 ;\ndefer brain\n' > "$fw_dir/mod.fs"
-fw_out=$( cd "$fw_dir" && printf ': helper 5 ;\n:e hunt helper 2 * ;\nhunt .\n(dirty) @ .\nbye\n' \
+printf ': hunt 1 ;\n: chase hunt 2 * ;\n' > "$fw_dir/mod.fs"
+fw_out=$( cd "$fw_dir" && printf ': helper 5 ;\n:e hunt helper 1+ ;\nbye\nn\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
     echo "FILE:"; cat mod.fs )
 rm -rf "$fw_dir"
 fw_file="${fw_out#*FILE:}"
-if [[ "$fw_out" == *"moved to the end"* && "$fw_out" == *"10"* && "$fw_out" == *"0  ok"* \
-      && "$fw_file" == *": helper 5 ;"*": hunt helper 2 * ;"* && "$fw_file" != *": hunt 1 ;"* ]]; then
-    printf "  ${GREEN}PASS${NC}  :e moves a definition past its new dependency (no fwd ref)\n"; ((passed++))
+if [[ "$fw_out" == *"warning: hunt uses helper, defined later"* \
+      && "$fw_file" == *": hunt helper 1+ ;"*": chase hunt 2 * ;"*": helper 5 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  mutation with a later dependency warns, splices in place\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  forward-reference move\n    Got: %q\n" "$fw_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  forward-reference warning\n    Got: %q\n" "$fw_out"; ((failed++))
 fi
 # An errored :e definition disarms: the next definition is a plain binding,
 # not a splice — leaf and the file stay untouched.

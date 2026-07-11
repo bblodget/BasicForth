@@ -10,12 +10,13 @@
   The discard verbs (`new`/`load`/`bye`) keep their prompt — they throw
   work away by intent. Scripts no longer need an explicit `save` before
   editing.
-- **A mutation that newly calls a later-defined word is moved, not
-  spliced.** If the edited definition now uses a word defined further down
-  the file (e.g. a helper you typed moments ago that the auto-save
-  appended), splicing in place would forward-reference and break the
-  reload — so the definition is moved to the end, after its dependency,
-  with a note. The file always reloads cleanly.
+- **A mutation that newly calls a later-defined word warns.** If the
+  edited definition now uses a word defined further down the file (e.g. a
+  helper you typed moments ago that the auto-save appended), the splice
+  proceeds in place with a warning naming each such word; the reload's
+  line error then points at the fix — bare `edit`, move the helper up. (A
+  designed auto-fix — move the dependencies up — is recorded in
+  Module_Architecture.md for if the warning proves a pain.)
 
 ### Tutorial footer shows progress
 - The step footer now reads `[ step 7/24: ... ]` — the step scan continues

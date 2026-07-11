@@ -179,13 +179,26 @@ machinery stays in git history.
   <name> first". (Today's temp-file edit + propagation would be retired
   with everything else; scratch sessions keep `see`, redefinition,
   `define`, and can adopt a file at any time with `save <name>`.)
-- **Forward references from a mutation.** *Resolved (2026-07-11):* an
-  edited definition that newly calls a word defined *later* in the file
-  (e.g. a helper the auto-save just appended) would forward-reference if
-  spliced in place — so it is **moved to the end**, after its dependency
-  (old span deleted, new text appended, with a note). Detection is a token
-  scan of the new text against later-defined module words; a mention inside
-  a comment can false-positive, costing only the in-place layout.
+- **Forward references from a mutation.** An edited definition that newly
+  calls a word defined *later* in the file (e.g. a helper the auto-save just
+  appended — the standard "refactor with a new helper" move) forward-
+  references when spliced in place, and the reload fails. *Current policy
+  (2026-07-11, Brandon's call): warn and proceed* — the splice stays in
+  place, a warning names each later-defined word the new text uses (token
+  scan; comment mentions can false-positive, warning-only), and the reload's
+  line error points at the fix: bare `edit`, move the helper up. Moving the
+  *edited word* to the end was tried and rejected — it just relocates the
+  forward reference when the word has callers.
+  **The designed auto-fix, recorded for when the warning proves a pain:**
+  move the *dependencies* up, not the edited word. A freshly-typed helper
+  has no meaningful file position yet, and moving a definition *earlier*
+  can never break its own callers — so: pull each later-defined dependency
+  to just before the edited word (original relative order), splice the
+  edited word in place; valid whenever each moved dependency's own deps sit
+  earlier, which for new helpers is nearly always. Fall back to move-to-end
+  when the edited word has no callers; refuse (live-but-unsaved fallback)
+  in the residual contorted case. Needs the splice writer generalized to a
+  sorted patch list — the splice-save emitter shape.
 - **A broken edit.** Splice + reload with a syntax error leaves a partial
   module and drops to the REPL (existing reload behavior). The loop is
   `edit` → fix → save — same as any compiler error. Acceptable; a future

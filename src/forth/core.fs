@@ -2311,33 +2311,26 @@ variable (es-fid)
     (es-nu) @ 0<>  over and
     if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
         (nl) 1 (es-put) drop  then  then ;
-variable (es-app)                            \ true: delete the span, APPEND the text —
-                                             \ used when the new text calls a word
-                                             \ defined later in the file (in place
-                                             \ would forward-reference and break the
-                                             \ reload; at the end it follows its deps)
-: (es-write) ( -- ok? )                      \ splice (or move) → .new + rename
+: (es-write) ( -- ok? )                      \ [0,off) + new (+ nl) + [off+len,end) → .new+rename
     (cur-file@) (name>paths)
     (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
     (es-fid) !
     (es-fa) @  (es-off) @  (es-put)          \ [0, off)
-    (es-app) @ 0= if  (es-put-new)  then     \ in place: the new text here
+    (es-put-new)                             \ the new text, in place
     (es-fa) @ (es-off) @ + (es-len) @ +      ( ok? post-a )
     (es-fu) @  (es-off) @ (es-len) @ +  -    ( ok? post-a post-u )
     (es-put)  and                            \ [off+len, end)
-    (es-app) @ if
-        (es-fu) @ if
-            (es-fa) @ (es-fu) @ + 1- c@ 10 <> if  (nl) 1 (es-put) drop  then
-        then
-        (es-put-new)                         \ moved: the new text at the end
-    then
     (es-fid) @ close-file 0=  and            ( ok? )
     dup 0= if  exit  then
     (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file 0= and ;
-: (es-fwd?) ( -- f )                         \ new text calls a word defined AFTER the span?
-    \ Token scan over the new text per later-defined module word — a mention
-    \ inside a comment can false-positive, which only costs the in-place
-    \ layout (the definition still lands correctly, at the end).
+: (es-warn) ( -- )                           \ warn: new text calls later-defined words
+    \ The splice stays in place — if the new text really calls a word defined
+    \ AFTER it (a helper the auto-save just appended, say), the reload below
+    \ will fail with a clear line error; this warning names the culprits so
+    \ the fix is obvious: bare `edit` and move them above. Token scan, so a
+    \ mention inside a comment can false-positive (warning only, harmless).
+    \ (A designed auto-fix — move the dependencies up — is recorded in
+    \ Module_Architecture.md, to be built if this warning proves a pain.)
     (latest@)
     begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
         dup (sw-anon?) 0= if
@@ -2345,14 +2338,16 @@ variable (es-app)                            \ true: delete the span, APPEND the
                 drop
                 (es-off) @ (es-len) @ +  swap u>  0= if   \ off2 >= span end
                     dup (sw-name)            ( nt name nu )
-                    (es-na) @ (es-nu) @ 2swap (word-in?) if
-                        drop  true exit  then
+                    2dup (es-na) @ (es-nu) @ 2swap (word-in?) if
+                        (msg:) ." warning: " (see-a) @ (see-u) @ type
+                        ."  uses " type ." , defined later in the file" cr
+                    else  2drop  then
                 then
             then
         then
         @
     repeat
-    drop  false ;
+    drop ;
 : (edit-splice) ( -- ok? )                   \ verify the span, then rewrite the file
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  false exit  then
@@ -2364,10 +2359,7 @@ variable (es-app)                            \ true: delete the span, APPEND the
     if  (es-fa) @ free drop
         (msg:) ." file changed on disk — nothing spliced (reload and retry)" cr
         false exit  then
-    (es-fwd?) (es-app) !
-    (es-app) @ if
-        (msg:) ." note: moved to the end of the file (it uses later definitions)" cr
-    then
+    (es-warn)
     (es-write)                               ( ok? )
     (es-fa) @ free drop
     dup 0= if  (msg:) ." cannot write " (cur-file@) type cr  then ;
