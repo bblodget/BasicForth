@@ -399,11 +399,16 @@ current directory.
 
 `save` records the *source* of your definitions (not a memory image), so a module
 file is a readable, editable Forth file. Only definitions are captured —
-transient actions like `5 double .` are not — and saving is idempotent and
-cumulative (it rewrites the whole file plus your edits, so redefinitions pile
-up). `compact <name>` writes a **deduped** sibling (`game.fs` → `game.compact.fs`)
-— each word's latest source once — so you can `diff` it and adopt the clean one.
-Capture is interactive-only: a piped script captures nothing.
+transient actions like `5 double .` are not. The saved file **replays to
+exactly the live session**: the file text is kept as-is (comments and layout
+survive) and your definitions append in the order you typed them. A plain `:`
+redefinition *appends* — earlier words keep the definition they captured
+(Forth is **hyper-static**; that's a feature, like a local rebinding). A word
+changed with **`edit`** is different: that's a *fix*, so its definition is
+replaced where it stands and edit history never accumulates — saving twice
+writes a byte-identical file. Capture is interactive-only: a piped script
+captures nothing. (`compact` is deprecated: fixes don't accumulate, and
+deduping deliberate rebindings would change what earlier words mean.)
 
 For an edit/compile/run loop, type bare **`edit`** (no word name): it opens the
 current module file in your editor and `reload`s it when you save and quit

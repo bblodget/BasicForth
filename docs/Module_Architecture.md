@@ -1,7 +1,8 @@
 # Module Architecture — Log-Canonical vs File-Canonical
 
-**Status: AGREED 2026-07-10. Implementation not started — the staged plan
-at the bottom is the roadmap; docs/TODO.md tracks progress.**
+**Status: AGREED 2026-07-10; revised 2026-07-11 with the hyper-static
+principle (which decides *what* gets spliced). The staged plan at the bottom
+is the roadmap; docs/TODO.md tracks progress.**
 
 This is the design doc for the editing-workflow arc's Step 4 (module
 ownership), expanded to cover a more fundamental question that came out of
@@ -9,6 +10,53 @@ building bare `edit`: **what is the source of truth for a module — the
 session's capture log, or the file on disk?** The answer decides how
 `edit <word>`, `:e`, `save`, and `compact` should work, so Steps 2 and 3 of
 the arc are on hold until it's settled.
+
+## The hyper-static principle: `:` binds, `edit`/`:e` mutate
+
+Forth's dictionary is a **hyper-static global environment**
+(https://wiki.c2.com/?HyperStaticGlobalEnvironment): `:` never changes an
+existing binding — it creates a *new* one, and every already-compiled word
+keeps the binding it captured at definition time. Subroutine threading makes
+this physical: the call target is baked in. In
+
+```
+: thrust 10 ;
+: climb thrust 2 * ;
+: thrust 25 ;
+```
+
+`climb` meaning 20 is not staleness — it is the semantics. The new `thrust`
+shadows only for words defined afterward. Used deliberately, this is a poor
+man's lexical scoping: helper names can be rebound freely without touching
+the words that captured them.
+
+That gives BasicForth two distinct verb classes, and persistence must honor
+both:
+
+| Verb | Live semantics | Persistence |
+|------|----------------|-------------|
+| `:` (redefinition) | **bind**: a new binding; earlier words keep the old one | **append** to the file — replay-faithful |
+| `edit <word>` / `:e` | **mutate**: fix the binding itself; all callers follow | **splice in place** + converge |
+
+`:` is `define`; `edit`/`:e` are the explicit `set!`. A mistake gets *fixed*
+with the mutation verbs; an intentional layer gets *bound* with `:`. Two
+consequences fall out:
+
+- **Append is the faithful persistence for bindings.** The file must replay
+  to the live session's state, and in a hyper-static environment the
+  *sequence* of bindings is the state. Deduplicating `:`-redefinitions
+  last-wins is not merely lossy, it is **wrong**: in
+  `: a 1 ;  : b a ;  : a 2 ;` dropping the first `a` breaks `b` (it
+  captured that binding — the deduped file doesn't even load). This bug was
+  found in the first splice-save implementation and is structurally
+  impossible under append.
+- **Splice is the faithful persistence for mutations.** An `edit` means
+  "that text was wrong"; the file's definition is replaced where it stands,
+  and the session converges by reload. Mutation history has no semantic
+  value, so nothing accumulates.
+
+`compact` is deprecated with a stronger reason than redundancy: deduping a
+hyper-static file *rewires bindings* — it is semantically unsound.
 
 ## Where we are: the log-canonical model
 
@@ -31,12 +79,13 @@ rendering word between rounds and keep playing.
 
 What it costs:
 
-- The file accumulates redefinitions and needs periodic `compact`.
-- Three views of the module can **disagree**: a plain `: helper 200 ;`
-  retyped at the prompt leaves callers on the old code (live), `save`+
-  `reload` replays the log in order so callers *still* bind the old code,
-  but `compact` emits the latest source at the word's original position so
-  callers would bind the *new* code. Same module, three behaviors.
+- The file accumulates *mutation history*: every `edit` appends the edited
+  word plus all of its recompiled callers, so fixing one word ten times
+  leaves ten copies (plus callers) in the file, needing periodic `compact`.
+- `compact` itself disagrees with the live session: it dedups last-wins and
+  emits the latest source at the word's original position, so callers that
+  captured an earlier binding come back bound to the *new* code — the
+  hyper-static semantics are silently rewired (see the principle above).
 - Propagation needs real machinery to stay correct: the `uses` graph walk,
   dependency ordering, `:noname` group re-runs, the superseded-group guard.
   It works, but every future feature has to keep it working.
@@ -54,13 +103,14 @@ Propagation machinery becomes unnecessary for the edit path.
 
 Concretely:
 
-- **`save` becomes structure-preserving and in-place.** For each word
-  redefined this session, replace its definition span in the file text
-  (spans are already in the per-word header metadata); genuinely new
-  definitions append at the end. Comments and layout survive. The file
-  never accumulates duplicates — this is Step 3's "structure-preserving
-  compact" machinery, promoted from a cleanup tool to *how saving works*.
-- **`compact` retires.** Nothing accumulates, so there is nothing to
+- **`save` is replay-faithful.** The seeded file text is kept byte-for-byte
+  (comments, layout, every binding in order) and session captures append in
+  the order they happened — with one exception: a group that came from a
+  *mutation verb* (`edit`, later `:e`) splices over the word's definition in
+  the file text instead of appending. Bindings accumulate only when you
+  intentionally layer them; mutation history never accumulates at all.
+- **`compact` retires.** Deliberate bindings are semantics (dedup would
+  rewire them), and mutations never pile up — there is nothing left to
   compact.
 - **`edit <word>`** keeps its focused temp-file UX (the editor shows just
   the word, not the whole file) but changes what happens on save-and-quit:
@@ -71,10 +121,11 @@ Concretely:
 - **`:e <word>`** (Step 2) becomes: retype the definition inline at the
   prompt, then splice + reload. Same semantics as `edit <word>`, different
   input method. The arm-flag propagation design is dropped.
-- **Plain `: helper 200 ;` at the prompt** still compiles in memory with
-  stale callers (standard Forth semantics) — but the moment you `save`, the
-  file is clean and the next `reload` converges. The three views collapse
-  to one. `:e` is the taught way to redefine *and converge immediately*.
+- **Plain `: helper 200 ;` at the prompt** compiles a new binding; earlier
+  words keep the old one, live and across save/reload alike — the
+  hyper-static semantics, preserved faithfully in both worlds. When what
+  you actually want is "fix it everywhere," that's a mutation: use `edit`
+  (or `:e` once it lands).
 
 ## What we give up: hot editing
 
@@ -135,12 +186,10 @@ machinery stays in git history.
   use testing shows the fix loop isn't enough):** snapshot the file before
   the splice and, on a failed reload, offer "revert? (y/n)" — a module kept
   in git already has this for free.
-- **`is`/`to` assignment lines.** In-place save replaces *definitions*;
-  direct assignments are order-dependent lines with no single span to
-  replace. Proposal: keep the file's existing assignment lines verbatim,
-  and on save append only the *final* binding per defer/value when it
-  differs from what the file would produce (this is what `compact` learned
-  to do). Needs working out in implementation.
+- **`is`/`to` assignment lines.** Resolved by the hyper-static principle:
+  assignments are order-dependent effects, so `save` keeps the file's lines
+  verbatim and appends the session's in the order they happened —
+  replay-faithful, no dedup, nothing to work out.
 - **Positioning the editor.** We know the word's byte offset; converting it
   to a line number lets `edit <word>` open vi/nano *at the word*
   (`+<line>`). Pure nicety, cheap with the span metadata in hand.
@@ -225,18 +274,25 @@ carries a `SrcId` — ownership is tracked; we just don't use it yet.
 | `uses`                         | stays — query tool, unchanged               |
 | `see`, capture log             | stay — log backs REPL-typed sources         |
 | `defer`/`is` hot swapping      | stays — THE live-editing mechanism          |
+| `:` redefinition               | stays hyper-static: binds, appends on save  |
 | bare `edit`                    | stays as shipped                            |
 | `define`                       | stays as shipped                            |
 | `edit <word>` propagation      | replaced by splice + reload                 |
 | `(propagate)` + anon machinery | deleted (option 1)                          |
-| `save` (append-only)           | becomes in-place / structure-preserving     |
-| `compact`                      | retired                                     |
+| `save` (append-only)           | stays append for bindings; splices mutations |
+| `compact`                      | retired (dedup rewires bindings)            |
 | `:e`                           | built on splice + reload                    |
 
 ## Staged implementation plan (once agreed)
 
-1. **Splice machinery**: replace a word's span in the file text, preserving
-   everything else (absorbs Step 3). `save` adopts it. `compact` deprecated.
+1. **Splice machinery**: `save` keeps the file text and the session's
+   bindings/assignments verbatim in order (replay-faithful), and splices
+   *mutation-verb* groups — `edit`-originated redefinitions (the edited
+   word and its propagation re-logs, tagged at capture time) — over the
+   word's definition in the file text. With append-era duplicate bindings
+   in the file, a mutation splices the **last** (in-force) one; earlier
+   bindings are untouchable semantics. Absorbs Step 3; `compact`
+   deprecated.
 2. **`edit <word>` v2**: temp-file UX + splice + reload — with a **unique
    temp path** (pid suffix) so parallel sessions can't clobber each other.
    Integration tests rewritten around reload semantics.

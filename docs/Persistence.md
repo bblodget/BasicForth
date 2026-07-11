@@ -134,11 +134,20 @@ through is rolled back and not captured. The `-session`/`reload`/`load`/`save`
 lines are never captured either, so a saved file stays **pure definitions**,
 clean to hand-edit.
 
-`save` writes everything captured (plus whatever the current file already
-contained, which is seeded into the log when you load it). Saving is
-**idempotent** (saving twice leaves the file unchanged) and **cumulative** (new
-definitions are appended to what was there). A bare `save` with nothing captured
-prints `nothing to save`; a bare `save` with no current file prints
+`save` distinguishes **bindings** from **mutations** (see
+docs/Module_Architecture.md — Forth's dictionary is *hyper-static*: `:` never
+changes an existing definition, it layers a new one, and earlier words keep
+what they captured). The file text is kept byte-for-byte — comments, blank
+lines, every binding in order — and everything you typed appends in the order
+it happened, so the file **replays to exactly the live session's state**: a
+plain `: thrust 25 ;` appends, and words defined before it still get the old
+`thrust`, live and after reload alike. The exception is a **mutation** —
+`edit <word>` (and the future `:e`) means "that text was wrong" — which
+replaces the word's definition where it stands instead of appending, so
+mutation history never accumulates: saving after ten edits of the same word
+leaves one definition, in place. Saving is **idempotent** (saving twice
+writes a byte-identical file). A bare `save` with nothing captured prints
+`nothing to save`; with no current file it prints
 `save: no current file (use: save <name>)`.
 
 ## Scope: interactive sessions only
@@ -178,17 +187,22 @@ inside a defining word.
 
 Other notes:
 
-- **Redefinitions accumulate** under `save`, which rewrites the whole file plus
-  your edits. `compact <name>` writes a deduped snapshot — each word's latest
-  source once, in dependency order, then each `value`/deferred word's **final
-  direct `to`/`is` assignment** (so bindings and value contents survive the
-  dedup) — to a sibling `<base>.compact<.ext>` so you can `diff` the two and
-  adopt the clean one if you like. A `:noname ... ; is x` binding (multi-line
-  included) is emitted as its whole recorded group — replaying it re-binds —
-  and no separate assignment line is appended for it. The trade-off: `save` keeps the file's
-  between-definition comments and structure; `compact` keeps only definitions
-  and final assignments. A *structure-preserving* compact (splice latest defs
-  into the original text) is future work.
+- **Mutation (splice) details.** An `edit` replaces the binding it actually
+  edited: the word's newest prior definition — a binding appended earlier
+  this session if you rebound it, else its newest definition in the file
+  text. Older same-name definitions are older bindings and are never
+  touched. Editing the same word again updates the same spot (last edit
+  wins). A mutation with no clean target — an edited word that was never
+  saved, an edited `:noname` action, or a definition sharing its source
+  line with another — appends instead (still replay-correct, just not
+  deduped). `is`/`to` assignment lines and `:noname ... ; is x` groups are
+  order-dependent effects: the file's stay put, the session's append in the
+  order they happened, and the last one wins on replay.
+- **`compact` is deprecated** — and for a stronger reason than redundancy:
+  deduping a hyper-static file *rewires bindings* (a word that captured an
+  earlier definition comes back bound to the latest one). The word remains
+  for now (it writes the old definitions-only snapshot) and will be removed
+  in a later cleanup (see docs/Module_Architecture.md).
 - **A library `include`d by a module** stays referenced, not inlined: `save`
   keeps the `include other.fs` line, not a copy of `other.fs`. The library's
   words are part of the live module (`.module`/`see`/`uses` show them, read from
@@ -204,7 +218,8 @@ registered with the internal `(hook!)` primitive:
 
 - `(session-init)` — at startup, records the `-session` restore point, marks the
   run interactive, sets the current file from the startup arg (if any), and seeds
-  the log from it so `save` rewrites it cumulatively. (The restore mark itself is
+  the log from it — `save` tells the file's own text (kept, spliced in place)
+  from session captures (appended) by the seed's extent. (The restore mark itself is
   captured at the *end of `core.fs`*, before any module loads, so `-session`/
   `new`/`load` forget the whole module — the loaded file's words plus interactive
   ones.)
