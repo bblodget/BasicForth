@@ -522,10 +522,15 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   stage): file text and `:` rebindings kept verbatim in order
   (replay-faithful), `edit`-originated mutations (tagged at capture)
   spliced over the binding they edited; `compact` deprecated.
-- [ ] **Stage 2: `edit <word>` v2** — temp-file UX + splice + reload
-  (replaces propagation), with a **unique temp path** (pid suffix) so
-  parallel sessions can't clobber each other. Tests rewritten around
-  reload semantics.
+- [x] **Stage 2: `edit <word>` v2** — temp-file UX + splice + reload
+  (replaces propagation). The edit targets the word's newest definition in
+  the module file, verifies the span still holds the expected text before
+  rewriting (atomic .new+rename), and reloads; the dirty-guard runs before
+  any reload (non-interactive sessions refuse instead of discarding).
+  Deviation from plan: the temp path is module-adjacent (`<module>.edit`,
+  removed after) rather than pid-suffixed — no new syscall, and collisions
+  then require two sessions editing the SAME module, which is already a
+  conflict. Propagation is now uncalled (deleted in Stage 4).
 - [ ] **Stage 3: `:e <word>`** — inline redefine + splice + reload.
 - [ ] **Stage 4: cleanup pass** — sweep the log-canonical cruft once 2–3
   prove stable: the propagation body in core.fs, `compact` + helpers, the

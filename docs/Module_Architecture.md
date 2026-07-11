@@ -193,12 +193,15 @@ machinery stays in git history.
 - **Positioning the editor.** We know the word's byte offset; converting it
   to a line number lets `edit <word>` open vi/nano *at the word*
   (`+<line>`). Pure nicety, cheap with the span metadata in hand.
-- **Unique temp file.** Today's `edit <word>` uses the fixed
+- **Unique temp file.** The old `edit <word>` used the fixed
   `/tmp/basicforth-edit.fs`, so two parallel BasicForth sessions editing at
-  the same moment clobber each other (a known v1 limitation). The rewrite
-  fixes it: suffix the temp path with the process id (a `getpid` syscall
-  wrapper) — unique per session, and self-describing when a stale file is
-  found in `/tmp`.
+  the same moment clobbered each other. **Resolved (stage 2) with a
+  module-adjacent path instead of the planned pid suffix**: the temp file is
+  `<module>.edit`, removed after the cycle — no new syscall, self-describing,
+  and collisions then require two sessions editing the *same module*, which
+  is already a conflict the temp file is the least of. (A scratch-session
+  `define` still uses the /tmp path; scratch sessions have no module to sit
+  next to.)
 
 ## Refinement candidate: do we need `save` at all?
 

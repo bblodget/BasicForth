@@ -1947,21 +1947,23 @@ if [[ "$gone_out" == *"7"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  REPL broke when boot-time getcwd failed\n    Got: %q\n" "$gone_out"; ((failed++))
 fi
-# EDIT-propagation: editing a word recompiles its transitive callers, so the
-# change goes live everywhere (subroutine threading otherwise leaves callers
-# calling the old word). leaf=1 → mid=leaf*10 → top prints mid; after editing
-# leaf to 2, `top` must print 20, and the report must name the recompiled callers.
-# `edit` spawns $EDITOR on the word's temp file — here a non-interactive sed that
-# rewrites leaf's source from 1 to 2.
+# EDIT is splice + reload: the edited word's new text replaces its definition
+# in the module file and the reload rebuilds every caller by construction —
+# leaf=1 → mid=leaf*10 → top prints mid; after editing leaf to 2, `top` must
+# print 20 and the FILE must hold the new text with no history and no temp
+# droppings. `edit` spawns $EDITOR on "<module>.edit" — here a sed.
 ep_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
 ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\ntop\nbye\n' \
-    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 ;
+    echo "FILE:"; cat mod.fs; ls mod.fs.edit 2>/dev/null && echo "TEMP-LEFT" )
+ep_n=$(grep -c ': leaf' <<<"$ep_out")
 rm -rf "$ep_dir"
-if [[ "$ep_out" == *"updated:"*"mid"* && "$ep_out" == *"top"* && "$ep_out" == *"20"* ]]; then
-    printf "  ${GREEN}PASS${NC}  edit recompiles transitive callers — the change goes live\n"; ((passed++))
+if [[ "$ep_out" == *"20"* && "$ep_out" == *"FILE:"*": leaf 2 ;"* && "$ep_n" == "1" \
+      && "$ep_out" != *"TEMP-LEFT"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit splices the file and reloads — callers live, no droppings\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  edit-propagation\n    Expected 'updated: ... mid ... top' and 20\n    Got: %q\n" "$ep_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  edit splice+reload\n    Expected 20, leaf 2 spliced once, no temp file\n    Got: %q\n" "$ep_out"; ((failed++))
 fi
 # An untouched temp file is a no-op: vi's :q! exits 0 (only :cq reports
 # failure), so edit compares the file image before/after the editor instead
@@ -1981,7 +1983,7 @@ fi
 # losing its binding. The binding must survive an aborted edit.
 ed_dir="$(mktemp -d)"
 printf 'defer render\n' > "$ed_dir/mod.fs"
-ed_out=$( cd "$ed_dir" && printf ':noname 42 . ; is render\nedit render\nrender\nbye\n' \
+ed_out=$( cd "$ed_dir" && printf ':noname 42 . ; is render\nsave\nedit render\nrender\nbye\n' \
     | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ed_dir"
 if [[ "$ed_out" == *"edit: unchanged"* && "$ed_out" == *"42"* && "$ed_out" != *"uninitialized"* ]]; then
@@ -1995,7 +1997,7 @@ fi
 # callers go through the defer).
 ef_dir="$(mktemp -d)"
 printf 'defer d\n' > "$ef_dir/mod.fs"
-ef_out=$( cd "$ef_dir" && printf 'edit d\n: w1 7 . ;\n'\'' w1 is d\nedit d\n:noname 42 . ; is d\nedit d\nd\nbye\nn\n' \
+ef_out=$( cd "$ef_dir" && printf 'edit d\n: w1 7 . ;\n'\'' w1 is d\nedit d\n:noname 42 . ; is d\nsave\nedit d\nd\nbye\nn\n' \
     | EDITOR='sed -i s/42/43/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ef_dir"
 if [[ "$ef_out" == *"is uninitialized"* && "$ef_out" == *"edit w1 instead"* && "$ef_out" == *"43"* ]]; then
@@ -2012,7 +2014,7 @@ fi
 em_dir="$(mktemp -d)"
 printf 'defer d\n: go2 . . ;\n' > "$em_dir/mod.fs"
 printf '#!/bin/sh\nsed -i "s/111/222/" "$1"\n' > "$em_dir/ed.sh" && chmod +x "$em_dir/ed.sh"
-em_out=$( cd "$em_dir" && printf ':noname 111\n7 go2 ; is d\nedit d\nd\n.( DEPTH=) depth . cr\nbye\nn\n' \
+em_out=$( cd "$em_dir" && printf ':noname 111\n7 go2 ; is d\nsave\nedit d\nd\n.( DEPTH=) depth . cr\nbye\nn\n' \
     | EDITOR="$em_dir/ed.sh" BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$em_dir"
 if [[ "$em_out" == *"7 222"* && "$em_out" == *"DEPTH=0"* ]]; then
@@ -2147,7 +2149,7 @@ rm -rf "$se_dir"
 # the file's original — climb keeps capturing the old thrust on replay.
 bm_dir="$(mktemp -d)"
 printf ': thrust 10 ;\n: climb thrust 2 * ;\n' > "$bm_dir/mod.fs"
-bm_out=$( cd "$bm_dir" && printf ': thrust 25 ;\nedit thrust\nsave\nbye\n' \
+bm_out=$( cd "$bm_dir" && printf ': thrust 25 ;\nsave\nedit thrust\nbye\n' \
     | EDITOR='sed -i s/25/30/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1;
     cat mod.fs; echo "REPLAY:"
     printf ': probe thrust . ; climb . probe\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 | sed -n 2p )
@@ -2179,14 +2181,12 @@ else
 fi
 rm -rf "$sa_dir"
 
-# USES and edit-propagation treat :noname actions first-class. A live anon
-# group (the CURRENT action of a deferred word) is reported as
-# "(:noname is <name>)" and recompiled when a word it calls is edited. BOTH
-# bindings must update — (word-src)'s empty-name lookup used to reach only the
-# NEWEST anon, leaving every other :noname-bound defer calling the old code.
+# USES treats :noname actions first-class, and an edit reaches every
+# :noname-bound defer through the reload: both groups (saved into the file)
+# replay against the edited helper, so BOTH bindings pick up the new code.
 ap_dir="$(mktemp -d)"
 printf 'defer d1\ndefer d2\n: helper 100 + ;\n' > "$ap_dir/mod.fs"
-ap_out=$( cd "$ap_dir" && printf ':noname 5 helper . ; is d1\n:noname 7 helper . ; is d2\nuses helper\nuses d1\nedit helper\nd1\nd2\nbye\nn\n' \
+ap_out=$( cd "$ap_dir" && printf ':noname 5 helper . ; is d1\n:noname 7 helper . ; is d2\nuses helper\nuses d1\nsave\nedit helper\nd1\nd2\nbye\nn\n' \
     | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ap_dir"
 if [[ "$ap_out" == *"helper is used by: (:noname is d2) (:noname is d1)"* \
@@ -2195,26 +2195,23 @@ if [[ "$ap_out" == *"helper is used by: (:noname is d2) (:noname is d1)"* \
 else
     printf "  ${RED}FAIL${NC}  uses on :noname actions\n    Got: %q\n" "$ap_out"; ((failed++))
 fi
-if [[ "$ap_out" == *"updated: (:noname is d1) (:noname is d2)"* \
-      && "$ap_out" == *"205"* && "$ap_out" == *"207"* ]]; then
-    printf "  ${GREEN}PASS${NC}  edit propagates into every :noname-bound defer\n"; ((passed++))
+if [[ "$ap_out" == *"205"* && "$ap_out" == *"207"* ]]; then
+    printf "  ${GREEN}PASS${NC}  edit reaches every :noname-bound defer via the reload\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  edit propagation into :noname actions\n    Expected: 205 and 207\n    Got: %q\n" "$ap_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  edit into :noname actions\n    Expected: 205 and 207\n    Got: %q\n" "$ap_out"; ((failed++))
 fi
-# GUARD: only the CURRENT action's group is re-run — re-running a superseded
-# group would re-fire its `is` and clobber the newer binding backward. Also
-# transitive: helper2 (calls helper) goes dirty, and the anon group that calls
-# helper2 is re-run in turn (7 + 201 = 208).
+# Superseded :noname groups stay harmless under reload semantics: both saved
+# groups replay in order, the LAST `is` wins, and the transitive chain
+# (helper2 calls the edited helper) is rebuilt by construction (7+201 = 208).
 ag_dir="$(mktemp -d)"
 printf 'defer d\n: helper 100 + ;\n: helper2 helper 1+ ;\n' > "$ag_dir/mod.fs"
-ag_out=$( cd "$ag_dir" && printf ':noname 5 helper . ; is d\n:noname 7 helper2 . ; is d\nedit helper\nd\nbye\nn\n' \
+ag_out=$( cd "$ag_dir" && printf ':noname 5 helper . ; is d\n:noname 7 helper2 . ; is d\nsave\nedit helper\nd\nbye\nn\n' \
     | EDITOR='sed -i s/100/200/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ag_dir"
-ag_n=$(grep -o '(:noname' <<<"$ag_out" | wc -l)
-if [[ "$ag_out" == *"updated: helper2 (:noname is d)"* && "$ag_out" == *"208"* && "$ag_n" == "1" ]]; then
-    printf "  ${GREEN}PASS${NC}  propagation skips superseded :noname groups (transitive ok)\n"; ((passed++))
+if [[ "$ag_out" == *"208"* && "$ag_out" != *"205"* ]]; then
+    printf "  ${GREEN}PASS${NC}  reload keeps the last :noname binding (transitive ok)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  superseded :noname group guard\n    Expected: 'updated: helper2 (:noname is d)' once, then 208\n    Got: %q\n" "$ag_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  superseded :noname group under reload\n    Expected 208 (last binding wins)\n    Got: %q\n" "$ag_out"; ((failed++))
 fi
 
 # COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
@@ -3196,16 +3193,24 @@ ed_nf=$(printf 'edit nosuchxyz\nbye\n' | BASICFORTH_SESSION=1 timeout 2 $FORTH 2
     && { printf "  ${GREEN}PASS${NC}  edit reports not found\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit reports not found\n    Got: %s\n" "$(echo "$ed_nf"|head -3)"; ((failed++)); }
 
-# An external edit takes effect: sed rewrites ee's body from 1 to 7.
-ed_ch=$(printf ': ee 1 ;\nedit ee\nee .\nbye\n' \
-    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+# An external edit takes effect: sed rewrites ee's body from 1 to 7 in the
+# module file, and the reload makes it live. (edit needs a module file: a
+# scratch-session word is refused with "save <name> first".)
+ed_dir=$(mktemp -d)
+printf ': ee 1 ;\n' > "$ed_dir/mod.fs"
+ed_ch=$( cd "$ed_dir" && printf 'edit ee\nee .\nbye\n' \
+    | EDITOR='sed -i s/1/7/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1)
+rm -rf "$ed_dir"
 [[ "$ed_ch" == *"7  ok"* ]] \
     && { printf "  ${GREEN}PASS${NC}  edit applies an external editor's changes\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit applies an external edit\n    Got: %s\n" "$(echo "$ed_ch"|head -5)"; ((failed++)); }
 
-# An aborting editor (non-zero exit) leaves the word unchanged.
-ed_ab=$(printf ': eb 1 ;\nedit eb\neb .\nbye\n' \
-    | EDITOR=false BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
+# An aborting editor (non-zero exit) leaves the word (and file) unchanged.
+ed_dir=$(mktemp -d)
+printf ': eb 1 ;\n' > "$ed_dir/mod.fs"
+ed_ab=$( cd "$ed_dir" && printf 'edit eb\neb .\nbye\n' \
+    | EDITOR=false BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1)
+rm -rf "$ed_dir"
 [[ "$ed_ab" == *"edit: editor exited with status 1"* && "$ed_ab" == *"1  ok"* ]] \
     && { printf "  ${GREEN}PASS${NC}  edit reports an aborted editor, word unchanged\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit aborted-editor handling\n    Got: %s\n" "$(echo "$ed_ab"|head -5)"; ((failed++)); }
@@ -3254,16 +3259,17 @@ sy_out=$(printf ': st0 s" true"  (system) . ;\n: st1 s" false" (system) . ;\nst0
 section "Dirty guard"
 # =========================================================================
 # (dirty) tracks unsaved log changes: clean at start, set by a definition,
-# cleared by save, set again by an edit. The save-first prompt itself only
+# cleared by save — and an edit ends CLEAN too (it writes the file and
+# reloads, which reseeds the log). The save-first prompt itself only
 # engages at a real terminal (PTY suite); here we verify the bookkeeping.
 dg_dir="$(mktemp -d)"
-dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\nbye\n' \
+dg_out=$( cd "$dg_dir" && printf '(dirty) @ .\n: dgw 1 ;\n(dirty) @ .\nsave m.fs\n(dirty) @ .\nedit dgw\n(dirty) @ .\ndgw .\nbye\n' \
     | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 rm -rf "$dg_dir"
-if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"-1  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save / edit\n"; ((passed++))
+if [[ "$dg_out" == *"0  ok"*"-1  ok"*"saved to"*"0  ok"*"0  ok"*"2  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  (dirty) tracks define / save; edit ends clean (reloaded)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, -1\n    Got: %q\n" "$dg_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  (dirty) bookkeeping\n    Expected 0, -1, saved, 0, 0, 2\n    Got: %q\n" "$dg_out"; ((failed++))
 fi
 # In a pipe the guard never prompts: a dirty new/bye proceeds silently (no
 # prompt text, no byte of input consumed as an answer).

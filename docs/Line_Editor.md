@@ -42,64 +42,54 @@ width.
 ## Editing a definition: `edit`
 
 `edit <name>` opens a word's source in your editor; when you save and quit,
-BasicForth recompiles it:
+BasicForth **splices the new text into the module file** over the definition
+you edited and **reloads the module**, so the change is on disk and live
+everywhere in one step:
 
 ```
-> : triple 3 * ;
- ok
 > edit triple              # opens $EDITOR on triple's source — edit, save, quit
+saved to /home/you/game.fs
  ok
-> triple                   # the new definition is live
+> triple                   # the new definition is live, and so is every caller
 ```
 
-It writes the word's current source to a temp file and launches your editor —
-`$VISUAL`, then `$EDITOR`, then `vi` if neither is set. The terminal returns to
-its normal (cooked) mode for the editor and the prompt re-engages raw mode when
-you come back, so a full-screen editor (vim, nano, …) behaves normally. On a
-clean exit BasicForth re-reads the file, recompiles the word, and propagates the
-change (below). If the editor exits non-zero (e.g. `:cq` in vim), the word is
-left unchanged.
+It writes the word's current source to a temp file next to the module
+(`<module>.edit`, removed afterwards) and launches your editor — `$VISUAL`,
+then `$EDITOR`, then `vi` if neither is set. The terminal returns to its
+normal (cooked) mode for the editor and the prompt re-engages raw mode when
+you come back, so a full-screen editor (vim, nano, …) behaves normally. If
+you leave without changing the file (vi's `:q!`), or the editor exits
+non-zero (vim's `:cq`), nothing happens — no splice, no reload, the session
+untouched.
 
-Because the source is a real multi-line file, your **formatting is preserved** —
-indentation, line breaks, and `\` comments all survive the round-trip. (An
-earlier version flattened each definition onto one editable input line; the
-external editor removed that limitation.)
+Because the source is a real multi-line file, your **formatting is
+preserved** — indentation, line breaks, and `\` comments all survive the
+round-trip.
 
-`edit` works for words you defined this session (source from the capture log) and
-for file-loaded words — `core.fs`, `include`d files — read from their source file
-via the dictionary's source metadata, the same way `see` finds them. For a
-file-loaded word the edited version is logged like a REPL redefinition, so a later
-`save` persists it. An assembly primitive or an unknown name reports a short
-message instead of opening the editor.
+An edit is a **mutation** ("that text was wrong"), so it operates on the
+module file: the binding you edit is the word's newest definition *in the
+file*. A word you typed this session and haven't saved isn't there yet — at
+a terminal `edit` offers "save first? (y/n)" and converges; in a piped
+script it refuses (`edit: unsaved changes — save first`) rather than
+silently discarding anything. An assembly primitive or an unknown name
+reports a short message instead of opening the editor; a scratch session
+(no module file) is told to `save <name>` first.
 
-The temp file is a fixed path (`/tmp/basicforth-edit.fs`), so two BasicForth
-sessions editing at the same moment would share it.
-
-### The edit goes live everywhere (propagation)
+### The edit goes live everywhere (reload)
 
 BasicForth is subroutine-threaded: redefining a word does **not** update the
-words that already call it (their call targets are compiled in). So after you
-save, `edit` **recompiles every module word that transitively uses the one you
-edited**, in dependency order, and prints what it touched:
+words that already call it (their call targets are compiled in). `edit`
+solves this by **reloading the module** after the splice: in a Forth file
+every word is defined before its callers, so the reload rebuilds every
+caller of the edited word *by construction* — transitive chains,
+`:noname … ; is x` bindings (the group replays and the last `is` wins), all
+of it, with no bookkeeping.
 
-```
-> edit install-brains      # change all three ghosts to ' drift, save + quit
-updated: init-game setup chase
- ok
-> chase                    # the change is live — no manual recompiling
-```
-
-It finds the callers with the same machinery as `uses`, and recompiles each from
-its source (capture log *or* file), re-logging it so `see`/`uses`/`save` stay
-correct.
-
-`:noname` actions are covered too: if the edited word is called from a
-`:noname … ; is x` group that is still `x`'s current action, the whole group is
-re-run — the trailing `is` re-binds the defer to freshly compiled code — and it
-appears in the report as `(:noname is x)`. A superseded group (an old action
-the defer has moved on from) is skipped: re-running it would drag the defer
-back to the old binding. The deferred word's own callers are never recompiled —
-they reach it through its action cell, which is the point of `defer`.
+The trade-off: a reload resets **runtime state** — variables reload
+uninitialized, values return to their file-time contents. Growth stays hot
+(`define`, `:`, and `' word is defer` swaps never reload); it is *revising*
+a definition that restarts the module. See docs/Module_Architecture.md for
+the full model.
 
 ### The whole file at once: bare `edit`
 

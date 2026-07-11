@@ -2158,19 +2158,26 @@ variable (ld-pos)
     dup 0= if  2drop  ." usage: sh <command>" cr exit  then
     (system) drop ;
 
-\ ===== EDIT: open a word's source in an external editor, then recompile =====
+\ ===== EDIT: open a word's source in an external editor, then splice+reload =====
 \ `edit <name>` writes the word's current source to a temp file, opens it in your
-\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit re-reads the file,
-\ recompiles the word from it (preserving your multi-line formatting — unlike a
-\ one-line REPL recall), and PROPAGATES the change to every module word that uses
-\ it (subroutine threading bakes call targets, so callers must be recompiled too,
-\ just as the redo/IS machinery handles). The edited definition is logged like a
-\ REPL redefinition, so SEE/USES/SAVE see the new source even for a word that was
-\ originally loaded from a file. The temp file is a fixed path, so two BasicForth
-\ sessions editing at the same moment would share it (a known v1 limitation).
-\ Bare `edit` (no name) opens the CURRENT MODULE FILE itself and reloads it on a
-\ change — the whole edit-on-disk loop (edit + reload) in one word.
-: (edit-tmp) ( -- c-addr u )  s" /tmp/basicforth-edit.fs" ;
+\ editor ($VISUAL, else $EDITOR, else vi), and on a clean exit SPLICES the new
+\ text into the module file over the binding it edited, then RELOADS the module
+\ — an edit is a MUTATION ("that text was wrong"), and reload rebuilds every
+\ caller by construction (words are defined before use in a file), so no
+\ propagation pass is needed and the file never accumulates edit history. The
+\ binding must live in the module file: if it was typed this session (or the
+\ file layout is newer than the header metadata), edit first CONVERGES — the
+\ dirty-guard offers "save first? (y/n)", then a reload re-stamps everything —
+\ and retries. The temp file sits next to the module ("<module>.edit", removed
+\ afterwards), so parallel sessions collide only when editing the SAME module —
+\ which is already a conflict. Bare `edit` (no name) opens the CURRENT MODULE
+\ FILE itself and reloads it on a change.
+create (et-path) (cf-max) 8 + allot          \ "<module>.edit"
+: (edit-tmp) ( -- c-addr u )                \ module-adjacent temp path
+    (cur-file-len) @ 0= if  s" /tmp/basicforth-edit.fs" exit  then   \ scratch (define)
+    (et-path) (sp-end) !
+    (cur-file@) (sp-add)  s" .edit" (sp-add)
+    (et-path)  (sp-end) @ over - ;
 variable (er-fid)  variable (er-buf)  variable (er-len)
 : (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
     (edit-tmp) w/o create-file if  drop 2drop  false exit  then  ( src-addr src-u fid )
@@ -2187,40 +2194,50 @@ variable (er-fid)  variable (er-buf)  variable (er-len)
     if  drop  (er-buf) @ free drop  false exit  then         ( u2 )
     (er-buf) @ swap true ;                   ( c-addr u2 true )
 : (edit-read) ( -- c-addr u true | false )  (edit-tmp) (read-all) ;
-: (edit-run) ( -- status )                  \ open the temp file in the user's editor
-    \ The path here MUST match (edit-tmp); the shell resolves $VISUAL/$EDITOR/vi.
-    s" ${VISUAL:-${EDITOR:-vi}} /tmp/basicforth-edit.fs" (system) ;
-create (em-cmd) (cf-max) 32 + allot          \ "editor '<module path>'" command line
-: (em-run) ( -- status )                    \ open the CURRENT MODULE FILE in the editor
+create (em-cmd) (cf-max) 64 + allot          \ "editor '<path>'" command line
+: (run-editor) ( path-a path-u -- status )  \ open <path> in $VISUAL/$EDITOR/vi
     (em-cmd) (sp-end) !
     s" ${VISUAL:-${EDITOR:-vi}} '" (sp-add)
-    (cur-file@) (sp-add)
+    (sp-add)                                 \ the path (single-quoted)
     s" '" (sp-add)
     (em-cmd)  (sp-end) @ over -  (system) ;
+: (edit-run) ( -- status )  (edit-tmp) (run-editor) ;
+: (em-run)   ( -- status )  (cur-file@) (run-editor) ;
+: (edit-rm) ( -- )                          \ remove the temp file (best effort)
+    (edit-tmp)                               ( path-a path-u )  \ materialize BEFORE
+    (em-cmd) (sp-end) !                      \ moving (sp-end) — (edit-tmp) uses it too
+    s" rm -f '" (sp-add)
+    (sp-add)                                 \ the path
+    s" '" (sp-add)
+    (em-cmd)  (sp-end) @ over -  (system) drop ;
 : (s=) ( a1 u1 a2 u2 -- f )                 \ exact string equality
     rot 2dup <> if  2drop 2drop  false exit  then
     drop                                     ( a1 a2 u )
     0 ?do  over i + c@  over i + c@  <> if  2drop  false unloop exit  then  loop
     2drop true ;
 variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor ran
-: (edit-src) ( src-addr src-u -- new? )     \ temp-file edit cycle; true if a def landed
+: (edit-cycle) ( src-a src-u -- new-a new-u true | false )   \ the temp-file round trip
     \ Shared by `edit` and `define`; messages report via the (msg:) prefix.
     (edit-write) 0= if  (msg:) ." cannot write temp file" cr  false exit  then
     (edit-read) 0= if  (msg:) ." cannot read temp file" cr  false exit  then  ( pre-a pre-u )
     (ed-pu) !  (ed-pre) !                     \ pre-image: what the editor was given
     (edit-run) ?dup if                        ( status )
-        (ed-pre) @ free drop
+        (ed-pre) @ free drop  (edit-rm)
         (msg:) ." editor exited with status " . cr  false exit  then
     (edit-read) 0= if
-        (ed-pre) @ free drop
+        (ed-pre) @ free drop  (edit-rm)
         (msg:) ." cannot read temp file" cr  false exit  then  ( c-addr u )
+    (edit-rm)
     2dup (ed-pre) @ (ed-pu) @ (s=) if         \ file untouched (e.g. vi :q! exits 0)
         drop free drop  (ed-pre) @ free drop
         (msg:) ." unchanged" cr  false exit  then
     (ed-pre) @ free drop
+    true ;
+: (edit-src) ( src-addr src-u -- new? )     \ DEFINE's cycle: evaluate + log the result
+    (edit-cycle) 0= if  false exit  then      ( new-a new-u )
     true (skip-capture) !                     \ keep THIS command line out of the log
-    (latest@) >r                              \ R: LATEST before recompiling
-    2dup (eval+log)  drop free drop           \ redefine + log; release the slurp
+    (latest@) >r                              \ R: LATEST before compiling
+    2dup (eval+log)  drop free drop           \ compile + log; release the slurp
     (latest@) r> = if
         (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
     true ;
@@ -2246,25 +2263,91 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
         (msg:) ." unchanged" cr  exit  then
     drop free drop  (ed-pre) @ free drop
     reload ;
-: (edit-defer) ( nt -- )                     \ edit what a deferred word RUNS
+
+\ --- the splice: file[off, off+len) ← the editor's text, atomically, verified ---
+: (edit-span?) ( nt -- off len true | false )   \ nt's span, in the CURRENT module file
+    (nt-meta)                                ( off len srcid )
+    dup 0=  over 65535 =  or if  drop 2drop  false exit  then
+    (source-path)  (cur-file@) (s=) 0= if  2drop  false exit  then
+    true ;
+variable (es-off)  variable (es-len)         \ the target span in the file
+variable (es-src)  variable (es-su)          \ the text the span must still hold
+variable (es-na)   variable (es-nu)          \ the replacement (editor) text
+variable (es-fa)   variable (es-fu)          \ the module file image
+variable (es-fid)
+: (es-put) ( c-addr u -- ok? )  (es-fid) @ write-file 0= ;
+: (es-write) ( -- ok? )                      \ [0,off) + new (+ nl) + [off+len,end) → .new+rename
+    (cur-file@) (name>paths)
+    (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
+    (es-fid) !
+    (es-fa) @  (es-off) @  (es-put)
+    (es-na) @  (es-nu) @  (es-put)  and
+    (es-nu) @ 0<>  over and
+    if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
+        (nl) 1 (es-put) drop  then  then     \ spliced text must end its line
+    (es-fa) @ (es-off) @ + (es-len) @ +      ( ok? post-a )
+    (es-fu) @  (es-off) @ (es-len) @ +  -    ( ok? post-a post-u )
+    (es-put)  and
+    (es-fid) @ close-file 0=  and            ( ok? )
+    dup 0= if  exit  then
+    (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file 0= and ;
+: (edit-splice) ( -- ok? )                   \ verify the span, then rewrite the file
+    (cur-file@) (read-all) 0= if
+        (msg:) ." cannot read " (cur-file@) type cr  false exit  then
+    (es-fu) !  (es-fa) !
+    (es-off) @ (es-len) @ +  (es-fu) @  u>
+    if  true  else
+        (es-fa) @ (es-off) @ +  (es-len) @  (es-src) @ (es-su) @  (s=) 0=
+    then
+    if  (es-fa) @ free drop
+        (msg:) ." file changed on disk — nothing spliced (reload and retry)" cr
+        false exit  then
+    (es-write)                               ( ok? )
+    (es-fa) @ free drop
+    dup 0= if  (msg:) ." cannot write " (cur-file@) type cr  then ;
+: (edit-guard?) ( -- proceed? )             \ an edit ends in a reload, which discards
+    \ unsaved captures — so guard first: y saves (the reload then replays the
+    \ saved work), n discards, anything else cancels. Non-interactive sessions
+    \ REFUSE instead of silently discarding; a script must `save` before `edit`.
+    (dirty) @ 0= if  true exit  then
+    (tty?) 0= if  ." edit: unsaved changes — save first" cr  false exit  then
+    (dirty-guard) ;
+: (edit-target) ( nt -- )                   \ temp-edit nt's source, splice the file, reload
+    (edit-guard?) 0= if  drop  exit  then
+    dup (edit-span?) 0= if  drop  exit  then  ( nt off len )
+    (es-len) !  (es-off) !                   ( nt )
+    (nt-src) 0= if  (msg:) ." cannot read source" cr  exit  then   ( src-a src-u )
+    2dup (es-su) !  (es-src) !                \ points into the source-file cache:
+    (edit-cycle) 0= if  (uf-free)  exit  then \ keep (uf-buf) alive through the splice
+    2dup (es-nu) !  (es-na) !                 ( new-a new-u )
+    (edit-splice)                             ( new-a new-u ok? )
+    -rot drop free drop                       \ release the editor text
+    (uf-free)
+    if  reload  then ;
+: (edit-defer) ( nt -- handled? )            \ edit what a deferred word RUNS
     (nt>code) (sb-len) !  dup (sb-xt) !  defer@ (sb-act) !
     (sb-act) @  (sb-xt) @  (sb-xt) @ (sb-len) @ +  within if
         ." edit: " (see-a) @ (see-u) @ type ."  is uninitialized — set it first:  ' <word> is "
-        (see-a) @ (see-u) @ type cr  exit  then
+        (see-a) @ (see-u) @ type cr  true exit  then
     (sb-act) @ (xt>name) if                  ( c-addr u )   \ bound to a named word
         ." edit: " (see-a) @ (see-u) @ type ."  is deferred — its action is "
-        2dup type ." ; edit " type ."  instead" cr  exit  then
+        2dup type ." ; edit " type ."  instead" cr  true exit  then
     (sb-act) @ (xt>nt) if                    ( nt' )   \ bound to a :noname — edit
-        dup (sw-anon?) if                    \ ITS group; re-running it rebinds
-            (nt-src) if  (edit-src) drop  (uf-free)  exit  then
-            (uf-free)
-        else drop then
+        dup (sw-anon?) if                    \ ITS group; the reload re-binds
+            dup (edit-span?) if  2drop  (edit-target)  true exit  then
+            drop  false exit                  \ group not in the file yet → converge
+        then  drop
     then
-    ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr ;
+    ." edit: " (see-a) @ (see-u) @ type ."  is deferred; its action has no editable source" cr
+    true ;
+: (edit-try) ( -- handled? )                 \ dispatch when the binding is reachable
+    (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )
+    dup (nt-type) 1 = if  (edit-defer)  exit  then   \ deferred: follow the binding
+    dup (edit-span?) if  2drop  (edit-target)  true exit  then
+    drop  false ;
 : edit ( "name" | -- )
     s" edit" (msg-u) ! (msg-a) !
     parse-word dup 0= if  2drop  (edit-module) exit  then    \ bare: edit the module file
-
     (see-u) !  (see-a) !
     (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
     0= if  2drop 2drop
@@ -2272,14 +2355,15 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
     dup 65535 = if  2drop 2drop
         ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
     2drop 2drop                              \ done with the meta cells
-    (see-a) @ (see-u) @ (nt-by-name) if      ( nt )
-        dup (nt-type) 1 = if  (edit-defer) exit  then   \ deferred: follow the binding
-        drop
-    then
-    (see-a) @ (see-u) @ (src-by-name) 0= if
-        ." edit: " (see-a) @ (see-u) @ type ."  has no editable source" cr exit  then  ( src-addr src-u )
-    (edit-src) 0= if  exit  then
-    (see-a) @ (see-u) @ (propagate) ;         \ recompile transitive callers (prints "updated:")
+    (cur-file-len) @ 0= if
+        ." edit: no current file — save <name> first, then edit" cr exit  then
+    (edit-try) if  exit  then
+    \ the binding isn't in the module file (typed this session, or the file
+    \ is newer than the metadata) → guard, reload to converge, and retry
+    (edit-guard?) 0= if  exit  then
+    reload
+    (edit-try) if  exit  then
+    ." edit: " (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr ;
 
 \ ===== DEFINE: open the editor on a fresh template to create a new word =====
 \ `define <name>` is `edit` for a word that doesn't exist yet: it opens your
