@@ -512,6 +512,8 @@ The finished program in `examples/chase.fs` is fully baked — every seam is a
 plain `:` definition, and the only token indirection left is the per-monster
 `mbrain` table, because *that one is the feature*, not scaffolding.
 
+## Saving your work
+
 A few notes for when you `save` your work (and check `.module` to see everything
 you've defined):
 
