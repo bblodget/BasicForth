@@ -535,7 +535,11 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   removed after) rather than pid-suffixed — no new syscall, and collisions
   then require two sessions editing the SAME module, which is already a
   conflict. Propagation is now uncalled (deleted in Stage 4).
-- [ ] **Stage 3: `:e <word>`** — inline redefine + splice + reload.
+- [x] **Stage 3: `:e <word>`** — inline redefine + splice + reload.
+  Mechanism: `:e` validates the target, arms a one-shot completion hook,
+  and EVALUATEs ": <name>" so the rest of the input compiles as a normal
+  definition; on completion the group (":e" rewritten to ":") splices the
+  file and reloads. Splice failure falls back to a plain unsaved binding.
 - [ ] **Stage 4: cleanup pass** — sweep the log-canonical cruft once 2–3
   prove stable: the propagation body in core.fs, `compact` + helpers, the
   fixed `(edit-tmp)` path; rewrite Line_Editor.md's propagation section;

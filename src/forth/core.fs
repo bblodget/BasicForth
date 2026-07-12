@@ -488,6 +488,8 @@ create (log)  3 cells allot             \ accumulated definitions (seed + sessio
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
 variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
+variable (ce-armed)  0 (ce-armed) !     \ a :e group is being typed: on completion,
+variable (ce-hook)   0 (ce-hook) !      \ run (ce-hook) — splice + reload (set near EOF)
 variable (dirty)                        \ true = the log holds changes SAVE hasn't written
 variable (cap-assign)                   \ this line ran a direct TO/IS (read from (assign?))
 variable (session-on)                   \ true only after (session-init) ran — i.e.
@@ -564,6 +566,15 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (pend) (buf-reset)  r> (cap-latest) !  exit
     then
     r@ (cap-latest) @ u> if             \ LATEST moved forward → a word was defined
+        (ce-armed) @ if                  \ the group is a :e mutation: splice + reload
+            false (ce-armed) !           \ (the hook logs a fallback itself on failure)
+            (ce-hook) @ ?dup if
+                execute
+                false (skip-capture) !   \ the hook's reload armed it for OUR line
+                (pend) (buf-reset)  r> drop
+                (latest@) (cap-latest) !  exit
+            then
+        then
         (log) cell+ @  (pend) cell+ @    \ log-off (pre-flush) and group length
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
@@ -587,7 +598,8 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     false (skip-capture) !
     false (cap-tag) !                   \ clear a tag stuck by an errored (eval+log)
     (assign?) drop                      \ clear a stale assign flag from an errored line
-    state @ if  drop exit  then
+    state @ if  drop exit  then         \ mid-definition: keep pending AND a :e arm
+    false (ce-armed) !                  \ a :e whose definition errored is disarmed
     (pend) cell+ @ if  (pend) (buf-reset)  then
     (cap-latest) ! ;
 
@@ -1560,6 +1572,8 @@ variable (ds-n)                            \ number of saved entries
 create (tut-name) (tut-max) allot         \ stable copy of the current tutorial name
 variable (tut-nlen)                        \ its length (0 = no tutorial started)
 variable (tut-step)                        \ current step (1-based)
+variable (tut-total)                       \ last step number in the file (0 = not
+                                           \ yet known — set when a scan reaches EOF)
 variable (tut-found)                       \ matching file located this pass?
 variable (tut-existed)                     \ requested step existed in the file?
 variable (ts-want)                         \ step (print-step) should print
@@ -1571,6 +1585,10 @@ variable (ts-any)                          \ printed any line of the wanted step
     over 1+ c@ [char] # = and
     swap 2 + c@ bl = and ;
 : (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
+    \ The scan continues past the wanted step to the END of the file, counting
+    \ the "## " headings, so the footer can show "step 7/24". The total is
+    \ recorded only when EOF is reached (an I/O error or a pager quit that
+    \ never gets there leaves the previous value).
     (tty?) if page then
     0 (pg-row) ! false (pg-quit) !
     1 (ts-cur) !  false (ts-any) !
@@ -1578,18 +1596,14 @@ variable (ts-any)                          \ printed any line of the wanted step
     begin
         (pg-buf@) (pg-bufsz) r@ read-line  ( u flag ior )
         if  2drop  r> close-file drop (ts-any) @ exit  then     \ I/O error
-        if                                 ( u )                \ got a line
-            (pg-buf@) over (tut-head?) if  \ heading: step boundary
-                1 (ts-cur) +!
-                (ts-cur) @ (ts-want) @ u> if
-                    drop r> close-file drop (ts-any) @ exit
-                then
-            then
-            (ts-cur) @ (ts-want) @ = if
-                (pg-buf@) swap (pg-line) true (ts-any) !
-            else drop then
-            (pg-quit) @ if r> close-file drop (ts-any) @ exit then
-        else  drop  r> close-file drop (ts-any) @ exit  then    \ EOF
+        0= if  drop  r> close-file drop                         \ EOF
+            (ts-cur) @ (tut-total) !
+            (ts-any) @ exit  then
+        ( u )                                                   \ got a line
+        (pg-buf@) over (tut-head?) if  1 (ts-cur) +!  then      \ step boundary
+        (ts-cur) @ (ts-want) @ =  (pg-quit) @ 0=  and if
+            (pg-buf@) swap (pg-line) true (ts-any) !
+        else  drop  then
     again ;
 : (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
     (tut-found) @ if 2drop exit then
@@ -1629,7 +1643,9 @@ variable (ts-any)                          \ printed any line of the wanted step
         (tut-step) @ 1 > if -1 (tut-step) +! then         \ clamp so back works
         exit
     then
-    cr ." [ step " (tut-step) @ 0 u.r ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
+    cr ." [ step " (tut-step) @ 0 u.r
+    (tut-total) @ ?dup if  ." /" 0 u.r  then
+    ." :  next   back   step [n] = replay/jump   end-tutorial ]" cr ;
 defer (step-val?)                          \ ( a u -- n true | false ) value-name
 :noname 2drop false ; is (step-val?)       \ lookup; real body after (nt-by-name)
 : (step#?) ( -- n true | false )           \ parse optional step: number or value
@@ -1648,7 +1664,7 @@ defer (step-val?)                          \ ( a u -- n true | false ) value-nam
     then
     dup (tut-nlen) !                        ( c-addr u )
     >r (tut-name) r> cmove
-    1 (tut-step) !
+    1 (tut-step) !  0 (tut-total) !         \ total re-learned from the new file
     (step#?) if 1 max (tut-step) ! then     \ tutorial chase 10 = resume there
     (tut-go) ;
 : next ( -- )
@@ -2181,9 +2197,9 @@ variable (ld-pos)
 \ caller by construction (words are defined before use in a file), so no
 \ propagation pass is needed and the file never accumulates edit history. The
 \ binding must live in the module file: if it was typed this session (or the
-\ file layout is newer than the header metadata), edit first CONVERGES — the
-\ dirty-guard offers "save first? (y/n)", then a reload re-stamps everything —
-\ and retries. The temp file sits next to the module ("<module>.edit", removed
+\ file layout is newer than the header metadata), edit first CONVERGES —
+\ unsaved work is auto-saved (a mutation implies the file is current), a
+\ reload re-stamps everything — and retries. The temp file sits next to the module ("<module>.edit", removed
 \ afterwards), so parallel sessions collide only when editing the SAME module —
 \ which is already a conflict. Bare `edit` (no name) opens the CURRENT MODULE
 \ FILE itself and reloads it on a change.
@@ -2257,13 +2273,12 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
         (msg:) ." no change" cr  false exit  then   \ the source defined nothing new
     true ;
 : (edit-module) ( -- )                      \ bare `edit`: open the module FILE, then reload
-    \ Edits the file in place on disk (no temp copy). The dirty-guard runs
-    \ BEFORE the editor opens: a y answer saves first, so the editor sees the
-    \ session's state; n edits the stale disk file and the reload discards
-    \ unsaved captures — the caller chose that. Unchanged file → no reload.
+    \ Edits the file in place on disk (no temp copy). Unsaved work is
+    \ auto-saved BEFORE the editor opens, so it sees the session's state.
+    \ Unchanged file → no reload.
     (session-on) @ 0= if  (msg:) ." no active session" cr  exit  then
     (cur-file-len) @ 0= if  (msg:) ." no current file (load <file> first)" cr  exit  then
-    (dirty-guard) 0= if  exit  then
+    (dirty) @ if  (save)  then               \ the editor must see the session's state
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( pre-a pre-u )
     (ed-pu) !  (ed-pre) !
@@ -2291,21 +2306,48 @@ variable (es-na)   variable (es-nu)          \ the replacement (editor) text
 variable (es-fa)   variable (es-fu)          \ the module file image
 variable (es-fid)
 : (es-put) ( c-addr u -- ok? )  (es-fid) @ write-file 0= ;
+: (es-put-new) ( ok -- ok )                  \ the new text, newline-terminated
+    (es-na) @  (es-nu) @  (es-put)  and
+    (es-nu) @ 0<>  over and
+    if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
+        (nl) 1 (es-put) drop  then  then ;
 : (es-write) ( -- ok? )                      \ [0,off) + new (+ nl) + [off+len,end) → .new+rename
     (cur-file@) (name>paths)
     (path-b) (path-b-len) @ w/o create-file if  drop  false exit  then
     (es-fid) !
-    (es-fa) @  (es-off) @  (es-put)
-    (es-na) @  (es-nu) @  (es-put)  and
-    (es-nu) @ 0<>  over and
-    if  (es-na) @ (es-nu) @ + 1- c@ 10 <> if
-        (nl) 1 (es-put) drop  then  then     \ spliced text must end its line
+    (es-fa) @  (es-off) @  (es-put)          \ [0, off)
+    (es-put-new)                             \ the new text, in place
     (es-fa) @ (es-off) @ + (es-len) @ +      ( ok? post-a )
     (es-fu) @  (es-off) @ (es-len) @ +  -    ( ok? post-a post-u )
-    (es-put)  and
+    (es-put)  and                            \ [off+len, end)
     (es-fid) @ close-file 0=  and            ( ok? )
     dup 0= if  exit  then
     (path-b) (path-b-len) @  (path-a) (path-a-len) @  rename-file 0= and ;
+: (es-warn) ( -- )                           \ warn: new text calls later-defined words
+    \ The splice stays in place — if the new text really calls a word defined
+    \ AFTER it (a helper the auto-save just appended, say), the reload below
+    \ will fail with a clear line error; this warning names the culprits so
+    \ the fix is obvious: bare `edit` and move them above. Token scan, so a
+    \ mention inside a comment can false-positive (warning only, harmless).
+    \ (A designed auto-fix — move the dependencies up — is recorded in
+    \ Module_Architecture.md, to be built if this warning proves a pain.)
+    (latest@)
+    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
+        dup (sw-anon?) 0= if
+            dup (edit-span?) if              ( nt off2 len2 )
+                drop
+                (es-off) @ (es-len) @ +  swap u>  0= if   \ off2 >= span end
+                    dup (sw-name)            ( nt name nu )
+                    2dup (es-na) @ (es-nu) @ 2swap (word-in?) if
+                        (msg:) ." warning: " (see-a) @ (see-u) @ type
+                        ."  uses " type ." , defined later in the file" cr
+                    else  2drop  then
+                then
+            then
+        then
+        @
+    repeat
+    drop ;
 : (edit-splice) ( -- ok? )                   \ verify the span, then rewrite the file
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  false exit  then
@@ -2317,18 +2359,18 @@ variable (es-fid)
     if  (es-fa) @ free drop
         (msg:) ." file changed on disk — nothing spliced (reload and retry)" cr
         false exit  then
+    (es-warn)
     (es-write)                               ( ok? )
     (es-fa) @ free drop
     dup 0= if  (msg:) ." cannot write " (cur-file@) type cr  then ;
-: (edit-guard?) ( -- proceed? )             \ an edit ends in a reload, which discards
-    \ unsaved captures — so guard first: y saves (the reload then replays the
-    \ saved work), n discards, anything else cancels. Non-interactive sessions
-    \ REFUSE instead of silently discarding; a script must `save` before `edit`.
-    (dirty) @ 0= if  true exit  then
-    (tty?) 0= if  ." edit: unsaved changes — save first" cr  false exit  then
-    (dirty-guard) ;
+: (edit-sync) ( -- )                        \ a mutation targets the FILE, so bring it
+    \ up to date first: unsaved work is auto-saved and the module reloaded (no
+    \ prompt — an edit implies the file is current, and the reload re-stamps
+    \ the source metadata so spans and the forward-reference check are exact).
+    \ The discard verbs (new/load/bye) keep the save-first prompt; snapshots
+    \ are git's job (sh git commit).
+    (dirty) @ if  (save)  reload  then ;
 : (edit-target) ( nt -- )                   \ temp-edit nt's source, splice the file, reload
-    (edit-guard?) 0= if  drop  exit  then
     dup (edit-span?) 0= if  drop  exit  then  ( nt off len )
     (es-len) !  (es-off) !                   ( nt )
     (nt-src) 0= if  (msg:) ." cannot read source" cr  exit  then   ( src-a src-u )
@@ -2372,10 +2414,10 @@ variable (es-fid)
     2drop 2drop                              \ done with the meta cells
     (cur-file-len) @ 0= if
         ." edit: no current file — save <name> first, then edit" cr exit  then
+    (edit-sync)                              \ unsaved work → auto-save + reload
     (edit-try) if  exit  then
-    \ the binding isn't in the module file (typed this session, or the file
-    \ is newer than the metadata) → guard, reload to converge, and retry
-    (edit-guard?) 0= if  exit  then
+    \ the binding isn't in the module file (saved earlier, metadata stale)
+    \ → reload to converge, and retry
     reload
     (edit-try) if  exit  then
     ." edit: " (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr ;
@@ -2597,6 +2639,100 @@ variable (sv-pos)                           \ read cursor into the log
     (sv-emit)
     (sv-out) @ (sv-out) cell+ @ (write-module) ;
 ' (save-splice) (save-impl) !               \ SAVE's real body from here on
+
+\ ===== :e — inline mutation: retype a definition, splice the file, reload =====
+\ `:e <name>` is `edit <name>` with the prompt as the editor: type the new
+\ definition inline (multi-line works — the continuation prompt appears just
+\ as with `:`), and when `;` closes it, the text is spliced into the module
+\ file over the word's newest definition there and the module reloads — the
+\ same mutation semantics and guards as `edit`. Mechanism: :e validates the
+\ target, arms a one-shot completion hook, and EVALUATEs ": <name>" so the
+\ rest of the input compiles as a normal definition; (capture-line) fires
+\ the hook when the group completes, and the group text (with the leading
+\ ":e" token rewritten to ":") replaces the target span. If the splice fails
+\ (the file changed externally mid-definition), the group is logged instead,
+\ so the new definition lives on as a plain unsaved binding. On any refusal
+\ the rest of the input line is flushed — it was the definition body.
+: (ce-flush) ( -- )  source nip >in ! ;     \ discard the rest of the input line
+: (log-group) ( c-addr u -- )               \ log a group verbatim (a plain binding)
+    (log) cell+ @ >r                        ( a u ) ( R: log-off )
+    2dup (log) (buf-append)
+    (nl) 1 (log) (buf-append)
+    nip  r> swap                            ( log-off u )
+    (latest@) (dir-add)
+    true (dirty) ! ;
+variable (ct-a)  variable (ct-u)  variable (ct-p)
+: (ce-text) ( -- a u )                      \ ":" ++ the group text after the ":e" token
+    (pend) @ (ct-a) !  (pend) cell+ @ (ct-u) !
+    0 (ct-p) !
+    begin
+        (ct-p) @ (ct-u) @ u<
+        dup if  drop  (ct-a) @ (ct-p) @ + c@ 33 <  then
+    while  1 (ct-p) +!  repeat              \ skip leading whitespace
+    2 (ct-p) +!                             \ skip the ":e" token itself
+    (ct-p) @ (ct-u) @ min (ct-p) !
+    (sv-out) (buf-reset)
+    s" :" (sv-out) (buf-append)
+    (ct-a) @ (ct-p) @ +  (ct-u) @ (ct-p) @ -  (sv-out) (buf-append)
+    (sv-out) @  (sv-out) cell+ @ ;
+variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected text
+: (ce-run) ( -- )                           \ the completion hook: splice + reload
+    (ce-text)                                ( a u )
+    2dup (log-group)                         \ fallback first: if the splice fails, the
+    (es-nu) !  (es-na) !                     \ definition lives on as an unsaved binding
+    (ce-exp) @ (es-src) !  (ce-eu) @ (es-su) !
+    (edit-splice) if
+        (ce-exp) @ free drop
+        reload  exit  then
+    (ce-exp) @ free drop
+    (msg:) ." the definition is live but unsaved" cr ;
+: (ce-arm!) ( nt off len -- ok? )           \ record the target; copy its expected text
+    (es-len) !  (es-off) !                  ( nt )
+    (nt-src) 0= if  (msg:) ." cannot read source" cr  false exit  then  ( a u )
+    dup allocate if  drop 2drop  (uf-free)  (msg:) ." out of memory" cr  false exit  then
+    dup (ce-exp) !  over (ce-eu) !          ( a u buf )
+    swap cmove                               \ survives (uf-buf) reuse until completion
+    (uf-free)
+    true ;
+: (ce-go) ( nt -- )                         \ arm the hook and open the definition
+    dup (edit-span?) 0= if  drop  (ce-flush)  exit  then   ( nt off len )
+    (ce-arm!) 0= if  (ce-flush)  exit  then
+    0 (def-n) !  s" : " (def-s,)  (see-a) @ (see-u) @ (def-s,)
+    true (ce-armed) !
+    false (skip-capture) !                   \ (edit-sync)'s reload armed the skip for
+                                             \ THIS line — but the :e group must reach
+                                             \ the completion hook, not be discarded
+    (def-buf) (def-n) @ evaluate ;           \ opens ": <name>"; the line continues in it
+: (ce-try) ( -- handled? )
+    (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )
+    dup (nt-type) 1 = if  drop
+        (msg:) (see-a) @ (see-u) @ type ."  is deferred — edit its action, or rebind with is" cr
+        (ce-flush)  true exit  then
+    dup (edit-span?) if  2drop  (ce-go)  true exit  then
+    drop  false ;
+: :e ( "name body... ;" -- )
+    s" :e" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop  (msg:) ." needs a word name" cr  (ce-flush) exit  then
+    (see-u) !  (see-a) !
+    (session-on) @ 0= if  (msg:) ." no active session" cr  (ce-flush) exit  then
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  not defined — use : (or define) for a new word" cr
+        (ce-flush) exit  then
+    dup 65535 = if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr  (ce-flush) exit  then
+    2drop 2drop
+    (cur-file-len) @ 0= if
+        (msg:) ." no current file — save <name> first, then :e" cr  (ce-flush) exit  then
+    (edit-sync)                              \ unsaved work → auto-save + reload
+    (ce-try) if  exit  then
+    \ the binding isn't in the module file (saved earlier, metadata stale)
+    \ → reload to converge, and retry
+    reload
+    (ce-try) if  exit  then
+    (msg:) (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr
+    (ce-flush) ;
+' (ce-run) (ce-hook) !
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

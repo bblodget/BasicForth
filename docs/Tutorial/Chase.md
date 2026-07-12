@@ -512,20 +512,26 @@ The finished program in `examples/chase.fs` is fully baked — every seam is a
 plain `:` definition, and the only token indirection left is the per-monster
 `mbrain` table, because *that one is the feature*, not scaffolding.
 
+## Saving your work
+
 A few notes for when you `save` your work (and check `.module` to see everything
 you've defined):
 
-- Every redefinition you typed is captured, so the saved file accumulates the
-  old versions too. `compact <name>` writes a deduped snapshot alongside it —
-  each word's latest source once.
+- The saved file **replays to exactly this session**. A `:` redefinition you
+  typed is kept as a layer — earlier words keep the version they captured,
+  which is Forth's nature (and sometimes a feature). To *fix* a word
+  everywhere instead, use the mutation verbs below: those rewrite the file in
+  place, so nothing accumulates.
 - A live `is`/`to` is saved **only** when you typed it straight at the prompt —
   an `is` buried inside another word isn't replayed. So keep your final brain
   assignments (`' hunt 0 brain!` …) at the top level, or fold them into
   `new-game` as we did.
 - The seam-refresh dance you did for `setup` and `update` is automated for
-  *named* words: `edit <word>` opens its source in your editor and, when you
-  save, recompiles every word that calls it. `:noname` seams are refreshed the
-  way you did it — by re-`is`-ing them. Type `next` for where to take it.
+  *named* words: **`edit <word>`** opens its source in your editor, and
+  **`:e <word>`** lets you retype it at the prompt — either way, on finish the
+  module file is updated in place and reloaded, so every word that calls it is
+  rebuilt (unsaved work is saved for you first). `:noname` seams are refreshed
+  the way you did it — by re-`is`-ing them. Type `next` for where to take it.
 
 ## Make it your own — toward Pac-Man
 

@@ -167,18 +167,38 @@ machinery stays in git history.
 
 ## Hard cases
 
-- **Dirty session at edit time.** `edit <word>`/`:e` end in a reload, which
-  discards unsaved captures — so like bare `edit`, they must run the
-  dirty-guard *first* ("save first? (y/n)"). Under this model saving is
-  clean (no accumulation), so a future refinement could be to auto-save
-  before every edit and drop the prompt. Start with the prompt; loosen
-  later if it feels naggy.
+- **Dirty session at edit time.** *Resolved by use testing (2026-07-11):
+  the prompt felt naggy, exactly as anticipated — mutations now
+  **auto-save** (and reload, so metadata is fresh) with no prompt. An edit
+  implies the file is current; checkpoints are git's job (`sh git commit`).
+  The discard verbs (`new`/`load`/`bye`) keep their save-first prompt: they
+  throw work away by intent, so a last-chance question is right there.*
 - **Words with no file (scratch sessions).** A session started bare has no
   current file, and a REPL-defined word isn't on disk. Proposal:
   `edit <word>`/`:e` in a scratch session say "no current file — save
   <name> first". (Today's temp-file edit + propagation would be retired
   with everything else; scratch sessions keep `see`, redefinition,
   `define`, and can adopt a file at any time with `save <name>`.)
+- **Forward references from a mutation.** An edited definition that newly
+  calls a word defined *later* in the file (e.g. a helper the auto-save just
+  appended — the standard "refactor with a new helper" move) forward-
+  references when spliced in place, and the reload fails. *Current policy
+  (2026-07-11, Brandon's call): warn and proceed* — the splice stays in
+  place, a warning names each later-defined word the new text uses (token
+  scan; comment mentions can false-positive, warning-only), and the reload's
+  line error points at the fix: bare `edit`, move the helper up. Moving the
+  *edited word* to the end was tried and rejected — it just relocates the
+  forward reference when the word has callers.
+  **The designed auto-fix, recorded for when the warning proves a pain:**
+  move the *dependencies* up, not the edited word. A freshly-typed helper
+  has no meaningful file position yet, and moving a definition *earlier*
+  can never break its own callers — so: pull each later-defined dependency
+  to just before the edited word (original relative order), splice the
+  edited word in place; valid whenever each moved dependency's own deps sit
+  earlier, which for new helpers is nearly always. Fall back to move-to-end
+  when the edited word has no callers; refuse (live-but-unsaved fallback)
+  in the residual contorted case. Needs the splice writer generalized to a
+  sorted patch list — the splice-save emitter shape.
 - **A broken edit.** Splice + reload with a syntax error leaves a partial
   module and drops to the REPL (existing reload behavior). The loop is
   `edit` → fix → save — same as any compiler error. Acceptable; a future

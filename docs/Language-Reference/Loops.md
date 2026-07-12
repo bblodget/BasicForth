@@ -34,11 +34,17 @@ current index is `i`.
     five              \ 0 1 2 3 4
 
 ## ?do … loop ( limit start -- )
-Like `do`, but runs the body zero times when `start` equals `limit` (a plain
-`do` would wrap around and run billions of times).
+Runs the body zero times when `start` equals `limit`.
 
     : maybe  0 0 ?do i . loop ;
     maybe             \ (nothing)
+
+In BasicForth `do` compiles the same entry check, so the two behave
+identically here — but that is an implementation detail. In standard Forth a
+plain `do` with equal bounds wraps around and runs billions of times, so use
+`?do` whenever the count can be zero (`n 0 ?do`): it documents the intent and
+keeps the code portable. Neither word protects a limit *below* the start
+(`0 3 ?do` still wraps) — `?do` checks equality only.
 
 ## +loop ( n -- )
 End a counted loop adding `n` to the index each pass (instead of 1). Use it to

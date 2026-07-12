@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Mutations auto-save; forward references move to the end
+- **`edit <word>`, `:e`, and bare `edit` no longer prompt "save first?"** —
+  unsaved session work is auto-saved (and for the word mutations, the
+  module reloaded so spans are fresh) before the edit proceeds. An edit
+  implies the file is current; snapshots are git's job (`sh git commit`).
+  The discard verbs (`new`/`load`/`bye`) keep their prompt — they throw
+  work away by intent. Scripts no longer need an explicit `save` before
+  editing.
+- **A mutation that newly calls a later-defined word warns.** If the
+  edited definition now uses a word defined further down the file (e.g. a
+  helper you typed moments ago that the auto-save appended), the splice
+  proceeds in place with a warning naming each such word; the reload's
+  line error then points at the fix — bare `edit`, move the helper up. (A
+  designed auto-fix — move the dependencies up — is recorded in
+  Module_Architecture.md for if the warning proves a pain.)
+
+### Tutorial footer shows progress
+- The step footer now reads `[ step 7/24: ... ]` — the step scan continues
+  to the end of the file counting headings, so you can see how far along a
+  tutorial you are. The total appears once known (a scan interrupted by a
+  pager quit before EOF shows plain `step 7` until the next full step).
+
+### New word: `:e` — retype a definition inline (stage 3)
+- **`:e <name>`** is `edit <name>` with the prompt as the editor: type the
+  new definition inline (multi-line, with the usual `... ` continuation
+  prompt), and when `;` closes it the text is spliced into the module file
+  over the word's newest definition and the module reloads — same mutation
+  semantics and guards as `edit`. A deferred word redirects to its action;
+  unsaved work prompts at a terminal and is refused in a script; a refusal
+  discards the rest of the input line (it was the definition body). If the
+  file changed on disk mid-definition, the new definition stays live as an
+  unsaved binding instead. The verb grid is complete: `:` binds, `define`
+  creates in the editor, `:e` fixes inline, `edit` fixes in the editor.
+
 ### Pipes: capture a command's output, feed its stdin
 - New `open-pipe ( c-addr u fam -- fileid ior )` / `close-pipe ( fileid --
   wretval wior )` (gforth-compatible): run `/bin/sh -c <cmd>` with a pipe
