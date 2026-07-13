@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.10.0 — 2026-07-13
 
 ### Cleanup: `compact` and the propagation machinery removed (stage 4)
 - **`compact` is gone.** Deduping a hyper-static module file rewires
@@ -62,6 +62,19 @@
   `close-pipe` on a non-pipe fd is EBADF. New platform calls
   `platform_popen`/`platform_pclose` under `(popen)`/`(pclose)` primitives
   (both architectures). See docs/Shelling_Out.md.
+
+### Sound: SDL3 audio via `sound.fs`
+- New `sound.fs` (load after `ffi.fs`) plays integer square-wave tones
+  through SDL3's default playback device: `snd-open`, `tone ( hz ms -- )`,
+  `beep`, `snd-wait`, `snd-close`. `tone` queues samples and returns at
+  once (SDL's audio thread drains the queue), so game loops keep running
+  while a sound plays. `snd-open?` lets a game run soundless on a system
+  with no audio instead of aborting. Independent of graphics — terminal
+  programs can beep too. Struct offsets verified against the SDL3 headers
+  by `tools/sdl3off.c`. See docs/Sound.md and `man Sound`.
+- **`bye` no longer freezes when SDL threads are running** — the platform
+  exit uses `SYS_exit_group` (kill all threads), not `SYS_exit` (both
+  architectures).
 
 ### `edit <word>` splices the module file and reloads (stage 2)
 - **An edit is now a file operation.** On save-and-quit, the edited word's

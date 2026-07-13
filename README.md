@@ -36,18 +36,21 @@ and project phases.
 
 ## Status
 
-**v0.9.0** — Graphics in a desktop window: an **FFI**
-(`dlopen`/`dlsym`/`(ccall)`) lets Forth call any C library, and `sdl3.fs`
-presents the software 2D surface via **SDL3** with vsync and events
-(`examples/bounce.fs`). Named **modules** replace the magic session file
-(`save game` / `load game`, `compact`, `uses`), `edit <word>` opens your
-`$EDITOR` and recompiles callers, `sh` runs shell commands, and a dirty-guard
-protects unsaved work. Dictionary headers gained a word-type byte, making
-`is`/`to` type-checked and `see` defer-aware; a second tutorial (`tutorial
-Chase`) teaches top-down design with `defer`. Builds on v0.8.0's line editor
-with `edit`/`.session`, v0.7.0's shell-like words, persistence, built-in help,
-tutorials, and dynamic memory.
-119 unit tests + 545 integration tests.
+**v0.10.0** — The interactive **editing workflow**. Forth's dictionary is
+hyper-static — `:` layers a new binding and earlier words keep what they
+captured — so `save` replays your session verbatim, while the *mutation*
+verbs fix a definition in place: `edit <word>` opens it in your `$EDITOR`,
+**`:e <word>`** lets you retype it at the prompt, and `define <word>` drafts
+a new word in the editor. Each splices the module file over the old
+definition and reloads it, so every caller is rebuilt by construction
+(`compact` and caller recompilation are gone). Mutations auto-save — an edit
+implies the file is current — and a warning names anything a fix calls that
+is defined later in the file. Also new: **SDL3 audio** (`sound.fs` —
+square-wave `tone`/`beep`; `bye` no longer freezes with SDL threads
+running), **pipes** (`open-pipe`/`close-pipe` capture a command's output),
+tutorial progress (`[ step 7/25 ]`), and `clearstack`. Builds on v0.9.0's
+FFI + SDL3 graphics, named modules, and the Chase tutorial.
+119 unit tests + 610 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -74,8 +77,11 @@ What works today:
 - File access: `OPEN-FILE`, `CREATE-FILE`, `CLOSE-FILE`, `READ-FILE`, `READ-LINE`,
   `WRITE-FILE`, `WRITE-LINE`, `FILE-SIZE`, `RENAME-FILE` (methods `R/O W/O R/W BIN`)
 - Dynamic memory (ANS MEMORY): `ALLOCATE`, `FREE`, `RESIZE`
-- Modules: `SAVE <name>` / `LOAD <name>` / `NEW` / `RELOAD` / `COMPACT` /
-  `USES` (named source-replay files) and `MARKER` dictionary restore points
+- Modules: `SAVE <name>` / `LOAD <name>` / `NEW` / `RELOAD` / `USES`
+  (named source-replay files) and `MARKER` dictionary restore points
+- Editing: `EDIT <word>` / `:E <word>` / `DEFINE <word>` / bare `EDIT` —
+  fix a definition in `$EDITOR` or at the prompt, draft a new one, or open
+  the whole module; mutations splice the module file and reload it
 - Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
@@ -83,6 +89,9 @@ What works today:
   `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`) —
   presented in a desktop window via the SDL3 backend (`sdl3.fs`): vsync'd
   frames, keyboard/quit events; try `examples/bounce.fs`
+- Sound: square-wave tones through SDL3's default playback device
+  (`sound.fs`): `SND-OPEN`, `TONE`, `BEEP`, `SND-WAIT` — queued, so game
+  loops keep running while a sound plays
 - FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
   (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
 - Tools: `WORDS`, `.MODULE` (list the module's words), `DUMP`, `.S`,
@@ -238,9 +247,10 @@ BasicForth/
       graphics.fs           Software 2D surface API (on-demand)
       ffi.fs                dlopen/dlsym wrappers for C libraries (on-demand)
       sdl3.fs               SDL3 display backend (on-demand)
+      sound.fs              SDL3 audio backend (on-demand)
   tests/
     test_basicforth.c       Unit test harness (119 tests)
-    test_integration.sh     Integration tests (545 tests, piped I/O)
+    test_integration.sh     Integration tests (610 tests, piped I/O)
     test_line_editor_pty.py Line-editor tests under a pseudo-terminal
     test_helper_arm64.s     ARM64 test bridge
     test_helper_x86.s       x86-64 test bridge
