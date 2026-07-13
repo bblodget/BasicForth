@@ -407,7 +407,7 @@ redefinition *appends* — earlier words keep the definition they captured
 changed with **`edit`** is different: that's a *fix*, so its definition is
 replaced where it stands and edit history never accumulates — saving twice
 writes a byte-identical file. Capture is interactive-only: a piped script
-captures nothing. (`compact` is deprecated: fixes don't accumulate, and
+captures nothing. (There is no `compact`: fixes don't accumulate, and
 deduping deliberate rebindings would change what earlier words mean.)
 
 For an edit/compile/run loop, type bare **`edit`** (no word name): it opens the

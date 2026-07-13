@@ -302,7 +302,7 @@ carries a `SrcId` — ownership is tracked; we just don't use it yet.
 | `define`                       | stays as shipped                            |
 | `edit <word>` propagation      | replaced by splice + reload                 |
 | `(propagate)` + anon machinery | deleted (option 1)                          |
-| `save` (append-only)           | stays append for bindings; splices mutations |
+| `save` (append-only)           | append-only, period (mutations splice the file directly, never reach save) |
 | `compact`                      | retired (dedup rewires bindings)            |
 | `:e`                           | built on splice + reload                    |
 
@@ -331,6 +331,16 @@ carries a `SrcId` — ownership is tracked; we just don't use it yet.
    - Tests: drop or rewrite the propagation suites.
    - TODO.md: close the absorbed open threads (fixed temp path,
      structure-preserving compact).
+
+   **Done 2026-07-11 — and the sweep went further than planned.** Since
+   mutations splice the file directly and reload (re-seeding the log), no
+   capture group is ever tagged as a mutation, so stage 1's save-time patch
+   machinery was itself dead code: `save` reduced to writing the log
+   verbatim (seeded file text + appended bindings, in order), and the
+   mutation tags, the patch collector/sorter/emitter, the `(save-impl)`
+   indirection, and the seed-extent records all went with the propagation
+   body and `compact`. `(eval+log)` survives as `define`'s back end;
+   `(anon-owner)` and `(word-in?)` survive for `uses`.
 5. **`module <file>`** + ownership rules (`.module` filter, foreign-word
    refusal with hint, dependency splicing).
 6. **(gated on use testing)** auto-sync — the file stays in sync as you

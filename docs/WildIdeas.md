@@ -95,8 +95,9 @@ Staging:
   multi-line `: … ;` onto one (long) horizontally-scrolled line with `\` comments
   rewritten to `( … )`. That solved recall but lost formatting. `edit` now instead
   **spawns an external editor** (`$VISUAL`/`$EDITOR`/`vi`) on a temp file via a new
-  `fork`/`exec`/`wait` platform primitive (`(system)`), then recompiles + propagates
-  on save — so the full source, multi-line layout and all, survives the round-trip.
+  `fork`/`exec`/`wait` platform primitive (`(system)`), then splices the fix into
+  the module file and reloads on save — so the full source, multi-line layout and
+  all, survives the round-trip.
   See docs/Line_Editor.md.
 
 The **free-cursor multi-line editor** (see all the lines of a definition at once,

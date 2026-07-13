@@ -2,7 +2,23 @@
 
 ## Unreleased
 
-### Mutations auto-save; forward references move to the end
+### Cleanup: `compact` and the propagation machinery removed (stage 4)
+- **`compact` is gone.** Deduping a hyper-static module file rewires
+  bindings (a word that captured an earlier definition would come back
+  bound to the latest one), and since mutations splice in place, nothing
+  accumulates to compact. Use `save` — it is replay-faithful by design.
+- **The caller-propagation machinery is deleted.** Reload rebuilds every
+  caller by construction (words are defined before use in a file), so the
+  recompile-the-callers pass that `edit` used before the splice+reload
+  model has been dead code since stage 2; it and the save-time mutation
+  tags are removed. `save` now writes the capture log verbatim (the seeded
+  file text plus your session's bindings, in order). No user-visible
+  behavior changes.
+- Stale comments fixed: `do` and `?do` compile identical code in
+  BasicForth (equal bounds skip the loop for both); the asm sources no
+  longer claim otherwise. `?do` remains the portable spelling.
+
+### Mutations auto-save; forward references warn
 - **`edit <word>`, `:e`, and bare `edit` no longer prompt "save first?"** —
   unsaved session work is auto-saved (and for the word mutations, the
   module reloaded so spans are fresh) before the edit proceeds. An edit

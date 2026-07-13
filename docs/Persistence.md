@@ -14,7 +14,6 @@ There is no magic `session.fs`. Files are explicit and named.
 |------|-------|---------|
 | `save <name>` | ( "name" -- ) | write the module to `<name>` (relative to the current directory); also makes `<name>` the current file |
 | `save` | ( -- ) | re-write the **current file** (the one you loaded or last `save <name>`d) |
-| `compact [<name>]` | ( "name" -- ) | write a **deduped** snapshot to a sibling `<base>.compact<.ext>` (for `diff`) |
 | `load <file>` | ( "name" -- ) | open `<file>` as the module — forget the old one, load the new one, make it current |
 | `new` | ( -- ) | clear the module — forget every definition, back to a clean slate (core only) |
 | `reload` | ( -- ) | re-read the **current file** from disk (the edit/compile/run loop) |
@@ -197,11 +196,11 @@ Other notes:
   `is`/`to` assignment lines and `:noname ... ; is x` groups are
   order-dependent effects: the file's stay put, the session's append in the
   order they happened, and the last one wins on replay.
-- **`compact` is deprecated** — and for a stronger reason than redundancy:
+- **There is no `compact`** — and for a stronger reason than redundancy:
   deduping a hyper-static file *rewires bindings* (a word that captured an
-  earlier definition comes back bound to the latest one). The word remains
-  for now (it writes the old definitions-only snapshot) and will be removed
-  in a later cleanup (see docs/Module_Architecture.md).
+  earlier definition comes back bound to the latest one). Since mutations
+  splice in place, nothing accumulates that would need compacting (see
+  docs/Module_Architecture.md).
 - **A library `include`d by a module** stays referenced, not inlined: `save`
   keeps the `include other.fs` line, not a copy of `other.fs`. The library's
   words are part of the live module (`.module`/`see`/`uses` show them, read from
@@ -217,8 +216,8 @@ registered with the internal `(hook!)` primitive:
 
 - `(session-init)` — at startup, records the `-session` restore point, marks the
   run interactive, sets the current file from the startup arg (if any), and seeds
-  the log from it — `save` tells the file's own text (kept, spliced in place)
-  from session captures (appended) by the seed's extent. (The restore mark itself is
+  the log from it — the log holds the file's own text followed by session
+  captures, and `save` writes it back verbatim. (The restore mark itself is
   captured at the *end of `core.fs`*, before any module loads, so `-session`/
   `new`/`load` forget the whole module — the loaded file's words plus interactive
   ones.)
