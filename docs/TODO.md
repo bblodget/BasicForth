@@ -558,6 +558,35 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   rollback-on-broken-reload if the fix loop proves insufficient.
   Checkpointing convention meanwhile: **git through `sh`**.
 
+### Use-testing queue (Brandon's v0.10.0 notes, 2026-07-13)
+
+- [x] Quick wins (one branch): edit temp file is `<module>.edit.fs` (editors
+  filetype-detect Forth); `list` pages the current module file (BASIC's
+  LIST, with a dirty-session note); `cancel;` abandons the definition being
+  typed (immediate; disarms a pending `:e` — before this, the only cancel
+  was typing an undefined word to force an error).
+- [ ] **Investigate: session broken after a stack underflow + aborted
+  reload** (repro notes: testing/one-d-life). Three threads: (a) bare
+  `edit` printed "stack underflow" repeatedly, then recovered after two
+  `save`s; (b) a reload that aborts partway leaves words after the error
+  point silently missing — the file is intact, but it FEELS like data
+  loss; (c) the reload's error text can be eaten by the editor's
+  alternate-screen restore (nvim), so the user never sees why.
+- [ ] **Language Reference coverage audit** — `random`, `rnd`, `allot` are
+  missing; make it a test (words output vs `## ` headings in
+  docs/Language-Reference/) so coverage can't regress.
+- [ ] **`see <word>` shows Language Reference usage** for primitives and
+  core words (scan the reference pages for the word's heading — own doc
+  scan, not a shell-out).
+- [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
+  annoying): move the fix's later-defined dependencies up to just before
+  the edited word; move-to-end when the word has no callers. Design in
+  Module_Architecture.md ("Forward references from a mutation").
+- [ ] **Topic lessons** — short single-topic tutorials (`lesson`?); first:
+  arrays (`create`/`allot`/`cells`), which also documents `allot`.
+- Rejected: shelling out to the real `man` (our docs are markdown; the
+  board may not have man/less; our pager works everywhere).
+
 ### Open threads
 
 - [x] **Pipes / output capture** — `open-pipe ( c-addr u fam -- fileid ior )`

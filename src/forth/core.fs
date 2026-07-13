@@ -1501,6 +1501,16 @@ create (tilde-buf) (tilde-sz) allot
     \ `more` doesn't return " ok". Safe here: top-level word, no fd held.
     page-file if  abort  then ;
 
+\ list: page the CURRENT MODULE file — BASIC's LIST, your whole program at
+\ once. Bindings typed since the last save live only in the capture log, so
+\ a dirty session gets a one-line reminder that the file view is behind.
+: list ( -- )
+    (cur-file-len) @ 0= if  ." list: no current file" cr  exit  then
+    (dirty) @ if  ." (unsaved changes - save to include them)" cr  then
+    (cur-file@) r/o open-file if
+        drop ." list: cannot open " (cur-file@) type cr abort  then
+    page-file if  abort  then ;
+
 \ Directory stack: pushd saves the current dir (absolute) and cd's to a new one;
 \ popd returns to the most recently saved dir; dirs lists current + saved (top
 \ first). Saved paths are absolute, so popd is correct across intervening cds.
@@ -2009,15 +2019,16 @@ variable (ev-d0)                            \ stack depth before the re-evaluati
 \ binding must live in the module file: if it was typed this session (or the
 \ file layout is newer than the header metadata), edit first CONVERGES —
 \ unsaved work is auto-saved (a mutation implies the file is current), a
-\ reload re-stamps everything — and retries. The temp file sits next to the module ("<module>.edit", removed
-\ afterwards), so parallel sessions collide only when editing the SAME module —
-\ which is already a conflict. Bare `edit` (no name) opens the CURRENT MODULE
-\ FILE itself and reloads it on a change.
-create (et-path) (cf-max) 8 + allot          \ "<module>.edit"
+\ reload re-stamps everything — and retries. The temp file sits next to the
+\ module ("<module>.edit.fs", removed afterwards — the .fs suffix so editors
+\ filetype-detect Forth), so parallel sessions collide only when editing the
+\ SAME module — which is already a conflict. Bare `edit` (no name) opens the
+\ CURRENT MODULE FILE itself and reloads it on a change.
+create (et-path) (cf-max) 16 + allot         \ "<module>.edit.fs"
 : (edit-tmp) ( -- c-addr u )                \ module-adjacent temp path
     (cur-file-len) @ 0= if  s" /tmp/basicforth-edit.fs" exit  then   \ scratch (define)
     (et-path) (sp-end) !
-    (cur-file@) (sp-add)  s" .edit" (sp-add)
+    (cur-file@) (sp-add)  s" .edit.fs" (sp-add)
     (et-path)  (sp-end) @ over - ;
 variable (er-fid)  variable (er-buf)  variable (er-len)
 : (edit-write) ( src-addr src-u -- ok? )    \ write the source span to the temp file
@@ -2354,6 +2365,14 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     (msg:) (see-a) @ (see-u) @ type ."  has no editable source in " (cur-file@) type cr
     (ce-flush) ;
 ' (ce-run) (ce-hook) !
+
+\ cancel; — abandon the definition being typed: nothing is defined, the rest
+\ of the line is discarded, and a pending :e is disarmed (nothing spliced).
+\ Immediate, so it runs mid-compilation; the abort takes the same recovery
+\ path as a line error, which (capture-reset) already handles.
+: cancel; ( -- )
+    state @ 0= if  ." cancel;: nothing to cancel" cr  exit  then
+    ." canceled" cr  abort ; immediate
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

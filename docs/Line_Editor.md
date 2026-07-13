@@ -55,7 +55,8 @@ saved to /home/you/game.fs
 ```
 
 It writes the word's current source to a temp file next to the module
-(`<module>.edit`, removed afterwards) and launches your editor — `$VISUAL`,
+(`<module>.edit.fs`, removed afterwards — the `.fs` suffix so your editor
+filetype-detects Forth and highlights it) and launches your editor — `$VISUAL`,
 then `$EDITOR`, then `vi` if neither is set. The terminal returns to its
 normal (cooked) mode for the editor and the prompt re-engages raw mode when
 you come back, so a full-screen editor (vim, nano, …) behaves normally. If
@@ -127,6 +128,17 @@ line — it was the definition body. A new dependency on a later-defined word
 warns and splices in place, like `edit`. If the file
 changed on disk mid-definition, the splice is refused and your new
 definition stays live as an unsaved binding.
+
+Changed your mind mid-definition? Type **`cancel;`** — it abandons the
+definition being typed (works for a plain `:` too): nothing is defined,
+the rest of the line is discarded, and the pending `:e` is disarmed, so
+nothing is spliced.
+
+```
+> :e triple 3 * cancel;    # oops, never mind
+canceled
+> triple                   # unchanged
+```
 
 The full verb grid: `:` **binds** a new definition (earlier words keep the
 old one — hyper-static), `define` creates one in the editor, `:e` **fixes**

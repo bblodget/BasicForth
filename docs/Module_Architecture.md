@@ -217,7 +217,7 @@ machinery stays in git history.
   `/tmp/basicforth-edit.fs`, so two parallel BasicForth sessions editing at
   the same moment clobbered each other. **Resolved (stage 2) with a
   module-adjacent path instead of the planned pid suffix**: the temp file is
-  `<module>.edit`, removed after the cycle — no new syscall, self-describing,
+  `<module>.edit.fs`, removed after the cycle — no new syscall, self-describing,
   and collisions then require two sessions editing the *same module*, which
   is already a conflict the temp file is the least of. (A scratch-session
   `define` still uses the /tmp path; scratch sessions have no module to sit
