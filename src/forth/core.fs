@@ -509,15 +509,6 @@ create (nl) 10 c,                       \ a single newline byte
 create (dir)     3 cells allot          \ cell buffer: 3-cell records (see above)
 create (dir-rec) 3 cells allot          \ scratch: one record being built
 
-\ Parallel tag per (dir) record: true when the group came from a MUTATION verb
-\ ((eval+log) — edit's resubmit and its propagation re-logs) rather than a
-\ plain binding typed at the prompt. The splice-save uses it: mutations are
-\ spliced over the word's definition in the file; bindings append verbatim
-\ (Forth is hyper-static — see docs/Module_Architecture.md).
-create (dir-tags) 3 cells allot  (dir-tags) 3 cells erase
-variable (cap-tag)  0 (cap-tag) !
-create (tag-rec) 1 cells allot
-
 \ entry → the execution token FIND returns: load the CodePtr at the aligned
 \ offset align8(10 + name-len) past the entry. Mirrors FIND's xt calculation.
 : (xt-of) ( entry -- xt )
@@ -529,9 +520,7 @@ create (tag-rec) 1 cells allot
     (dir-rec) 2 cells + !               \ rec[2] = xt
     (dir-rec) cell+ !                   \ rec[1] = log-len
     (dir-rec) !                         \ rec[0] = log-off
-    (dir-rec) 3 cells (dir) (buf-append)    \ append the 24-byte record
-    (cap-tag) @ (tag-rec) !
-    (tag-rec) 1 cells (dir-tags) (buf-append) ;  \ + its mutation tag
+    (dir-rec) 3 cells (dir) (buf-append) ;  \ append the 24-byte record
 
 \ (dir-add-group): index EVERY word newly defined in this group, not just the
 \ last. Walk the dictionary link chain (link is the first cell of each header)
@@ -596,7 +585,6 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ next real definition would be silently not captured.
 : (capture-reset) ( latest -- )
     false (skip-capture) !
-    false (cap-tag) !                   \ clear a tag stuck by an errored (eval+log)
     (assign?) drop                      \ clear a stale assign flag from an errored line
     state @ if  drop exit  then         \ mid-definition: keep pending AND a :e arm
     false (ce-armed) !                  \ a :e whose definition errored is disarmed
@@ -658,26 +646,16 @@ variable (path-a-len)  variable (path-b-len)
 
 \ (seed-log): reset the log + SEE index, then load the current file's bytes into
 \ the log so SAVE rewrites it cumulatively. Empty when there is no current file
-\ (a fresh session) or the file does not exist yet (a new file). The seed's
-\ extent and origin are recorded so the splice-save can tell file text (kept,
-\ patched in place) from session captures (appended): log[0, seed-len) is a
-\ verbatim copy of (seed-path), so a file word's metadata span indexes it.
-variable (seed-len)                     \ bytes of (log) that mirror the file
-create (seed-path) (cf-max) allot       \ the file those bytes came from
-variable (seed-path-len)
+\ (a fresh session) or the file does not exist yet (a new file).
 : (seed-log) ( -- )
     (log) (buf-reset)
     (dir) (buf-reset)                   \ SEE index tracks the log's lifecycle
-    (dir-tags) (buf-reset)
     false (dirty) !                     \ log now mirrors the file (or is empty)
-    0 (seed-len) !  0 (seed-path-len) !
     (cur-file-len) @ 0= if  exit  then  \ no current file → log stays empty
     (cur-file@) r/o open-file           ( fileid ior )
     if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
-    close-file drop
-    (log) cell+ @ (seed-len) !
-    (cur-file@) dup (seed-path-len) !  (seed-path) swap cmove ;
+    close-file drop ;
 
 \ (session-init): boot hook, run once when entering the interactive REPL, with
 \ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
@@ -695,8 +673,11 @@ variable (seed-path-len)
 \ the cwd, via "<name>.new" + atomic rename, so a write failure never destroys an
 \ existing file. SAVE <name> also makes <name> the current file (save-as). A
 \ no-op when nothing has been captured, so it never litters an empty file.
-\ The real body is the splice-save near EOF (it needs the introspection words),
-\ installed via (save-impl); until then the fallback writes the log verbatim.
+\ The log IS the file image: the seeded file text plus every captured group,
+\ verbatim, in order — Forth is hyper-static, so the sequence of bindings is
+\ the module's state and SAVE must be replay-faithful (see
+\ docs/Module_Architecture.md). Mutations (edit/:e) never reach this path:
+\ they splice the file directly and reload, which re-seeds the log.
 : (write-module) ( c-addr u -- )        \ atomic write to the current file
     (cur-file@) (name>paths)
     (path-b) (path-b-len) @ w/o create-file   ( c-addr u fileid ior )
@@ -710,10 +691,8 @@ variable (seed-path-len)
     abort" save: rename error"
     false (dirty) !
     ." saved to " (cur-file@) type cr ;
-variable (save-impl)  0 (save-impl) !   \ xt of the splice-save body (set near EOF)
 : (save) ( -- )
     (log) cell+ @ 0= if  ." nothing to save" cr  exit  then
-    (save-impl) @ ?dup if  execute exit  then
     (log) @ (log) cell+ @ (write-module) ;
 
 : save ( "name" -- )
@@ -1792,8 +1771,8 @@ variable (uf-srcid)  variable (uf-buf)  variable (uf-len)
 \ Every header (named or :noname) records its Flags2 type, code span, and source
 \ metadata; these read them back. (nt-src) resolves the recorded source from the
 \ capture log (srcid 0) or the source file. (anon-owner) answers "which deferred
-\ word currently runs this :noname?" — the identity USES and edit-propagation
-\ report a live anonymous definition by, as (:noname is <name>).
+\ word currently runs this :noname?" — the identity USES reports a live
+\ anonymous definition by, as (:noname is <name>).
 : (nt-type) ( nt -- type )  9 + c@ 15 and ;  \ Flags2 word-type code
 : (nt>code) ( nt -- xt len )                 \ a word's code span, from its header
     dup 8 + c@ 31 and 10 + 7 + -8 and +      ( cp-addr )
@@ -1968,55 +1947,18 @@ variable (sb-xt)  variable (sb-len)  variable (sb-act)
     ." \ currently: an unnamed word (no recorded source)" cr ;
 ' (see-binding) is (see-post)
 
-\ ===== EDIT-propagation body (armed by `edit`, fired from (capture-line)) =====
-\ Subroutine threading bakes call targets, so redefining a word doesn't reach its
-\ callers. After `edit <word>` resubmits, recompile every module word that
-\ (transitively) uses it. Walk the module words oldest-first (definition order is
-\ a valid dependency order) with a growing dirty set, recompiling each affected
-\ caller from its source (log or file, via (word-src)) and re-logging it so
-\ SEE/USES/SAVE stay correct. A :noname group whose anon is the CURRENT action
-\ of a deferred word is re-run whole (the trailing `is` re-binds); its defer is
-\ NOT added to the dirty set — callers reach it through the action cell.
-8192 constant (prop-max)                    \ max source bytes of one definition handled
-create (prop-src) (prop-max) allot          \ scratch copy (survives a log realloc)
-512 constant (prop-nmax)
-create (prop-nts) (prop-nmax) cells allot   \ snapshot of the module's entries (newest-first)
-variable (prop-n)
-create (prop-dirty) 4096 allot              \ space-separated names known to need recompiling
-variable (prop-dirty-len)
-variable (prop-count)                       \ how many callers were recompiled
-
-: (prop-dirty+) ( c-addr u -- )             \ add a name to the dirty set
-    dup (prop-dirty-len) @ + 2 + 4096 > if  2drop exit  then
-    (prop-dirty) (prop-dirty-len) @ +  (sp-end) !
-    (sp-add)  s"  " (sp-add)
-    (sp-end) @ (prop-dirty) - (prop-dirty-len) ! ;
-: (prop-name-dirty?) ( c-addr u -- f )      \ is this name already in the dirty set?
-    (prop-dirty) (prop-dirty-len) @  2swap  (word-in?) ;
-
-variable (pmd-src)  variable (pmd-srclen)  variable (pmd-pos)
-: (pmd-ws?) ( i -- f )  (prop-dirty) + c@ 33 < ;
-: (prop-mentions-dirty?) ( src u -- f )     \ does this source mention any dirty word?
-    (pmd-srclen) !  (pmd-src) !
-    0 (pmd-pos) !
-    begin (pmd-pos) @ (prop-dirty-len) @ < while
-        (pmd-pos) @ (pmd-ws?) if  1 (pmd-pos) +!
-        else
-            (pmd-pos) @                     ( tok-start )
-            begin (pmd-pos) @ (prop-dirty-len) @ <  (pmd-pos) @ (pmd-ws?) 0=  and
-            while 1 (pmd-pos) +! repeat
-            (prop-dirty) over +  (pmd-pos) @ rot -      ( tok-addr tok-len )
-            (pmd-src) @ (pmd-srclen) @ 2swap (word-in?) if  true exit  then
-        then
-    repeat
-    false ;
-
+\ ===== (eval+log): compile source text as a new binding + log it =====
+\ DEFINE's back end: evaluate text as if typed at the prompt, append it to the
+\ capture log, and index it for SEE. The result is a plain session binding
+\ (srcid 0) — SAVE appends it like anything typed interactively.
+8192 constant (el-max)                      \ max source bytes of one definition handled
+create (el-src) (el-max) allot              \ scratch copy (survives a log realloc)
 variable (ev-d0)                            \ stack depth before the re-evaluation
 : (eval+log) ( c-addr u -- )                \ evaluate source as a new def + log it (srcid 0)
-    dup (prop-max) > if  2drop exit  then    ( c-addr u )
-    >r  (prop-src) r@ cmove  r>             ( u )       \ copy out (survive log realloc)
+    dup (el-max) > if  2drop exit  then      ( c-addr u )
+    >r  (el-src) r@ cmove  r>               ( u )       \ copy out (survive log realloc)
     (log) cell+ @  >r                       ( u )       \ R: log-off
-    (prop-src) over (log) (buf-append)      ( u )       \ append source to the log
+    (el-src) over (log) (buf-append)        ( u )       \ append source to the log
     (nl) 1 (log) (buf-append)               ( u )       \ + a newline separator
     depth (ev-d0) !
     (log) @ r@ +  over  (rd-eval-lines)     ( u )       \ compile from the log copy
@@ -2024,140 +1966,8 @@ variable (ev-d0)                            \ stack depth before the re-evaluati
                                             \ leave nothing: drop its leftovers
                                             \ (they sit above our u) so the
                                             \ caller's stack frame cannot shift
-    true (cap-tag) !                        \ mark the record a MUTATION (splice on save)
     r>  over  (latest@) (dir-add)           ( u )       \ index the new word's source
-    false (cap-tag) !
     drop  true (dirty) ! ;
-: (prop-recompile) ( nt -- )                \ re-evaluate nt's source + re-log it
-    (word-src) 0= if  exit  then            ( c-addr u )
-    (eval+log)  1 (prop-count) +! ;
-
-: (prop-snapshot) ( -- )                    \ collect the module's entries (newest-first)
-    0 (prop-n) !
-    (latest@)
-    begin (sw-end?) 0= while
-        (prop-n) @ (prop-nmax) < if
-            dup  (prop-n) @ cells (prop-nts) +  !  1 (prop-n) +!
-        then
-        @
-    repeat drop ;
-
-: (prop-anon) ( nt -- )                     \ re-run a live :noname group that calls a dirty word
-    dup (nt>code) drop (anon-owner) 0= if  drop exit  then   ( nt owner )
-    >r                                       \ superseded groups have no owner and are
-                                             \ skipped: re-running one would clobber a
-                                             \ NEWER binding of the same deferred word
-    (nt-src) 0= if  r> drop exit  then       ( c-addr u ) ( R: owner )
-    2dup (prop-mentions-dirty?) 0= if  2drop  r> drop  exit  then
-    (eval+log)  1 (prop-count) +!            \ re-fires the group's trailing `is`
-    space ." (:noname is "  r> (sw-name) type  ." )" ;
-: (prop-one) ( nt -- )                      \ recompile this word if it uses a dirty word
-    dup (sw-anon?) if  (prop-anon) exit  then   \ :noname group: re-run it (re-binds)
-    dup (sw-name) (prop-name-dirty?) if  drop exit  then   \ already dirty → skip
-    dup (word-src) 0= if  drop exit  then    ( nt c-addr u )
-    (prop-mentions-dirty?) 0= if  drop exit  then  ( nt )
-    dup (prop-recompile)
-    dup (sw-name) (prop-dirty+)
-    space (sw-name) type ;
-
-: (propagate) ( c-addr u -- )               \ recompile the edited word's transitive callers
-    0 (prop-dirty-len) !  0 (prop-count) !
-    (prop-dirty+)                           \ the edited word is dirty
-    (prop-snapshot)
-    ." updated:"
-    (prop-n) @ 0 ?do
-        (prop-n) @ 1- i -  cells (prop-nts) + @    \ oldest-first
-        (prop-one)
-    loop
-    (prop-count) @ 0= if  ."  (nothing)"  then  cr
-    (uf-free) ;                             \ release the file cache used by (word-src)
-
-\ ===== COMPACT: a deduped, dependency-ordered snapshot of the module =====
-\ SAVE rewrites the whole loaded file verbatim (comments and all) then appends, so
-\ redefinitions accumulate. COMPACT instead emits each module word's in-force
-\ source ONCE, at its first (oldest) definition position — deduped, in dependency
-\ order. It writes a sibling "<base>.compact<.ext>" so you can diff it against
-\ SAVE's output; it drops the file's between-definition comments (definitions
-\ only). Reuses the module snapshot and the SEE/USES source resolver.
-create (cmp-seen) 4096 allot                \ space-separated names already written
-variable (cmp-seen-len)
-variable (cmp-fid)
-variable (ld-pos)
-: (cmp-seen+) ( c-addr u -- )
-    dup (cmp-seen-len) @ + 2 + 4096 > if  2drop exit  then
-    (cmp-seen) (cmp-seen-len) @ +  (sp-end) !
-    (sp-add)  s"  " (sp-add)
-    (sp-end) @ (cmp-seen) - (cmp-seen-len) ! ;
-: (cmp-seen?) ( c-addr u -- f )  (cmp-seen) (cmp-seen-len) @ 2swap (word-in?) ;
-: (src-by-name) ( c-addr u -- src-addr src-u true | false )  \ in-force source of a name
-    (find-meta) 0= if  2drop 2drop  false exit  then         ( xt off len srcid )
-    (uh-srcid) !  (uh-len) !  (uh-off) !  (uh-xt) !
-    (uh-srcid) @ 65535 = if  false exit  then                \ primitive: no source
-    (uh-srcid) @ 0= if  (uh-xt) @ (src-of)
-    else  (uh-off) @ (uh-len) @ (uh-srcid) @ (file-span)  then ;
-: (last-dot) ( c-addr u -- pos )            \ index of the last '.', or u if none
-    dup (ld-pos) !
-    0 ?do  dup i + c@ [char] . = if  i (ld-pos) !  then  loop  drop
-    (ld-pos) @ ;
-: (compact-name) ( c-addr u -- )            \ (path-a) := "<base>.compact<.ext>"
-    2dup (last-dot) >r                       ( c-addr u )   \ R: dotpos
-    (path-a) (sp-end) !
-    over r@ (sp-add)  s" .compact" (sp-add)  r@ /string (sp-add)
-    r> drop
-    (sp-end) @ (path-a) - (path-a-len) ! ;
-: (compact-one) ( nt -- )                   \ write this word's source if not already written
-    dup (sw-anon?) if                        \ :noname: each is unique — emit its
-        (nt-src) if                          \ whole group (it ends in `is <name>`,
-            (cmp-fid) @ write-file abort" compact: write error"   \ so replaying
-            (nl) 1 (cmp-fid) @ write-file abort" compact: write error"  \ rebinds)
-        then  exit  then
-    (sw-name) 2dup (cmp-seen?) if  2drop exit  then
-    2dup (cmp-seen+)
-    (src-by-name) if                         ( src-addr src-u )
-        (cmp-fid) @ write-file abort" compact: write error"
-        (nl) 1 (cmp-fid) @ write-file abort" compact: write error"
-    then ;
-\ (cmp-assign): a definitions-only snapshot would lose a deferred word's
-\ binding and a value's contents — those live in direct `is`/`to` lines, not in
-\ any definition. For each in-force defer/value in the module, append its LAST
-\ logged direct assignment (found with SEE's (last-assign?) scanner), so the
-\ compacted file loads to the same behavior the module has now.
-: (cmp-assign) ( nt -- )
-    dup (nt-type)  dup 1 =  swap 2 =  or  0= if  drop exit  then
-    dup dup (sw-name) (nt-by-name) 0= if  2drop exit  then   ( nt nt nt' )
-    = 0= if  drop exit  then                 ( nt )   \ shadowed entry → skip
-    dup (nt-type) 1 = if                     \ defer bound to a :noname? its
-        dup (nt>code) drop defer@            ( nt act )   \ emitted group already
-        (xt>nt) if  (sw-anon?) if  drop exit  then  then  \ carries the binding
-    then                                     ( nt )
-    (sw-name)  (sb-tu) !  (sb-t) !
-    (last-assign?) 0= if  exit  then          \ never directly assigned
-    (sb-a) @ (sb-u) @ (cmp-fid) @ write-file abort" compact: write error"
-    (nl) 1 (cmp-fid) @ write-file abort" compact: write error" ;
-
-: compact ( "name" -- )
-    parse-word dup 0= if
-        2drop (cur-file@) dup 0= if
-            drop ." compact: no current file (use: compact <name>)" cr exit
-        then
-    then                                     ( c-addr u )
-    (compact-name)
-    (path-a) (path-a-len) @ w/o create-file   ( fileid ior )
-    abort" compact: cannot create file"       ( fileid )
-    (cmp-fid) !
-    0 (cmp-seen-len) !
-    (prop-snapshot)
-    (prop-n) @ 0 ?do
-        (prop-n) @ 1- i - cells (prop-nts) + @    \ oldest-first
-        (compact-one)
-    loop
-    (prop-n) @ 0 ?do                          \ final is/to binding per target
-        (prop-n) @ 1- i - cells (prop-nts) + @
-        (cmp-assign)
-    loop
-    (cmp-fid) @ close-file abort" compact: close error"
-    (uf-free)
-    ." compacted to " (path-a) (path-a-len) @ type cr ;
 
 \ ===== sh : run a Linux command (the rest of the line) via the shell =====
 \ `sh <command...>` runs the rest of the input line as a shell command, the way
@@ -2449,196 +2259,6 @@ variable (def-n)
     2drop 2drop
     (def-template) (edit-src) drop ;
 
-\ ===== Splice-save: SAVE honors bind vs mutate =====
-\ (Module_Architecture.md stage 1, under the hyper-static principle.)
-\ Forth's dictionary is hyper-static: `:` never changes a binding, it makes a
-\ new one, and earlier words keep what they captured — so the sequence of
-\ bindings IS the module's state, and SAVE keeps the seeded file text and the
-\ session's captures VERBATIM, in order (replay-faithful). The one exception
-\ is a MUTATION: a group logged by (eval+log) — edit's resubmit and its
-\ propagation re-logs, tagged in (dir-tags) — means "that text was wrong";
-\ its word's definition in the file text is REPLACED where it stands and the
-\ group is dropped from the appended tail, so mutation history never
-\ accumulates. Comments and layout survive untouched. The log itself is not
-\ modified, so SEE keeps working and a second SAVE is byte-identical.
-create (sv-out) 3 cells allot  (sv-out) 3 cells erase   \ output being built
-create (sv-pat) 3 cells allot  (sv-pat) 3 cells erase   \ patch records (4 cells:
-create (sv-rec) 4 cells allot                           \  log-off len repl-a repl-u)
-create (sv-tmp) 4 cells allot
-: (sv-pat-n) ( -- n )    (sv-pat) cell+ @ 4 cells / ;
-: (sv-pat@)  ( i -- rec ) 4 cells * (sv-pat) @ + ;
-: (sv-pat+)  ( off len repl-a repl-u -- )
-    (sv-rec) 3 cells + !  (sv-rec) 2 cells + !  (sv-rec) cell+ !  (sv-rec) !
-    (sv-rec) 4 cells (sv-pat) (buf-append) ;
-: (sv-pat-find) ( off -- rec true | false )  \ existing patch at this target?
-    (sv-pat-n) 0 ?do
-        dup i (sv-pat@) @ = if  drop  i (sv-pat@) true  unloop exit  then
-    loop  drop  false ;
-
-\ Does this header's span lie in the seed (= the seeded file's own text)?
-\ True only for file words whose source file is the one the log was seeded
-\ from, with the span inside the seeded byte range (a stale file is skipped).
-: (sv-seed-hdr?) ( nt -- off len true | false )
-    (nt-meta)                               ( off len srcid )
-    dup 0=  over 65535 =  or if  drop 2drop  false exit  then
-    (source-path)                           ( off len c-addr u )
-    (seed-path) (seed-path-len) @ (s=) 0= if  2drop  false exit  then
-    2dup +  (seed-len) @  u> if  2drop  false exit  then
-    true ;
-\ The NEWEST seed span carrying this name — the binding in force when the
-\ file loaded, i.e. the one a mutation conceptually edited. Earlier same-name
-\ spans are older bindings: hyper-static semantics, never touched.
-variable (sv-nm)  variable (sv-nu)
-: (sv-last-span) ( c-addr u -- off len true | false )
-    (sv-nu) !  (sv-nm) !
-    (latest@)
-    begin  dup (sw-mark) @ <>  over 0<>  and  while   ( nt )
-        dup (sw-anon?) 0= if
-            dup (sw-name) (sv-nm) @ (sv-nu) @ (ci=) if
-                dup (sv-seed-hdr?) if            ( nt off len )
-                    rot drop  true  exit  then
-            then
-        then
-        @
-    repeat
-    drop  false ;
-
-\ Collect the patches: walk the SEE records in capture order; each TAGGED
-\ (mutation) group becomes (a) a replacement of the span holding the binding
-\ it edited and (b) a deletion of the group from the tail. The edited binding
-\ is the name's newest PRIOR appearance: an untagged tail group when the word
-\ was rebound this session, else its newest seed span. Tagged priors are
-\ skipped — they are mutation history whose text already lives at the
-\ resolved target, so a later mutation of the same word updates the same
-\ replacement (last edit wins). A mutation with no target (an edited
-\ REPL-typed word never saved, or a target span shared with another
-\ definition — a multi-word line) stays in the tail, as does everything
-\ untagged. (eval+log) indexes the group WITHOUT its trailing newline, so
-\ the span is widened to cover the separator when punching it out of the
-\ tail, and the replacement borrows it when the text doesn't end in one.
-variable (sv-prev)                          \ previous record's span off (multi-word groups)
-variable (sv-go)  variable (sv-gl)          \ the tagged group's log-off / len
-: (sv-gl+) ( -- len )                       \ group len + its separator newline, if any
-    (sv-gl) @
-    (sv-go) @ over + (log) cell+ @ u< if
-        (log) @ (sv-go) @ + over + c@ 10 = if  1+  then
-    then ;
-: (sv-repl) ( -- a u )                      \ replacement text, newline-terminated
-    (log) @ (sv-go) @ +
-    (sv-gl) @ 2dup + 1- c@ 10 = if  exit  then
-    drop (sv-gl+) ;
-: (sv-rec-name?) ( rec -- f )               \ does this record define (sv-nm)?
-    2 cells + @ (xt>nt) 0= if  false exit  then   ( nt )
-    dup (sw-anon?) if  drop  false exit  then
-    (sw-name) (sv-nm) @ (sv-nu) @ (ci=) ;
-: (sv-sib?) ( j -- f )                      \ does record j share its span (multi-word line)?
-    dup 3 cells * (dir) @ + @  swap          ( off j )
-    dup 0> if
-        dup 1- 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
-    dup 1+  (dir) cell+ @ 3 cells /  < if
-        dup 1+ 3 cells * (dir) @ + @  2 pick = if  2drop  true exit  then  then
-    2drop  false ;
-: (sv-prior?) ( i -- off len 1 | -1 | 0 )   \ newest untagged prior binding of (sv-nm)
-    begin  dup 0>  while
-        1-                                   ( j )
-        dup cells (dir-tags) @ + @ 0= if     \ bindings only; skip mutation history
-            dup 3 cells * (dir) @ +          ( j rec )
-            dup (sv-rec-name?) if
-                over (sv-sib?) if  2drop  -1 exit  then  \ multi-word line: leave in tail
-                nip  dup @  swap cell+ @  1  exit
-            then
-            drop
-        then
-    repeat
-    drop  0 ;
-: (sv-span-users) ( off -- n )              \ module headers stamped with this seed off
-    0 swap  (latest@)                        ( n off nt )
-    begin  dup (sw-mark) @ <>  over 0<>  and  while
-        dup (sw-anon?) 0= if
-            dup (sv-seed-hdr?) if            ( n off nt off2 len2 )
-                drop  2 pick = if  rot 1+ -rot  then
-            then
-        then
-        @
-    repeat
-    2drop ;
-: (sv-mutate) ( off len -- )                \ target span ← the tagged group's text
-    (sv-go) @ (sv-gl+) 0 0 (sv-pat+)        \ drop the group from the tail
-    over (sv-pat-find) if                    ( off len prec )
-        (sv-repl)  2 pick 3 cells + !  swap 2 cells + !  2drop   \ last edit wins
-    else
-        (sv-repl) (sv-pat+)                  \ new replacement
-    then ;
-: (sv-collect) ( -- )
-    -1 (sv-prev) !
-    (dir) cell+ @ 3 cells /  0 ?do
-        i 3 cells * (dir) @ +               ( rec )
-        dup @ (sv-prev) @ <> if             \ first record of its group
-            dup @ (sv-prev) !
-            i cells (dir-tags) @ + @ if     \ a mutation-verb group
-                dup @ (sv-go) !  dup cell+ @ (sv-gl) !
-                dup 2 cells + @ (xt>nt) if  ( rec nt )
-                    dup (sw-anon?) 0= if
-                        (sw-name) (sv-nu) !  (sv-nm) !
-                        i (sv-prior?)
-                        dup 1 = if  drop  (sv-mutate)  else
-                        0= if                \ no tail binding: the seed's newest span
-                            (sv-nm) @ (sv-nu) @ (sv-last-span) if   ( rec off len )
-                                over (sv-span-users) 1 > if  2drop  \ shared line: tail
-                                else  (sv-mutate)  then
-                            then
-                        then then
-                    else  drop  then        \ anon mutation: stays in the tail
-                then
-            then
-        then
-        drop
-    loop ;
-
-\ Sort the patch records by target offset (bubble; there are few).
-: (sv-swap) ( r1 r2 -- )
-    over (sv-tmp) 4 cells cmove
-    2dup swap 4 cells cmove
-    (sv-tmp) swap 4 cells cmove  drop ;
-variable (sv-sorted)
-: (sv-sort) ( -- )
-    begin
-        true (sv-sorted) !
-        (sv-pat-n) 1- 0 max 0 ?do
-            i (sv-pat@)  i 1+ (sv-pat@)     ( r1 r2 )
-            over @ over @ u> if  2dup (sv-swap)  false (sv-sorted) !  then
-            2drop
-        loop
-        (sv-sorted) @
-    until ;
-
-\ Emit the whole log — seed text plus captured tail — applying the sorted
-\ replacements/deletions where they fall. Everything between them is copied
-\ byte-for-byte.
-variable (sv-pos)                           \ read cursor into the log
-: (sv-emit) ( -- )
-    0 (sv-pos) !
-    (sv-pat-n) 0 ?do
-        i (sv-pat@)                          ( rec )
-        (log) @ (sv-pos) @ +                 ( rec gap-addr )
-        over @ (sv-pos) @ - 0 max            ( rec gap-addr gap-len )
-        (sv-out) (buf-append)                ( rec )   \ untouched text before the patch
-        dup 2 cells + @  over 3 cells + @    ( rec repl-a repl-u )
-        (sv-out) (buf-append)                ( rec )   \ the replacement (empty = delete)
-        dup @ over cell+ @ +  (sv-pos) @ max (sv-pos) !
-        drop
-    loop
-    (log) @ (sv-pos) @ +
-    (log) cell+ @ (sv-pos) @ - 0 max
-    (sv-out) (buf-append) ;
-
-: (save-splice) ( -- )
-    (sv-out) (buf-reset)  (sv-pat) (buf-reset)
-    (sv-collect)
-    (sv-sort)
-    (sv-emit)
-    (sv-out) @ (sv-out) cell+ @ (write-module) ;
-' (save-splice) (save-impl) !               \ SAVE's real body from here on
 
 \ ===== :e — inline mutation: retype a definition, splice the file, reload =====
 \ `:e <name>` is `edit <name>` with the prompt as the editor: type the new
@@ -2662,6 +2282,7 @@ variable (sv-pos)                           \ read cursor into the log
     (latest@) (dir-add)
     true (dirty) ! ;
 variable (ct-a)  variable (ct-u)  variable (ct-p)
+create (ce-out) 3 cells allot  (ce-out) 3 cells erase   \ the rewritten group text
 : (ce-text) ( -- a u )                      \ ":" ++ the group text after the ":e" token
     (pend) @ (ct-a) !  (pend) cell+ @ (ct-u) !
     0 (ct-p) !
@@ -2671,10 +2292,10 @@ variable (ct-a)  variable (ct-u)  variable (ct-p)
     while  1 (ct-p) +!  repeat              \ skip leading whitespace
     2 (ct-p) +!                             \ skip the ":e" token itself
     (ct-p) @ (ct-u) @ min (ct-p) !
-    (sv-out) (buf-reset)
-    s" :" (sv-out) (buf-append)
-    (ct-a) @ (ct-p) @ +  (ct-u) @ (ct-p) @ -  (sv-out) (buf-append)
-    (sv-out) @  (sv-out) cell+ @ ;
+    (ce-out) (buf-reset)
+    s" :" (ce-out) (buf-append)
+    (ct-a) @ (ct-p) @ +  (ct-u) @ (ct-p) @ -  (ce-out) (buf-append)
+    (ce-out) @  (ce-out) cell+ @ ;
 variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected text
 : (ce-run) ( -- )                           \ the completion hook: splice + reload
     (ce-text)                                ( a u )

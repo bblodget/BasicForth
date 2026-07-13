@@ -17,7 +17,7 @@ Like `:` but with no name: compile a definition and leave its *execution token*
 (xt) on the stack instead. Run it with `execute`, or install it as a deferred
 word's behavior with `is` — the seam-filling idiom from the Chase tutorial.
 The definition's source is recorded like any word's, so `see` on a deferred
-word shows its `:noname` action in full, and `save`/`compact` replay it.
+word shows its `:noname` action in full, and `save` replays it.
 
     :noname  dup * ;      \ compiles, leaves the xt on the stack
     5 swap execute .      \ 25

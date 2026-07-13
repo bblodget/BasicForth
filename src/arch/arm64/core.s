@@ -3507,6 +3507,9 @@ forth_noname:
 
 // ---------- ?DO ----------
 // ?DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
+// Skips the loop body if limit == index. In BasicForth this is the SAME code
+// DO emits — both zero-trip on equal bounds; ?DO is kept as the standard,
+// portable spelling.
 .global forth_question_do
 forth_question_do:
     STP X29, X30, [SP, #-16]!
@@ -3531,8 +3534,8 @@ forth_question_do:
     RET
 
 // compile_question_do_inline — emit ?DO's inline code (24 bytes, 6 instructions).
-// Same structure as compile_do_inline: compare BEFORE push to return stack.
-// If equal, branch forward (skip loop body entirely, clean return stack).
+// Identical to compile_do_inline: compare and branch BEFORE pushing to return
+// stack, so an equal-bounds loop is skipped with a clean return stack.
 // Returns: X0 = address of B.EQ instruction (for LOOP to patch).
 compile_question_do_inline:
     CHECK_DICT 24

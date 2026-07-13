@@ -63,7 +63,8 @@ A `:noname` definition gets a real dictionary entry with an **empty name**
 (length 0). It is unfindable by construction — `find` compares lengths first
 and every typed token has length ≥ 1 — and `words`/`.module` skip it, so the
 entry exists purely to carry metadata: its code pointer and source record let
-`see` print a defer's anonymous action and let `compact` replay it.
+`see` print a defer's anonymous action and let `save` carry it in the module
+file.
 
 ## Engine Registers
 

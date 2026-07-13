@@ -540,10 +540,16 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   and EVALUATEs ": <name>" so the rest of the input compiles as a normal
   definition; on completion the group (":e" rewritten to ":") splices the
   file and reloads. Splice failure falls back to a plain unsaved binding.
-- [ ] **Stage 4: cleanup pass** — sweep the log-canonical cruft once 2–3
-  prove stable: the propagation body in core.fs, `compact` + helpers, the
-  fixed `(edit-tmp)` path; rewrite Line_Editor.md's propagation section;
-  drop/rewrite the propagation tests.
+- [x] **Stage 4: cleanup pass** (2026-07-11) — deleted the propagation body
+  (`(propagate)`, `(prop-*)`, `(pmd-*)`; `(eval+log)` survives as `define`'s
+  back end with its own `(el-src)` scratch), `compact` + helpers, and the
+  whole mutation-tag path: with mutations splicing the file directly, no
+  capture group is ever tagged, so `(dir-tags)`/`(cap-tag)` and the entire
+  splice-save patch machinery (`(sv-*)`) were dead — `save` is now literally
+  "write the log verbatim" (the log = seeded file text + appended bindings),
+  and the `(save-impl)` indirection and seed-extent records went with it.
+  Dropped the 3 compact tests; fixed the stale ?DO-vs-DO asm comments (both
+  arches emit identical code — equal bounds zero-trip for both).
 - [ ] **Stage 5: `module <file>` + ownership** — `.module` filters by
   SrcId, foreign-word refusal with a hint, dependency edits splice into
   their own file (one reload propagates through the `include` chain).

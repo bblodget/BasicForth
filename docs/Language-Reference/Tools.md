@@ -22,12 +22,6 @@ Forth is hyper-static). The exception: a word changed with **`edit`** is a
 never accumulates and saving twice is byte-identical. Writes atomically, so
 a failure never corrupts an existing file.
 
-## compact ( "name" -- )  /  compact ( -- )
-**Deprecated** — mutations no longer accumulate, and deduping deliberate
-`:` rebindings would *rewire* them (earlier words would come back bound to
-the latest definition). Still writes the old definitions-only snapshot to a
-sibling **`<base>.compact<.ext>`**; will be removed in a later cleanup.
-
 ## load ( "name" -- )
 Open `<file>` as the module — forget the old one, load the new one, make it
 current. Like `basicforth <file>`, mid-session. If you have unsaved changes it

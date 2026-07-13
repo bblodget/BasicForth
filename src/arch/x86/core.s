@@ -3179,7 +3179,9 @@ forth_noname:
 
 # ---------- ?DO ----------
 # ?DO ( limit index -- ) (R: -- limit index)  IMMEDIATE, COMPILE_ONLY
-# Like DO but skips the loop body if limit == index.
+# Skips the loop body if limit == index. In BasicForth this is the SAME code
+# DO emits (see compile_do_inline) — both zero-trip on equal bounds; ?DO is
+# kept as the standard, portable spelling.
 # Compiles: compare-and-branch-equal-forward, then push to return stack.
 # The forward branch is patched by LOOP/+LOOP (same as DO's skip-patch).
 .global forth_question_do
@@ -3188,8 +3190,6 @@ forth_question_do:
     # Phase 1: Load limit and index, pop from data stack
     # Phase 2: Compare — if equal, branch forward (skip loop body entirely)
     # Phase 3: Push limit and index to return stack
-    # The key difference from DO: branch BEFORE pushing to return stack,
-    # so if we skip, return stack is clean.
     call compile_question_do_inline # RAX = skip-patch address
     incq do_depth(%rip)
     sub $6*CELL, %r15
@@ -3203,8 +3203,8 @@ forth_question_do:
     ret
 
 # compile_question_do_inline — emit ?DO's inline code (22 bytes).
-# Same as compile_do_inline but: compare and branch BEFORE pushing to
-# return stack. If equal, skip the entire loop body (clean return stack).
+# Byte-identical to compile_do_inline: compare and branch BEFORE pushing to
+# return stack, so an equal-bounds loop is skipped with a clean return stack.
 # Returns: RAX = address of JE offset field (for LOOP to patch).
 compile_question_do_inline:
     CHECK_DICT 22

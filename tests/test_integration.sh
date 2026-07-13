@@ -2005,13 +2005,13 @@ else
 fi
 # An untouched temp file is a no-op: vi's :q! exits 0 (only :cq reports
 # failure), so edit compares the file image before/after the editor instead
-# of trusting the exit status. Nothing is resubmitted or propagated.
+# of trusting the exit status. Nothing is spliced or reloaded.
 eu_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$eu_dir/mod.fs"
 eu_out=$( cd "$eu_dir" && printf 'edit leaf\nmid .\nbye\n' \
     | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$eu_dir"
-if [[ "$eu_out" == *"edit: unchanged"* && "$eu_out" != *"updated:"* && "$eu_out" == *"10"* ]]; then
+if [[ "$eu_out" == *"edit: unchanged"* && "$eu_out" == *"10"* ]]; then
     printf "  ${GREEN}PASS${NC}  edit with an untouched file is a no-op\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  edit with an untouched file is a no-op\n    Got: %q\n" "$eu_out"; ((failed++))
@@ -2242,7 +2242,6 @@ fi
 rm -rf "$hs_dir"
 # EDIT is a MUTATION: the edited word's definition is replaced where it
 # stands, mutation history never accumulates, and the save is idempotent.
-# The propagation re-logs (unchanged text) splice onto themselves.
 se_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$se_dir/mod.fs"
 se_out=$( cd "$se_dir" && printf 'edit leaf\nsave\nbye\n' \
@@ -2325,52 +2324,6 @@ if [[ "$ag_out" == *"208"* && "$ag_out" != *"205"* ]]; then
     printf "  ${GREEN}PASS${NC}  reload keeps the last :noname binding (transitive ok)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  superseded :noname group under reload\n    Expected 208 (last binding wins)\n    Got: %q\n" "$ag_out"; ((failed++))
-fi
-
-# COMPACT writes a deduped sibling "<base>.compact<.ext>": after redefining x, the
-# append SAVE keeps both versions, but COMPACT emits only the latest, once.
-cp_dir="$(mktemp -d)"
-printf ': x 1 ;\n' > "$cp_dir/mod.fs"
-( cd "$cp_dir" && printf 'edit x\ncompact mod.fs\nbye\n' \
-    | EDITOR='sed -i s/1/9/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
-cp_count=$(grep -c ': x' "$cp_dir/mod.compact.fs" 2>/dev/null)
-cp_body=$(cat "$cp_dir/mod.compact.fs" 2>/dev/null)
-rm -rf "$cp_dir"
-# COMPACT keeps final is/to bindings: the deduped snapshot must load to the
-# same behavior — the defer bound (last assignment wins) and the value set.
-ca_dir="$(mktemp -d)"
-printf 'defer g\n' > "$ca_dir/mod.fs"
-( cd "$ca_dir" && printf ': one 1 ;\n: two 2 ;\n'\'' one is g\n'\'' two is g\n0 value hits\n7 to hits\ncompact\nbye\nn\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
-ca_out=$( printf 'g .\nhits .\nbye\n' \
-    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$ca_dir/mod.compact.fs" 2>&1 )
-ca_file=$(cat "$ca_dir/mod.compact.fs" 2>/dev/null)
-rm -rf "$ca_dir"
-if [[ "$ca_out" == *"2 "* && "$ca_out" == *"7 "* && "$ca_file" == *"' two is g"* \
-      && "$ca_file" != *"' one is g"* && "$ca_file" == *"7 to hits"* ]]; then
-    printf "  ${GREEN}PASS${NC}  compact keeps final is/to bindings (loads live)\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  compact final bindings\n    Got out: %q\n    File: %q\n" "$ca_out" "$ca_file"; ((failed++))
-fi
-if [[ "$cp_count" == "1" && "$cp_body" == *": x 9 ;"* && "$cp_body" != *": x 1 ;"* ]]; then
-    printf "  ${GREEN}PASS${NC}  compact writes a deduped sibling (latest definition only)\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  compact dedup\n    Expected one ': x 9 ;', no ': x 1 ;'\n    Got (%s defs): %q\n" "$cp_count" "$cp_body"; ((failed++))
-fi
-# COMPACT with a MULTI-LINE :noname binding: the anonymous definition's whole
-# group is emitted (replaying it rebinds the defer). The old line-based
-# scanner emitted only the group's LAST line — a file that failed to load.
-cm_dir="$(mktemp -d)"
-printf 'defer g\n' > "$cm_dir/mod.fs"
-( cd "$cm_dir" && printf ':noname 20\n  2 + . ; is g\ncompact mod.fs\nbye\nn\n' \
-    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
-cm_out=$( printf 'g\nbye\n' \
-    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$cm_dir/mod.compact.fs" 2>&1 | tr -d '\0' | tr -dc '[:print:]\n')
-rm -rf "$cm_dir"
-if [[ "$cm_out" == *"22"* && "$cm_out" != *"uninitialized"* ]]; then
-    printf "  ${GREEN}PASS${NC}  compact replays a multi-line :noname binding\n"; ((passed++))
-else
-    printf "  ${RED}FAIL${NC}  compact multi-line :noname binding\n    Got: %q\n" "$cm_out"; ((failed++))
 fi
 
 # SEE — a source lister over the session capture log (interactive scope). The
@@ -3295,9 +3248,9 @@ assert_editor_count "history up/up/down -> 89"     '88 emit\n89 emit\n\033[A\033
 section "EDIT (external editor)"
 # =========================================================================
 # `edit <word>` writes the word's source to a temp file, opens it in $EDITOR, and
-# on a clean exit recompiles from the file and propagates to callers. We drive it
-# non-interactively by pointing $EDITOR at a `sed` (or `true`/`false`) instead of
-# a real editor. The bad-name paths fail before any editor is spawned.
+# on a clean exit splices the new text into the module file and reloads. We drive
+# it non-interactively by pointing $EDITOR at a `sed` (or `true`/`false`) instead
+# of a real editor. The bad-name paths fail before any editor is spawned.
 
 # Errors before spawning: not-found and primitive (no $EDITOR needed).
 ed_pn=$(printf 'edit dup\nbye\n'       | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
