@@ -1989,12 +1989,13 @@ fi
 # in the module file and the reload rebuilds every caller by construction —
 # leaf=1 → mid=leaf*10 → top prints mid; after editing leaf to 2, `top` must
 # print 20 and the FILE must hold the new text with no history and no temp
-# droppings. `edit` spawns $EDITOR on "<module>.edit" — here a sed.
+# droppings. `edit` spawns $EDITOR on "<module>.edit.fs" (the .fs suffix so
+# editors filetype-detect Forth) — here a sed.
 ep_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n: top mid . ;\n' > "$ep_dir/mod.fs"
 ep_out=$( cd "$ep_dir" && printf 'top\nedit leaf\ntop\nbye\n' \
     | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 ;
-    echo "FILE:"; cat mod.fs; ls mod.fs.edit 2>/dev/null && echo "TEMP-LEFT" )
+    echo "FILE:"; cat mod.fs; ls mod.fs.edit.fs 2>/dev/null && echo "TEMP-LEFT" )
 ep_n=$(grep -c ': leaf' <<<"$ep_out")
 rm -rf "$ep_dir"
 if [[ "$ep_out" == *"20"* && "$ep_out" == *"FILE:"*": leaf 2 ;"* && "$ep_n" == "1" \
@@ -2204,6 +2205,54 @@ if [[ "$cx_out" == *"? nosuchword"* && "$cx_out" == *"42"* && "$cx_out" == *"1  
     printf "  ${GREEN}PASS${NC}  an errored :e disarms — next definition binds normally\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  errored :e disarm\n    Got: %q\n" "$cx_out"; ((failed++))
+fi
+
+# cancel; abandons the definition being typed — nothing defined, the rest of
+# the line discarded, a pending :e disarmed (nothing spliced, file untouched);
+# a later :e still works, and at the prompt cancel; is a friendly no-op.
+cq_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$cq_dir/mod.fs"
+cq_out=$( cd "$cq_dir" && printf ': foo 1 2 cancel; 3 ;\nfoo\n:e leaf 999 cancel;\nleaf .\ncancel;\n:e leaf 2 ;\nleaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$cq_dir"
+if [[ "$cq_out" == *"canceled"* && "$cq_out" == *"? foo"* && "$cq_out" == *"1  ok"* \
+      && "$cq_out" == *"nothing to cancel"* && "$cq_out" == *"2  ok"* \
+      && "$cq_out" == *"FILE:"*": leaf 2 ;"* && "$cq_out" != *"FILE:"*"999"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cancel; abandons : and :e definitions cleanly\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cancel;\n    Got: %q\n" "$cq_out"; ((failed++))
+fi
+
+# cancel; mid-MULTI-LINE :e: the continuation lines compile as usual until
+# cancel; unwinds them — the armed splice never fires.
+cq2_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$cq2_dir/mod.fs"
+cq2_out=$( cd "$cq2_dir" && printf ':e leaf\n  42\ncancel;\nleaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$cq2_dir"
+if [[ "$cq2_out" == *"canceled"* && "$cq2_out" == *"1  ok"* \
+      && "$cq2_out" == *"FILE:"*": leaf 1 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  cancel; mid-multi-line :e — nothing spliced\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cancel; multi-line :e\n    Got: %q\n" "$cq2_out"; ((failed++))
+fi
+
+# LIST pages the current module file (BASIC's LIST); a dirty session gets a
+# one-line reminder that unsaved bindings aren't in the file view yet, and
+# with no current file it explains itself.
+ls_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$ls_dir/mod.fs"
+ls_out=$( cd "$ls_dir" && printf 'list\n: extra 5 ;\nlist\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$ls_dir"
+ls_nf=$( printf 'list\nbye\n' | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
+if [[ "$ls_out" == *": mid leaf 10 * ;"* && "$ls_out" == *"unsaved changes"* \
+      && "$ls_nf" == *"list: no current file"* ]]; then
+    printf "  ${GREEN}PASS${NC}  list pages the module file (dirty note, no-file message)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  list\n    Got: %q\n    No-file: %q\n" "$ls_out" "$ls_nf"; ((failed++))
 fi
 
 # SPLICE-SAVE (Module_Architecture stage 1, hyper-static): a plain `:`

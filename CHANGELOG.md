@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Quick wins from v0.10.0 use testing
+- **The edit temp file is now `<module>.edit.fs`** (was `<module>.edit`),
+  so editors filetype-detect Forth and syntax-highlight it.
+- **New word: `list`** — page the current module file, BASIC-style: your
+  whole program at once. A session with unsaved bindings prints
+  "(unsaved changes - save to include them)" first, since those live in
+  the capture log until a save writes them.
+- **New word: `cancel;`** — abandon the definition being typed (`:`,
+  `:noname`, or `:e`): nothing is defined, the rest of the line is
+  discarded, and a pending `:e` is disarmed (nothing spliced). Immediate,
+  so it works mid-line or on a continuation line; a no-op at the prompt.
+  Before this, the only way out of a `:e` was typing an undefined word to
+  force an error.
+
 ## v0.10.0 — 2026-07-13
 
 ### Cleanup: `compact` and the propagation machinery removed (stage 4)

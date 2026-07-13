@@ -748,8 +748,11 @@ first.
 editor on a `: word` / `;` template, and the saved definition is compiled and
 logged like one typed at the prompt (an existing word is refused — use
 `edit`). **`:e <word>`** is `edit` without the editor: retype the definition
-inline (multi-line works) and on `;` the file is spliced and reloaded. Bare
-**`edit`** (no name) opens the whole module file and `reload`s it on change.
+inline (multi-line works) and on `;` the file is spliced and reloaded — or
+type **`cancel;`** to abandon the definition mid-way (works for a plain `:`
+too; nothing is defined or spliced). Bare **`edit`** (no name) opens the
+whole module file and `reload`s it on change. **`list`** pages the current
+module file, BASIC-style — your whole program at once.
 See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers

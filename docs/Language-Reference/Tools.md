@@ -31,6 +31,11 @@ asks "save first? (y/n)" at the terminal.
 Clear the module — forget every definition, back to a clean slate (core only).
 If you have unsaved changes it asks "save first? (y/n)" at the terminal.
 
+## list ( -- )
+Page the current module file — BASIC's `LIST`, your whole program at once.
+Bindings typed since the last save live in the capture log, not the file,
+so a dirty session prints "(unsaved changes - save to include them)" first.
+
 ## reload ( -- )
 Re-read the current file from disk — the edit/compile/run loop (`-session` then
 re-load the current module file).

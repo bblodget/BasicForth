@@ -12,6 +12,14 @@ than run.
     : square  dup * ;
     5 square .        \ 25
 
+## cancel; ( -- )
+Abandon the definition being typed (a `:`, `:noname`, or `:e`): nothing is
+defined, the rest of the input line is discarded, and a pending `:e` splice
+is disarmed. Immediate — it acts the moment it's read, even mid-line or on
+a continuation line. At the prompt (nothing compiling) it's a no-op.
+
+    : foo 1 2 cancel;     \ "canceled" — foo never existed
+
 ## :noname ( -- xt )
 Like `:` but with no name: compile a definition and leave its *execution token*
 (xt) on the stack instead. Run it with `execute`, or install it as a deferred
