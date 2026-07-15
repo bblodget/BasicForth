@@ -2255,6 +2255,36 @@ else
     printf "  ${RED}FAIL${NC}  list\n    Got: %q\n    No-file: %q\n" "$ls_out" "$ls_nf"; ((failed++))
 fi
 
+# FAULT RECOVERY vs the module: a reload that hits a guard fault (here a
+# top-level + underflows) must (a) keep every definition COMPLETED before the
+# bad line — ; re-anchors the recovery snapshot — and (b) leave the log
+# seeded from the file it read, so a later SAVE writes that file back
+# byte-identically instead of a stale image of the previous module (this was
+# real data loss: save used to silently revert on-disk edits).
+fr_dir="$(mktemp -d)"
+printf ': a 1 ;\n: b a 10 * ;\n' > "$fr_dir/mod.fs"
+printf ': a 1 ;\n: NEW-WORK 42 ;\n+\n: b a 10 * ;\n' > "$fr_dir/bad.fs"
+fr_out=$( cd "$fr_dir" && printf 'sh cp bad.fs mod.fs\nreload\na .\nNEW-WORK .\nb .\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+fr_same=$(cmp -s "$fr_dir/mod.fs" "$fr_dir/bad.fs" && echo SAME)
+rm -rf "$fr_dir"
+if [[ "$fr_out" == *"stack underflow"* && "$fr_out" == *"1  ok"* && "$fr_out" == *"42  ok"* \
+      && "$fr_out" == *"? b"* && "$fr_same" == "SAME" ]]; then
+    printf "  ${GREEN}PASS${NC}  faulted reload: words before the fault survive, save is file-faithful\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  faulted reload recovery\n    Got: %q  file-same: %q\n" "$fr_out" "$fr_same"; ((failed++))
+fi
+
+# A guard fault on the SAME LINE as a forget must not resurrect the forgotten
+# words: (restore-dict) re-anchors the recovery snapshot.
+fm_out=$( printf 'marker m\n: x 1 ;\nm +\nx .\n: y 2 ;\ny .\nbye\n' \
+    | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
+if [[ "$fm_out" == *"stack underflow"* && "$fm_out" == *"? x"* && "$fm_out" == *"2  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  fault after a forget does not resurrect forgotten words\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  fault-after-forget re-anchor\n    Got: %q\n" "$fm_out"; ((failed++))
+fi
+
 # SPLICE-SAVE (Module_Architecture stage 1, hyper-static): a plain `:`
 # redefinition is a NEW BINDING — earlier words keep the old one — so SAVE
 # appends it verbatim (replay-faithful) and keeps the file text untouched

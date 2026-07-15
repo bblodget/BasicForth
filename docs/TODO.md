@@ -565,13 +565,21 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   LIST, with a dirty-session note); `cancel;` abandons the definition being
   typed (immediate; disarms a pending `:e` — before this, the only cancel
   was typing an undefined word to force an error).
-- [ ] **Investigate: session broken after a stack underflow + aborted
-  reload** (repro notes: testing/one-d-life). Three threads: (a) bare
-  `edit` printed "stack underflow" repeatedly, then recovered after two
-  `save`s; (b) a reload that aborts partway leaves words after the error
-  point silently missing — the file is intact, but it FEELS like data
-  loss; (c) the reload's error text can be eaten by the editor's
-  alternate-screen restore (nvim), so the user never sees why.
+- [x] **Investigated + fixed: session broken after a stack underflow +
+  aborted reload** (2026-07-13). Root cause: guard-fault recovery jumps to
+  the REPL loop, abandoning whatever multi-step word was in flight.
+  Cascade: (open-module) reseeded the log AFTER evaluating, so a faulted
+  reload left the log holding the PREVIOUS module — a later `save`
+  silently reverted the file, wiping on-disk edits (the reported data
+  loss; the repeated "stack underflow" was each bare-edit quit re-running
+  the same faulting reload until a save reverted the bad line away along
+  with the user's work). Fixed: (1) (open-module) seeds the log BEFORE
+  evaluating — save is always file-faithful; (2) `;` and (restore-dict)
+  re-anchor the recovery snapshot (both arches), so a fault keeps every
+  definition completed before the bad line and a fault after a forget
+  can't resurrect forgotten words. Deferred (bounded, needs a fault-time
+  cleanup registry): a faulted include leaks its open fd and read
+  buffers.
 - [ ] **Language Reference coverage audit** — `random`, `rnd`, `allot` are
   missing; make it a test (words output vs `## ` headings in
   docs/Language-Reference/) so coverage can't regress.

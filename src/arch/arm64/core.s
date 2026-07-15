@@ -2142,6 +2142,14 @@ forth_semicolon:
     ADR X9, state
     STR XZR, [X9]
 
+    // A completed definition is a consistent recovery point: a later guard
+    // fault rolls the dictionary back to HERE, not to before this definition
+    // (build_header's entry snapshot covers a fault DURING one).
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
+
     LDP X29, X30, [SP], #16
     RET
 
@@ -4188,6 +4196,13 @@ forth_latest_at:
 forth_restore_dict:
     LDR X22, [X19], #CELL           // latest (TOS), pop
     LDR X21, [X19], #CELL           // here, pop
+    // Re-anchor fault recovery: without this, a guard fault after a forget
+    // (-session/marker/reload) would restore the PRE-forget LATEST/HERE and
+    // resurrect the forgotten words.
+    ADR X9, saved_latest
+    STR X22, [X9]
+    ADR X9, saved_here
+    STR X21, [X9]
     RET
 
 // (session-mark!) ( -- )  record the current HERE/LATEST as the session restore
