@@ -744,9 +744,14 @@ variable (path-a-len)  variable (path-b-len)
 : (open-module) ( -- )
     true (skip-capture) !
     -session
+    (seed-log)                          \ reseed BEFORE evaluating: if the load
+                                        \ faults partway (guard-page recovery
+                                        \ abandons the rest of this word), the
+                                        \ log already mirrors the file — a later
+                                        \ SAVE rewrites the file it read, never
+                                        \ a stale image of the previous module
     (cur-file@) (included?)             ( ior )
-    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then
-    (seed-log) ;                        \ reseed the log for SAVE (SEE reads file metadata)
+    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then ;
 
 \ LOAD <file>: open <file> as the current module — a clean swap, like
 \ `basicforth <file>` mid-session. Verified readable BEFORE anything is forgotten,

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fault recovery can no longer lose your work
+- **A `reload` (or `edit`/`:e` reload) that crashes partway — e.g. a stack
+  underflow in the file — used to leave the capture log holding the
+  PREVIOUS module, so a later `save` silently reverted the file on disk,
+  wiping edits.** The log is now seeded from the file BEFORE it is
+  evaluated, so after any failed load `save` writes back exactly the file
+  it read.
+- **Definitions completed before the bad line now survive the crash.**
+  The fault-recovery snapshot is re-anchored at every completed `;` (it
+  used to roll back to the start of the last definition, losing it), so
+  the module stays loaded up to the point of the error — the first
+  missing word points at the culprit line.
+- A fault on the same line as a forget (`marker`/`-session`) no longer
+  resurrects the forgotten words: the forget re-anchors the snapshot too.
+  (Both architectures.)
+
 ### Quick wins from v0.10.0 use testing
 - **The edit temp file is now `<module>.edit.fs`** (was `<module>.edit`),
   so editors filetype-detect Forth and syntax-highlight it.

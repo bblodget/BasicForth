@@ -1989,6 +1989,11 @@ forth_semicolon:
 .Lsemi_noname:
     # Return to interpret mode
     movq $0, state(%rip)
+    # A completed definition is a consistent recovery point: a later guard
+    # fault rolls the dictionary back to HERE, not to before this definition
+    # (build_header's entry snapshot covers a fault DURING one).
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
     ret
 
 .Lsemi_unbalanced:
@@ -3817,6 +3822,11 @@ forth_restore_dict:
     mov (%r15), %r12               # latest (TOS)
     mov CELL(%r15), %r13          # here
     add $2*CELL, %r15             # pop both
+    # Re-anchor fault recovery: without this, a guard fault after a forget
+    # (-session/marker/reload) would restore the PRE-forget LATEST/HERE and
+    # resurrect the forgotten words.
+    mov %r12, saved_latest(%rip)
+    mov %r13, saved_here(%rip)
     ret
 
 # (session-mark!) ( -- )  record the current HERE/LATEST as the session restore
