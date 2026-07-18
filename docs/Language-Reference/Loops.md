@@ -5,6 +5,20 @@ a condition says stop, and **counted** loops (`do …`) that run over a range. A
 of these are **compile-only** structure words — use them inside a `:` definition.
 Examples wrap each in a short word you then run.
 
+At a glance:
+
+    begin ... until          ( flag at until )   repeat until true
+    begin ... again          ( -- )              loop forever (exit leaves)
+    begin ... while ... repeat                   test in the middle
+    do ... loop              ( limit start -- )  count start..limit-1
+    ?do ... loop             ( limit start -- )  same, zero-trip when equal
+    do ... n +loop           ( n -- at +loop )   step by n (can be negative)
+    i                        ( -- n )            innermost loop index
+    j                        ( -- n )            next outer loop index
+    leave                    ( -- )              exit the loop now
+    unloop                   ( -- )              drop loop bookkeeping (before exit)
+    recurse                  ( -- )              call the current word itself
+
 ## begin … until ( -- ) ( flag consumed at until )
 Run the body, then test: repeat while the flag at `until` is false, stop when it
 is true. The body always runs at least once.
@@ -86,5 +100,5 @@ problems that divide naturally.
 
 ## See Also
 
-- `man conditionals` — `if`/`else`/`then` and `case`, often used inside loops.
-- `man return-stack` — `i`/`j` live on the return stack; mind `>r`/`r>` inside loops.
+- `help conditionals` — `if`/`else`/`then` and `case`, often used inside loops.
+- `help return-stack` — `i`/`j` live on the return stack; mind `>r`/`r>` inside loops.

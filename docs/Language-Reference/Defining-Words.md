@@ -4,6 +4,26 @@ How you add to BasicForth's vocabulary: new commands with `:`, named values with
 `constant`/`value`, storage with `variable`/`create`, and your own defining words
 with `create … does>`.
 
+At a glance:
+
+    : name ... ;    ( "name" -- )      define a new word
+    cancel;         ( -- )             abandon the definition being typed
+    :noname ... ;   ( -- xt )          unnamed definition, leaves its xt
+    variable        ( "name" -- )      one cell of storage; name pushes addr
+    constant        ( x "name" -- )    name pushes x, fixed
+    value           ( x "name" -- )    name pushes x, changeable with to
+    to              ( x "name" -- )    store into a value (or deferred word)
+    defer           ( "name" -- )      a word whose action comes later
+    is              ( xt "name" -- )   install a deferred word's action
+    defer@          ( xt1 -- xt2 )     fetch a deferred action (raw)
+    action-of       ( "name" -- xt )   fetch a deferred action, checked
+    create          ( "name" -- )      name pushes the address after it
+    does>           ( -- )             run-time action for created words
+    marker          ( "name" -- )      restore point; run name to forget
+    '               ( "name" -- xt )   "tick": a word's execution token
+    [']             ( "name" -- )      tick, compile-time version
+    immediate       ( -- )             last word runs during compilation
+
 ## : ( "name" -- )  and  ; ( -- )
 `:` begins a new definition, reads its name, and switches to compile mode; `;`
 finishes it and returns to interpreting. Between them, words are compiled rather
@@ -32,7 +52,7 @@ word shows its `:noname` action in full, and `save` replays it.
 
 ## variable ( "name" -- )   →   name: ( -- a-addr )
 Create a named one-cell variable. Running the name pushes its address; use `@`
-and `!` (see `man memory`).
+and `!` (see `help memory`).
 
     variable v   7 v !   v @ .    \ 7
 
@@ -48,7 +68,7 @@ value.
     5 value count   count .       \ 5
 
 Unlike a `variable` (whose `!` contents aren't saved), a `value` set with a
-direct `to` at the prompt **persists across `save`/`reload`** — see `man Persistence`.
+direct `to` at the prompt **persists across `save`/`reload`** — see `help modules`.
 
 ## to ( x "name" -- )
 Store a new value into a `value` (or a deferred word). Any other target is
@@ -77,7 +97,7 @@ target is refused: `x: not a deferred word`.
     ' abs    is brain  -5 brain .    \ 5
 
 A direct `is` typed at the prompt persists across `save`/`reload`, like `to` —
-see `man Persistence`. Deeper dive: docs/Deferred_Words.md.
+see `help modules`. Deeper dive: docs/Deferred_Words.md.
 
 ## defer@ ( xt1 -- xt2 )
 Fetch a deferred word's current action from its xt — the raw form of
@@ -137,10 +157,10 @@ as a literal.
 ## immediate ( -- )
 Mark the most recently defined word as *immediate*, so it runs during
 compilation rather than being compiled. The building block for custom compiling
-words; pairs with `postpone`/`literal` (see `man interpreter`).
+words; pairs with `postpone`/`literal` (see `help interpreter`).
 
 ## See Also
 
-- `man memory` — `@` / `!` / `allot` for the storage these words create.
-- `man interpreter` — `execute`, `postpone`, `literal`, and how compilation works.
+- `help memory` — `@` / `!` / `allot` for the storage these words create.
+- `help interpreter` — `execute`, `postpone`, `literal`, and how compilation works.
 - docs/Defining_Words.md, docs/Deferred_Words.md, and docs/Marker.md — deeper dives.

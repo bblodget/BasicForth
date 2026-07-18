@@ -580,9 +580,29 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   can't resurrect forgotten words. Deferred (bounded, needs a fault-time
   cleanup registry): a faulted include leaks its open fd and read
   buffers.
-- [ ] **Language Reference coverage audit** — `random`, `rnd`, `allot` are
-  missing; make it a test (words output vs `## ` headings in
-  docs/Language-Reference/) so coverage can't regress.
+- [~] **Language Reference coverage audit** — entries written (branch
+  reference-gaps, 2026-07-18: all 79 gaps closed; survivors are 8 internals:
+  hld lit >digit >digit? fill32 einval page-file chdir — that's the test's
+  exclusion list). STILL TO DO: the regression test itself (live `words`
+  output vs `## ` heading tokens in docs/Language-Reference/, pinned
+  BASICFORTH_PATH), and the `binary` word (`: binary #2 base ! ;` beside
+  decimal/hex — name `bin` is taken by the file-access modifier).
+- [ ] **`help` / `tutorials` interface** (design agreed 2026-07-18):
+  - Bare `help`: list every BASICFORTH_DOCS section except Tutorial (which
+    gets a "type tutorials" pointer), topics **aligned in ~3 columns**
+    (pad names to a fixed field width — the lister already sorts into a
+    buffer), plus a 2-line footer: `help <topic>`, `help <word>`.
+  - `help <name>`: exact topic match first → print the page **preamble**
+    (top of file to the first `## ` heading — title, short intro,
+    at-a-glance table); else scan `## ` heading tokens across the
+    reference pages → print just that word's entry block (heading to the
+    next `## `). Pages are already written to this convention.
+  - Topic match folds case AND hyphen/underscore (fixes the old
+    `man help-system` cross-reference bug below).
+  - New `tutorials` word lists tutorials ("start one with: tutorial <name>").
+  - Retire `man` and `topics`; keep `apropos`. Sweep remaining `man <topic>`
+    references in docs/ root pages + Manual when the words land
+    (Language-Reference already says `help ...`).
 - [ ] **`see <word>` shows Language Reference usage** for primitives and
   core words (scan the reference pages for the word's heading — own doc
   scan, not a shell-out).

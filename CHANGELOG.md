@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Language Reference: complete coverage, at-a-glance tables
+- **Every user-facing word now has a reference entry.** A words-vs-headings
+  audit found 79 gaps; all are closed (the survivors are 8 internal helpers,
+  deliberately excluded). Highlights: the whole dictionary-space vocabulary
+  (`here` `allot` `,` `c,` `align` `aligned`), sized access (`w@ w! l@ l!`),
+  `dump`/`?`, double comparisons (`d= d< d0= d0<`) and `d.`, the `$`/`%`/`#`
+  number prefixes, `r/w`, `stdin`/`stdout`/`stderr`, the `key_*` game
+  constants, comments (`\` and `(`), `>in`, `parse-name`, `bye`, `version`,
+  and the tutorial words.
+- **Every page now opens with an "At a glance" block** — the whole vocabulary
+  with stack effects on one screen, before the per-word entries. This is the
+  page preamble the planned `help <topic>` will print (`help <word>` will
+  print a single entry); cross-references already use the `help` spelling
+  (`man` still works until `help` lands).
+- **New pages:** Modules.md (`save`/`load`/`edit`/`:e`/`define`/`redo` and
+  friends, split out of Tools.md), Numbers.md (bases, the `$`/`%`/`#`
+  prefixes, `>number` — reading numbers, split from the printing page),
+  Shell.md (`ls`/`cd`/`cat`/...), Scripting.md
+  (`arg`/`next-arg`/`bye-code`/shebang), Random.md (`random`/`rnd`/`seed`).
+- **Topic names follow a convention now: lowercase-typeable, kebab-case, no
+  connector words, one word when one word will do.** Renamed:
+  Number-Output → **Printing**, Comparison-and-Logic → **Comparison**,
+  Constants-and-Variables → **Variables-Constants**, Terminal-IO →
+  **Terminal**.
+- Fixed stale facts found on the way: `.s` documented as decimal-only, the
+  dictionary is 256 KB (not 64 KB), no `bin` base word exists (that name is
+  the file-mode modifier), and an example that shadowed `value`.
+
 ### New `examples/cam.fs` — a 1-D cellular automata machine
 - Inspired by Toffoli & Margolus, *Cellular Automata Machines*: a 64-cell
   toroidal universe with a table-driven update. A rule is one colon

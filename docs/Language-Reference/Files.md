@@ -12,11 +12,36 @@ A full round trip — write a line, then read it back:
           >r  pad 80 r@ read-line drop drop  pad swap type  r> close-file drop ;
     wr  rd            \ Hello, file!
 
+At a glance:
+
+    r/o  w/o  r/w   ( -- fam )                access methods (read/write/both)
+    bin             ( fam -- fam )            binary-mode modifier
+    open-file       ( c u fam -- fileid ior ) open an existing file
+    create-file     ( c u fam -- fileid ior ) create (truncate) and open
+    close-file      ( fileid -- ior )         close
+    read-file       ( c u1 fid -- u2 ior )    read up to u1 bytes
+    read-line       ( c u1 fid -- u2 f ior )  read one line
+    write-file      ( c u fid -- ior )        write u bytes
+    write-line      ( c u fid -- ior )        write u bytes + newline
+    file-size       ( fid -- ud ior )         size as a double
+    rename-file     ( c1 u1 c2 u2 -- ior )    rename
+    include <name>  ( "name" -- )             load a Forth source file
+    included        ( c u -- )                include, name on the stack
+    open-pipe       ( c u fam -- fid ior )    pipe over a shell command
+    close-pipe      ( fid -- wret wior )      finish a pipe, reap the child
+    stdin stdout stderr  ( -- fileid )        the standard streams
+
 ## r/o ( -- fam )
 The read-only file-access method, for `open-file`.
 
 ## w/o ( -- fam )
 The write-only file-access method.
+
+## r/w ( -- fam )
+The read-write file-access method. (Refused by `open-pipe`, which is
+one-directional.)
+
+    \ s" state.dat" r/w open-file ...
 
 ## bin ( fam -- fam )
 Modify an access method to binary mode (no text translation).
@@ -93,8 +118,17 @@ zombie process).
 
     \ fileid close-pipe 2drop
 
+## stdin stdout stderr ( -- fileid )
+The standard streams (file descriptors 0, 1, 2) as constants, usable wherever
+a `fileid` is — read piped input with `stdin read-line`, or send diagnostics
+to `stderr` without disturbing redirected output.
+
+    : warn  s" watch out" stderr write-line drop ;
+    \ pad 80 stdin read-line   ( in a filter script )
+
 ## See Also
 
-- `man strings` — building the filename and buffer strings these words take.
-- `man memory` — `pad`/`allocate` for read buffers.
+- `help strings` — building the filename and buffer strings these words take.
+- `help memory` — `pad`/`allocate` for read buffers.
+- `help scripting` — `arg`/`argv` and `#!` scripts that read `stdin`.
 - docs/Platform_Layer.md — the underlying syscalls; BASICFORTH_PATH file search.

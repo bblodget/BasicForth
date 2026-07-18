@@ -2,7 +2,16 @@
 
 A handful of named values are always available. **Constants** push a fixed value;
 **variables** push the *address* of a cell you read with `@` and write with `!`
-(see `man memory`). To define your own, see `man defining-words`.
+(see `help memory`). To define your own, see `help defining-words`.
+
+At a glance:
+
+    true   ( -- -1 )        the canonical true flag (all bits set)
+    false  ( -- 0 )         the false flag
+    bl     ( -- 32 )        the space character code
+    base   ( -- a-addr )    variable: the current number base
+    state  ( -- a-addr )    variable: 0 interpreting, non-zero compiling
+    pad    ( -- c-addr )    transient scratch buffer
 
 ## Constants
 
@@ -27,7 +36,8 @@ The character code for a space (BLank). Handy with `emit`, `fill`, etc.
 
 ## base ( -- a-addr )
 Holds the current number base used for reading and printing numbers (10 by
-default). `decimal`, `hex`, and `bin` set it; see `man number-output`.
+default). `decimal` and `hex` set it; see `help numbers` (including the
+`$` / `%` / `#` literal prefixes that sidestep it for one number).
 
     base @ .          \ 10
 
@@ -48,6 +58,6 @@ so treat it as transient.
 
 ## See Also
 
-- `man defining-words` — `constant`, `variable`, and `value` to make your own.
-- `man memory` — `@` / `!` for reading and writing variables.
-- `man number-output` — `decimal` / `hex` / `bin` and the `base` variable.
+- `help defining-words` — `constant`, `variable`, and `value` to make your own.
+- `help memory` — `@` / `!` for reading and writing variables.
+- `help numbers` — `decimal` / `hex` and the `$`/`%`/`#` prefixes.

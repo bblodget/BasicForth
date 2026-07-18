@@ -7,6 +7,12 @@ on the data stack.
 
 Stack effects show both stacks: `( data -- data )` and `( R: before -- after )`.
 
+At a glance:
+
+    >r   ( x -- ) ( R: -- x )       move top item to the return stack
+    r>   ( -- x ) ( R: x -- )       move it back to the data stack
+    r@   ( -- x ) ( R: x -- x )     copy it back, leaving it there
+
 **These words are compile-only** — use them inside a `:` definition, not at the
 interactive prompt. Three rules keep the return stack safe:
 
@@ -37,6 +43,6 @@ Copy the top return-stack item to the data stack, leaving it on the return stack
 
 ## See Also
 
-- `man stack` — the data stack and its rearranging words.
-- `man control-flow` — `do … loop` and the index words `i`/`j`, which use the
+- `help stack` — the data stack and its rearranging words.
+- `help loops` — `do … loop` and the index words `i`/`j`, which use the
   return stack.

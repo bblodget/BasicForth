@@ -5,6 +5,26 @@ positioning, and timing. Words that read keys or move the cursor only do
 something useful at an interactive terminal, so a few below are described rather
 than shown.
 
+At a glance:
+
+    emit        ( char -- )       print one character
+    cr          ( -- )            newline
+    space       ( -- )            one space
+    spaces      ( n -- )          n spaces
+    key         ( -- char )       wait for a keypress
+    key?        ( -- flag )       has a key been pressed?
+    accept      ( c u1 -- u2 )    read a line into a buffer
+    page        ( -- )            clear the screen
+    at-xy       ( x y -- )        move the cursor (0,0 = top left)
+    screen-width  ( -- n )        terminal width in columns
+    screen-height ( -- n )        terminal height in rows
+    cursor-off  ( -- )            hide the cursor
+    cursor-on   ( -- )            show it again
+    ms          ( n -- )          sleep n milliseconds
+    ms@         ( -- n )          monotonic milliseconds counter
+    key_up key_down key_left key_right key_escape
+                ( -- code )       arrow/escape key codes from key
+
 ## emit ( char -- )
 Print one character by its code.
 
@@ -78,8 +98,19 @@ operation.
 
     \ ms@  ... work ...  ms@ swap -  .   \ elapsed ms
 
+## key_up key_down key_left key_right key_escape ( -- code )
+Constants for the abstract key codes `key` returns for the arrow keys (the
+platform layer parses their escape sequences into single codes: 129–132) and
+Escape (27). The game-loop idiom:
+
+    : steer  key? if key case
+        key_up    of  go-up     endof
+        key_left  of  go-left   endof
+        key_escape of quit-game endof
+      endcase then ;
+
 ## See Also
 
-- `man number-output` — `.`, `.s`, and friends for printing numbers.
-- `man strings` — `type` and `."` for printing text.
+- `help printing` — `.`, `.s`, and friends for printing numbers.
+- `help strings` — `type` and `."` for printing text.
 - docs/Platform_Layer.md — how these map to terminal/syscall operations.

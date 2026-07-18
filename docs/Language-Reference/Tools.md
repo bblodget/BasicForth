@@ -1,93 +1,57 @@
 # Tools
 
 Environment commands you use *at the prompt* rather than inside programs:
-inspecting words, saving your session, and browsing the docs. Each has a fuller
-topic page (`man <topic>`), linked below.
+inspecting words, browsing the docs, running tutorials, and shelling out.
+(Saving and editing your work moved to `help modules`.)
 
-## Module persistence
+At a glance:
 
-Your interactive definitions are a **module** you can write to a named file and
-load back (BASIC's `SAVE`/`LOAD`). Capture runs in an interactive session. See
-`man persistence`.
+    see <name>     ( "name" -- )      show a word's source
+    words          ( -- )             list every word in the dictionary
+    marker <name>  ( "name" -- )      set a forget-point (help defining-words)
+    version        ( -- )             print the build version banner
+    sh <command>   ( "cmd<eol>" -- )  run a shell command
+    (system)       ( c-addr u -- status )  run a command, return its status
 
-## save ( "name" -- )  /  save ( -- )
-`save <name>` writes the module to `<name>` (relative to the current directory)
-and makes it the current file; bare `save` re-writes the current file. The
-file text is kept byte-for-byte (comments, layout, every definition in order)
-and the session's definitions and direct `is`/`to` assignments append in the
-order they happened, so the file **replays to exactly the live state** — a
-plain `:` redefinition appends (earlier words keep the binding they captured;
-Forth is hyper-static). The exception: a word changed with **`edit`** is a
-*mutation* — its definition is replaced where it stands, so edit history
-never accumulates and saving twice is byte-identical. Writes atomically, so
-a failure never corrupts an existing file.
+    Browsing the docs (BASICFORTH_DOCS):
+    topics         ( -- )             list the help topics by section
+    man <topic>    ( "topic" -- )     page a topic file
+    apropos <key>  ( "keyword" -- )   which topics mention a keyword?
 
-## load ( "name" -- )
-Open `<file>` as the module — forget the old one, load the new one, make it
-current. Like `basicforth <file>`, mid-session. If you have unsaved changes it
-asks "save first? (y/n)" at the terminal.
-
-## new ( -- )
-Clear the module — forget every definition, back to a clean slate (core only).
-If you have unsaved changes it asks "save first? (y/n)" at the terminal.
-
-## list ( -- )
-Page the current module file — BASIC's `LIST`, your whole program at once.
-Bindings typed since the last save live in the capture log, not the file,
-so a dirty session prints "(unsaved changes - save to include them)" first.
-
-## reload ( -- )
-Re-read the current file from disk — the edit/compile/run loop (`-session` then
-re-load the current module file).
-
-## -session ( -- )
-Low-level "forget the module's words" back to the end of `core.fs` — the helper
-`new` / `load` / `reload` build on.
+    Tutorials (one step at a time, at the REPL):
+    tutorial <name> ( "name" ["step"] -- )  start a tutorial (bare: list them)
+    next           ( -- )             show the next step
+    back           ( -- )             show the previous step
+    step [n]       ( ["step"] -- )    replay the current step, or jump to n
+    end-tutorial   ( -- )             leave (your definitions remain)
 
 ## Inspecting words
 
 ## see ( "name" -- )
 Print the source of a word you defined interactively, exactly as you typed it.
 Reports *defined, but no source captured* for primitives and `core.fs` words.
-See `man see`.
+See docs/See.md.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;
 
 ## words ( -- )
-List **every** word in the dictionary, newest first — the ~330 built-ins plus
-anything you've added. Handy for discovery, but a lot to scroll.
-
-## .module ( -- )
-List just the words **you** have defined — your module — everything added on top
-of `core.fs` (a `load`ed file or anything `include`d at the REPL), newest first,
-with a count. The BASIC `LIST`: *"what have I built?"*
-
-    \ : sq dup * ;   variable n   .module
-    \ 2 words in this module (newest first):
-    \ n sq
-
-## uses ( "name" -- )
-List the module words whose source mentions `<name>` as a whole token
-(case-insensitive) — a grep over your own definitions, handy before renaming
-something. It reads each word's source the way `see` does — from the interactive
-capture log for words you typed, or from the file for words loaded via a startup
-argument, `load`, or `include` — so it covers everything `.module` lists.
-`<name>`'s own defining line is not counted. A `:noname … ; is x` group that
-is the current action of a deferred word is scanned too, reported as
-`(:noname is x)`; superseded groups are skipped, and so is the binding group
-of `<name>` itself when `<name>` is a deferred word.
-
-    \ variable mcount  : step  mcount @ . ;  : tick  mcount 1+ . ;
-    \ uses mcount
-    \ mcount is used by: tick step
+List **every** word in the dictionary, newest first — the built-ins plus
+anything you've added. Handy for discovery, but a lot to scroll; `.module`
+(`help modules`) lists just yours.
 
 ## marker ( "name" -- )
 Define a dictionary restore point (also a defining word — see
-`man defining-words` and `man marker`).
+`help defining-words` and docs/Marker.md).
+
+## version ( -- )
+Print the version banner shown at startup (the build's `git describe` string).
+
+    version           \ *** BasicForth v0.10.0 (Linux/x86-64) ***
 
 ## Shelling out
 
-Run Linux programs from the prompt. See `docs/Shelling_Out.md`.
+Run Linux programs from the prompt. See `docs/Shelling_Out.md`, and
+`help shell` for the built-in `ls` / `cat` / `cd` family.
 
 ## sh ( "command<eol>" -- )
 Run the rest of the line as a shell command (`/bin/sh -c`), the way you'd type it
@@ -102,7 +66,7 @@ status or are building the command in code.
 ## Browsing the docs
 
 These read the `*.md` topics in the directories named by `BASICFORTH_DOCS`. See
-`man help-system`.
+docs/Help_System.md.
 
 ## topics ( -- )
 List the available help topics, grouped by section.
@@ -114,10 +78,37 @@ Find `<topic>.md` (case-insensitive) and page it a screenful at a time
 ## apropos ( "keyword" -- )
 List the topics whose text contains `<keyword>`, each labelled with its section.
 
+## Tutorials
+
+An interactive walk through a lesson file, one step at a time — unlike `man`,
+which pages a whole file. See docs/Tutorial_System.md.
+
+## tutorial ( "name" ["step"] -- )
+Start tutorial `<name>` (resolved case-insensitively across the docs dirs) at
+step 1 — or at an optional step number. With no name, prints a hint and the
+available topics.
+
+    tutorial snake        \ step 1 of the Snake lesson appears
+
+## next ( -- )
+Show the tutorial's next step.
+
+## back ( -- )
+Show the previous step.
+
+## step ( ["step"] -- )
+Replay the current step — handy after running something that drew all over
+the screen. With a number (or the name of a `value` holding one), jump
+straight there: `step 7`.
+
+## end-tutorial ( -- )
+Leave the tutorial: forgets which step `next` would show, nothing else —
+**your definitions remain**.
+
 ## See Also
 
-- docs/Persistence.md — modules: `save <name>`, `load`, `new`, `reload` in depth.
+- `help modules` — `save` / `load` / `edit` and friends (moved from this page).
 - docs/See.md — how `see` reconstructs source.
-- docs/Marker.md — dictionary restore points.
 - docs/Help_System.md — `topics`, `man`, `apropos`, and sections.
+- docs/Tutorial_System.md — the tutorial system, including writing lessons.
 - docs/Shelling_Out.md — `sh` / `(system)`: running Linux programs.

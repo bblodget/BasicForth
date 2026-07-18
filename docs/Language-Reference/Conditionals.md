@@ -1,10 +1,19 @@
 # Conditionals
 
-Words that choose what runs based on a flag (see `man comparison-and-logic` for
-where flags come from). Any non-zero value counts as true; only `0` is false.
+Words that choose what runs based on a flag (see `help comparison`
+for where flags come from). Any non-zero value counts as true; only `0` is
+false. These are **compile-only** structure words — use them inside a `:`
+definition.
 
-These are **compile-only** structure words — use them inside a `:` definition.
-The examples wrap each in a short word you then run.
+At a glance:
+
+    if ... then              ( flag -- )   run the branch when true
+    if ... else ... then     ( flag -- )   two-way branch
+    case                     ( x -- )      multi-way branch on a value
+      n of ... endof                       one arm, runs when x = n
+      ...                                  optional default arm
+    endcase                                end of case (drops x)
+    exit                     ( -- )        return from the word now
 
 ## if … then ( flag -- )
 Run the words between `if` and `then` only when the flag is true.
@@ -45,9 +54,9 @@ Return from the current word immediately. Handy for an early-out guard.
     5 report          \ big
     -5 report         \ small
 
-Inside a `do … loop`, call `unloop` before `exit` (see `man loops`).
+Inside a `do … loop`, call `unloop` before `exit` (see `help loops`).
 
 ## See Also
 
-- `man comparison-and-logic` — the tests that produce the flags used here.
-- `man loops` — `begin`/`until`, `do`/`loop`, and friends.
+- `help comparison` — the tests that produce the flags used here.
+- `help loops` — `begin`/`until`, `do`/`loop`, and friends.
