@@ -7,6 +7,28 @@ one, and the rest read, compare, and copy them.
 `s"` and `."` work both ways: inside a definition they compile the string
 into the word; at the prompt they act immediately.
 
+At a glance:
+
+    .(        ( "text)" -- )            print now, even while compiling
+    ."        ( -- )                    print text (compiled into the word)
+    s"        ( -- c-addr u )           make a string
+    type      ( c-addr u -- )           print a string
+    count     ( c-addr -- c-addr u )    counted string -> addr/len
+    compare   ( c1 u1 c2 u2 -- n )      compare two strings (-1/0/1)
+    /string   ( c u n -- c+n u-n )      drop n chars from the front
+    -trailing ( c u -- c u2 )           drop trailing spaces
+    cmove     ( c1 c2 u -- )            copy u bytes, front to back
+    cmove>    ( c1 c2 u -- )            copy u bytes, back to front
+    blank     ( c u -- )                fill with spaces
+    char      ( "name" -- c )           first char of the next word
+    [char]    ( "name" -- c )           char, compile-time version
+
+## .( ( "text)" -- )
+Print text up to the closing `)` — immediately, even in the middle of
+compiling. The classic use is progress messages from a file being loaded.
+
+    .( loading graphics...)   \ prints right now, compile mode or not
+
 ## ." ( -- )
 Inside a definition: compile a string that is printed when the word runs. At
 the prompt: print it right away. The text runs from after the space to the
@@ -92,6 +114,6 @@ a literal.
 
 ## See Also
 
-- `man memory` — `fill`, `move`, and addresses behind these strings.
-- `man number-output` — `type` is also how pictured numeric output is printed.
+- `help memory` — `fill`, `move`, and addresses behind these strings.
+- `help printing` — `type` is also how pictured numeric output is printed.
 - docs/String_Words.md — the fuller treatment.

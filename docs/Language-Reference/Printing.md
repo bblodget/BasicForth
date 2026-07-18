@@ -1,8 +1,22 @@
-# Number Output
+# Printing
 
-Printing numbers, choosing the number base, and building custom formats with the
-"pictured numeric output" words. Numbers are read and printed in the current
-**base** (`base`, default 10); see also `man constants-and-variables`.
+Printing numbers, and building custom formats with the "pictured numeric
+output" words. Numbers print in the current **base** (`base`, default 10) —
+switching bases and typing numbers *in* is `help numbers`.
+
+At a glance:
+
+    .        ( n -- )               print signed, then a space
+    u.       ( u -- )               print unsigned
+    .r       ( n width -- )         print right-justified in a field
+    u.r      ( u width -- )         unsigned, right-justified
+    d.       ( d -- )               print a double (128-bit)
+    .s       ( -- )                 show the whole stack (in decimal)
+    h.2      ( u -- )               print a byte as two hex digits
+    h.addr   ( u -- )               print as eight hex digits
+
+    Pictured output (custom formats — details below):
+    <# # #s hold holds sign #>
 
 ## . ( n -- )
 Print a signed number followed by a space.
@@ -24,28 +38,29 @@ Print an unsigned number right-justified in a field.
 
     42 6 u.r          \ "    42"
 
+## d. ( d -- )
+Print a signed double (128-bit, two cells) followed by a space.
+
+    5 s>d d.          \ 5
+    -1 -1 d.          \ -1
+
+## h.2 ( u -- )
+Print the low byte of `u` as exactly two hex digits, regardless of the
+current base. Handy for byte-level debugging (`dump` uses it).
+
+    10 h.2            \ 0A
+
+## h.addr ( u -- )
+Print `u` as exactly eight hex digits, regardless of the current base.
+
+    255 h.addr        \ 000000FF
+
 ## .s ( -- )
 Print the whole data stack non-destructively as `<count> bottom ... top` — the
-single most useful debugging word.
+single most useful debugging word. Note: `.s` always prints in decimal,
+regardless of `base` (unlike `.`).
 
     1 2 3 .s          \ <3> 1 2 3
-
-## Number base
-
-## decimal ( -- )
-Switch to base 10.
-
-    decimal 255 .     \ 255
-
-## hex ( -- )
-Switch to base 16 (digits print in uppercase).
-
-    255 hex .  decimal    \ FF
-
-For any other base, store it directly into `base`:
-
-    : .bin  2 base ! . decimal ;
-    5 .bin            \ 101
 
 ## Pictured numeric output
 
@@ -90,17 +105,8 @@ Insert a minus sign if `n` is negative — pass the *original* signed value.
 ## #> ( ud -- c-addr u )
 End the conversion, dropping `ud` and leaving the finished string to `type`.
 
-## Number input
-
-## >number ( ud c-addr u -- ud c-addr u )
-Convert leading digits of a string into a double, in the current base. Returns
-the accumulated value plus whatever of the string was left unconverted.
-
-    : value  0 0 s" 42" >number 2drop drop . ;
-    value             \ 42
-
 ## See Also
 
-- `man arithmetic` — the double-precision words (`s>d`, etc.) behind pictured output.
-- `man constants-and-variables` — the `base` variable.
+- `help numbers` — bases, the `$`/`%`/`#` prefixes, and `>number`.
+- `help arithmetic` — the double-precision words (`s>d`, etc.) behind pictured output.
 - docs/Pictured_Numeric_Output.md — the fuller treatment.

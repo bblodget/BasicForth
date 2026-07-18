@@ -8,6 +8,25 @@ swapped. `.s` prints the stack non-destructively as `<count> bottom ... top`,
 which the examples below use to show the result. Each example assumes you start
 with an empty stack.
 
+At a glance:
+
+    dup        ( x -- x x )                duplicate the top item
+    drop       ( x -- )                    discard the top item
+    swap       ( x1 x2 -- x2 x1 )          exchange the top two
+    over       ( x1 x2 -- x1 x2 x1 )       copy the second to the top
+    rot        ( x1 x2 x3 -- x2 x3 x1 )    third item up to the top
+    -rot       ( x1 x2 x3 -- x3 x1 x2 )    top item down to third
+    ?dup       ( x -- x x | x )            dup only if non-zero
+    nip        ( x1 x2 -- x2 )             drop the second item
+    tuck       ( x1 x2 -- x2 x1 x2 )       copy the top under the second
+    pick       ( ... u -- ... xu )         copy the u-th item to the top
+    depth      ( -- +n )                   how many items on the stack
+    clearstack ( ... -- )                  discard everything
+    2dup       ( x1 x2 -- x1 x2 x1 x2 )    duplicate the top pair
+    2drop      ( x1 x2 -- )                discard the top pair
+    2over      ( ... -- ... x1 x2 )        copy the second pair to the top
+    2swap      ( x1 x2 x3 x4 -- x3 x4 x1 x2 )  exchange the top two pairs
+
 ## dup        ( x -- x x )
 Duplicate the top item.
 
@@ -96,6 +115,6 @@ Exchange the top two pairs.
 
 ## See Also
 
-- `man getting-started` — the tutorial introduction to the stack.
-- The return stack (`>r`, `r>`, `r@`) is documented separately.
-- `.s` and `.` are described in the I/O reference.
+- `help return-stack` — `>r`, `r>`, `r@` and friends.
+- `help printing` — `.s` and `.`, used in the examples above.
+- `help getting-started` — the tutorial introduction to the stack.

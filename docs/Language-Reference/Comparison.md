@@ -1,12 +1,30 @@
 # Comparison and Logic
 
 Comparisons leave a **flag**: `-1` (all bits set) for true, `0` for false. These
-work directly with the control-flow words (`man control-flow`) and, because true
-is all-ones, with the bitwise operators below.
+work directly with the control-flow words (`help conditionals`) and, because true
+is all-ones, with the bitwise operators below. The `u` variants treat values as
+unsigned, which matters for addresses and large positive values.
 
-Signed comparisons (`<`, `>`) treat values as signed; the `u` variants (`u<`,
-`u>`) treat them as unsigned, which matters for addresses and large positive
-values. Examples start from an empty stack.
+At a glance:
+
+    =       ( x1 x2 -- flag )     equal?
+    <>      ( x1 x2 -- flag )     not equal?
+    <       ( n1 n2 -- flag )     signed less-than?
+    >       ( n1 n2 -- flag )     signed greater-than?
+    u<      ( u1 u2 -- flag )     unsigned less-than?
+    u>      ( u1 u2 -- flag )     unsigned greater-than?
+    within  ( n lo hi -- flag )   lo <= n < hi?
+    0=      ( x -- flag )         zero? (logical NOT)
+    0<>     ( x -- flag )         non-zero?
+    0<      ( n -- flag )         negative?
+    0>      ( n -- flag )         positive?
+
+    and     ( x1 x2 -- x3 )       bitwise AND
+    or      ( x1 x2 -- x3 )       bitwise OR
+    xor     ( x1 x2 -- x3 )       bitwise exclusive-OR
+    invert  ( x -- ~x )           bitwise NOT
+    lshift  ( x u -- x<<u )       shift left u bits
+    rshift  ( x u -- x>>u )       logical shift right u bits
 
 ## = ( x1 x2 -- flag )
 True if the two values are equal.
@@ -107,5 +125,6 @@ halving).
 
 ## See Also
 
-- `man control-flow` — `if`, `until`, `while` consume these flags.
-- `man arithmetic` — `2*` / `2/` for sign-aware doubling and halving.
+- `help conditionals` — `if` and friends consume these flags.
+- `help loops` — `until` / `while` consume them too.
+- `help arithmetic` — `2*` / `2/` for sign-aware doubling and halving.

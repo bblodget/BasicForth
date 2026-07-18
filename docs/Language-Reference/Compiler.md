@@ -3,7 +3,15 @@
 The compile-time half of the interpreter — words that control what happens
 *while* a definition is being compiled. Most are **compile-only** and only make
 sense inside a `:` definition. The interpreter state itself lives in the `state`
-variable (see `man constants-and-variables`).
+variable (see `help variables-constants`).
+
+At a glance:
+
+    [         ( -- )       switch to interpreting, mid-definition
+    ]         ( -- )       switch back to compiling
+    literal   ( x -- )     compile a computed value as a literal
+    postpone  ( "name" -- ) compile a word's compilation behavior
+    compile,  ( xt -- )    compile a call to an xt
 
 ## [ ( -- )  (compile-only)
 Leave compile mode and start interpreting — temporarily, in the middle of a
@@ -38,7 +46,7 @@ being compiled — the low-level "compile a call" used by defining words.
 
 ## See Also
 
-- `man constants-and-variables` — the `state` variable this all hinges on.
-- `man defining-words` — `'`, `[']`, `immediate`, and `does>`.
-- `man interpreter` — the run-time/interpret side (`evaluate`, `execute`, …).
+- `help variables-constants` — the `state` variable this all hinges on.
+- `help defining-words` — `'`, `[']`, `immediate`, and `does>`.
+- `help interpreter` — the run-time/interpret side (`evaluate`, `execute`, …).
 - docs/Conditionals.md and docs/Compiler.md — deeper background.

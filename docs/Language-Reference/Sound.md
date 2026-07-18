@@ -10,6 +10,16 @@ background; with no device open, the sound words are silent no-ops.
     beep
     snd-wait snd-close
 
+At a glance:
+
+    snd-open   ( -- )             open the audio device
+    snd-open?  ( -- flag )        is it open?
+    tone       ( freq ms -- )     queue a square-wave tone
+    beep       ( -- )             a short default blip
+    snd-wait   ( -- )             block until the queue drains
+    snd-close  ( -- )             close the device
+    snd-vol    ( -- a-addr )      volume variable (0..32767)
+
 ## snd-open ( -- )
 Open the default audio playback device (signed 16-bit mono, 44100 Hz; SDL
 resamples for the hardware) and start it. Aborts with the SDL error message
@@ -45,5 +55,5 @@ Square-wave amplitude, default 8000. Set with `to`:
     2000 to snd-vol   \ quiet
     beep
 
-See `docs/Sound.md` for how the backend works, and `man ffi` for the calling
+See `docs/Sound.md` for how the backend works, and `help ffi` for the calling
 mechanism.
