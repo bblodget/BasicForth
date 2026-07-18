@@ -592,6 +592,14 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   Module_Architecture.md ("Forward references from a mutation").
 - [ ] **Topic lessons** — short single-topic tutorials (`lesson`?); first:
   arrays (`create`/`allot`/`cells`), which also documents `allot`.
+- [ ] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life): the asm
+  primitive's print routine hard-codes divide-by-10, while `.` is redefined
+  in core.fs with `<# #S #>` and respects BASE — so `2 base !  6 .s` shows
+  `6` where `.` shows `110`. Standard Forths' `.S` follows BASE. Fix:
+  redefine `.s` in core.fs base-aware (depth + non-destructive stack walk
+  need `depth`/`pick` or direct sp0/DSP access). Audit siblings while
+  there: any other asm printer that bypasses BASE (`.` primitive is
+  shadowed; check H.2/H.ADDR are intentional hex).
 - Rejected: shelling out to the real `man` (our docs are markdown; the
   board may not have man/less; our pager works everywhere).
 
