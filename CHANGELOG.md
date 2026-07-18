@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### New `examples/cam.fs` — a 1-D cellular automata machine
+- Inspired by Toffoli & Margolus, *Cellular Automata Machines*: a 64-cell
+  toroidal universe with a table-driven update. A rule is one colon
+  definition over pseudo-neighbor words (`west2`…`east2`); `table!`
+  enumerates all 32 neighborhood configs through it into a lookup table,
+  so the inner loop is a table fetch. Ships three rules: `1d-life`
+  (survive {2,4} / born {2,3}), `parity` (linear XOR — superposition,
+  self-reproducing seeds), and `echo`.
+- Patterns are strings — `s" #.###" 10 place-pattern` — so new specimens
+  can be pasted straight from a run's output. Includes a zoo of
+  discovered objects (gliders, a 7-generation diehard, oscillators of
+  period 2, 3, and 6) and the reactions that create them: glider
+  collisions produce, depending on impact phase, an explosion or the
+  period-2 blinker, and glider–blinker hits transmute the blinker into
+  the period-3 or period-6 oscillator.
+- Grew out of interactive sessions using the v0.10.0 module workflow
+  (`edit`, string seeds, `see`); the whole file is REPL-driveable:
+  `start`, `go`, `20 collide`, `0 to tick` for instant sweeps.
+
 ### Fault recovery can no longer lose your work
 - **A `reload` (or `edit`/`:e` reload) that crashes partway — e.g. a stack
   underflow in the file — used to leave the capture log holding the
