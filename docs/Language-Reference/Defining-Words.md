@@ -24,7 +24,7 @@ At a glance:
     [']             ( "name" -- )      tick, compile-time version
     immediate       ( -- )             last word runs during compilation
 
-## : ( "name" -- )  and  ; ( -- )
+## : ; ( "name" -- )
 `:` begins a new definition, reads its name, and switches to compile mode; `;`
 finishes it and returns to interpreting. Between them, words are compiled rather
 than run.

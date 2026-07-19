@@ -111,7 +111,7 @@ directory-read (`getdents`) failure the same way.
 ## See Also
 
 - `docs/BasicForth_Manual.md` — the "Shell-Like Words" section.
-- `docs/Help_System.md` — `man` / `topics` / `apropos`, which share the
+- `docs/Help_System.md` — `help` / `tutorials` / `apropos`, which share the
   `(getdents)` directory-walk and `page-file` pager.
 - `docs/Persistence.md` — `save` / `reload` and `session.fs`, now pinned to the
   startup directory.

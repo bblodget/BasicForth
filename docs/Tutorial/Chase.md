@@ -555,6 +555,6 @@ deferred and runnable stubs installed — open it, `save mygame.fs`, and fill
 the seams top-down, just like you did here.
 
 The finished program is `examples/chase.fs`. For any word used here, the
-Language Reference has a page per topic — try `man defining-words` (for `defer`,
-`is`, `:noname`, and `'`), `man interpreter` (for `execute`), or `man Loops`.
+Language Reference has a page per topic — try `help defining-words` (for `defer`,
+`is`, `:noname`, and `'`), `help interpreter` (for `execute`), or `help loops`.
 Type `back` to revisit any step. Happy hacking!

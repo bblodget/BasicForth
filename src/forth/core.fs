@@ -42,9 +42,10 @@
 \ String helpers
 : COUNT   dup 1+ swap c@ ;
 
-\ Number base
+\ Number base ("bin" is taken — the file-access modifier — hence BINARY)
 : DECIMAL   #10 base ! ;
 : HEX       $10 base ! ;
+: BINARY    #2 base ! ;
 
 \ Pictured numeric output
 \ Builds strings right-to-left in PAD buffer.
@@ -777,7 +778,8 @@ variable (path-a-len)  variable (path-b-len)
 \ missing/unreadable file never wipes your work.
 : reload ( -- )
     (session-on) @ 0= if  ." reload: no active session" cr  exit  then
-    (cur-file-len) @ 0= if  ." reload: no current file" cr  exit  then
+    (cur-file-len) @ 0= if
+        ." reload: no current file — save <name> to start one, or load <name>" cr  exit  then
     (cur-file@) r/o open-file           ( fileid ior )
     if  drop ." reload: cannot read " (cur-file@) type cr  exit  then
     close-file drop
@@ -1145,9 +1147,15 @@ variable (el-hpos)                    \ browse cursor within one edit
 (hist-init)
 ' (edit-line)  3 (hook!)
 
-\ ===== Help system: docs browser (man / topics / apropos) =====
+\ ===== Help system: docs browser (help / tutorials / apropos) =====
 \ Reads the docs/*.md files in the colon-separated directories named by
 \ BASICFORTH_DOCS. Directory listing uses (getdents); files are read on demand.
+\ The reference pages follow a convention the browser relies on: each page
+\ opens with a preamble (title, short intro, "At a glance" table) that runs
+\ to the first "## " heading, and each "## " heading names the word(s) its
+\ entry documents. So `help <topic>` prints a file's preamble, and
+\ `help <word>` prints every heading-to-heading entry block that names the
+\ word (a word like `begin` heads several).
 
 variable (gd)                            \ getdents record buffer (heap, lazy)
 4096 constant (gd-size)
@@ -1184,7 +1192,7 @@ variable (dd-xt)  variable (dd-cur)  variable (dd-rem)
         dup (dd-cur) +!  (dd-rem) @ swap - (dd-rem) !
     repeat ;
 
-\ Last path component of a directory (the "section" name shown by topics).
+\ Last path component of a directory (the "section" name shown by help).
 variable (bn-a)  variable (bn-u)
 : (basename) ( c-addr u -- ba bu )
     dup 0= if exit then
@@ -1196,8 +1204,7 @@ variable (bn-a)  variable (bn-u)
     loop
     (bn-a) @ over +  swap  (bn-u) @ swap - ;   ( ba bu )
 
-\ TOPICS: list the available .md topics, grouped under their section (the
-\ directory each topic lives in) and sorted alphabetically within each section.
+\ Topic collector: gather one docs dir's .md names (sorted) for the listers.
 \ Names are copied into a heap buffer first — the getdents buffer is reused
 \ across reads, so a name pointer into it is not stable — then sorted and printed.
 variable (sec-a)  variable (sec-u)         \ current section name (a basename)
@@ -1240,7 +1247,7 @@ variable (tn-w)  variable (tn-n)  variable (tn-d)
         repeat
         1+ (tn-ptr-at) !                   \ ptr[j+1] = key
     loop ;
-: (topics-in) ( dir-addr dir-u -- )
+: (collect-in) ( dir-addr dir-u -- )       \ fill (tn-*) with one dir's .md names
     2dup r/o open-file if drop 2drop exit then   ( dir-addr dir-u fileid )
     >r                                            ( dir-addr dir-u )   \ R: fileid
     (basename) (sec-u) ! (sec-a) !
@@ -1255,15 +1262,18 @@ variable (tn-w)  variable (tn-n)  variable (tn-d)
             dup (de-reclen) +              ( end nextptr )
         repeat 2drop
     repeat drop
-    r> close-file drop
-    (tn-n) @ 0= if exit then               \ no topics here → no header
-    (tn-sort)
-    (sec-a) @ (sec-u) @ type cr  space space        \ section header
-    (tn-n) @ 0 ?do  i (tn-ptr-at) @ count type space  loop
-    cr ;
-: topics ( -- )
-    (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    ['] (topics-in) (each-dir) ;
+    r> close-file drop ;
+variable (tn-fw)                           \ field width for the column layout
+: (3col) ( -- )                            \ print the collected names, 3 aligned columns
+    0 (tn-n) @ 0 ?do  i (tn-ptr-at) @ c@ max  loop  2 + (tn-fw) !
+    (tn-n) @ 0 ?do
+        i 3 mod 0= if  space space  then
+        i (tn-ptr-at) @ count               ( c-addr u )
+        2dup type
+        i 3 mod 2 <  i (tn-n) @ 1- <  and if
+            nip (tn-fw) @ swap - spaces     \ mid-row: pad to the field width
+        else  2drop cr  then                \ row end (or last name)
+    loop ;
 
 \ --- case-insensitive helpers ---
 : (lc) ( ch -- ch )  dup [char] A [char] Z 1+ within if 32 + then ;
@@ -1273,6 +1283,18 @@ variable (tn-w)  variable (tn-n)  variable (tn-d)
     begin dup r@ < while
         2 pick over + c@ (lc)
         2 pick 2 pick + c@ (lc)
+        <> if r> drop drop drop drop false exit then
+        1+
+    repeat r> drop drop drop drop true ;
+\ Topic-name fold: case-insensitive AND '_' = '-', so `help help-system`
+\ finds Help_System.md however the file spells it.
+: (fdc) ( ch -- ch )  (lc) dup [char] _ = if drop [char] - then ;
+: (fd=) ( a1 u1 a2 u2 -- f )             \ folded string equal (case, - vs _)
+    rot 2dup = 0= if 2drop 2drop false exit then   ( a1 a2 u2 u1 )
+    drop >r 0                                        ( a1 a2 i )   \ R: len
+    begin dup r@ < while
+        2 pick over + c@ (fdc)
+        2 pick 2 pick + c@ (fdc)
         <> if r> drop drop drop drop false exit then
         1+
     repeat r> drop drop drop drop true ;
@@ -1309,7 +1331,27 @@ variable (pg-quit)                       \ true once the user pressed q
         (pg-quit) @ if  r> close-file drop  false exit  then  \ user quit: not an error
     again ;
 
-\ --- MAN: find <topic>.md (case-insensitive) in the docs dirs and page it ---
+\ Does the line begin with "## " (an entry heading / tutorial step boundary)?
+: (head?) ( c-addr u -- f )
+    3 u< if drop false exit then
+    dup c@ [char] # =
+    over 1+ c@ [char] # = and
+    swap 2 + c@ bl = and ;
+
+\ Page a file's preamble: top of file to the first "## " heading. Closes the fd.
+: (page-preamble) ( fileid -- read-error? )
+    0 (pg-row) ! false (pg-quit) !
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        if  2drop  ." (read error)" cr  r> close-file drop  true exit  then
+        0= if  drop  r> close-file drop  false exit  then     \ EOF
+        (pg-buf@) over (head?) if  drop  r> close-file drop  false exit  then
+        (pg-buf@) swap (pg-line)
+        (pg-quit) @ if  r> close-file drop  false exit  then
+    again ;
+
+\ --- HELP: topic summaries and per-word entries from the docs dirs ---
 512 constant (mpath-sz)
 create (mpath) (mpath-sz) allot          \ "<dir>/<name>" scratch path
 variable (md-dir)  variable (md-dirn)    \ current dir for (build-path)
@@ -1324,7 +1366,8 @@ variable (mn-found)
     [char] / (mpath) (md-dirn) @ + c!
     (mpath) (md-dirn) @ + 1+  r@  cmove
     (mpath)  (md-dirn) @ 1+ r> + ;
-: (man-in) ( dir-addr dir-u -- )
+\ Topic pass: find <topic>.md (folded match) and print its preamble.
+: (ht-in) ( dir-addr dir-u -- )
     (mn-found) @ if 2drop exit then
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
@@ -1336,9 +1379,9 @@ variable (mn-found)
         begin 2dup u> while                      ( end ptr )
             dup (de-name) dup (cstr-len)         ( end ptr name namelen )
             2dup (ends-md?) if
-                2dup 3 - (mn-t) @ (mn-tn) @ (ci=) if
+                2dup 3 - (mn-t) @ (mn-tn) @ (fd=) if
                     (build-path) r/o open-file
-                    if drop else page-file drop true (mn-found) ! then  \ drop page-file's flag
+                    if drop else (page-preamble) drop true (mn-found) ! then
                     2drop r> close-file drop exit
                 then
             then
@@ -1346,14 +1389,122 @@ variable (mn-found)
         repeat 2drop
     repeat drop
     r> close-file drop ;
-: man ( "topic" -- )
-    parse-word                              ( c-addr u )
-    dup 0= if 2drop ." usage: man <topic>" cr exit then
-    (mn-tn) ! (mn-t) !  false (mn-found) !
+
+\ Word pass: does a "## " heading line name the target word? Headings list the
+\ word(s) an entry documents, then the stack effect — so the token scan stops
+\ at "(". Matching is case-insensitive only (words may legitimately contain
+\ '-' or '_', so no fold here).
+variable (hh-a)  variable (hh-u)           \ heading text after "## "
+variable (hh-1st)                          \ scanning the first token?
+: (head-word?) ( c-addr u -- f )
+    dup 3 < if 2drop false exit then
+    3 - (hh-u) !  3 + (hh-a) !  true (hh-1st) !
+    0                                       ( i )
+    begin dup (hh-u) @ < while
+        dup (hh-a) @ + c@ bl = if 1+ else
+            dup                             ( i j )   \ scan to the token's end
+            begin dup (hh-u) @ < if dup (hh-a) @ + c@ bl <> else false then
+            while 1+ repeat
+            tuck swap -                     ( j tok-u )
+            2dup - (hh-a) @ +  swap         ( j tok-a tok-u )
+            over c@ [char] ( =  over 1 = and if
+                \ a bare "(" is the stack effect — except as the heading's
+                \ FIRST token, where it is the word "(" itself
+                (hh-1st) @ if
+                    2dup (mn-t) @ (mn-tn) @ (ci=) if 2drop drop true exit then
+                then
+                2drop drop false exit
+            then
+            2dup (mn-t) @ (mn-tn) @ (ci=) if  2drop drop true exit  then
+            2drop  false (hh-1st) !
+        then
+    repeat drop false ;
+variable (hw-hit)                          \ inside a matched entry?
+variable (hw-any)                          \ printed any entry from this file?
+\ Print EVERY entry whose "## " heading names the target word — a word like
+\ `begin` heads several entries (begin…until, begin…again, begin…while…repeat).
+\ Each heading re-decides whether the lines after it print. Closes the fd.
+: (page-entry) ( fileid -- found? )
+    0 (pg-row) ! false (pg-quit) !
+    false (hw-hit) !  false (hw-any) !
+    >r
+    begin
+        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        if  2drop  r> close-file drop  (hw-any) @ exit  then   \ I/O error
+        0= if  drop  r> close-file drop  (hw-any) @ exit  then \ EOF
+        ( u )
+        (pg-buf@) over (head?) if
+            (pg-buf@) over (head-word?) dup (hw-hit) !
+            if  true (hw-any) !  then
+        then
+        (hw-hit) @ if  (pg-buf@) swap (pg-line)  else  drop  then
+        (pg-quit) @ if  r> close-file drop  (hw-any) @ exit  then
+    again ;
+\ Scan every reference page in a dir for the word's entries — all pages are
+\ visited even after a hit, so a word documented in several places shows every
+\ entry. Tutorial dirs are skipped — their "## " headings are lesson steps,
+\ not word entries.
+: (hw-in) ( dir-addr dir-u -- )
+    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    (md-dirn) ! (md-dir) !
+    (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
+    >r
+    begin
+        r@ (gd@) (gd-size) (getdents)            ( n )
+        dup 0> while
+        (gd@) + (gd@)                            ( end ptr )
+        begin 2dup u> while                      ( end ptr )
+            dup (de-name) dup (cstr-len)         ( end ptr name namelen )
+            2dup (ends-md?) if
+                2dup (build-path) r/o open-file
+                if drop else
+                    (page-entry) if  true (mn-found) !  then
+                then
+            then
+            2drop  dup (de-reclen) +
+        repeat 2drop
+    repeat drop
+    r> close-file drop ;
+
+\ Bare help: list each section's topics in three columns; the Tutorial
+\ section is left to `tutorials`.
+: (help-in) ( dir-addr dir-u -- )
+    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    (collect-in)
+    (tn-n) @ 0= if exit then               \ no topics here → no header
+    (tn-sort)
+    (sec-a) @ (sec-u) @ type cr
+    (3col) ;
+: (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorial sections
+    2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+    (collect-in)
+    (tn-n) @ 0= if exit then
+    (tn-sort)
+    (3col) ;
+
+: tutorials ( -- )
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    ['] (man-in) (each-dir)
+    ." Tutorials (start one with:  tutorial <name>):" cr
+    ['] (tuts-in) (each-dir) ;
+
+: help ( ["name"] -- )
+    parse-word                              ( c-addr u )
+    (docs-path) nip 0= if  2drop ." (BASICFORTH_DOCS not set)" cr exit  then
+    dup 0= if                               \ bare help: the topic listing
+        2drop
+        ['] (help-in) (each-dir)
+        ." Tutorial:  type  tutorials  to list the interactive tutorials." cr cr
+        ." help <topic>  - that topic's summary       (help stack)" cr
+        ." help <word>   - one word's entry           (help allot)" cr
+        exit
+    then
+    (mn-tn) ! (mn-t) !  false (mn-found) !
+    ['] (ht-in) (each-dir)                  \ topic first: the page preamble
+    (mn-found) @ if exit then
+    ['] (hw-in) (each-dir)                  \ then a word: its entry block
     (mn-found) @ 0= if
-        ." no help for " (mn-t) @ (mn-tn) @ type ."  (try TOPICS)" cr
+        ." no help for " (mn-t) @ (mn-tn) @ type
+        ."   (try:  help  or  apropos <keyword>)" cr
     then ;
 
 \ --- APROPOS: list topics whose file contains <keyword> (case-insensitive) ---
@@ -1510,7 +1661,8 @@ create (tilde-buf) (tilde-sz) allot
 \ once. Bindings typed since the last save live only in the capture log, so
 \ a dirty session gets a one-line reminder that the file view is behind.
 : list ( -- )
-    (cur-file-len) @ 0= if  ." list: no current file" cr  exit  then
+    (cur-file-len) @ 0= if
+        ." list: no current file — save <name> to start one, or load <name>" cr  exit  then
     (dirty) @ if  ." (unsaved changes - save to include them)" cr  then
     (cur-file@) r/o open-file if
         drop ." list: cannot open " (cur-file@) type cr abort  then
@@ -1573,11 +1725,6 @@ variable (tut-existed)                     \ requested step existed in the file?
 variable (ts-want)                         \ step (print-step) should print
 variable (ts-cur)                          \ step counter while scanning
 variable (ts-any)                          \ printed any line of the wanted step?
-: (tut-head?) ( c-addr u -- f )            \ does the line begin with "## "?
-    3 u< if drop false exit then
-    dup c@ [char] # =
-    over 1+ c@ [char] # = and
-    swap 2 + c@ bl = and ;
 : (print-step) ( fileid -- existed? )      \ print step (ts-want); paged; close file
     \ The scan continues past the wanted step to the END of the file, counting
     \ the "## " headings, so the footer can show "step 7/24". The total is
@@ -1594,7 +1741,7 @@ variable (ts-any)                          \ printed any line of the wanted step
             (ts-cur) @ (tut-total) !
             (ts-any) @ exit  then
         ( u )                                                   \ got a line
-        (pg-buf@) over (tut-head?) if  1 (ts-cur) +!  then      \ step boundary
+        (pg-buf@) over (head?) if  1 (ts-cur) +!  then          \ step boundary
         (ts-cur) @ (ts-want) @ =  (pg-quit) @ 0=  and if
             (pg-buf@) swap (pg-line) true (ts-any) !
         else  drop  then
@@ -1628,7 +1775,7 @@ variable (ts-any)                          \ printed any line of the wanted step
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
     ['] (tut-in) (each-dir)
     (tut-found) @ 0= if
-        ." no tutorial named " (tut-name) (tut-nlen) @ type ."  (try TOPICS)" cr
+        ." no tutorial named " (tut-name) (tut-nlen) @ type ."  (try TUTORIALS)" cr
         0 (tut-nlen) ! exit
     then
     (tut-existed) @ 0= if
@@ -1654,7 +1801,7 @@ defer (step-val?)                          \ ( a u -- n true | false ) value-nam
     parse-word (tut-max) min                ( c-addr u )
     dup 0= if 2drop
         ." usage: tutorial <name> [step]   then  next / back / step  to move" cr
-        topics exit
+        tutorials exit
     then
     dup (tut-nlen) !                        ( c-addr u )
     >r (tut-name) r> cmove
@@ -2103,7 +2250,8 @@ variable (ed-pre)  variable (ed-pu)          \ temp-file image before the editor
     \ auto-saved BEFORE the editor opens, so it sees the session's state.
     \ Unchanged file → no reload.
     (session-on) @ 0= if  (msg:) ." no active session" cr  exit  then
-    (cur-file-len) @ 0= if  (msg:) ." no current file (load <file> first)" cr  exit  then
+    (cur-file-len) @ 0= if
+        (msg:) ." no current file — save <name> to start one, or load <name>" cr  exit  then
     (dirty) @ if  (save)  then               \ the editor must see the session's state
     (cur-file@) (read-all) 0= if
         (msg:) ." cannot read " (cur-file@) type cr  exit  then   ( pre-a pre-u )

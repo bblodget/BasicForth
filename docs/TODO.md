@@ -580,14 +580,16 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   can't resurrect forgotten words. Deferred (bounded, needs a fault-time
   cleanup registry): a faulted include leaks its open fd and read
   buffers.
-- [~] **Language Reference coverage audit** — entries written (branch
+- [x] **Language Reference coverage audit** — entries written (branch
   reference-gaps, 2026-07-18: all 79 gaps closed; survivors are 8 internals:
-  hld lit >digit >digit? fill32 einval page-file chdir — that's the test's
-  exclusion list). STILL TO DO: the regression test itself (live `words`
-  output vs `## ` heading tokens in docs/Language-Reference/, pinned
-  BASICFORTH_PATH), and the `binary` word (`: binary #2 base ! ;` beside
-  decimal/hex — name `bin` is taken by the file-access modifier).
-- [ ] **`help` / `tutorials` interface** (design agreed 2026-07-18):
+  hld lit >digit >digit? fill32 einval page-file chdir — the test's
+  exclusion list). DONE (branch help-system, 2026-07-18): the regression
+  test lives in test_integration.sh ("every word has a Language-Reference
+  entry" — live `words` vs `## ` heading tokens), and `binary` is defined
+  beside decimal/hex (name `bin` is taken by the file-access modifier).
+- [x] **`help` / `tutorials` interface** (design agreed 2026-07-18; SHIPPED
+  2026-07-18, branch help-system — all points below as specified, `man` and
+  `topics` retired, docs swept, integration tests for all three behaviors):
   - Bare `help`: list every BASICFORTH_DOCS section except Tutorial (which
     gets a "type tutorials" pointer), topics **aligned in ~3 columns**
     (pad names to a fixed field width — the lister already sorts into a
@@ -603,9 +605,20 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   - Retire `man` and `topics`; keep `apropos`. Sweep remaining `man <topic>`
     references in docs/ root pages + Manual when the words land
     (Language-Reference already says `help ...`).
-- [ ] **`see <word>` shows Language Reference usage** for primitives and
-  core words (scan the reference pages for the word's heading — own doc
-  scan, not a shell-out).
+- [ ] **Markdown-aware pager** — the help system is written in Markdown;
+  render it: headings bold, `**bold**`, `` `code` `` and indented blocks
+  set off (color or dim). Two layers:
+  - *Platform*: text-attribute primitives beside `page`/`at-xy` — semantic
+    requests (color code, bold/reverse/reset), each platform mapping them
+    (ANSI on Linux; a future framebuffer/bare-metal target maps the same
+    codes to attributes). Prior art: BareMetalForth's `sys_set_color`
+    (platform_linux.asm) takes a VGA color code 0–15 and emits ANSI — the
+    right shape, but it only mapped 6 of 16 colors and had no bold; do the
+    full palette + bold this time, and reset attributes on exit like it did.
+  - *Forth*: the render pass lives in the pager's `(pg-line)` — one choke
+    point all help/tutorial output flows through; no markdown knowledge in
+    assembly. MUST be gated on `(tty?)` (like the `--more--` pause) so piped
+    output stays byte-identical plain text — tests and scripts depend on it.
 - [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
   annoying): move the fix's later-defined dependencies up to just before
   the edited word; move-to-end when the word has no callers. Design in
