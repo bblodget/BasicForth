@@ -62,7 +62,12 @@ file still reads fine under `help` — the headings are ordinary Markdown.
 ```
 
 The name is the file's base name without `.md`, matched case-insensitively —
-`tutorial Snake`, `tutorial snake`. The `tutorials` listing shows each file's
+`tutorial Snake`, `tutorial snake`. `Tutorial` directories on
+`BASICFORTH_DOCS` are searched first (the same set this listing shows), so a
+reference page with the same name — `Strings.md` exists in both
+Language-Reference and Tutorial — never shadows a lesson. Other docs
+directories are searched second: any docs page can still be walked step by
+step (`tutorial Printing`). The `tutorials` listing shows each file's
 **title line** (our convention is `# <Name> — <what you'll learn>`, so the
 title names the tutorial *and* describes it):
 
@@ -72,6 +77,7 @@ Tutorials (start one with:  tutorial <name>):
   Arrays — Your First Data Structure
   Chase — Design a Game from the Top Down
   Snake — Build Your First Game
+  Strings — Text on the Stack
 ```
 
 A file with no `# ` title line is listed by its file name.

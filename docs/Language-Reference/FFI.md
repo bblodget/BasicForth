@@ -1,8 +1,14 @@
 # FFI — Calling C Libraries
 
 Load a shared C library and call its functions directly from Forth. Load the
-wrappers first: `include ffi.fs`. Strings passed to C must be NUL-terminated
-(`>z` does the copy); arguments are integers/pointers, up to 6 per call.
+wrappers first: `include ffi.fs`. Arguments are integers/pointers, up to 6
+per call.
+
+Two string formats meet at this border. A Forth string is an address/length
+pair — the `c-addr` in stack comments means *character address* (nothing to
+do with C). A C string has no length; it ends at a NUL byte, and by Forth
+convention its address is called a `zaddr` (*zero-terminated*). Cross over
+with `>z` going out and `ztype` coming back.
 
 At a glance:
 

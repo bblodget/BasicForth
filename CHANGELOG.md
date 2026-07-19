@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Strings lesson
+- **`tutorial Strings`** — the second topic lesson (~10 minutes, 11 steps):
+  a string is an address/length pair — `s"`/`type`/`.s`, printing with
+  `."`, strings as byte arrays, slicing with `/string`/`-trailing`,
+  `char`/`emit`, the `compare 0=` idiom, the transient-buffer gotcha
+  (prompt-level `s"` strings are borrowed — the third `s"` reuses the
+  oldest slot), and keeping a copy in your own `create`/`allot` buffer.
+- **Fixed: `tutorial <name>` let a reference page shadow a same-named
+  lesson** (`tutorial Strings` opened Language-Reference/Strings.md — the
+  first hit on the docs path won). `Tutorial` directories — the set
+  `tutorials` lists — are now searched first; other docs pages second, so
+  walking any docs file step by step still works.
+
 ### `require` — load a file only once
 - **New words `require <file>` / `required ( c-addr u -- )`** (gforth
   compatible): like `include`/`included`, but a no-op if the file was
