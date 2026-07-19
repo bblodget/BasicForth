@@ -30,8 +30,9 @@ At a glance:
 ## Inspecting words
 
 ## see ( "name" -- )
-Print the source of a word you defined interactively, exactly as you typed it.
-Reports *defined, but no source captured* for primitives and `core.fs` words.
+Print the source of a word's most recent definition, exactly as written —
+whether typed this session or loaded from a file (including `core.fs`).
+Assembly primitives have no source; `see` points you at `help <name>` instead.
 See docs/See.md.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;

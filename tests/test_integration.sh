@@ -2505,10 +2505,10 @@ if [[ "$see_multi" == ": m1 1 ;  : m2 2 ;" ]]; then
 else
     printf "  ${RED}FAIL${NC}  SEE finds a non-last definition on a shared line\n    Expected ': m1 1 ;  : m2 2 ;'\n    Got: %q\n" "$see_multi"; ((failed++))
 fi
-if [[ "$see_prim" == *"is a primitive (assembly)"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive\n"; ((passed++))
+if [[ "$see_prim" == *"is a primitive (assembly)"* && "$see_prim" == *"try: help dup"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive and points at help\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)'\n    Got: %q\n" "$see_prim"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)' + 'try: help dup'\n    Got: %q\n" "$see_prim"; ((failed++))
 fi
 if [[ "$see_core" == ": SPACES"* ]]; then
     printf "  ${GREEN}PASS${NC}  SEE shows a core.fs word from its source file\n"; ((passed++))
@@ -3522,8 +3522,8 @@ section "EDIT (external editor)"
 
 # Errors before spawning: not-found and primitive (no $EDITOR needed).
 ed_pn=$(printf 'edit dup\nbye\n'       | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
-[[ "$ed_pn" == *"edit: dup is a primitive"* ]] \
-    && { printf "  ${GREEN}PASS${NC}  edit reports a primitive\n"; ((passed++)); } \
+[[ "$ed_pn" == *"edit: dup is a primitive"* && "$ed_pn" == *"try: help dup"* ]] \
+    && { printf "  ${GREEN}PASS${NC}  edit reports a primitive and points at help\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  edit reports a primitive\n    Got: %s\n" "$(echo "$ed_pn"|head -3)"; ((failed++)); }
 ed_nf=$(printf 'edit nosuchxyz\nbye\n' | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
 [[ "$ed_nf" == *"edit: nosuchxyz not found"* ]] \

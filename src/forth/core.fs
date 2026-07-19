@@ -883,7 +883,8 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     then
     dup 65535 = if                           ( xt off len srcid )   \ PRIM sentinel
         2drop 2drop
-        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly) — try: help "
+        (see-a) @ (see-u) @ type cr exit
     then
     dup 0= if                                \ srcid 0 → REPL word: use the capture log
         drop  2drop  (see-xt) !
@@ -2497,7 +2498,8 @@ variable (es-fid)
     0= if  2drop 2drop
         ." edit: " (see-a) @ (see-u) @ type ."  not found" cr exit  then
     dup 65535 = if  2drop 2drop
-        ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit" cr exit  then
+        ." edit: " (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot edit — try: help "
+        (see-a) @ (see-u) @ type cr exit  then
     2drop 2drop                              \ done with the meta cells
     (cur-file-len) @ 0= if
         ." edit: no current file — save <name> first, then edit" cr exit  then

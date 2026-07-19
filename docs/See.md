@@ -31,7 +31,7 @@ It also works for `core.fs` words and labels assembly primitives:
 > see spaces
 : SPACES  dup 0 > if 0 do space loop else drop then ;
 > see dup
-see: dup is a primitive (assembly)
+see: dup is a primitive (assembly) — try: help dup
 ```
 
 Multi-line definitions and non-colon defining words come back whole:
@@ -59,7 +59,8 @@ Multi-line definitions and non-colon defining words come back whole:
 - **including** words made by your own *custom* defining words.
 
 Assembly **primitives** have no source span, so `SEE` labels them
-*`<name>` is a primitive (assembly)*. A name that isn't currently defined (never
+*`<name>` is a primitive (assembly)* and points at `help <name>` for the
+reference entry. A name that isn't currently defined (never
 defined, or **forgotten** by `-session`/a marker, which can restore an *older*
 same-named word) reports *`<name>` not found*.
 
@@ -78,7 +79,8 @@ header — `(source-id, offset, length)` — see
 live xt) and dispatches on the source-id:
 
 - **not found** → *not found*.
-- **primitive sentinel** → *`<name>` is a primitive (assembly)*.
+- **primitive sentinel** → *`<name>` is a primitive (assembly)* + a `help
+  <name>` hint.
 - **source-id 0** (typed at the REPL, not yet saved) → scan the capture-log
   directory for the matching xt and `type` that slice (below).
 - **source-id ≥ 1** (loaded from a file) → `(source-path)` gives the file's

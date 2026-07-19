@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Polish
+- **`see`/`edit` on a primitive now point at `help`** — the "is a
+  primitive (assembly)" message ends with *— try: help \<name\>*, since the
+  reference entry is where a primitive's documentation actually lives.
+
 ### First topic lesson (Arrays) + descriptive tutorial listing
 - **`tutorial Arrays`** — the first *topic lesson*: a ~10-minute, 14-step
   walk through `create` / `allot` / `cells`, the index-word idiom
