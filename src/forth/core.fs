@@ -248,6 +248,13 @@ variable (s"flip)
 \ Programming-Tools words (15)
 : ?     ( a-addr -- ) @ . ;
 
+\ Base-aware .S: the asm primitive's printer hard-codes decimal; this one
+\ follows BASE like the redefined `.` (so `binary 110 .s` shows 110 — the
+\ <depth> tag follows BASE too). Same format as the primitive: <depth>,
+\ then the stack bottom to top.
+: .S    [char] < emit depth 0 u.r [char] > emit space
+        depth 0> if depth 0 do  depth i - 1- pick .  loop then ;
+
 \ Hex output helpers for DUMP
 : H.2   ( u -- ) base @ >r hex
         0 <# # # #> type
@@ -1299,6 +1306,72 @@ variable (tn-fw)                           \ field width for the column layout
         1+
     repeat r> drop drop drop drop true ;
 
+\ --- text attributes ---
+\ COLOR sets the foreground from the 16-color QBasic/VGA palette (0 black,
+\ 1 blue, 2 green, 3 cyan, 4 red, 5 magenta, 6 brown, 7 white; 8-15 the
+\ bright variants); BOLD and REVERSE turn one attribute on; NORMAL resets
+\ everything. The (attr!) primitive emits nothing when stdout is not a
+\ terminal, so these words are safe anywhere — piped output never contains
+\ escape bytes.
+: color ( n -- ) 0 max 15 min (attr!) ;
+: bold ( -- ) 16 (attr!) ;
+: reverse ( -- ) 17 (attr!) ;
+: normal ( -- ) 18 (attr!) ;
+
+\ --- markdown rendering ---
+\ Help pages and tutorials are Markdown; on a terminal the pager renders the
+\ common constructs — "## " headings bold with the hashes stripped, indented
+\ code/table blocks cyan, `code` spans cyan and **bold** spans bold with the
+\ markers stripped. Markdown pages opt in via (mk?) (more/list page Forth
+\ source and stay plain), and the pass only runs on a terminal, so piped
+\ output stays byte-identical to the file — tests and scripts depend on it.
+variable (mk?)                           \ render the current page as markdown?
+3 constant (mk-code)                     \ cyan: `code` spans + indented blocks
+variable (mk-b)                          \ **bold** span open?
+variable (mk-c)                          \ `code` span open?
+variable (mk-x)                          \ any attribute emitted on this line?
+: (attr+) ( n -- )  (attr!) true (mk-x) ! ;
+: (mk-flush) ( -- )                      \ end of line: reset attrs + span state
+    (mk-x) @ if 18 (attr!) then
+    false (mk-b) !  false (mk-c) !  false (mk-x) ! ;
+: (mk-hashes) ( c-addr u -- n )          \ length of the leading '#' run
+    0 swap 0 ?do over i + c@ [char] # <> if leave then 1+ loop nip ;
+: (mk-spaces) ( c-addr u -- n )          \ length of the leading blank run
+    0 swap 0 ?do over i + c@ bl <> if leave then 1+ loop nip ;
+: (mk-head?) ( c-addr u -- strip )       \ heading: hashes + a space; 0 = not one
+    2dup (mk-hashes)                     ( a u n )
+    dup 0= if nip nip exit then
+    2dup > 0= if 2drop drop 0 exit then  \ nothing after the hashes
+    rot over + c@ bl <> if 2drop 0 exit then
+    nip 1+ ;
+\ Toggle a span attribute. Closing resets, then re-opens whichever span is
+\ still live, so `code` inside **bold …** comes back bold when it closes.
+: (mk-tog) ( var on-code -- )
+    over @ if
+        drop  false swap !  18 (attr+)
+        (mk-b) @ if 16 (attr+) then
+        (mk-c) @ if (mk-code) (attr+) then
+    else
+        swap true swap !  (attr+)
+    then ;
+: (mk-span) ( c-addr u -- )              \ type with `code` / **bold** rendering
+    begin dup 0> while
+        over c@ [char] ` = if
+            (mk-c) (mk-code) (mk-tog)  1 /string
+        else over c@ [char] * =  over 2 u< 0= and  (mk-c) @ 0= and
+             dup if drop over 1+ c@ [char] * = then if
+            (mk-b) 16 (mk-tog)  2 /string
+        else
+            over c@ emit  1 /string
+        then then
+    repeat 2drop ;
+: (mk-line) ( c-addr u -- )              \ render one markdown line
+    2dup (mk-head?) ?dup if
+        16 (attr+)  /string type  (mk-flush) exit then
+    2dup (mk-spaces) 4 u< 0= if
+        (mk-code) (attr+)  type  (mk-flush) exit then
+    (mk-span) (mk-flush) ;
+
 \ --- pager: print a file fd, pausing each screenful ---
 256 constant (pg-bufsz)
 variable (pg-buf)                        \ line buffer (heap, lazy)
@@ -1308,11 +1381,12 @@ variable (pg-quit)                       \ true once the user pressed q
     (pg-buf) @ ?dup if exit then
     (pg-bufsz) allocate abort" help: out of memory" dup (pg-buf) ! ;
 : (pg-prompt) ( -- )
-    ." -- more (space=page, q=quit) --" key cr
+    reverse ." -- more (space=page, q=quit) --" normal key cr
     dup [char] q = swap [char] Q = or if  true (pg-quit) !  then
     0 (pg-row) ! ;
 : (pg-line) ( c-addr u -- )
-    type cr  1 (pg-row) +!
+    (mk?) @ (otty?) and if (mk-line) else type then
+    cr  1 (pg-row) +!
     (tty?) 0= if exit then                 \ piped: no --more-- pause, ever
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
 \ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
@@ -1321,7 +1395,7 @@ variable (pg-quit)                       \ true once the user pressed q
 \ keeps a directory fd open), so a non-local abort here would skip their cleanup.
 \ Each caller decides whether to abort.
 : page-file ( fileid -- read-error? )
-    0 (pg-row) ! false (pg-quit) !
+    0 (pg-row) ! false (pg-quit) !  false (mk?) !   \ arbitrary files: plain
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
@@ -1340,7 +1414,7 @@ variable (pg-quit)                       \ true once the user pressed q
 
 \ Page a file's preamble: top of file to the first "## " heading. Closes the fd.
 : (page-preamble) ( fileid -- read-error? )
-    0 (pg-row) ! false (pg-quit) !
+    0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ help pages are markdown
     >r
     begin
         (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
@@ -1425,7 +1499,7 @@ variable (hw-any)                          \ printed any entry from this file?
 \ `begin` heads several entries (begin…until, begin…again, begin…while…repeat).
 \ Each heading re-decides whether the lines after it print. Closes the fd.
 : (page-entry) ( fileid -- found? )
-    0 (pg-row) ! false (pg-quit) !
+    0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ help pages are markdown
     false (hw-hit) !  false (hw-any) !
     >r
     begin
@@ -1731,7 +1805,7 @@ variable (ts-any)                          \ printed any line of the wanted step
     \ recorded only when EOF is reached (an I/O error or a pager quit that
     \ never gets there leaves the previous value).
     (tty?) if page then
-    0 (pg-row) ! false (pg-quit) !
+    0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ tutorials are markdown
     1 (ts-cur) !  false (ts-any) !
     >r
     begin

@@ -11,7 +11,7 @@ At a glance:
     .r       ( n width -- )         print right-justified in a field
     u.r      ( u width -- )         unsigned, right-justified
     d.       ( d -- )               print a double (128-bit)
-    .s       ( -- )                 show the whole stack (in decimal)
+    .s       ( -- )                 show the whole stack (follows base)
     h.2      ( u -- )               print a byte as two hex digits
     h.addr   ( u -- )               print as eight hex digits
 
@@ -57,10 +57,10 @@ Print `u` as exactly eight hex digits, regardless of the current base.
 
 ## .s ( -- )
 Print the whole data stack non-destructively as `<count> bottom ... top` — the
-single most useful debugging word. Note: `.s` always prints in decimal,
-regardless of `base` (unlike `.`).
+single most useful debugging word. Follows `base`, like `.` (the count too).
 
     1 2 3 .s          \ <3> 1 2 3
+    binary 110 .s     \ <1> 110
 
 ## Pictured numeric output
 

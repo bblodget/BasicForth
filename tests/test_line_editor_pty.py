@@ -162,5 +162,21 @@ gone = send(fd, b"gw4 .\r")
 report("n on new discards the module", "? gw4" in gone.decode(errors="replace"))
 send(fd, b"bye\r"); os.close(fd)
 
+# 9) Markdown rendering is terminal-only, so it can only be tested here: on a
+#    PTY, help output is rendered — the "## " heading comes out bold with the
+#    hashes stripped, the indented example cyan, attributes reset by line end.
+#    (The pipe suite asserts the complementary half: piped output stays plain.)
+os.environ["BASICFORTH_DOCS"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "Language-Reference")
+fd = spawn()
+out = send(fd, b"help allot\r", 0.7)
+txt = out.decode(errors="replace")
+report("help heading bold, hashes stripped",
+       "\x1b[1mallot" in txt and "## allot" not in txt)
+report("indented example cyan", "\x1b[36m" in txt)
+report("attributes reset", "\x1b[0m" in txt)
+send(fd, b"\r")                # continue past a pager pause, or just re-prompt
+send(fd, b"bye\r"); os.close(fd)
+
 print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 sys.exit(1 if failed else 0)

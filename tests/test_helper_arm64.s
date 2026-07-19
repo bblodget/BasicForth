@@ -199,6 +199,10 @@ platform_page:
 platform_at_xy:
     RET
 
+.global platform_text_attr
+platform_text_attr:
+    RET
+
 .global platform_screen_width
 platform_screen_width:
     MOV X0, #80

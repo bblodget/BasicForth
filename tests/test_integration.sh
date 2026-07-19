@@ -634,6 +634,10 @@ assert_output "bin output"         ': bin 2 base ! ; bin #10 . decimal'         
 assert_output "bin % prefix"       '%1010 .'                                      "10"
 assert_output "binary output"      'binary #10 . decimal'                         "1010"
 assert_output "binary input"       'binary 1011 decimal .'                        "11"
+assert_output ".s follows BASE"    'binary 110 .s decimal'                        "<1> 110"
+assert_output ".s hex"             '30 hex .s decimal'                            "<1> 1E"
+assert_output ".s decimal format"  '1 2 3 .s'                                     "<3> 1 2 3"
+assert_output ".s empty stack"     '.s'                                           "<0>"
 assert_output "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
 assert_output "$ prefix decimal"   '$FF .'                                        "255"
 assert_output "# prefix hex"       'hex #255 . decimal'         "FF"
@@ -2898,6 +2902,27 @@ if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
 else
     printf "  ${RED}FAIL${NC}  help begin shows all three begin entries\n"
     printf "    Got %s '## begin' headings\n" "$(echo "$begin_out" | grep -c '^## begin')"; ((failed++))
+fi
+
+# Markdown rendering is tty-only: piped help output must stay byte-identical
+# to the file — no escape bytes, and the ## / `` / ** markers intact. (The
+# rendered path is exercised by the PTY suite on a real terminal.)
+esc_out=$(printf 'help spin\nhelp Widgets\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$esc_out" != *$'\x1b'* && "$esc_out" == *'## spin ( n -- )'* ]]; then
+    printf "  ${GREEN}PASS${NC}  piped help: no escape bytes, markdown intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  piped help: no escape bytes, markdown intact\n"; ((failed++))
+fi
+
+# The attribute words themselves are silent on a piped stdout (the primitive
+# checks isatty), so they are safe in scripts and filters.
+attr_out=$(printf '10 color bold reverse ." visible" normal cr bye\n' | \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
+if [[ "$attr_out" != *$'\x1b'* && "$attr_out" == *"visible"* ]]; then
+    printf "  ${GREEN}PASS${NC}  color/bold/reverse/normal: silent when piped\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  color/bold/reverse/normal: silent when piped\n"; ((failed++))
 fi
 
 # notes.txt is not a topic

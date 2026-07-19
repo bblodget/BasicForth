@@ -614,34 +614,33 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   - Retire `man` and `topics`; keep `apropos`. Sweep remaining `man <topic>`
     references in docs/ root pages + Manual when the words land
     (Language-Reference already says `help ...`).
-- [ ] **Markdown-aware pager** — the help system is written in Markdown;
-  render it: headings bold, `**bold**`, `` `code` `` and indented blocks
-  set off (color or dim). Two layers:
-  - *Platform*: text-attribute primitives beside `page`/`at-xy` — semantic
-    requests (color code, bold/reverse/reset), each platform mapping them
-    (ANSI on Linux; a future framebuffer/bare-metal target maps the same
-    codes to attributes). Prior art: BareMetalForth's `sys_set_color`
-    (platform_linux.asm) takes a VGA color code 0–15 and emits ANSI — the
-    right shape, but it only mapped 6 of 16 colors and had no bold; do the
-    full palette + bold this time, and reset attributes on exit like it did.
-  - *Forth*: the render pass lives in the pager's `(pg-line)` — one choke
-    point all help/tutorial output flows through; no markdown knowledge in
-    assembly. MUST be gated on `(tty?)` (like the `--more--` pause) so piped
-    output stays byte-identical plain text — tests and scripts depend on it.
+- [x] **Markdown-aware pager** (branch markdown-pager, 2026-07-19) — help
+  pages and tutorials render on a terminal: headings bold (hashes
+  stripped), indented blocks + `` `code` `` cyan, `**bold**` bold,
+  `--more--` bar reverse video. Two layers, as planned:
+  - *Platform*: one call `platform_text_attr` (semantic codes: 0-15 =
+    VGA/QBasic color — full 16, unlike BareMetalForth's 6 — 16 bold,
+    17 reverse, 18 reset), ANSI on Linux, self-gated on isatty(stdout);
+    `platform_exit` resets attributes. Forth words: `color`/`bold`/
+    `reverse`/`normal` (+ `(attr!)` primitive).
+  - *Forth*: render pass `(mk-line)` in the `(pg-line)` choke point, gated
+    on the new `(otty?)` (stdout tty — NOT `(tty?)`/stdin, so
+    `script <in >tty` still renders and `tty> | pipe` never does) and on
+    `(mk?)` (help/tutorial pages opt in; `more`/`list` page Forth source
+    and stay plain). Piped output byte-identical, enforced by tests both
+    ways (pipe suite: no ESC bytes; PTY suite: rendering present).
 - [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
   annoying): move the fix's later-defined dependencies up to just before
   the edited word; move-to-end when the word has no callers. Design in
   Module_Architecture.md ("Forward references from a mutation").
 - [ ] **Topic lessons** — short single-topic tutorials (`lesson`?); first:
   arrays (`create`/`allot`/`cells`), which also documents `allot`.
-- [ ] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life): the asm
-  primitive's print routine hard-codes divide-by-10, while `.` is redefined
-  in core.fs with `<# #S #>` and respects BASE — so `2 base !  6 .s` shows
-  `6` where `.` shows `110`. Standard Forths' `.S` follows BASE. Fix:
-  redefine `.s` in core.fs base-aware (depth + non-destructive stack walk
-  need `depth`/`pick` or direct sp0/DSP access). Audit siblings while
-  there: any other asm printer that bypasses BASE (`.` primitive is
-  shadowed; check H.2/H.ADDR are intentional hex).
+- [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
+  2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
+  `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows
+  BASE too). Sibling audit: `u. .r u.r` already BASE-aware; `dump`/`h.2`/
+  `h.addr` intentionally hex (and save/restore BASE); asm error-message
+  line numbers deliberately decimal.
 - Rejected: shelling out to the real `man` (our docs are markdown; the
   board may not have man/less; our pager works everywhere).
 
@@ -657,9 +656,8 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   docs/Shelling_Out.md.
 - [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
   `platform_key`), so unsaved work can be lost silently.
-- [ ] `man` doesn't map hyphens↔underscores, so some cross-references in the
-  docs name topics that don't resolve (e.g. `man help-system` vs
-  `Help_System.md`).
+- [x] ~~`man` doesn't map hyphens↔underscores~~ — obsolete: `man` was retired
+  in v0.11.0 and its replacement `help <topic>` folds case AND `-`/`_`.
 
 ---
 

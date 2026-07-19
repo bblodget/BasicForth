@@ -20,6 +20,10 @@ At a glance:
     screen-height ( -- n )        terminal height in rows
     cursor-off  ( -- )            hide the cursor
     cursor-on   ( -- )            show it again
+    color       ( n -- )          text color (0-15, QBasic palette)
+    bold        ( -- )            bold text on
+    reverse     ( -- )            reverse video on
+    normal      ( -- )            reset color/bold/reverse
     ms          ( n -- )          sleep n milliseconds
     ms@         ( -- n )          monotonic milliseconds counter
     key_up key_down key_left key_right key_escape
@@ -86,6 +90,30 @@ Hide the text cursor (useful while drawing).
 
 ## cursor-on ( -- )
 Show the text cursor again.
+
+## color ( n -- )
+Set the text (foreground) color from the 16-color QBasic/VGA palette: 0 black,
+1 blue, 2 green, 3 cyan, 4 red, 5 magenta, 6 brown, 7 white, and 8–15 the
+bright variants (14 is yellow, 15 bright white). Stays in effect until
+changed or `normal`. Like all the attribute words, it emits nothing when
+output is piped or redirected, so scripts stay clean.
+
+    \ 4 color ." warning!" normal cr
+
+## bold ( -- )
+Turn on bold text. `normal` turns it off.
+
+    \ bold ." heading" normal cr
+
+## reverse ( -- )
+Turn on reverse video (swap foreground and background) — good for status bars
+and highlights. `normal` turns it off.
+
+    \ reverse ."  -- score: 42 --  " normal cr
+
+## normal ( -- )
+Reset all text attributes: color, bold, and reverse. BasicForth also resets
+attributes automatically on exit.
 
 ## ms ( n -- )
 Pause for `n` milliseconds.
