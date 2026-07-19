@@ -186,7 +186,7 @@ _start:
 .Leenv_done:
 
     // Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories for
-    // the help system: man / topics / apropos). Same pattern as the PATH walk.
+    // the help system: help / tutorials / apropos). Same pattern as the PATH walk.
     LDR X0, [SP]
     ADD X0, X0, #2
     LSL X0, X0, #3

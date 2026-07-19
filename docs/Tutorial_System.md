@@ -6,14 +6,14 @@ and then **returns to the prompt**, so you can type the examples yourself before
 moving on with `next`.
 
 A tutorial is just one of the Markdown files in a `BASICFORTH_DOCS` section — the
-same files `man` and `topics` use. No special file format: each lesson is split
+same files `help` browses. No special file format: each lesson is split
 into steps by its `## ` headings.
 
 ## Words
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `tutorial` | ( "name" ["step"] -- ) | start tutorial `<name>` (resolved case-insensitively across the docs dirs, like `man`) at step 1 — or at an optional step: a number, or the name of a `value` holding one. With no name, prints a hint and the `topics` list |
+| `tutorial` | ( "name" ["step"] -- ) | start tutorial `<name>` (resolved case-insensitively across the docs dirs, like a `help` topic) at step 1 — or at an optional step: a number, or the name of a `value` holding one. With no name, prints a hint and the `tutorials` list |
 | `next` | ( -- ) | show the next step |
 | `back` | ( -- ) | show the previous step |
 | `step` | ( ["step"] -- ) | replay the current step (handy after running something that drew all over the screen); with a number or a `value` name, jump straight there — `step 7`, `step tstep` |
@@ -37,7 +37,7 @@ A short intro.
 ```
 
 walks as three steps: the intro, then *Adding*, then *Defining a word*. The same
-file still reads fine under `man Lesson` — the headings are ordinary Markdown.
+file still reads fine under `help` — the headings are ordinary Markdown.
 
 ## Using it
 
@@ -61,7 +61,7 @@ file still reads fine under `man Lesson` — the headings are ordinary Markdown.
 > back                    \ review the previous step
 ```
 
-The name is the file's base name without `.md` (what `topics` shows), matched
+The name is the file's base name without `.md` (what `tutorials` shows), matched
 case-insensitively — `tutorial Snake`, `tutorial snake`.
 
 Each step is shown on a **cleared screen** (interactive sessions only — piped
@@ -84,8 +84,8 @@ exist, BasicForth says so rather than failing silently.
   Split a long idea across two `## ` steps.
 - **Make examples runnable and short**, with the expected result in a trailing
   `\ comment`, exactly as in the Language Reference pages.
-- **Number lesson files** (`01-…`, `02-…`) so `topics` lists them in order
-  (`topics` sorts names within each section).
+- **Number lesson files** (`01-…`, `02-…`) so `tutorials` lists them in order
+  (`tutorials` sorts names within each section).
 - A lesson file lives in a `BASICFORTH_DOCS` section just like a reference page;
   a common layout is a `Tutorial` section alongside `Language-Reference`:
 
@@ -126,6 +126,6 @@ just replays.
 
 ## See Also
 
-- `docs/Help_System.md` — `man` / `topics` / `apropos`, which share the
+- `docs/Help_System.md` — `help` / `tutorials` / `apropos`, which share the
   `BASICFORTH_DOCS` sections and file-resolution that tutorials use.
 - `docs/BasicForth_Manual.md` — the "Built-in Help" section.

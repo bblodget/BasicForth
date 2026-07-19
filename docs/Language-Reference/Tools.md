@@ -14,8 +14,10 @@ At a glance:
     (system)       ( c-addr u -- status )  run a command, return its status
 
     Browsing the docs (BASICFORTH_DOCS):
-    topics         ( -- )             list the help topics by section
-    man <topic>    ( "topic" -- )     page a topic file
+    help           ( -- )             list the help topics
+    help <topic>   ( "topic" -- )     print a topic's summary
+    help <word>    ( "word" -- )      print a word's reference entries
+    tutorials      ( -- )             list the interactive tutorials
     apropos <key>  ( "keyword" -- )   which topics mention a keyword?
 
     Tutorials (one step at a time, at the REPL):
@@ -68,25 +70,33 @@ status or are building the command in code.
 These read the `*.md` topics in the directories named by `BASICFORTH_DOCS`. See
 docs/Help_System.md.
 
-## topics ( -- )
-List the available help topics, grouped by section.
+## help ( ["name"] -- )
+The front door to the reference manual. Three forms:
 
-## man ( "topic" -- )
-Find `<topic>.md` (case-insensitive) and page it a screenful at a time
-(space = next page, q = quit).
+    help              \ list every topic (tutorials get their own lister)
+    help stack        \ a topic: print its summary and at-a-glance table
+    help allot        \ a word: print that word's reference entry
+
+A topic name matches its `.md` file case-insensitively, folding `-` and `_`
+(`help help-system` finds `Help_System.md`). Anything that isn't a topic is
+looked up as a word across the reference pages — and every entry naming it
+is shown, so `help begin` prints all three `begin …` loop forms.
+
+## tutorials ( -- )
+List the interactive tutorials — start one with `tutorial <name>`.
 
 ## apropos ( "keyword" -- )
 List the topics whose text contains `<keyword>`, each labelled with its section.
 
 ## Tutorials
 
-An interactive walk through a lesson file, one step at a time — unlike `man`,
-which pages a whole file. See docs/Tutorial_System.md.
+An interactive walk through a lesson file, one step at a time — unlike `help`,
+which prints and returns. See docs/Tutorial_System.md.
 
 ## tutorial ( "name" ["step"] -- )
 Start tutorial `<name>` (resolved case-insensitively across the docs dirs) at
 step 1 — or at an optional step number. With no name, prints a hint and the
-available topics.
+tutorial list.
 
     tutorial snake        \ step 1 of the Snake lesson appears
 
@@ -109,6 +119,6 @@ Leave the tutorial: forgets which step `next` would show, nothing else —
 
 - `help modules` — `save` / `load` / `edit` and friends (moved from this page).
 - docs/See.md — how `see` reconstructs source.
-- docs/Help_System.md — `topics`, `man`, `apropos`, and sections.
+- docs/Help_System.md — `help`, `tutorials`, `apropos`, and sections.
 - docs/Tutorial_System.md — the tutorial system, including writing lessons.
 - docs/Shelling_Out.md — `sh` / `(system)`: running Linux programs.

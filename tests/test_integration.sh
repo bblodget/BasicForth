@@ -632,6 +632,8 @@ assert_output "hex $ prefix"       ': hex 16 base ! ; $FF . decimal'            
 assert_output "dec # in hex"       'hex #100 . decimal'                         "64"
 assert_output "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
 assert_output "bin % prefix"       '%1010 .'                                      "10"
+assert_output "binary output"      'binary #10 . decimal'                         "1010"
+assert_output "binary input"       'binary 1011 decimal .'                        "11"
 assert_output "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
 assert_output "$ prefix decimal"   '$FF .'                                        "255"
 assert_output "# prefix hex"       'hex #255 . decimal'         "FF"
@@ -2125,8 +2127,9 @@ fi
 # Without a current module file there is nothing to open.
 bn_out=$( printf 'edit\nbye\n' \
     | EDITOR=true BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
-if [[ "$bn_out" == *"edit: no current file"* ]]; then
-    printf "  ${GREEN}PASS${NC}  bare edit without a module explains itself\n"; ((passed++))
+if [[ "$bn_out" == *"edit: no current file"* \
+   && "$bn_out" == *"save <name> to start one, or load <name>"* ]]; then
+    printf "  ${GREEN}PASS${NC}  bare edit without a module suggests save and load\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  bare edit without a module\n    Got: %q\n" "$bn_out"; ((failed++))
 fi
@@ -2247,10 +2250,11 @@ printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$ls_dir/mod.fs"
 ls_out=$( cd "$ls_dir" && printf 'list\n: extra 5 ;\nlist\nbye\nn\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ls_dir"
-ls_nf=$( printf 'list\nbye\n' | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
+ls_nf=$( printf 'list\nreload\nbye\n' | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
 if [[ "$ls_out" == *": mid leaf 10 * ;"* && "$ls_out" == *"unsaved changes"* \
-      && "$ls_nf" == *"list: no current file"* ]]; then
-    printf "  ${GREEN}PASS${NC}  list pages the module file (dirty note, no-file message)\n"; ((passed++))
+      && "$ls_nf" == *"list: no current file — save <name> to start one, or load <name>"* \
+      && "$ls_nf" == *"reload: no current file — save <name> to start one, or load <name>"* ]]; then
+    printf "  ${GREEN}PASS${NC}  list pages the module file (dirty note; list/reload no-file guidance)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  list\n    Got: %q\n    No-file: %q\n" "$ls_out" "$ls_nf"; ((failed++))
 fi
@@ -2786,15 +2790,32 @@ fi
 
 
 # =========================================================================
-section "Help system (man / topics / apropos)"
+section "Help system (help / tutorials / apropos)"
 # =========================================================================
 
 # Build a throwaway docs directory with two .md topics plus a non-.md file
-# that must be ignored.
+# that must be ignored. Widgets.md follows the reference-page convention:
+# a preamble (title + intro, what `help widgets` prints) up to the first
+# "## " heading, then one "## <word> ( effect )" entry block per word.
 docs_dir="$(mktemp -d)"
-printf '# Widgets\nThe widget subsystem and its gears.\n' > "$docs_dir/Widgets.md"
-printf '# Sound\nNothing relevant in this one.\n'         > "$docs_dir/Sound.md"
-printf 'ignore me\n'                                      > "$docs_dir/notes.txt"
+cat > "$docs_dir/Widgets.md" <<'EOF'
+# Widgets
+The widget subsystem and its gears.
+
+## spin ( n -- )
+Spin the widget n times, greased by gears.
+
+    3 spin
+
+## grease oil ( -- )
+Lubricate the widget works.
+
+## spin faster ( -- )
+Spin at full speed.
+EOF
+printf '# Sound\nNothing relevant in this one.\n\n## oil ( -- )\nOil the speaker bearings.\n' > "$docs_dir/Sound.md"
+printf 'ignore me\n'                              > "$docs_dir/notes.txt"
+printf '# Big Topic\nfolded topic body here.\n'   > "$docs_dir/Big_Topic.md"
 
 # docs_check NAME INPUT EXPECTED — run with BASICFORTH_DOCS pointed at docs_dir
 docs_check() {
@@ -2817,21 +2838,75 @@ docs_check() {
     fi
 }
 
-docs_check "topics lists .md topics"       "topics" "Widgets"
-docs_check "topics ignores non-.md"        "topics" "Sound"
-docs_check "man pages a topic"             "man Widgets" "widget subsystem and its gears"
-docs_check "man is case-insensitive"       "man widgets" "widget subsystem and its gears"
-docs_check "man on missing topic"          "man nope" "no help for nope"
+docs_check "help lists .md topics"         "help" "Widgets"
+docs_check "help lists every topic"        "help" "Sound"
+docs_check "help footer names both forms"  "help" "help <word>"
+docs_check "help points at tutorials"      "help" "tutorials"
+docs_check "help <topic> prints preamble"  "help Widgets" "widget subsystem and its gears"
+docs_check "help topic is case-insensitive" "help widgets" "widget subsystem and its gears"
+docs_check "help topic folds - and _"      "help big-topic" "folded topic body here"
+docs_check "help <word> prints its entry"  "help spin" "Spin the widget n times"
+docs_check "help word is case-insensitive" "help SPIN" "Spin the widget n times"
+docs_check "help word entry shows heading" "help spin" "## spin ( n -- )"
+docs_check "help shared heading, 1st word" "help grease" "Lubricate the widget works"
+docs_check "help shared heading, 2nd word" "help oil" "Lubricate the widget works"
+docs_check "help on missing name"          "help nope" "no help for nope"
+docs_check "stack-effect tokens are not words" "help n" "no help for n"
+docs_check "man is retired"                "man Widgets" "? man"
+docs_check "topics is retired"             "topics" "? topics"
 docs_check "apropos finds a match"         "apropos gears" "Widgets"
 docs_check "apropos is case-insensitive"   "apropos GEARS" "Widgets"
 
+# help <topic> stops at the first "## " heading (preamble only, no entries)
+pre_out=$(printf 'help Widgets\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$pre_out" == *"widget subsystem"* && "$pre_out" != *"Spin the widget"* ]]; then
+    printf "  ${GREEN}PASS${NC}  help <topic> stops at the first entry\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help <topic> stops at the first entry\n"
+    printf "    Got:      %s\n" "$(echo "$pre_out" | head -6)"; ((failed++))
+fi
+
+# help <word> prints only matching entry blocks (heading to next "## "),
+# but ALL of them — `spin` heads two entries, like `begin` in the real docs
+ent_out=$(printf 'help spin\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$ent_out" == *"3 spin"* && "$ent_out" == *"Spin at full speed"* \
+   && "$ent_out" != *"Lubricate"* && "$ent_out" != *"widget subsystem"* ]]; then
+    printf "  ${GREEN}PASS${NC}  help <word> prints every matching entry, only those\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help <word> prints every matching entry, only those\n"
+    printf "    Got:      %s\n" "$(echo "$ent_out" | head -10)"; ((failed++))
+fi
+
+# ...including entries on different pages: oil is in Widgets.md AND Sound.md
+oil_out=$(printf 'help oil\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
+if [[ "$oil_out" == *"Lubricate"* && "$oil_out" == *"speaker bearings"* ]]; then
+    printf "  ${GREEN}PASS${NC}  help <word> gathers entries across pages\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help <word> gathers entries across pages\n"
+    printf "    Got:      %s\n" "$(echo "$oil_out" | head -8)"; ((failed++))
+fi
+
+# The real-docs case that motivated multi-entry help: `help begin` must show
+# all three indefinite-loop entries from Language-Reference/Loops.md
+begin_out=$(printf 'help begin\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 2 $FORTH 2>&1)
+if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
+    printf "  ${GREEN}PASS${NC}  help begin shows all three begin entries\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help begin shows all three begin entries\n"
+    printf "    Got %s '## begin' headings\n" "$(echo "$begin_out" | grep -c '^## begin')"; ((failed++))
+fi
+
 # notes.txt is not a topic
-notes_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+notes_out=$(printf 'help\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
 if [[ "$notes_out" != *"notes"* ]]; then
-    printf "  ${GREEN}PASS${NC}  topics excludes notes.txt\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  help excludes notes.txt\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  topics excludes notes.txt\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help excludes notes.txt\n"; ((failed++))
 fi
 
 # apropos must not list a file that lacks the keyword
@@ -2844,23 +2919,23 @@ else
 fi
 
 # Unset BASICFORTH_DOCS — every command reports it gracefully
-unset_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+unset_out=$(printf 'help\nhelp stack\ntutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     env -u BASICFORTH_DOCS timeout 2 $FORTH 2>&1)
-if [[ "$unset_out" == *"BASICFORTH_DOCS not set"* ]]; then
-    printf "  ${GREEN}PASS${NC}  topics with no BASICFORTH_DOCS\n"; ((passed++))
+if [[ $(echo "$unset_out" | grep -c "BASICFORTH_DOCS not set") -eq 3 ]]; then
+    printf "  ${GREEN}PASS${NC}  help/tutorials with no BASICFORTH_DOCS\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  topics with no BASICFORTH_DOCS\n"
-    printf "    Got:      %s\n" "$(echo "$unset_out" | head -3)"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help/tutorials with no BASICFORTH_DOCS\n"
+    printf "    Got:      %s\n" "$(echo "$unset_out" | head -4)"; ((failed++))
 fi
 
 # Long docs path must not overflow the internal path buffer. Pad the directory
 # with resolvable "/." segments so the directory still opens (the kernel/open
 # clamp keeps it valid) while the segment length exceeds the path-build buffer.
-# Before the bounds check this corrupted the dictionary; now man/apropos just
+# Before the bounds check this corrupted the dictionary; now help/apropos just
 # find nothing and the REPL stays alive.
 long_docs="$docs_dir"
 while [ "${#long_docs}" -lt 600 ]; do long_docs="$long_docs/."; done
-long_out=$(printf 'man Widgets\napropos gears\n42 .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
+long_out=$(printf 'help Widgets\nhelp spin\napropos gears\n42 .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$long_docs" timeout 2 $FORTH 2>&1)
 long_status=$?
 if [ "$long_status" -eq 0 ] && [[ "$long_out" == *"42"* ]] && [[ "$long_out" == *"Goodbye!"* ]]; then
@@ -2870,32 +2945,49 @@ else
     printf "    exit %s, output: %s\n" "$long_status" "$(echo "$long_out" | head -3)"; ((failed++))
 fi
 
-# Section grouping: topics groups topics under their directory (section) name,
-# and apropos labels each hit with its section. Use two named subdirectories
-# plus an empty one (no .md → no header).
+# Section grouping: help groups topics under their directory (section) name,
+# and apropos labels each hit with its section. A directory named "Tutorial"
+# is excluded from bare help (it belongs to `tutorials`); an empty section
+# (no .md) prints no header.
 sec_base="$(mktemp -d)"
-mkdir -p "$sec_base/RefSec" "$sec_base/TutSec" "$sec_base/EmptySec"
+mkdir -p "$sec_base/RefSec" "$sec_base/Tutorial" "$sec_base/EmptySec"
 printf '# Alpha\nwidget gear\n' > "$sec_base/RefSec/Alpha.md"
 printf '# Beta\nmore widget\n'  > "$sec_base/RefSec/Beta.md"
-printf '# Lesson\nnothing\n'    > "$sec_base/TutSec/Lesson.md"
+printf '# Lesson\nnothing\n'    > "$sec_base/Tutorial/Lesson.md"
 printf 'not a topic\n'          > "$sec_base/EmptySec/readme.txt"
-sec_docs="$sec_base/RefSec:$sec_base/TutSec:$sec_base/EmptySec"
+sec_docs="$sec_base/RefSec:$sec_base/Tutorial:$sec_base/EmptySec"
 
-sec_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+sec_out=$(printf 'help\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
-if [[ "$sec_out" == *"RefSec"* ]] && [[ "$sec_out" == *"TutSec"* ]] \
-   && [[ "$sec_out" == *"Alpha"* ]] && [[ "$sec_out" == *"Lesson"* ]]; then
-    printf "  ${GREEN}PASS${NC}  topics groups under section headers\n"; ((passed++))
+if [[ "$sec_out" == *"RefSec"* ]] && [[ "$sec_out" == *"Alpha"* ]] \
+   && [[ "$sec_out" == *"Beta"* ]]; then
+    printf "  ${GREEN}PASS${NC}  help groups under section headers\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  topics groups under section headers\n"
+    printf "  ${RED}FAIL${NC}  help groups under section headers\n"
     printf "    Got:      %s\n" "$(echo "$sec_out" | head -6)"; ((failed++))
+fi
+
+# The Tutorial section is bare help's one exclusion — `tutorials` lists it
+if [[ "$sec_out" != *"Lesson"* ]]; then
+    printf "  ${GREEN}PASS${NC}  help excludes the Tutorial section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help excludes the Tutorial section\n"; ((failed++))
+fi
+tuts_out=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$tuts_out" == *"Lesson"* ]] && [[ "$tuts_out" == *"tutorial <name>"* ]] \
+   && [[ "$tuts_out" != *"Alpha"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists only the Tutorial section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorial section\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -4)"; ((failed++))
 fi
 
 # An empty section (no .md) must not print a header
 if [[ "$sec_out" != *"EmptySec"* ]]; then
-    printf "  ${GREEN}PASS${NC}  topics omits empty section header\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  help omits empty section header\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  topics omits empty section header\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help omits empty section header\n"; ((failed++))
 fi
 
 # apropos labels each hit with its section
@@ -2908,16 +3000,17 @@ else
     printf "    Got:      %s\n" "$(echo "$aps_out" | head -4)"; ((failed++))
 fi
 
-# topics sorts names alphabetically within a section, regardless of the order
-# the filesystem returns them. Create them out of order and expect them sorted.
+# help sorts names alphabetically within a section (regardless of filesystem
+# order) and lays them out three to a row, aligned on a fixed field width.
 sort_base="$(mktemp -d)"
-for n in Zebra Apple Mango; do printf '# %s\n' "$n" > "$sort_base/$n.md"; done
-sort_out=$(printf 'topics\n' | BASICFORTH_PATH="$FORTH_LIB" \
+for n in Zebra Apple Mango Kiwi; do printf '# %s\n' "$n" > "$sort_base/$n.md"; done
+sort_out=$(printf 'help\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sort_base" timeout 2 $FORTH 2>&1)
-if [[ "$sort_out" == *"Apple Mango Zebra"* ]]; then
-    printf "  ${GREEN}PASS${NC}  topics sorts names within a section\n"; ((passed++))
+if echo "$sort_out" | grep -Eq '^  Apple +Kiwi +Mango$' \
+   && echo "$sort_out" | grep -Eq '^  Zebra$'; then
+    printf "  ${GREEN}PASS${NC}  help sorts names into three columns\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  topics sorts names within a section\n"
+    printf "  ${RED}FAIL${NC}  help sorts names into three columns\n"
     printf "    Got:      %s\n" "$(echo "$sort_out" | head -4)"; ((failed++))
 fi
 rm -rf "$sort_base"
@@ -2925,19 +3018,46 @@ rm -rf "$sort_base"
 rm -rf "$sec_base"
 
 # A "topic" that is actually a directory: open() succeeds but read() returns
-# EISDIR. man must report it via page-file's "(read error)" and the REPL must
-# keep running afterward — a regression guard for page-file no longer aborting
-# through (man-in) (which would skip its directory-fd cleanup and leak it).
+# EISDIR. help must report it via "(read error)" and the REPL must keep
+# running afterward — a regression guard for the preamble pager not aborting
+# through (ht-in) (which would skip its directory-fd cleanup and leak it).
 mkdir "$docs_dir/Brokendir.md"
-brk_out=$(printf 'man Brokendir\n9 9 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
+brk_out=$(printf 'help Brokendir\n9 9 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$docs_dir" timeout 2 $FORTH 2>&1)
 if [[ "$brk_out" == *"(read error)"* && "$brk_out" == *"18"* ]]; then
-    printf "  ${GREEN}PASS${NC}  man on a directory-topic reports read error, REPL survives\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  help on a directory-topic reports read error, REPL survives\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  man on a directory-topic (page-file cleanup)\n    Got: %s\n" "$(echo "$brk_out" | head -5)"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help on a directory-topic (pager cleanup)\n    Got: %s\n" "$(echo "$brk_out" | head -5)"; ((failed++))
 fi
 
 rm -rf "$docs_dir"
+
+# Reference coverage audit: every user-facing word in the live dictionary
+# must have a "## " heading entry in some docs/Language-Reference page —
+# the `help <word>` contract. Parenthesized names are internal by
+# convention; the exclusion list is the eight deliberate internals.
+# (set -f: the dictionary contains `*` and `*/`, which must not glob.)
+audit_words=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
+    | sed -n '2p' | sed 's/ ok *$//')
+audit_heads=$(awk '/^## /{ for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }' \
+    "$REPO_ROOT"/docs/Language-Reference/*.md | sort -u)
+audit_missing=""
+set -f
+for w in $audit_words; do
+    case "$w" in \(*) continue;; esac
+    lw=$(printf '%s' "$w" | tr 'A-Z' 'a-z')
+    case " hld lit >digit >digit? fill32 einval page-file chdir " in
+        *" $lw "*) continue;;
+    esac
+    printf '%s\n' "$audit_heads" | grep -qxF -e "$lw" || audit_missing="$audit_missing $w"
+done
+set +f
+if [ -n "$audit_words" ] && [ -z "$audit_missing" ]; then
+    printf "  ${GREEN}PASS${NC}  every word has a Language-Reference entry\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  every word has a Language-Reference entry\n"
+    printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
+fi
 
 # =========================================================================
 section "Interactive tutorial (tutorial / next / back)"
@@ -3026,16 +3146,16 @@ else
     printf "    Got escape bytes in: %s\n" "$(echo "$tut_esc" | cat -v | head -3)"; ((failed++))
 fi
 
-# The --more-- pager pause is interactive-only: a piped man of a file longer
-# than the screen must print every line straight through, with no pause
-# swallowing input and no "-- more" prompt in the output.
+# The --more-- pager pause is interactive-only: a piped help of a file longer
+# than the screen (all preamble — no "## " heading) must print every line
+# straight through, with no pause swallowing input and no "-- more" prompt.
 for i in $(seq 1 40); do echo "filler line $i"; done > "$tut_dir/Longpage.md"
-tut_pager=$(printf 'man Longpage\n' | BASICFORTH_PATH="$FORTH_LIB" \
+tut_pager=$(printf 'help Longpage\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$tut_dir" timeout 2 $FORTH 2>&1)
 if [[ "$tut_pager" == *"filler line 40"* && "$tut_pager" != *"-- more"* ]]; then
-    printf "  ${GREEN}PASS${NC}  piped man never pauses at --more--\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  piped help never pauses at --more--\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  piped man never pauses at --more--\n"
+    printf "  ${RED}FAIL${NC}  piped help never pauses at --more--\n"
     printf "    Got:      %s\n" "$(echo "$tut_pager" | tail -3)"; ((failed++))
 fi
 

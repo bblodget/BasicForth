@@ -132,7 +132,7 @@ at `dict_dup` (tail, link=0) and ends at the last DEFWORD entry
 - **File access**: open-file, create-file, close-file, read-file, read-line, file-size, rename-file
 - **Dynamic memory**: allocate, free, resize (heap separate from the dictionary, via mmap)
 - **Module persistence**: save \<name\> (write the module's definitions to a file), load \<file\> (open a module), new (clear it), reload (re-read the current file), -session (forget the module's words), see (print a word's most recent source)
-- **Help system**: topics (list docs topics), man (page a topic's .md file), apropos (search topics for a keyword) — docs found via BASICFORTH_DOCS
+- **Help system**: help (list topics / topic summary / one word's entry), tutorials (list lessons), apropos (keyword search) — docs found via BASICFORTH_DOCS
 - **Return stack**: >r, r>, r@ (COMPILE_ONLY)
 - **Compiler**: :, ;, immediate, ', evaluate, included
 - **Control flow**: if, then, else, begin, until, again, while, repeat, recurse, do, loop, +loop, i, j, unloop, leave (IMMEDIATE+COMPILE_ONLY)

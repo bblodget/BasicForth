@@ -55,17 +55,15 @@ a few words.
 
 ## Interactive Help System (man / perldoc style)
 
-**Done — docs browser:** `topics`, `man <topic>`, and `apropos <keyword>` read
-the markdown files in `$BASICFORTH_DOCS` so you can read `BasicForth_Manual.md`
-and other topics from the REPL. See `docs/Help_System.md`.
+**Done — docs browser:** `help` (topic listing / topic summary / per-word
+entry), `tutorials`, and `apropos <keyword>` read the markdown files in
+`$BASICFORTH_DOCS` from the REPL. See `docs/Help_System.md`.
 
-**Still wanted — per-word help (Part A):** an interactive way to look up a
-defined word. Write inline documentation blocks in the `.fs` source files that a
-parser can extract into a help store, then a word like `help <word>` prints that
-word's stack effect and description at the REPL. Inspired by the Linux `man`
-command and Perl's POD. Open questions: where the help text lives (parsed into
-memory at load time vs. read on demand from the source files), and the markup
-for the doc blocks.
+**Done — per-word help (Part A):** `help <word>` prints one word's stack
+effect, description, and example straight from its Language-Reference entry
+(the `## word ( effect )` block). The open question resolved itself: the help
+text lives in the reference pages, read on demand — no doc blocks in the `.fs`
+sources, no parse-at-load store.
 
 ## Interactive Line Editor + EDIT (recall and re-edit definitions)
 

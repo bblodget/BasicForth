@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### `help` — the reference manual, from the prompt
+- **New word `help`**, replacing `man` and `topics` (both retired; `apropos`
+  is unchanged). Three forms:
+  - `help` — every topic, three aligned columns per section, with a two-line
+    footer showing the other forms.
+  - `help <topic>` — the topic's **summary**: its page preamble (title, short
+    intro, at-a-glance table), not the whole file. Topic names fold case and
+    `-`/`_`, so `help help-system` finds `Help_System.md`.
+  - `help <word>` — that word's reference entries: every `## word ( effect )`
+    block naming it, so `help begin` shows all three loop forms and shared
+    headings show once per page. Works for punctuation words too
+    (`help ;`, `help (`, `help \`), and for shared headings
+    (`help stdout` → the `stdin stdout stderr` entry).
+- **New word `tutorials`** lists the interactive tutorials (the Tutorial
+  section is left out of bare `help` and pointed there); bare `tutorial`
+  now shows it.
+- Docs swept for the new interface: Help_System.md rewritten, Manual's
+  "Built-in Help" section redone, `man <topic>` cross-references updated
+  everywhere (including both tutorials — Snake also pointed at the renamed
+  Terminal page).
+- **New word `binary`** switches `base` to 2, beside `decimal` and `hex`
+  (the name `bin` was taken by the file-access modifier).
+- **Coverage is now tested**: the integration suite audits the live `words`
+  list against the Language-Reference `## ` headings, so a new word without
+  a reference entry (or a heading `help <word>` can't find) fails the build.
+- `list`, bare `edit`, and `reload` with no current file now give the same
+  guidance — `save <name> to start one, or load <name>` — instead of three
+  different messages (only one of which mentioned `load`, none `save`).
+
 ### Language Reference: complete coverage, at-a-glance tables
 - **Every user-facing word now has a reference entry.** A words-vs-headings
   audit found 79 gaps; all are closed (the survivors are 8 internal helpers,

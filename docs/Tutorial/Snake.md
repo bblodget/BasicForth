@@ -331,9 +331,9 @@ You built a game! Everything is just words you can change. A few ideas:
 
 To study a richer version with a score line and increasing speed:
 
-    man snake          \ if you've added examples to BASICFORTH_DOCS
+    more examples/snake.fs      \ browse its source (see help shell)
 
 The finished program is in `examples/snake-mini.fs`, and a fuller version in
 `examples/snake.fs`. For details on any word used here, the Language Reference
-has a page per topic — try `man Loops`, `man Memory`, or `man Terminal-IO`.
+has a page per topic — try `help loops`, `help memory`, or `help terminal`.
 Type `back` to revisit any step. Happy hacking!

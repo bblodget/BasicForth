@@ -170,7 +170,7 @@ _start:
 .Leenv_done:
 
     # Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories, used
-    # by the help system: man / topics / apropos). Same pattern as the PATH walk.
+    # by the help system: help / tutorials / apropos). Same pattern as the PATH walk.
     mov start_argc(%rip), %rcx
     lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
 .Ldenv_loop:

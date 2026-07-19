@@ -8,6 +8,7 @@ At a glance:
 
     decimal  ( -- )                 switch base to 10
     hex      ( -- )                 switch base to 16
+    binary   ( -- )                 switch base to 2
     >number  ( ud c u -- ud c u )   convert string digits to a number
 
     Literal prefixes (any time, whatever the base):
@@ -25,10 +26,13 @@ Switch to base 16 (digits print in uppercase).
 
     255 hex .  decimal    \ FF
 
-For any other base, store it directly into `base`:
+## binary ( -- )
+Switch to base 2 — handy for bit masks and cellular automata. (The name
+`bin` is taken by the file-access modifier — see `help files`.) For any
+other base, store it directly into `base`:
 
-    : .bin  2 base ! . decimal ;
-    5 .bin            \ 101
+    5 binary .  decimal   \ 101
+    #6 base !             \ base 6, if you must
 
 ## Number prefixes ($ hex, % binary, # decimal)
 

@@ -129,7 +129,7 @@ If you see that, point `BASICFORTH_PATH` at the directory holding `core.fs`
 | `BASICFORTH_PATH` | Colon-separated directories searched when a file is not found in CWD |
 | `BASICFORTH_SESSION` | `1` forces the interactive session (SAVE) on, `0` forces it off; unset = on at a terminal |
 | `BASICFORTH_EDITOR` | `1` forces the line editor on, `0` forces it off; unset = on when stdin is a terminal |
-| `BASICFORTH_DOCS` | Colon-separated directories of `*.md` topics for the `man` / `topics` / `apropos` help words |
+| `BASICFORTH_DOCS` | Colon-separated directories of `*.md` topics for the `help` / `tutorials` / `apropos` words |
 
 When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
 a file in the current directory, BasicForth searches each directory in
@@ -563,7 +563,7 @@ it with up to 6 integer/pointer arguments in C parameter order:
 ```
 
 This is how the SDL3 graphics backend reaches the display. C code has no
-safety net — see `man ffi` and `docs/FFI.md`.
+safety net — see `help ffi` and `docs/FFI.md`.
 
 ## Sound (SDL3 audio)
 
@@ -580,7 +580,7 @@ keeps running while they play:
 `tone ( freq ms -- )` returns immediately; `snd-wait` blocks until the queue
 drains (use it before `bye`). With no device open the sound words are silent
 no-ops — games open with `snd-open? drop` to run soundless on a system with
-no audio instead of aborting. See `man sound` and `docs/Sound.md`; for
+no audio instead of aborting. See `help sound` and `docs/Sound.md`; for
 graphics, `docs/Graphics.md` and the bouncing-square demo `examples/bounce.fs`
 (which blips off the walls).
 
@@ -591,41 +591,48 @@ more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
 
 ```
 $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
-> topics                         \ list topics, grouped by section
+> help                           \ list the topics, three to a row
 Language-Reference
-  Arithmetic  Comparison  Memory  Stack
-Tutorial
-  Snake
-> man stack                      \ page a topic (case-insensitive, .md added)
+  Arithmetic           Comparison           Compiler
+  ...
+Tutorial:  type  tutorials  to list the interactive tutorials.
+
+help <topic>  - that topic's summary       (help stack)
+help <word>   - one word's entry           (help allot)
+> help stack                     \ a topic: its summary + at-a-glance table
 # Stack Manipulation
 ...
--- more (space=page, q=quit) --
+> help allot                     \ a word: just its reference entry
+## allot ( n -- )
+Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup                    \ which topics mention "dup"?
 Stack (Language-Reference)
 Snake (Tutorial)
 ```
 
 - Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
-  last path component (like the sections of the Unix `man` system, but named
-  rather than numbered).
-- `topics` lists every `*.md` file (without the extension), grouped under its
-  section.
-- `man <topic>` finds `<topic>.md` (case-insensitive) across all sections and
-  pages it one screenful at a time — press space for the next page or `q` to stop.
+  last path component. Bare `help` lists every `*.md` topic under its section
+  header — except the Tutorial section, which `tutorials` lists instead.
+- `help <topic>` finds `<topic>.md` case-insensitively, folding `-`/`_`, and
+  prints the page's summary: its preamble up to the first `## ` entry.
+- `help <word>` scans the reference pages for the `## ` entries documenting
+  that word and prints each one — `help allot`, `help to`, `help ;`;
+  `help begin` shows all three `begin …` loop forms.
 - `apropos <keyword>` lists the topics whose file contains `<keyword>`
   (case-insensitive substring match), each labelled with its section.
+- Long output pages a screenful at a time — space for the next page, `q` to stop.
 
 If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
 See `docs/Help_System.md` for details.
 
 ### Interactive tutorials
 
-Where `man` pages a whole file, `tutorial` walks one **one step at a time** and
-returns to the prompt after each step, so you can try the examples before moving
-on:
+Where `help` prints and returns, `tutorial` walks a lesson **one step at a
+time** and returns to the prompt after each step, so you can try the examples
+before moving on:
 
 ```
-> tutorial Snake                \ start a lesson (name like man, case-insensitive)
+> tutorial Snake                \ start a lesson (case-insensitive name)
 ...
 [ step 1:  next   back   step [n] = replay/jump   end-tutorial ]
 > next                          \ next step    (back = previous, step = replay)
@@ -850,4 +857,4 @@ documented here as they become available in the interactive environment.
 | `.S`         | `( -- )`           | Display the stack (non-destructive) |
 | `CLEARSTACK` | `( ... -- )`       | Discard everything on the stack |
 
-See `man stack` for the full set of stack manipulation words.
+See `help stack` for the full set of stack manipulation words.
