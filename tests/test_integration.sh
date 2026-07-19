@@ -498,6 +498,39 @@ assert_output "gr fill-rect"          "include $GR  48 allocate drop value gb  :
 assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
 assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
 
+# Shapes and sprites on an 8x6 surface (stride 32). Helper p prints the pixel
+# at (x,y). Sprite sp is a 2x2 packed 32bpp block holding 1 2 / 3 4. The setup
+# is multi-line: the input line buffer is 256 bytes and $GR is a long path.
+GRP="include $GR
+192 allocate drop value gb
+: p 32 * swap 4 * + gb + l@ . ;
+: s gb 8 6 32 set-surface 0 clear ;"
+SPR="16 allocate drop value sp  1 sp l!  2 sp 4 + l!  3 sp 8 + l!  4 sp 12 + l!"
+GRP="$GRP
+$SPR"
+assert_output "gr line horizontal"     "$GRP
+: g s red 1 1 5 1 line 3 1 p 6 1 p ; g"            "16711680 0"
+assert_output "gr line vertical"       "$GRP
+: g s red 2 0 2 4 line 2 3 p 2 5 p ; g"            "16711680 0"
+assert_output "gr line diagonal"       "$GRP
+: g s red 0 0 5 5 line 3 3 p 3 2 p ; g"            "16711680 0"
+assert_output "gr line clips quietly"  "$GRP
+: g s red -5 -5 20 20 line 2 2 p depth . ; g"      "16711680 0"
+assert_output "gr rect outline hollow" "$GRP
+: g s green 1 1 4 3 rect 1 1 p 4 3 p 2 2 p ; g"    "65280 65280 0"
+assert_output "gr circle rim, hollow"  "$GRP
+: g s blue 4 3 2 circle 6 3 p 4 1 p 4 3 p ; g"     "255 255 0"
+assert_output "gr fill-circle"         "$GRP
+: g s blue 4 3 2 fill-circle 4 3 p 0 0 p ; g"      "255 0"
+assert_output "gr blit"                "$GRP
+: g s sp 1 1 2 2 blit 1 1 p 2 2 p 0 0 p ; g"       "1 4 0"
+assert_output "gr blit clip: src shifts" "$GRP
+: g s sp -1 0 2 2 blit 0 0 p 0 1 p 1 0 p ; g"      "2 4 0"
+assert_output "gr blit-key transparent" "$GRP
+: g 7 sp l! 9 sp 4 + l! gb 8 6 32 set-surface 5 clear 7 sp 0 0 2 2 blit-key 0 0 p 1 0 p ; g" "5 9"
+assert_output "gr grab/blit round-trip" "$GRP
+: g s red 2 2 pixel sp 2 2 2 2 grab 0 clear sp 2 2 2 2 blit 2 2 p 3 3 p depth . ; g" "16711680 0 0"
+
 # =========================================================================
 section "FFI (dlopen / dlsym / ccall)"
 # =========================================================================
@@ -525,6 +558,15 @@ else
         printf "  ${GREEN}PASS${NC}  SDL3 open+draw+readback (red pixel via dummy video driver)\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
+    fi
+
+    # sdl-scale: the window is scaled but the drawing surface stays logical
+    sdl_sc=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 4 to sdl-scale 48 20 sdl-open sdl-frame gr-width @ u. gr-height @ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_sc" | grep -q '48 20'; then
+        printf "  ${GREEN}PASS${NC}  sdl-scale keeps the surface logical (48x20 at scale 4)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-scale keeps the surface logical\n    Got: %q\n" "$sdl_sc"; ((failed++))
     fi
 fi
 

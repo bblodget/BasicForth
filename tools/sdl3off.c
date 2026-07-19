@@ -13,6 +13,7 @@ int main(void) {
   printf("SDL_INIT_VIDEO=0x%x\n", (unsigned)SDL_INIT_VIDEO);
   printf("SDL_PIXELFORMAT_XRGB8888=0x%x\n", (unsigned)SDL_PIXELFORMAT_XRGB8888);
   printf("SDL_TEXTUREACCESS_STREAMING=%d\n", (int)SDL_TEXTUREACCESS_STREAMING);
+  printf("SDL_SCALEMODE_NEAREST=%d\n", (int)SDL_SCALEMODE_NEAREST);
 
   printf("\n-- event types --\n");
   printf("SDL_EVENT_QUIT=0x%x\n", (unsigned)SDL_EVENT_QUIT);

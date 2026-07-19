@@ -58,7 +58,6 @@ create (snd-spec) 12 allot             \ SDL_AudioSpec: format l, channels l, fr
 \ undefined, so mask before testing.
 : (c-bool) ( raw -- flag )  $FF and 0<> ;
 
-: ztype ( zaddr -- )  begin dup c@ ?dup while emit 1+ repeat drop ;
 : snd-error ( -- )  ." snd: " 0 (SDL_GetError) (ccall) ztype cr abort ;
 
 \ --- open / close ---

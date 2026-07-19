@@ -1,19 +1,21 @@
-\ BasicForth — Bouncing square in an SDL window
+\ BasicForth — Bouncing ball in an SDL window
 \ Copyright (C) 2026 Brandon Blodget
 \ SPDX-License-Identifier: GPL-2.0-only
 \
-\ The first desktop-window graphics demo: a yellow square bouncing around a
-\ window, one frame per display refresh (vsync), with a blip on every wall
-\ hit. ESC, q, or closing the window quits.
+\ The desktop-window graphics demo: a yellow ball bouncing inside a walled
+\ court, one frame per display refresh (vsync), with a blip on every wall
+\ hit. Retro chunky pixels: the surface is 320x180 logical pixels shown 4x
+\ (sdl-scale) in a 1280x720 window. ESC, q, or closing the window quits.
 \
 \ Usage: include graphics.fs  include ffi.fs  include sdl3.fs
 \        include sound.fs
 \        include examples/bounce.fs
 \        bounce
 
-640 constant b-w          \ window size
-360 constant b-h
-64  constant b-size       \ square side
+320 constant b-w          \ logical surface size (window is 4x)
+180 constant b-h
+10  constant b-r          \ ball radius
+b-r 2* constant b-size    \ ball bounding-box side
 
 variable b-x   variable b-y
 variable b-dx  variable b-dy
@@ -37,7 +39,8 @@ variable b-done
 : b-frame ( -- )
     sdl-frame
     $102040 clear                        \ dark blue background
-    yellow  b-x @ b-y @  b-size b-size fill-rect
+    white  0 0 b-w b-h rect              \ court walls
+    yellow  b-x @ b-r +  b-y @ b-r +  b-r fill-circle
     sdl-show ;
 
 : b-events ( -- )
@@ -51,7 +54,8 @@ variable b-done
     repeat ;
 
 : bounce ( -- )
-    b-w b-h sdl-open  snd-open? drop   \ no audio -> blips are no-ops
+    4 to sdl-scale  b-w b-h sdl-open
+    snd-open? drop                     \ no audio -> blips are no-ops
     40 b-x !  30 b-y !  4 b-dx !  3 b-dy !
     false b-done !
     begin  b-frame  b-events  b-step  b-done @  until
@@ -59,7 +63,7 @@ variable b-done
 
 \ Fixed-frame variant for automated tests (no events, then clean close).
 : bounce-frames ( n -- )
-    b-w b-h sdl-open
+    4 to sdl-scale  b-w b-h sdl-open
     40 b-x !  30 b-y !  4 b-dx !  3 b-dy !
     0 ?do  b-frame  b-step  loop
     sdl-close ;
