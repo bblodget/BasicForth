@@ -29,6 +29,15 @@ completed. See Planning.md for high-level vision and design decisions.
   path. Found 2026-07-06 (a test bug passed a directory to `include`), fixed
   2026-07-10 on the `include-dir-segfault` branch (both architectures;
   integration tests: error message + session survives).
+- [ ] **`include` of a missing file silently prints ` ok`.** `forth_included`
+  deliberately returns success on ENOENT (after the BASICFORTH_PATH search)
+  because startup uses the same path for optional files — `main.s` tells the
+  cases apart via the `incl_opened` flag. But at the REPL it swallows typos:
+  `include exmaples/bounce.fs` says ` ok` and defines nothing (found 2026-07-11
+  during the sound review). Fix direction: interactive `include`/`included`
+  report `cannot open <name>`, while the startup loads (core.fs warning,
+  optional session file) keep the silent-skip semantics via `incl_opened`.
+  Both architectures + an integration test.
 
 ---
 
