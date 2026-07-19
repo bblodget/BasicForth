@@ -666,8 +666,12 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   `nth` idiom, `,`-tables, `erase`, byte arrays — `allot`'s narrative
   home). `tutorials` listing upgraded to show each file's
   `# Name — description` title line, so lessons and projects distinguish
-  themselves by description, not by category machinery. More lessons as
-  needed: strings, files, defer/is, modules.
+  themselves by description, not by category machinery. Second lesson:
+  `tutorial Strings` (branch strings-lesson, 2026-07-19 — the addr/len
+  pair, slicing, compare, the transient-buffer gotcha; fixed en route:
+  Tutorial dirs now win a `tutorial <name>` clash with a same-named
+  reference page). More lessons as needed: files, defer/is, modules,
+  FFI/graphics (`require sdl3.fs` makes the setup one line now).
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows
