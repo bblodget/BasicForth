@@ -7,10 +7,12 @@
 \ hit. Retro chunky pixels: the surface is 320x180 logical pixels shown 4x
 \ (sdl-scale) in a 1280x720 window. ESC, q, or closing the window quits.
 \
-\ Usage: include graphics.fs  include ffi.fs  include sdl3.fs
-\        include sound.fs
-\        include examples/bounce.fs
+\ Usage: include bounce.fs   (dependencies load themselves)
 \        bounce
+\ or from a shell:  basicforth bounce.fs  then type bounce
+
+require sdl3.fs
+require sound.fs
 
 320 constant b-w          \ logical surface size (window is 4x)
 180 constant b-h

@@ -29,15 +29,16 @@ completed. See Planning.md for high-level vision and design decisions.
   path. Found 2026-07-06 (a test bug passed a directory to `include`), fixed
   2026-07-10 on the `include-dir-segfault` branch (both architectures;
   integration tests: error message + session survives).
-- [ ] **`include` of a missing file silently prints ` ok`.** `forth_included`
+- [x] **`include` of a missing file silently prints ` ok`.** `forth_included`
   deliberately returns success on ENOENT (after the BASICFORTH_PATH search)
   because startup uses the same path for optional files — `main.s` tells the
   cases apart via the `incl_opened` flag. But at the REPL it swallows typos:
   `include exmaples/bounce.fs` says ` ok` and defines nothing (found 2026-07-11
-  during the sound review). Fix direction: interactive `include`/`included`
-  report `cannot open <name>`, while the startup loads (core.fs warning,
-  optional session file) keep the silent-skip semantics via `incl_opened`.
-  Both architectures + an integration test.
+  during the sound review). Fixed 2026-07-19 on the `require` branch, exactly
+  as planned: `(inc-opened?)` exposes `incl_opened`; core.fs wrappers over
+  `include`/`included` report `cannot open <name>`; the startup loads call the
+  assembly entry directly and keep the silent-skip. Integration tests for
+  both `include` and `require` of a missing file.
 
 ---
 
@@ -403,20 +404,17 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
-- [ ] **Include guards + dependency includes (`require`)** — gforth-style
-  `require <file>` / `required ( c-addr u -- )`: include a file only if not
-  already loaded. Then each library declares its own dependencies
-  (`sdl3.fs` requires `graphics.fs` + `ffi.fs`, `sound.fs` requires
-  `ffi.fs`) and examples require their whole stack, so
-  `basicforth bounce.fs` works from a cold start — no memorized include
-  order. Design questions for planning: what counts as "loaded" — a
-  resolved-path ledger (gforth) vs. a dictionary-sentinel check
-  ("a word from that file is findable"), the latter self-heals across
-  `marker` rollback and save/reload, which a separate list would lie
-  about; double-include today also *loses state* (re-including sdl3.fs
-  zeroes `sdl-win` under a live window, resets `sdl-scale`) — test that
-  `require` twice preserves it. Likely wants `[defined]`/`[if]`-style
-  conditionals as primitives. Own feature branch; touches INCLUDED.
+- [x] **Include guards + dependency includes (`require`)** — done 2026-07-19
+  (`require` branch): `require`/`required` load a file only if not already
+  loaded; the ledger is a dictionary sentinel `(inc:<basename>)` defined
+  after each successful load (self-heals across `marker`/`new`/`load` — a
+  forgotten library is require-able again; no `[defined]`/`[if]` needed).
+  Libraries declare their own dependencies (sdl3.fs → ffi+graphics,
+  sound.fs → ffi, bounce.fs → sdl3+sound), so one `require sdl3.fs` or
+  `include bounce.fs` brings up the whole stack. A second
+  `require sdl3.fs` under a live window preserves `sdl-win`/`sdl-scale`
+  (tested). Missing files now error — see the Known Bugs entry above.
+  One new primitive: `(inc-opened?)`; everything else pure core.fs.
 - [x] `BASICFORTH_PATH` colon-separated directory search
   - Supports multiple directories separated by `:` (like PATH,
     LD_LIBRARY_PATH).

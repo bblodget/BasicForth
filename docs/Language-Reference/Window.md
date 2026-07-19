@@ -1,10 +1,10 @@
 # Window — The SDL3 Display Backend
 
 Puts the `graphics.fs` surface on screen: a desktop window, or the raw console
-(KMSDRM) on a system with no desktop. Load order matters — the backend sits on
-the FFI and the surface:
+(KMSDRM) on a system with no desktop. It requires its own dependencies (the
+FFI and the drawing surface), so one line loads everything:
 
-    include graphics.fs  include ffi.fs  include sdl3.fs
+    require sdl3.fs
 
 A frame is: `sdl-frame` (surface now points at the window's pixels), draw with
 the graphics words, `sdl-show` (present, paced by vsync). The texture is

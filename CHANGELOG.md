@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### `require` — load a file only once
+- **New words `require <file>` / `required ( c-addr u -- )`** (gforth
+  compatible): like `include`/`included`, but a no-op if the file was
+  already loaded. Libraries now declare their own dependencies —
+  `sdl3.fs` requires `ffi.fs` + `graphics.fs`, `sound.fs` requires
+  `ffi.fs`, `bounce.fs` requires the whole stack — so `require sdl3.fs`
+  (or one `include bounce.fs`) brings up everything, in order, once.
+  The include litany is gone from the docs.
+- Loaded-ness lives in the dictionary: each load defines a no-op sentinel
+  `(inc:<basename>)` *after* the file's words, so a `marker` (or
+  `new`/`load`) that forgets a library forgets the sentinel too — `require`
+  then reloads it. `include` still always loads (edit-and-reload).
+- **Bug fix: interactive `include`/`included`/`require` of a missing file
+  now reports `cannot open <name>`** instead of silently printing ` ok`
+  (the long-standing typo trap). The deliberate silent-skip remains only
+  for the startup loads (core.fs, session file), which enter through the
+  assembly path. New primitive `(inc-opened?)` exposes the existing
+  `incl_opened` flag; the rest is pure core.fs.
+
 ### Polish
 - **`see`/`edit` on a primitive now point at `help`** — the "is a
   primitive (assembly)" message ends with *— try: help \<name\>*, since the

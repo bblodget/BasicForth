@@ -1,10 +1,10 @@
 # Sound — Tones via SDL3 Audio
 
 Square-wave tones through the default playback device. Load the backend
-first: `include ffi.fs  include sound.fs`. Tones queue and play in the
-background; with no device open, the sound words are silent no-ops.
+first: `require sound.fs` (it pulls in the FFI itself). Tones queue and play
+in the background; with no device open, the sound words are silent no-ops.
 
-    include ffi.fs  include sound.fs
+    require sound.fs
     snd-open
     440 200 tone      \ concert A, 200 ms
     beep

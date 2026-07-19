@@ -3,9 +3,9 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ Plays integer square-wave tones through SDL3's default playback device.
-\ Load order:
+\ Pulls in its own dependencies -- just:
 \
-\   include ffi.fs   include sound.fs
+\   require sound.fs
 \
 \ Independent of graphics.fs/sdl3.fs -- terminal programs can beep too.
 \ Usage:  snd-open   440 200 tone   beep   snd-wait   snd-close
@@ -20,6 +20,8 @@
 \
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
+
+require ffi.fs
 
 \ --- library ---
 \ sdl3.fs binds some of these names too; the rebindings are identical, so

@@ -568,6 +568,25 @@ else
     else
         printf "  ${RED}FAIL${NC}  sdl-scale keeps the surface logical\n    Got: %q\n" "$sdl_sc"; ((failed++))
     fi
+
+    # require sdl3.fs pulls its own deps (ffi, graphics), and a second require
+    # under a live window is a no-op: sdl-win must be preserved, not zeroed.
+    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\nsdl-win\nrequire sdl3.fs\nsdl-win swap over = . 0= 0= .\nsdl-close\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_rq" | grep -q -- '-1 -1'; then
+        printf "  ${GREEN}PASS${NC}  require sdl3.fs: deps auto-load; re-require keeps a live window\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  require sdl3.fs deps/idempotence\n    Got: %q\n" "$sdl_rq"; ((failed++))
+    fi
+
+    # Cold start: one include of bounce.fs loads the whole stack via require.
+    sdl_cb=$(printf 'include bounce.fs\n3 bounce-frames depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB:$REPO_ROOT/examples" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_cb" | grep -q '0  ok'; then
+        printf "  ${GREEN}PASS${NC}  cold-start: include bounce.fs pulls sdl3+sound via require\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  cold-start bounce via require\n    Got: %q\n" "$sdl_cb"; ((failed++))
+    fi
 fi
 
 # SDL3 audio — same skip rules, dummy audio driver so no sound hardware is
@@ -3666,6 +3685,47 @@ p2_out=$(printf 'variable p1 variable p2\ns" echo one" r/o open-pipe drop p1 !\n
 # open-pipe gets EBADF from close-pipe (close-file would leak a zombie).
 assert_output "open-pipe r/w -> EINVAL" 's" true" r/w open-pipe swap drop einval = .' "-1"
 assert_output "close-pipe on a non-pipe fd -> EBADF" '99 close-pipe . .' "9 0"
+
+# =========================================================================
+section "REQUIRE (load a file only once)"
+# =========================================================================
+# A load records a sentinel word (inc:<basename>); require skips a file whose
+# sentinel is findable. rlib.fs bumps a REPL-defined counter so the number of
+# actual loads is observable.
+req_dir="$(mktemp -d)"
+echo '1 cnt +!' > "$req_dir/rlib.fs"
+printf 'require %s/rlib.fs\n' "$req_dir" > "$req_dir/rtop.fs"
+
+assert_output "require loads once"          "variable cnt 0 cnt !
+require $req_dir/rlib.fs
+require $req_dir/rlib.fs
+cnt @ ."  "1"
+assert_output "required (string form) skips" "variable cnt 0 cnt !
+require $req_dir/rlib.fs
+s\" $req_dir/rlib.fs\" required
+cnt @ ."  "1"
+assert_output "include still force-reloads"  "variable cnt 0 cnt !
+require $req_dir/rlib.fs
+include $req_dir/rlib.fs
+cnt @ ."  "2"
+assert_output "require by bare name skips a path-loaded file" "variable cnt 0 cnt !
+include $req_dir/rlib.fs
+require rlib.fs
+cnt @ ."  "1"
+assert_output "nested require dedups"        "variable cnt 0 cnt !
+require $req_dir/rtop.fs
+require $req_dir/rlib.fs
+cnt @ ."  "1"
+assert_output "marker rollback -> require reloads" "variable cnt 0 cnt !
+marker mm
+require $req_dir/rlib.fs
+mm
+require $req_dir/rlib.fs
+cnt @ ."  "2"
+assert_error  "require of a missing file errors"  "require zz-no-such-file.fs"  "cannot open"
+assert_error  "include of a missing file errors"  "include zz-no-such-file.fs"  "cannot open"
+assert_output "require alone shows usage"    "require"  "usage: require <file>"
+rm -rf "$req_dir"
 
 # =========================================================================
 section "Dirty guard"
