@@ -565,6 +565,28 @@ it with up to 6 integer/pointer arguments in C parameter order:
 This is how the SDL3 graphics backend reaches the display. C code has no
 safety net — see `help ffi` and `docs/FFI.md`.
 
+## Graphics (2D in a window)
+
+Software 2D drawing presented in an SDL3 window (or on the raw console on a
+desktop-less system). Pixels, lines, rectangles, circles, and color-keyed
+sprites, all clipped; `sdl-scale` sets the pixel size — a 320×180 surface at
+scale 4 fills a 1280×720 window with big crisp pixels (and 1/16 the drawing
+work):
+
+```
+> include graphics.fs  include ffi.fs  include sdl3.fs
+ ok
+> 4 to sdl-scale  320 180 sdl-open
+ ok
+> sdl-frame  black clear  yellow 160 90 40 fill-circle
+> white 0 0 320 180 rect  red 0 0 319 179 line  sdl-show
+ ok
+```
+
+Each frame draws from scratch between `sdl-frame` and `sdl-show` (vsync-paced,
+so a `begin ... until` game loop needs no timer). See `help graphics` and
+`help window`, `docs/Graphics.md`, and the demo `examples/bounce.fs`.
+
 ## Sound (SDL3 audio)
 
 Square-wave tones through the default playback device, queued so your code
@@ -580,9 +602,8 @@ keeps running while they play:
 `tone ( freq ms -- )` returns immediately; `snd-wait` blocks until the queue
 drains (use it before `bye`). With no device open the sound words are silent
 no-ops — games open with `snd-open? drop` to run soundless on a system with
-no audio instead of aborting. See `help sound` and `docs/Sound.md`; for
-graphics, `docs/Graphics.md` and the bouncing-square demo `examples/bounce.fs`
-(which blips off the walls).
+no audio instead of aborting. See `help sound` and `docs/Sound.md`; the
+bouncing-ball demo `examples/bounce.fs` blips off the walls.
 
 ## Built-in Help
 

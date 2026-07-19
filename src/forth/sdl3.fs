@@ -30,7 +30,8 @@
 0 value (SDL_CreateTexture)   0 value (SDL_DestroyTexture)
 0 value (SDL_LockTexture)     0 value (SDL_UnlockTexture)
 0 value (SDL_RenderTexture)   0 value (SDL_RenderPresent)
-0 value (SDL_PollEvent)
+0 value (SDL_PollEvent)       0 value (SDL_SetTextureScaleMode)
+0 value (SDL_SetHint)
 
 : (sdl-bind) ( -- )
     s" libSDL3.so.0" dlopen to (sdl3)
@@ -48,13 +49,16 @@
     (sdl3) s" SDL_UnlockTexture"   dlsym to (SDL_UnlockTexture)
     (sdl3) s" SDL_RenderTexture"   dlsym to (SDL_RenderTexture)
     (sdl3) s" SDL_RenderPresent"   dlsym to (SDL_RenderPresent)
-    (sdl3) s" SDL_PollEvent"       dlsym to (SDL_PollEvent) ;
+    (sdl3) s" SDL_PollEvent"       dlsym to (SDL_PollEvent)
+    (sdl3) s" SDL_SetTextureScaleMode" dlsym to (SDL_SetTextureScaleMode)
+    (sdl3) s" SDL_SetHint"         dlsym to (SDL_SetHint) ;
 (sdl-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
 $20       constant SDL_INIT_VIDEO
 $16161804 constant XRGB8888          \ SDL_PIXELFORMAT_XRGB8888
 1         constant TEX_STREAMING     \ SDL_TEXTUREACCESS_STREAMING
+0         constant SCALE_NEAREST     \ SDL_SCALEMODE_NEAREST (crisp pixels)
 
 $100 constant ev-quit                \ SDL_EVENT_QUIT
 $210 constant ev-close               \ SDL_EVENT_WINDOW_CLOSE_REQUESTED
@@ -72,6 +76,13 @@ $40000051 constant key-down
 \ --- state ---
 0 value sdl-win    0 value sdl-ren    0 value sdl-tex
 0 value sdl-width  0 value sdl-height
+
+\ Pixel size: set BEFORE sdl-open. The drawing surface stays w x h (logical
+\ pixels) while the window is w*scale x h*scale -- each logical pixel shows
+\ as a chunky scale x scale block (GPU-stretched, nearest-neighbor, free).
+\ A 320x180 surface at scale 4 fills a 1280x720 window with 1/16 the pixels
+\ to draw. Sticky across sdl-close; 1 = one-to-one (the default).
+1 value sdl-scale
 variable (sdl-px)     \ SDL_LockTexture out: pixel base (8 bytes)
 variable (sdl-pitch)  \ SDL_LockTexture out: pitch (4 bytes; read with l@)
 create sdl-event 128 allot   \ SDL_Event (type is a 32-bit int at offset 0)
@@ -80,20 +91,30 @@ create sdl-event 128 allot   \ SDL_Event (type is a 32-bit int at offset 0)
 \ undefined, so mask before testing.
 : (c-bool) ( raw -- flag )  $FF and 0<> ;
 
-: ztype ( zaddr -- )  begin dup c@ ?dup while emit 1+ repeat drop ;
+\ SDL_SetHint needs two C strings at once, but >z has a single scratch
+\ buffer -- so these live as static NUL-terminated strings in the dictionary.
+create (z-wm-ping)  s" SDL_VIDEO_X11_NET_WM_PING" here over allot swap cmove 0 c,
+create (z-off)      char 0 c,  0 c,
+
 : sdl-error ( -- )  ." sdl: " 0 (SDL_GetError) (ccall) ztype cr abort ;
 
 \ --- open / close ---
 : sdl-open ( w h -- )
     to sdl-height  to sdl-width
+    \ Skip the window manager's liveness ping (_NET_WM_PING): an idle REPL
+    \ doesn't pump events, so the WM would pop "not responding" dialogs at a
+    \ perfectly healthy prompt. Must be set before the window is created.
+    (z-wm-ping) (z-off) 2 (SDL_SetHint) (ccall) drop
     SDL_INIT_VIDEO 1 (SDL_Init) (ccall) (c-bool) 0= if sdl-error then
-    s" BasicForth" >z  sdl-width sdl-height 0
+    s" BasicForth" >z  sdl-width sdl-scale *  sdl-height sdl-scale *  0
     4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then  to sdl-win
     sdl-win 0  2 (SDL_CreateRenderer) (ccall)
     dup 0= if sdl-error then  to sdl-ren
     sdl-ren 1  2 (SDL_SetRenderVSync) (ccall) drop   \ best effort (dummy driver has no vsync)
     sdl-ren XRGB8888 TEX_STREAMING sdl-width sdl-height
-    5 (SDL_CreateTexture) (ccall)  dup 0= if sdl-error then  to sdl-tex ;
+    5 (SDL_CreateTexture) (ccall)  dup 0= if sdl-error then  to sdl-tex
+    \ default texture filtering is linear (blurry when scaled up)
+    sdl-tex SCALE_NEAREST 2 (SDL_SetTextureScaleMode) (ccall) drop ;
 
 : sdl-close ( -- )
     sdl-tex ?dup if 1 (SDL_DestroyTexture)  (ccall) drop  0 to sdl-tex then

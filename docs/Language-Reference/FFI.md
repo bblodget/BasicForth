@@ -52,6 +52,12 @@ crash BasicForth. Check stack pictures against the C prototype.
 Copy a Forth string to a scratch buffer and NUL-terminate it, for C functions
 that take strings. One shared buffer: consume the result before the next `>z`.
 
+## ztype ( zaddr -- )
+The other direction: print a NUL-terminated C string, as returned by many C
+functions (error messages, version strings).
+
+    \ 0 (SDL_GetError) (ccall) ztype
+
 ## (dlopen) ( zaddr -- handle )
 ## (dlsym) ( handle zaddr -- fnptr )
 The raw primitives under `dlopen`/`dlsym`: same jobs, NUL-terminated string

@@ -353,7 +353,10 @@ docs/Graphics.md for the API.
   delegates to the ASM primitives so compiled code is unchanged
 - [ ] SDL3 in the Pumpkian board image (build from source; bookworm has no
   libsdl3 package) — done in the Pumpkian repo
-- [ ] More primitives: lines, circles, blit/sprites
+- [x] More primitives: `line` (Bresenham), `rect`, `circle`/`fill-circle`
+  (midpoint), `blit`/`blit-key`/`grab` sprites (packed 32bpp, color-key
+  transparency); `sdl-scale` pixel size (320×180 at 4× = 1280×720 window,
+  nearest-neighbor GPU stretch); bounce.fs demo updated
 - [ ] Font / text rendering (show characters on the framebuffer)
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
@@ -400,6 +403,20 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [ ] **Include guards + dependency includes (`require`)** — gforth-style
+  `require <file>` / `required ( c-addr u -- )`: include a file only if not
+  already loaded. Then each library declares its own dependencies
+  (`sdl3.fs` requires `graphics.fs` + `ffi.fs`, `sound.fs` requires
+  `ffi.fs`) and examples require their whole stack, so
+  `basicforth bounce.fs` works from a cold start — no memorized include
+  order. Design questions for planning: what counts as "loaded" — a
+  resolved-path ledger (gforth) vs. a dictionary-sentinel check
+  ("a word from that file is findable"), the latter self-heals across
+  `marker` rollback and save/reload, which a separate list would lie
+  about; double-include today also *loses state* (re-including sdl3.fs
+  zeroes `sdl-win` under a live window, resets `sdl-scale`) — test that
+  `require` twice preserves it. Likely wants `[defined]`/`[if]`-style
+  conditionals as primitives. Own feature branch; touches INCLUDED.
 - [x] `BASICFORTH_PATH` colon-separated directory search
   - Supports multiple directories separated by `:` (like PATH,
     LD_LIBRARY_PATH).

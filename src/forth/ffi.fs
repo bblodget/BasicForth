@@ -27,6 +27,10 @@ create (zbuf) (z-max) 1+ allot
     dup (z-max) > abort" >z: string too long"
     dup >r  (zbuf) swap cmove  0 (zbuf) r> + c!  (zbuf) ;
 
+\ The other direction: print a NUL-terminated C string (error messages,
+\ version strings, anything a C function hands back by address).
+: ztype ( zaddr -- )  begin dup c@ ?dup while emit 1+ repeat drop ;
+
 : dlopen ( c-addr u -- handle )  >z (dlopen)
     dup 0= abort" dlopen: cannot load library" ;
 

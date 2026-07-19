@@ -32,9 +32,34 @@ include sdl3.fs       \ the SDL3 window/present/event backend
 |------|-------|---------|
 | `set-surface` | ( base w h stride -- ) | point drawing at a pixel buffer |
 | `pixel` | ( color x y -- ) | plot one pixel (clipped) |
+| `line` | ( color x0 y0 x1 y1 -- ) | line between two points (Bresenham) |
+| `rect` | ( color x y w h -- ) | outline rectangle |
 | `fill-rect` | ( color x y w h -- ) | filled rectangle (clipped) |
+| `circle` | ( color cx cy r -- ) | outline circle (midpoint) |
+| `fill-circle` | ( color cx cy r -- ) | filled circle |
 | `clear` | ( color -- ) | fill the whole surface |
+| `blit` | ( src x y w h -- ) | copy a sprite block onto the surface |
+| `blit-key` | ( key src x y w h -- ) | sprite copy, `key`-colored pixels skipped |
+| `grab` | ( dst x y w h -- ) | copy a surface region into a buffer |
 | `pixel-addr` | ( x y -- addr ) | byte address of a pixel (no clip) |
+
+Everything clips: endpoints, rectangles, circles, and sprites may hang off
+any edge (or lie fully outside) and only the visible part draws. Horizontal
+and vertical `line`s, `fill-rect` rows, and `fill-circle` spans all fill in
+`fill32` bursts; the general `line`/`circle` paths go pixel-by-pixel.
+
+A **sprite** is nothing but a packed 32-bpp pixel block: w×h 32-bit pixels
+row after row (stride w×4), identified by its base address — `allocate` a
+buffer and fill it, or draw with the shape words and `grab` it off the
+surface. `blit-key` is the transparency mechanism: pick a color the art
+doesn't use (magenta, classically) and pixels of that value are skipped,
+so non-rectangular sprites sit over any background:
+
+```
+16 16 * 4 * allocate drop value ship        \ 16x16 sprite buffer
+... fill ship with art, magenta where transparent ...
+magenta ship 100 50 16 16 blit-key          \ draw it at (100,50)
+```
 
 Colors are packed `0x00RRGGBB`. Named colors: `black white red green blue yellow
 cyan magenta`.
@@ -60,6 +85,14 @@ effectively instant.
 | `sdl-poll` | ( -- flag ) | poll one event into the event buffer |
 | `sdl-event-type` | ( -- u ) | type of the polled event |
 | `sdl-key` | ( -- keycode ) | keycode of a polled key event |
+| `sdl-scale` | ( -- n ) | pixel size (a `value`; set with `to` before `sdl-open`) |
+
+**Pixel size** (`sdl-scale`, default 1): with `4 to sdl-scale`, `320 180
+sdl-open` opens a 1280×720 window whose drawing surface is 320×180 — every
+logical pixel shows as a crisp 4×4 block (GPU-stretched, nearest-neighbor,
+free). That's the retro look, and 1/16 the pixels to draw per frame, which is
+what keeps software rendering fast: prefer a small scaled surface over a big
+1:1 one. All drawing words and events stay in logical coordinates.
 
 Event-type constants: `ev-quit`, `ev-close`, `ev-keydown`, `ev-keyup`.
 Keycodes: `key-esc key-space key-q key-left key-right key-up key-down`.
@@ -88,9 +121,10 @@ include examples/bounce.fs
 bounce                \ ESC, q, or close the window to quit
 ```
 
-A yellow square bouncing in a 640×360 window, one step per display refresh.
-`bounce-frames ( n -- )` runs a fixed number of frames and exits (used by the
-automated test).
+A yellow ball (`fill-circle`) bouncing inside `rect` walls on a 320×180
+surface shown 4× in a 1280×720 window, one step per display refresh.
+`bounce-frames ( n -- )` runs a fixed number of frames and exits (for
+automated tests).
 
 ## Testing
 
@@ -102,9 +136,39 @@ and FFI sections of `tests/test_integration.sh`. The QEMU run skips the SDL
 test (no aarch64 libSDL3 in the qemu sysroot); on the board, SDL3 must be in
 the Pumpkian image (built from source — bookworm has no libsdl3 package).
 
+## Troubleshooting
+
+**`sdl-open` freezes and no window appears** (the prompt just hangs, no
+error): almost certainly a wedged X input method. On X11 desktops,
+`SDL_Init` connects to the input-method server named by `XMODIFIERS`
+(usually ibus) using the XIM protocol; if `ibus-x11` is hung, that
+handshake never completes and *every* SDL program freezes at startup —
+this is environmental, not BasicForth (a minimal C SDL3 program hangs the
+same way). Diagnose: `ps -o time -C ibus-x11` showing large CPU time is
+the tell. Fix: `ibus restart` (or log out and in). Workaround without
+touching ibus: start with the input method disabled —
+
+```
+XMODIFIERS=@im=none basicforth
+```
+
+To escape the frozen session: Ctrl+C won't work (raw mode), so
+`pkill basicforth` from another terminal, then `reset` if the echo
+looks odd.
+
+**"Application is not responding" dialogs** (historical): the window
+manager pings each window and SDL only answers while events are being
+pumped (`sdl-poll`) — and an idle REPL pumps nothing, so the WM used to
+declare a perfectly healthy prompt hung. `sdl-open` now disables the ping
+(`SDL_VIDEO_X11_NET_WM_PING=0`) so interactive windows sit quietly at the
+prompt. The flip side: a *genuinely* wedged program won't be offered a
+Force Quit dialog either — `pkill basicforth` is the way out.
+
 ## Scope and what's next
 
-Current state: 32-bpp only; `pixel`/`fill-rect`/`clear` presented via SDL3.
-Next, per the roadmap in [Planning.md](Planning.md): more 2D primitives
-(lines, circles, blit/sprites), text rendering, audio via SDL3, and GPU/3D
-via SDL_GPU.
+Current state: 32-bpp only; pixels, lines, rectangles, circles, and
+color-keyed sprites, presented via SDL3 with integer pixel scaling
+(`sdl-scale`). Audio shipped separately (docs/Sound.md). Next, per the
+roadmap in [Planning.md](Planning.md) and
+[Graphics_Planning.md](Graphics_Planning.md): font/text rendering, then
+GPU-accelerated 2D/3D via SDL_GPU (and the float support it needs).

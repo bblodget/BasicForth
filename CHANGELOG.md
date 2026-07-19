@@ -7,6 +7,31 @@
   primitive (assembly)" message ends with *— try: help \<name\>*, since the
   reference entry is where a primitive's documentation actually lives.
 
+### 2D shapes, sprites, and chunky pixels
+- **New drawing words** in `graphics.fs` (all clipped, pure Forth):
+  `line` (Bresenham, fast H/V paths), `rect` (outline), `circle` /
+  `fill-circle` (midpoint, shared walk), and sprites — `blit` (packed
+  32-bpp block), `blit-key` (color-key transparency), `grab` (surface →
+  buffer, the inverse).
+- **`sdl-scale`** (PixelGameEngine-style pixel size): `4 to sdl-scale
+  320 180 sdl-open` opens a 1280×720 window with a 320×180 logical
+  surface — crisp GPU-stretched nearest-neighbor blocks (new
+  `SDL_SetTextureScaleMode` binding), 1/16 the pixels to draw.
+- `examples/bounce.fs` is now a bouncing ball (`fill-circle`) in `rect`
+  walls at 320×180×4.
+- **REPL-friendly windows**: `sdl-open` disables the WM liveness ping
+  (`SDL_VIDEO_X11_NET_WM_PING`), so a window sitting at an idle prompt no
+  longer draws "application is not responding" dialogs — draw one frame
+  at a time, interactively.
+- New reference pages `help graphics` and `help window`; Manual section;
+  Graphics.md updated (incl. a wedged-ibus troubleshooting note); 12 new
+  integration tests (heap-surface readback + dummy-driver sdl-scale).
+- Every `src/forth` library now has a reference page (core.fs = the rest
+  of the reference; ffi/sound/graphics/window). `ztype` moved from
+  duplicate definitions in `sdl3.fs`/`sound.fs` into `ffi.fs` and gained
+  an FFI reference entry; the surface variables (`gr-base` & co.) are
+  documented too.
+
 ### First topic lesson (Arrays) + descriptive tutorial listing
 - **`tutorial Arrays`** — the first *topic lesson*: a ~10-minute, 14-step
   walk through `create` / `allot` / `cells`, the index-word idiom
