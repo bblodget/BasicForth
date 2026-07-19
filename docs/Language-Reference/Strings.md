@@ -2,7 +2,10 @@
 
 In BasicForth a string is usually an address/length pair on the stack:
 `( c-addr u )` — a start address and a byte count. `s"` makes one, `type` prints
-one, and the rest read, compare, and copy them.
+one, and the rest read, compare, and copy them. (`c-addr` means *character
+address* — it has nothing to do with the C language. A *counted* string —
+length byte first, unpacked by `count` — is the old Forth format; a
+NUL-terminated *C* string is a `zaddr`, met only at the FFI border.)
 
 `s"` and `."` work both ways: inside a definition they compile the string
 into the word; at the prompt they act immediately.
@@ -116,4 +119,6 @@ a literal.
 
 - `help memory` — `fill`, `move`, and addresses behind these strings.
 - `help printing` — `type` is also how pictured numeric output is printed.
+- `help ffi` — passing strings to C: `>z` makes a NUL-terminated `zaddr`,
+  `ztype` prints one a C function returned.
 - docs/String_Words.md — the fuller treatment.

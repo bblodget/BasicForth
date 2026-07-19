@@ -1860,8 +1860,12 @@ variable (ts-any)                          \ printed any line of the wanted step
             (pg-buf@) swap (pg-line) true (ts-any) !
         else  drop  then
     again ;
+variable (tut-strict)                      \ true: this pass looks in Tutorial dirs only
 : (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
     (tut-found) @ if 2drop exit then
+    (tut-strict) @ if
+        2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+    then
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
     >r
@@ -1887,7 +1891,10 @@ variable (ts-any)                          \ printed any line of the wanted step
     false (tut-found) !  false (tut-existed) !
     (tut-step) @ (ts-want) !
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    ['] (tut-in) (each-dir)
+    true (tut-strict) !  ['] (tut-in) (each-dir)   \ Tutorial dirs win a name clash
+    (tut-found) @ 0= if                            \ (Strings is a lesson AND a help
+        false (tut-strict) !  ['] (tut-in) (each-dir)   \ topic) — then any docs page
+    then
     (tut-found) @ 0= if
         ." no tutorial named " (tut-name) (tut-nlen) @ type ."  (try TUTORIALS)" cr
         0 (tut-nlen) ! exit

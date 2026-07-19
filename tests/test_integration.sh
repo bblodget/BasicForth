@@ -3118,6 +3118,19 @@ else
 fi
 rm -rf "$sort_base"
 
+# `tutorial <name>` resolves only in Tutorial sections — a reference page with
+# the same name (e.g. Strings.md in both Language-Reference and Tutorial) must
+# not shadow the lesson, even when its directory comes first in the path.
+printf '# Grok reference page\nREFBODY\n' > "$sec_base/RefSec/Grok.md"
+tut_shadow=$(printf 'tutorial Grok\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$tut_shadow" == *"Learn widgets fast"* && "$tut_shadow" != *"REFBODY"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorial ignores same-named reference pages\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorial ignores same-named reference pages\n"
+    printf "    Got:      %s\n" "$(echo "$tut_shadow" | head -4)"; ((failed++))
+fi
+
 rm -rf "$sec_base"
 
 # A "topic" that is actually a directory: open() succeeds but read() returns
@@ -3278,10 +3291,32 @@ assert_output "Arrays lesson table example"  \
     $'create days 31 , 28 , 31 , 30 , 31 , 30 , 31 , 31 , 30 , 31 , 30 , 31 ,\n: days-in ( month -- n ) 1- cells days + @ ;\n2 days-in .' \
     "28"
 
+# The shipped Strings lesson: opens with 11 steps, and its examples run.
+strings_out=$(printf 'tutorial Strings\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+if [[ "$strings_out" == *"Text on the Stack"* && "$strings_out" == *"step 1/11"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Strings lesson opens with 11 steps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  Strings lesson opens with 11 steps\n"
+    printf "    Got:      %s\n" "$(echo "$strings_out" | head -4)"; ((failed++))
+fi
+assert_output "Strings lesson compare example" \
+    $': yes? ( c-addr u -- flag ) s" yes" compare 0= ;\ns" yes" yes? . s" nope" yes? .' \
+    "-1 0"
+# The transient-buffer round-robin the lesson teaches: two live at once, the
+# third s" reuses the oldest slot.
+assert_output "Strings lesson transient-buffer example" \
+    $'s" AAAA" s" BBBB" s" CCCC"\ntype space type space type' \
+    "CCCC BBBB CCCC"
+assert_output "Strings lesson keep-a-string example" \
+    $'create name 16 allot variable name-len\n: name! ( c-addr u -- ) dup name-len ! name swap cmove ;\n: name@ ( -- c-addr u ) name name-len @ ;\ns" Ada" name!\ns" x" s" y" s" z" 2drop 2drop 2drop\n: greet ." Hello, " name@ type ." !" cr ;\ngreet' \
+    "Hello, Ada!"
+
 # The real-docs listing shows each tutorial's "# Name — description" title
 real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
 if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
+   && "$real_tuts" == *"Strings — Text on the Stack"* \
    && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
     printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
 else

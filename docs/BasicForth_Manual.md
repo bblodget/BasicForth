@@ -687,6 +687,8 @@ tutorial — one topic, ten minutes; a *project* builds a whole program):
 
 - `tutorial Arrays` — your first data structure: `create`, `allot`, `cells`,
   and the loop/index idiom, in about ten minutes.
+- `tutorial Strings` — text as an address/length pair: `s"`, `type`, slicing,
+  comparing, and keeping a copy in your own buffer.
 - `tutorial Snake` — learn the language *bottom-up*, one small word at a time,
   until the last word is the whole game. Finished program: `examples/snake-mini.fs`.
 - `tutorial Chase` — learn to *design* a game *top-down*: sketch the whole shape
