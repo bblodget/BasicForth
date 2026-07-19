@@ -128,6 +128,36 @@ All of the helper words are internal (parenthesized names like `(getdents)`,
 `(each-dir)`, `(page-entry)`); only `help`, `tutorials`, and `apropos` are
 meant to be called directly.
 
+## Markdown Rendering
+
+On a terminal, help pages and tutorial steps are lightly rendered as they are
+paged:
+
+- `## ` headings print **bold** with the hashes stripped
+- lines indented four or more spaces (the at-a-glance tables and code
+  examples) print in cyan
+- inline `` `code` `` spans print cyan and `**bold**` spans bold, with the
+  markers stripped; a code span inside a bold span reverts to bold when it
+  closes
+- the `-- more --` pause bar prints in reverse video
+
+The render pass lives in `(mk-line)`, called from the pager's one line-printing
+choke point `(pg-line)`; no markdown knowledge exists in assembly. Each line
+that set an attribute ends with a reset, so quitting mid-page never leaves the
+terminal colored. Two gates keep non-interactive output exact:
+
+- the render pass runs only when **stdout is a terminal** (`(otty?)`), so
+  piped or redirected output is byte-identical to the file — tests and
+  scripts depend on this;
+- only pages known to be markdown opt in (the `(mk?)` flag, set by the help
+  and tutorial pagers) — `more` and `list` page Forth source and stay plain.
+
+The attributes themselves are the user-facing words `color` / `bold` /
+`reverse` / `normal` (see `help terminal`), built on the `(attr!)` primitive:
+a semantic request (0–15 = QBasic/VGA color, 16 bold, 17 reverse, 18 reset)
+that each platform maps to its own mechanism — ANSI SGR on Linux, hardware
+attributes on a future framebuffer target.
+
 ## History
 
 `help` replaced the original `man` / `topics` pair in v0.11.0: `topics`'s

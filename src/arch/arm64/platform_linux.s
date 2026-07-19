@@ -345,7 +345,9 @@ platform_flush_icache:
 // platform_exit ( X0=status ) — restore terminal and exit with status.
 .global platform_exit
 platform_exit:
-    STP X0, X30, [SP, #-16]!        // preserve status + LR across the call
+    STP X0, X30, [SP, #-16]!        // preserve status + LR across the calls
+    MOV X0, #18                     // reset text attributes (tty only; no
+    BL platform_text_attr           // escape bytes reach a piped stdout)
     BL platform_restore_term
     LDP X0, X30, [SP], #16
     MOV X8, #SYS_exit_group
@@ -1366,8 +1368,78 @@ platform_cursor_on:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- TEXT ATTRIBUTES ----------
+// platform_text_attr ( X0=code -- )
+// Semantic text-attribute request; each platform maps codes to its own
+// attribute mechanism (ANSI SGR here; a framebuffer target would set hardware
+// attributes). Codes: 0-15 = foreground color (VGA/QBasic palette, full 16),
+// 16 = bold on, 17 = reverse video on, 18 = reset all attributes.
+// NO-OP when stdout is not a terminal, so piped/redirected output never
+// contains escape bytes. Unknown codes are ignored.
+.global platform_text_attr
+platform_text_attr:
+    CMP X0, #18
+    B.HI .Lattr_done                // unknown code: ignore
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    MOV X23, X0                     // X23 = code
+    MOV X0, #STDOUT
+    BL platform_isatty
+    CBZ X0, .Lattr_ret              // not a terminal: emit nothing
+    SUB SP, SP, #16
+    MOV X0, SP                      // build ESC [ ... m on the stack
+    MOV W9, #0x1b
+    STRB W9, [X0], #1
+    MOV W9, #'['
+    STRB W9, [X0], #1
+    CMP X23, #16
+    B.HS .Lattr_mode
+    // Color 0-15: VGA order -> ANSI 30-37, bright (8-15) -> 90-97
+    ADR X10, vga_ansi_fg
+    AND X11, X23, #7
+    LDRB W12, [X10, X11]            // base ANSI code 30-37
+    CMP X23, #8
+    B.LO 1f
+    ADD W12, W12, #60               // bright variant 90-97
+1:  MOV W13, #10                    // two decimal digits
+    UDIV W14, W12, W13              // tens
+    MSUB W15, W14, W13, W12         // ones
+    ADD W14, W14, #'0'
+    ADD W15, W15, #'0'
+    STRB W14, [X0], #1
+    STRB W15, [X0], #1
+    MOV W9, #'m'
+    STRB W9, [X0], #1
+    B .Lattr_write
+.Lattr_mode:
+    // 16/17/18 -> ESC[1m (bold) / ESC[7m (reverse) / ESC[0m (reset)
+    ADR X10, attr_mode_ch
+    SUB X11, X23, #16
+    LDRB W12, [X10, X11]
+    STRB W12, [X0], #1
+    MOV W9, #'m'
+    STRB W9, [X0], #1
+.Lattr_write:
+    MOV X1, X0
+    MOV X0, SP
+    SUB X1, X1, X0                  // length
+    BL platform_write
+    ADD SP, SP, #16
+.Lattr_ret:
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+.Lattr_done:
+    RET
+
 // ---------- ANSI Escape Sequences ----------
 .section .rodata
+// VGA/QBasic color order (black blue green cyan red magenta brown gray)
+// mapped to the ANSI SGR foreground codes.
+vga_ansi_fg:
+    .byte 30, 34, 32, 36, 31, 35, 33, 37
+attr_mode_ch:
+    .ascii "170"                    // bold, reverse, reset SGR digits
+
 ansi_page:
     .byte 0x1b
     .ascii "[2J"

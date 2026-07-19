@@ -200,6 +200,10 @@ platform_page:
 platform_at_xy:
     ret
 
+.global platform_text_attr
+platform_text_attr:
+    ret
+
 .global platform_screen_width
 platform_screen_width:
     mov $80, %eax

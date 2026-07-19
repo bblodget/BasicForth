@@ -3658,6 +3658,20 @@ forth_at_xy:
     LDP X29, X30, [SP], #16
     RET
 
+// ---------- (ATTR!) ----------
+// (attr!) ( n -- )
+// Semantic text-attribute request: 0-15 = foreground color (VGA/QBasic
+// palette), 16 = bold, 17 = reverse, 18 = reset. The platform layer maps the
+// code (ANSI SGR on Linux) and emits nothing when stdout is not a terminal.
+// User-facing words COLOR / BOLD / REVERSE / NORMAL are defined in core.fs.
+.global forth_text_attr
+forth_text_attr:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19], #CELL           // pop attribute code
+    BL platform_text_attr
+    LDP X29, X30, [SP], #16
+    RET
+
 // ---------- SCREEN-WIDTH ----------
 // SCREEN-WIDTH ( -- u )
 .global forth_screen_w
@@ -4139,6 +4153,18 @@ forth_pclose:
 forth_tty:
     STP X29, X30, [SP, #-16]!
     MOV X0, #0                      // fd 0 = stdin
+    BL platform_isatty              // X0 = 1 tty / 0 not
+    STR X0, [X19, #-CELL]!
+    LDP X29, X30, [SP], #16
+    RET
+
+// (otty?) ( -- f )  true when stdout is a terminal. Gates output shaping (the
+// pager's markdown rendering): a piped/redirected stdout must receive the
+// file's bytes unchanged even when stdin is interactive — and vice versa.
+.global forth_otty
+forth_otty:
+    STP X29, X30, [SP, #-16]!
+    MOV X0, #1                      // fd 1 = stdout
     BL platform_isatty              // X0 = 1 tty / 0 not
     STR X0, [X19, #-CELL]!
     LDP X29, X30, [SP], #16
@@ -5326,6 +5352,8 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
+DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
+DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5340,6 +5368,8 @@ DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
 .global dict_system
 .global dict_fill32
 .global dict_ccall
+.global dict_text_attr
+.global dict_otty
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):

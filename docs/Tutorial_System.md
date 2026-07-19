@@ -97,14 +97,15 @@ exist, BasicForth says so rather than failing silently.
 
 The engine reuses the docs-browser machinery: `(each-dir)` to walk the
 `BASICFORTH_DOCS` sections, the `(getdents)` directory scan to find `<name>.md`
-(case-insensitively, like `man`), `(build-path)` to form the path, and
+(case-insensitively, like `help`), `(build-path)` to form the path, and
 `read-line` to read it. `(print-step)` walks the lines counting `## ` headings,
 printing only the requested step through the pager line-printer (`(pg-line)`), so
-long steps page automatically. State is a stable copy of the current tutorial
+long steps page automatically and steps get the same markdown rendering as
+help pages on a terminal (see docs/Help_System.md). State is a stable copy of the current tutorial
 name plus the current step index, so `next`/`back` just re-open the file and
 re-scan to the new step — no file is held open between commands.
 
-All helper words are internal (`(tut-go)`, `(print-step)`, `(tut-head?)`, …);
+All helper words are internal (`(tut-go)`, `(print-step)`, `(head?)`, …);
 only `tutorial`, `next`, `back`, `step`, and `end-tutorial` are meant to be
 called directly. The optional step argument on `tutorial`/`step` is parsed
 from the line (not the stack). A number is used as-is; the name of a

@@ -36,10 +36,12 @@ The character code for a space (BLank). Handy with `emit`, `fill`, etc.
 
 ## base ( -- a-addr )
 Holds the current number base used for reading and printing numbers (10 by
-default). `decimal` and `hex` set it; see `help numbers` (including the
-`$` / `%` / `#` literal prefixes that sidestep it for one number).
+default). `decimal`, `hex`, and `binary` set it; see `help numbers`
+(including the `$` / `%` / `#` literal prefixes that sidestep it for one
+number). Beware: `base @ .` prints `10` in **every** base — the value of
+the base, shown in its own base, is always "10". To see it in decimal:
 
-    base @ .          \ 10
+    base @ dup decimal . base !     \ 16 (say), base unchanged
 
 ## state ( -- a-addr )
 Holds the interpreter state: 0 while interpreting, non-zero while compiling a

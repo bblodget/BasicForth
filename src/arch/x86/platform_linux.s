@@ -299,7 +299,9 @@ platform_write:
 # platform_exit ( RDI=status -- ) — restore terminal and exit with status.
 .global platform_exit
 platform_exit:
-    push %rdi                   # preserve status across the ioctl call
+    push %rdi                   # preserve status across the calls below
+    mov $18, %rdi               # reset text attributes (tty only; no escape
+    call platform_text_attr     # bytes reach a piped/redirected stdout)
     call platform_restore_term
     pop %rdi
     mov $SYS_exit_group, %rax
@@ -1267,8 +1269,70 @@ platform_cursor_on:
     call platform_write
     ret
 
+# ---------- TEXT ATTRIBUTES ----------
+# platform_text_attr ( RDI=code -- )
+# Semantic text-attribute request; each platform maps codes to its own
+# attribute mechanism (ANSI SGR here; a framebuffer target would set hardware
+# attributes). Codes: 0-15 = foreground color (VGA/QBasic palette, full 16),
+# 16 = bold on, 17 = reverse video on, 18 = reset all attributes.
+# NO-OP when stdout is not a terminal, so piped/redirected output never
+# contains escape bytes. Unknown codes are ignored.
+.global platform_text_attr
+platform_text_attr:
+    cmp $18, %rdi
+    ja .Lattr_done                  # unknown code: ignore
+    push %rdi
+    mov $STDOUT, %rdi
+    call platform_isatty
+    pop %rdi
+    test %rax, %rax
+    jz .Lattr_done                  # not a terminal: emit nothing
+    sub $16, %rsp
+    movb $0x1b, (%rsp)              # build ESC [ ... m on the stack
+    movb $'[', 1(%rsp)
+    cmp $16, %rdi
+    jae .Lattr_mode
+    # Color 0-15: VGA order -> ANSI 30-37, bright (8-15) -> 90-97
+    lea vga_ansi_fg(%rip), %rax
+    mov %rdi, %rcx
+    and $7, %rcx
+    movzbl (%rax,%rcx), %eax        # base ANSI code 30-37
+    cmp $8, %rdi
+    jb 1f
+    add $60, %eax                   # bright variant 90-97
+1:  mov $10, %ecx                   # two decimal digits
+    xor %edx, %edx
+    div %ecx                        # EAX = tens, EDX = ones
+    add $'0', %al
+    add $'0', %dl
+    movb %al, 2(%rsp)
+    movb %dl, 3(%rsp)
+    movb $'m', 4(%rsp)
+    mov $5, %edx
+    jmp .Lattr_write
+.Lattr_mode:
+    # 16/17/18 -> ESC[1m (bold) / ESC[7m (reverse) / ESC[0m (reset)
+    lea attr_mode_ch(%rip), %rax
+    movzbl -16(%rax,%rdi), %eax
+    movb %al, 2(%rsp)
+    movb $'m', 3(%rsp)
+    mov $4, %edx
+.Lattr_write:
+    lea (%rsp), %rsi
+    call platform_write
+    add $16, %rsp
+.Lattr_done:
+    ret
+
 # ---------- ANSI Escape Sequences ----------
 .section .rodata
+# VGA/QBasic color order (black blue green cyan red magenta brown gray)
+# mapped to the ANSI SGR foreground codes.
+vga_ansi_fg:
+    .byte 30, 34, 32, 36, 31, 35, 33, 37
+attr_mode_ch:
+    .ascii "170"                    # bold, reverse, reset SGR digits
+
 ansi_page:
     .byte 0x1b
     .ascii "[2J"

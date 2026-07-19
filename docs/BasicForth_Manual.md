@@ -621,6 +621,9 @@ Snake (Tutorial)
 - `apropos <keyword>` lists the topics whose file contains `<keyword>`
   (case-insensitive substring match), each labelled with its section.
 - Long output pages a screenful at a time — space for the next page, `q` to stop.
+- On a terminal the pages are rendered: headings and `**bold**` come out bold,
+  `` `code` `` and the indented examples cyan. Piped output stays plain text,
+  byte-identical to the file.
 
 If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
 See `docs/Help_System.md` for details.

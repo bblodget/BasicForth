@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Markdown-rendered help + text attributes
+- **Help pages and tutorials render on the terminal**: `## ` headings print
+  bold with the hashes stripped, the indented at-a-glance tables and code
+  examples print cyan, inline `` `code` `` prints cyan and `**bold**` bold
+  with the markers stripped, and the `-- more --` bar is reverse video.
+  Piped/redirected output is untouched — byte-identical to the file — and
+  `more`/`list` stay plain (they page Forth source, not markdown). The
+  render pass is pure Forth in the pager's line printer; assembly knows
+  nothing about markdown.
+- **New words `color` / `bold` / `reverse` / `normal`** — terminal text
+  attributes for your own programs (status bars, game screens):
+  `color ( n -- )` takes the 16-color QBasic/VGA palette (4 = red, 14 =
+  yellow, …); `normal` resets everything, and BasicForth also resets on
+  exit. All four are silent when stdout is piped, so scripts stay clean.
+  Built on one new platform call, `platform_text_attr`, that maps semantic
+  codes to ANSI (a future bare-metal target would map the same codes to
+  hardware attributes). New primitives: `(attr!)`, `(otty?)` (stdout
+  isatty — the render gate; the `--more--` pause still keys off stdin).
+- **`.s` now follows `base`** like `.` — `binary 110 .s` shows `110`, and
+  hex stacks dump in hex. (The asm primitive's printer hard-coded decimal;
+  `.s` is now redefined in core.fs over `depth`/`pick`. `dump`, `h.2`, and
+  `h.addr` remain intentionally hex.)
+
 ## v0.11.0 — 2026-07-19
 
 ### `help` — the reference manual, from the prompt

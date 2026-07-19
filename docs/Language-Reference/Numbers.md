@@ -31,8 +31,12 @@ Switch to base 2 — handy for bit masks and cellular automata. (The name
 `bin` is taken by the file-access modifier — see `help files`.) For any
 other base, store it directly into `base`:
 
-    5 binary .  decimal   \ 101
+    #5 binary .  decimal  \ 101
     #6 base !             \ base 6, if you must
+
+Numbers are parsed in the **current** base — once you are in binary, `5`
+won't parse (`? 5`). Type `decimal` first, or write numbers with the `#`
+prefix, which is always read as decimal (as the example above does).
 
 ## Number prefixes ($ hex, % binary, # decimal)
 
