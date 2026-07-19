@@ -136,9 +136,11 @@ paged:
 - `## ` headings print **bold** with the hashes stripped
 - lines indented four or more spaces (the at-a-glance tables and code
   examples) print in cyan
-- inline `` `code` `` spans print cyan and `**bold**` spans bold, with the
-  markers stripped; a code span inside a bold span reverts to bold when it
-  closes
+- inline `` `code` `` spans print cyan, `**bold**` spans bold, and
+  `*italic*` spans italic, with the markers stripped; a span closing inside
+  another (code inside bold, italic inside bold) re-opens the survivor. A
+  lone star in prose (`5 * 3`) opens nothing — a single `*` starts an
+  italic span only when a printable character follows it
 - the `-- more --` pause bar prints in reverse video
 
 The render pass lives in `(mk-line)`, called from the pager's one line-printing
@@ -153,10 +155,10 @@ terminal colored. Two gates keep non-interactive output exact:
   and tutorial pagers) — `more` and `list` page Forth source and stay plain.
 
 The attributes themselves are the user-facing words `color` / `bold` /
-`reverse` / `normal` (see `help terminal`), built on the `(attr!)` primitive:
-a semantic request (0–15 = QBasic/VGA color, 16 bold, 17 reverse, 18 reset)
-that each platform maps to its own mechanism — ANSI SGR on Linux, hardware
-attributes on a future framebuffer target.
+`reverse` / `normal` / `italic` (see `help terminal`), built on the `(attr!)`
+primitive: a semantic request (0–15 = QBasic/VGA color, 16 bold, 17 reverse,
+18 reset, 19 italic) that each platform maps to its own mechanism — ANSI SGR
+on Linux, hardware attributes on a future framebuffer target.
 
 ## History
 

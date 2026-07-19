@@ -61,8 +61,20 @@ file still reads fine under `help` — the headings are ordinary Markdown.
 > back                    \ review the previous step
 ```
 
-The name is the file's base name without `.md` (what `tutorials` shows), matched
-case-insensitively — `tutorial Snake`, `tutorial snake`.
+The name is the file's base name without `.md`, matched case-insensitively —
+`tutorial Snake`, `tutorial snake`. The `tutorials` listing shows each file's
+**title line** (our convention is `# <Name> — <what you'll learn>`, so the
+title names the tutorial *and* describes it):
+
+```
+> tutorials
+Tutorials (start one with:  tutorial <name>):
+  Arrays — Your First Data Structure
+  Chase — Design a Game from the Top Down
+  Snake — Build Your First Game
+```
+
+A file with no `# ` title line is listed by its file name.
 
 Each step is shown on a **cleared screen** (interactive sessions only — piped
 input gets plain text with no escape codes). Your experiments between steps
@@ -78,14 +90,20 @@ exist, BasicForth says so rather than failing silently.
 ## Notes for lesson authors
 
 - **Keep each step to half–two-thirds of a screen.** A step is printed through
-  the same pager as `man`, so an over-long step pauses (`space` to continue,
+  the same pager as `help`, so an over-long step pauses (`space` to continue,
   `q` to stop) — but the point of a tutorial step is to leave room *below* it,
   so the reader can type the examples while the instructions stay visible.
   Split a long idea across two `## ` steps.
 - **Make examples runnable and short**, with the expected result in a trailing
   `\ comment`, exactly as in the Language Reference pages.
-- **Number lesson files** (`01-…`, `02-…`) so `tutorials` lists them in order
-  (`tutorials` sorts names within each section).
+- **Give the file a descriptive, prefix-free name** (`Arrays`, `Snake` — not
+  `01-arrays`) and open it with a `# <Name> — <what you'll learn>` title:
+  that line *is* the description shown by `tutorials` (which sorts names
+  alphabetically within each section).
+- Two styles have emerged: **project tutorials** (Snake, Chase) build one
+  program across many steps; **topic lessons** (Arrays) teach one concept in
+  ~10 minutes with extra-short steps — one idea, one thing to type — and end
+  by pointing into the reference (`help memory`). Same engine either way.
 - A lesson file lives in a `BASICFORTH_DOCS` section just like a reference page;
   a common layout is a `Tutorial` section alongside `Language-Reference`:
 

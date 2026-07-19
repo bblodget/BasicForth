@@ -622,7 +622,7 @@ Snake (Tutorial)
   (case-insensitive substring match), each labelled with its section.
 - Long output pages a screenful at a time — space for the next page, `q` to stop.
 - On a terminal the pages are rendered: headings and `**bold**` come out bold,
-  `` `code` `` and the indented examples cyan. Piped output stays plain text,
+  `*italic*` italic, `` `code` `` and the indented examples cyan. Piped output stays plain text,
   byte-identical to the file.
 
 If `BASICFORTH_DOCS` is unset, each word prints `(BASICFORTH_DOCS not set)`.
@@ -652,8 +652,11 @@ resume a lesson later, note the step number in the footer and start with
 Steps are split on the file's `## ` headings, so any docs file can be walked this
 way. See `docs/Tutorial_System.md`.
 
-Two tutorials ship today, each building a complete terminal game:
+`tutorials` lists what ships, one title per line (a *lesson* is just a short
+tutorial — one topic, ten minutes; a *project* builds a whole program):
 
+- `tutorial Arrays` — your first data structure: `create`, `allot`, `cells`,
+  and the loop/index idiom, in about ten minutes.
 - `tutorial Snake` — learn the language *bottom-up*, one small word at a time,
   until the last word is the whole game. Finished program: `examples/snake-mini.fs`.
 - `tutorial Chase` — learn to *design* a game *top-down*: sketch the whole shape

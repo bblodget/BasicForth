@@ -175,6 +175,9 @@ report("help heading bold, hashes stripped",
        "\x1b[1mallot" in txt and "## allot" not in txt)
 report("indented example cyan", "\x1b[36m" in txt)
 report("attributes reset", "\x1b[0m" in txt)
+out = send(fd, b': t9 s" a *b* c" (mk-span) cr ; t9\r')
+report("*italic* span rendered",
+       "\x1b[3mb\x1b[0m" in out.decode(errors="replace"))
 send(fd, b"\r")                # continue past a pager pause, or just re-prompt
 send(fd, b"bye\r"); os.close(fd)
 

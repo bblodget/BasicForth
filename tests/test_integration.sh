@@ -2917,12 +2917,12 @@ fi
 
 # The attribute words themselves are silent on a piped stdout (the primitive
 # checks isatty), so they are safe in scripts and filters.
-attr_out=$(printf '10 color bold reverse ." visible" normal cr bye\n' | \
+attr_out=$(printf '10 color bold reverse italic ." visible" normal cr bye\n' | \
     BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1)
 if [[ "$attr_out" != *$'\x1b'* && "$attr_out" == *"visible"* ]]; then
-    printf "  ${GREEN}PASS${NC}  color/bold/reverse/normal: silent when piped\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  color/bold/reverse/italic/normal: silent when piped\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  color/bold/reverse/normal: silent when piped\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  color/bold/reverse/italic/normal: silent when piped\n"; ((failed++))
 fi
 
 # notes.txt is not a topic
@@ -2979,6 +2979,8 @@ mkdir -p "$sec_base/RefSec" "$sec_base/Tutorial" "$sec_base/EmptySec"
 printf '# Alpha\nwidget gear\n' > "$sec_base/RefSec/Alpha.md"
 printf '# Beta\nmore widget\n'  > "$sec_base/RefSec/Beta.md"
 printf '# Lesson\nnothing\n'    > "$sec_base/Tutorial/Lesson.md"
+printf '# Grok — Learn widgets fast\nintro\n' > "$sec_base/Tutorial/Grok.md"
+printf 'no title here\n'        > "$sec_base/Tutorial/Plain.md"
 printf 'not a topic\n'          > "$sec_base/EmptySec/readme.txt"
 sec_docs="$sec_base/RefSec:$sec_base/Tutorial:$sec_base/EmptySec"
 
@@ -3006,6 +3008,21 @@ if [[ "$tuts_out" == *"Lesson"* ]] && [[ "$tuts_out" == *"tutorial <name>"* ]] \
 else
     printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorial section\n"
     printf "    Got:      %s\n" "$(echo "$tuts_out" | head -4)"; ((failed++))
+fi
+
+# The listing shows each tutorial's title line ("# Name — description"
+# convention, hashes stripped); a file with no title falls back to its name.
+if [[ "$tuts_out" == *"Grok — Learn widgets fast"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials shows the title-line description\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials shows the title-line description\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -5)"; ((failed++))
+fi
+if [[ "$tuts_out" == *"Plain"* && "$tuts_out" != *"no title here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials falls back to the file name\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials falls back to the file name\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -5)"; ((failed++))
 fi
 
 # An empty section (no .md) must not print a header
@@ -3182,6 +3199,33 @@ if [[ "$tut_pager" == *"filler line 40"* && "$tut_pager" != *"-- more"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  piped help never pauses at --more--\n"
     printf "    Got:      %s\n" "$(echo "$tut_pager" | tail -3)"; ((failed++))
+fi
+
+# The shipped Arrays lesson: starts, has its 14 steps, and its examples run.
+arrays_out=$(printf 'tutorial Arrays\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+if [[ "$arrays_out" == *"no built-in array type"* && "$arrays_out" == *"step 1/14"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Arrays lesson opens with 14 steps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  Arrays lesson opens with 14 steps\n"
+    printf "    Got:      %s\n" "$(echo "$arrays_out" | head -4)"; ((failed++))
+fi
+assert_output "Arrays lesson examples work" \
+    $'create nums 5 cells allot\n: nth ( i -- addr ) cells nums + ;\n: init 5 0 do i i * i nth ! loop ;\ninit\n: show 5 0 do i nth @ . loop cr ;\nshow' \
+    "0 1 4 9 16"
+assert_output "Arrays lesson table example"  \
+    $'create days 31 , 28 , 31 , 30 , 31 , 30 , 31 , 31 , 30 , 31 , 30 , 31 ,\n: days-in ( month -- n ) 1- cells days + @ ;\n2 days-in .' \
+    "28"
+
+# The real-docs listing shows each tutorial's "# Name — description" title
+real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
+   && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials lists real titles with descriptions\n"
+    printf "    Got:      %s\n" "$(echo "$real_tuts" | head -5)"; ((failed++))
 fi
 
 # Unset BASICFORTH_DOCS — tutorial reports it gracefully

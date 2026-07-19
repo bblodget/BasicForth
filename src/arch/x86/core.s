@@ -3328,9 +3328,9 @@ forth_at_xy:
 # ---------- (ATTR!) ----------
 # (attr!) ( n -- )
 # Semantic text-attribute request: 0-15 = foreground color (VGA/QBasic
-# palette), 16 = bold, 17 = reverse, 18 = reset. The platform layer maps the
+# palette), 16 = bold, 17 = reverse, 18 = reset, 19 = italic. The platform layer maps the
 # code (ANSI SGR on Linux) and emits nothing when stdout is not a terminal.
-# User-facing words COLOR / BOLD / REVERSE / NORMAL are defined in core.fs.
+# User-facing words COLOR / BOLD / REVERSE / NORMAL / ITALIC are defined in core.fs.
 .global forth_text_attr
 forth_text_attr:
     mov (%r15), %rdi                # pop attribute code

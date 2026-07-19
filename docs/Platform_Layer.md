@@ -540,14 +540,15 @@ Set a text attribute from a semantic code.
 
 Codes: 0–15 = foreground color in the VGA/QBasic palette (full 16, mapped
 through an 8-entry VGA→ANSI table, +60 for the bright half), 16 = bold on,
-17 = reverse video on, 18 = reset all attributes; unknown codes are ignored.
+17 = reverse video on, 18 = reset all attributes, 19 = italic on; unknown
+codes are ignored.
 Emits the matching ANSI SGR sequence (`ESC[{n}m`) via `platform_write` — but
 only when stdout is a terminal (checked with `platform_isatty`), so piped or
 redirected output never contains escape bytes. `platform_exit` requests a
 reset before leaving so no session can exit with attributes stuck on. On a
 future bare metal platform, the same codes would set VGA attribute bytes or
 framebuffer text style. Exposed to Forth as `(attr!)`; the user words are
-`color` / `bold` / `reverse` / `normal` in core.fs.
+`color` / `bold` / `reverse` / `normal` / `italic` in core.fs.
 
 ### platform_screen_width
 

@@ -629,12 +629,30 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
     `(mk?)` (help/tutorial pages opt in; `more`/`list` page Forth source
     and stay plain). Piped output byte-identical, enforced by tests both
     ways (pipe suite: no ESC bytes; PTY suite: rendering present).
+- [ ] **`list` should page the capture log, not the file** (found 2026-07-19
+  walking the Arrays lesson): `list` shows the module *file*, so a word
+  defined since the last `save` is missing — surprising next to bare
+  `edit`, whose dirty-guard save makes it look always-current. Since the
+  file-canonical model, the log IS "the file's text plus the lines added
+  since", so listing the log shows the always-current view with no
+  fidelity loss and retires the `(unsaved changes - save to include
+  them)` note. Implementation note: the log lives on the heap, and
+  `list` pages a fileid through `page-file` — either give the pager a
+  page-from-memory entry point or list the log line-by-line through
+  `(pg-line)` directly.
 - [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
   annoying): move the fix's later-defined dependencies up to just before
   the edited word; move-to-end when the word has no callers. Design in
   Module_Architecture.md ("Forward references from a mutation").
-- [ ] **Topic lessons** — short single-topic tutorials (`lesson`?); first:
-  arrays (`create`/`allot`/`cells`), which also documents `allot`.
+- [x] **Topic lessons** (branch arrays-lesson, 2026-07-19) — decided lessons
+  are just tutorials: same engine, same `tutorial` command, a shorter
+  writing style (one idea + one thing to type per step) rather than a new
+  word. First lesson: `tutorial Arrays` (`create`/`allot`/`cells`, the
+  `nth` idiom, `,`-tables, `erase`, byte arrays — `allot`'s narrative
+  home). `tutorials` listing upgraded to show each file's
+  `# Name — description` title line, so lessons and projects distinguish
+  themselves by description, not by category machinery. More lessons as
+  needed: strings, files, defer/is, modules.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows

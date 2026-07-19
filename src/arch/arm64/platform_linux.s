@@ -1373,12 +1373,12 @@ platform_cursor_on:
 // Semantic text-attribute request; each platform maps codes to its own
 // attribute mechanism (ANSI SGR here; a framebuffer target would set hardware
 // attributes). Codes: 0-15 = foreground color (VGA/QBasic palette, full 16),
-// 16 = bold on, 17 = reverse video on, 18 = reset all attributes.
-// NO-OP when stdout is not a terminal, so piped/redirected output never
+// 16 = bold on, 17 = reverse video on, 18 = reset all attributes, 19 = italic
+// on. NO-OP when stdout is not a terminal, so piped/redirected output never
 // contains escape bytes. Unknown codes are ignored.
 .global platform_text_attr
 platform_text_attr:
-    CMP X0, #18
+    CMP X0, #19
     B.HI .Lattr_done                // unknown code: ignore
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
@@ -1412,7 +1412,7 @@ platform_text_attr:
     STRB W9, [X0], #1
     B .Lattr_write
 .Lattr_mode:
-    // 16/17/18 -> ESC[1m (bold) / ESC[7m (reverse) / ESC[0m (reset)
+    // 16/17/18/19 -> ESC[1m bold / ESC[7m reverse / ESC[0m reset / ESC[3m italic
     ADR X10, attr_mode_ch
     SUB X11, X23, #16
     LDRB W12, [X10, X11]
@@ -1438,7 +1438,7 @@ platform_text_attr:
 vga_ansi_fg:
     .byte 30, 34, 32, 36, 31, 35, 33, 37
 attr_mode_ch:
-    .ascii "170"                    // bold, reverse, reset SGR digits
+    .ascii "1703"                   // bold, reverse, reset, italic SGR digits
 
 ansi_page:
     .byte 0x1b
