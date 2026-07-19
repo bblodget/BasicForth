@@ -163,6 +163,15 @@ relative to the current working directory (the build directory).
 > s" ../../../examples/snake.fs" included
 ```
 
+`REQUIRE` (and its string form `REQUIRED`) is `include` that loads a file
+only once — asking again is a no-op. It's how libraries declare their
+dependencies: `sdl3.fs` begins with `require ffi.fs require graphics.fs`,
+so `require sdl3.fs` brings up the whole graphics stack in one line, and a
+file required by several libraries still loads once. After editing a file,
+use `include` to force a reload. A missing file is an error for both
+(`cannot open <name>`); only the silent startup loads (core.fs, the session
+file) skip quietly.
+
 ### Executable Scripts (`#!`)
 
 A Forth file can be run directly as a Unix executable script. Give it a
@@ -574,7 +583,7 @@ scale 4 fills a 1280×720 window with big crisp pixels (and 1/16 the drawing
 work):
 
 ```
-> include graphics.fs  include ffi.fs  include sdl3.fs
+> require sdl3.fs
  ok
 > 4 to sdl-scale  320 180 sdl-open
  ok
@@ -593,7 +602,7 @@ Square-wave tones through the default playback device, queued so your code
 keeps running while they play:
 
 ```
-> include ffi.fs  include sound.fs
+> require sound.fs
  ok
 > snd-open  440 200 tone  beep  snd-wait  snd-close
  ok

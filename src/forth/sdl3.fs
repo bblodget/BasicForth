@@ -3,9 +3,10 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ Presents the graphics.fs software 2D surface in a desktop window (or on the
-\ raw console via SDL's KMSDRM driver), vsync'd. Load order:
+\ raw console via SDL's KMSDRM driver), vsync'd. Pulls in its own
+\ dependencies -- just:
 \
-\   include graphics.fs   include ffi.fs   include sdl3.fs
+\   require sdl3.fs
 \
 \ A frame goes:  sdl-frame  (lock texture, point the surface at its pixels)
 \                ... draw with graphics.fs words ...
@@ -17,6 +18,9 @@
 \
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
+
+require ffi.fs
+require graphics.fs
 
 \ --- library ---
 \ The strings live in one binding word that runs at include time (bottom of

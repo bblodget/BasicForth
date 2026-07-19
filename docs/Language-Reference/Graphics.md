@@ -5,7 +5,7 @@ Software 2D drawing on the current *surface*: a 32-bpp pixel buffer set up by
 with `include graphics.fs`. Coordinates are pixels, (0,0) top-left; colors are
 packed `$RRGGBB`. Everything clips: shapes may hang off any edge freely.
 
-    include graphics.fs  include ffi.fs  include sdl3.fs
+    require sdl3.fs
     320 180 sdl-open
     sdl-frame  black clear
     red 10 10 100 60 fill-rect  white 10 10 100 60 rect

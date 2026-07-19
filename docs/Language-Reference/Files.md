@@ -27,6 +27,8 @@ At a glance:
     rename-file     ( c1 u1 c2 u2 -- ior )    rename
     include <name>  ( "name" -- )             load a Forth source file
     included        ( c u -- )                include, name on the stack
+    require <name>  ( "name" -- )             include, only if not yet loaded
+    required        ( c u -- )                require, name on the stack
     open-pipe       ( c u fam -- fid ior )    pipe over a shell command
     close-pipe      ( fid -- wret wior )      finish a pipe, reap the child
     stdin stdout stderr  ( -- fileid )        the standard streams
@@ -93,7 +95,9 @@ Rename the file named by the first string to the second.
 
 ## include ( "name" -- )
 Load and interpret the Forth source file named by the next word — the usual way
-to load a program.
+to load a program. Always loads, even if the file was loaded before — that's
+the edit-and-reload workflow (`require` is the load-only-once variant). A
+missing file is an error (`cannot open <name>`).
 
     \ include game.fs
 
@@ -102,6 +106,22 @@ Like `include`, but takes the filename as a string on the stack (so it can be
 computed). Use it inside definitions.
 
     \ : load  s" game.fs" included ;
+
+## require ( "name" -- )
+Like `include`, but a no-op if the file has already been loaded this session —
+for dependencies. Libraries `require` what they need at the top, so requiring
+the top of a stack loads the whole stack once: `require sdl3.fs` pulls in
+`ffi.fs` and `graphics.fs` by itself, and repeats are harmless. After editing
+a file mid-session, use `include` to force the reload (`require` will see it
+as already loaded). Loaded-ness follows the dictionary: if a `marker` forgets
+a library, `require` will happily load it again.
+
+    \ require sdl3.fs
+
+## required ( c-addr u -- )
+Like `require`, with the filename as a string on the stack.
+
+    \ s" sdl3.fs" required
 
 ## open-pipe ( c-addr u fam -- fileid ior )
 Run a shell command with a pipe over its stdout (`r/o`: read what it prints)

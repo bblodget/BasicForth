@@ -18,13 +18,15 @@ the project philosophy and the path to GPU/3D via SDL_GPU.
 > normal desktop; it was removed in the SDL pivot. It lives in git history
 > (`src/forth/drm.fs`, `tools/drmoff.c` before the pivot).
 
-Everything loads **on demand** (not at startup), in this order:
+Everything loads **on demand** (not at startup), and each library `require`s
+its own dependencies, so one line brings up the whole stack:
 
 ```
-include graphics.fs   \ the drawing surface + 2D primitives
-include ffi.fs        \ dlopen/dlsym/ccall (see docs/FFI.md)
-include sdl3.fs       \ the SDL3 window/present/event backend
+require sdl3.fs       \ pulls in graphics.fs (surface) and ffi.fs (FFI) itself
 ```
+
+(`require` loads a file only if it isn't already loaded; `include` always
+loads — see `help require`.)
 
 ## The surface (graphics.fs)
 
@@ -116,9 +118,8 @@ repeat
 ## The demo (examples/bounce.fs)
 
 ```
-include graphics.fs  include ffi.fs  include sdl3.fs
-include examples/bounce.fs
-bounce                \ ESC, q, or close the window to quit
+include examples/bounce.fs    \ requires sdl3.fs + sound.fs itself
+bounce                        \ ESC, q, or close the window to quit
 ```
 
 A yellow ball (`fill-circle`) bouncing inside `rect` walls on a 320×180

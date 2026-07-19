@@ -2295,6 +2295,12 @@ forth_included:
     mov CELL(%r15), %rsi            # RSI = c-addr (filename)
     add $2*CELL, %r15
 
+    # Fresh open-tracking for THIS call: set again on a successful open, so
+    # (inc-opened?) read right after an include tells whether the file was
+    # actually found (a missing file is otherwise a silent success — the
+    # startup loads depend on that; main.s reads the same flag for core.fs).
+    movq $0, incl_opened(%rip)
+
     # Save filename for error reporting
     mov %rsi, file_name_addr(%rip)
     mov %rdx, file_name_len(%rip)
@@ -3882,6 +3888,21 @@ forth_included_ior:
     mov %rax, (%r15)               # push ior
     ret
 
+# ---------- (INC-OPENED?) ----------
+# (INC-OPENED?) ( -- flag )
+# True if the most recent include/included actually opened its file
+# (incl_opened: cleared at forth_included entry, set on a successful open).
+# core.fs builds REQUIRE and the interactive cannot-open report on this.
+.global forth_inc_opened
+forth_inc_opened:
+    xor %rax, %rax
+    cmpq $0, incl_opened(%rip)
+    setne %al
+    neg %rax                        # 0 / -1 Forth flag
+    sub $CELL, %r15
+    mov %rax, (%r15)
+    ret
+
 # ---------- MS@ ----------
 # MS@ ( -- u )
 # Return current monotonic milliseconds.
@@ -4891,6 +4912,7 @@ DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
 DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
+DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -4907,6 +4929,7 @@ DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 .global dict_ccall
 .global dict_text_attr
 .global dict_otty
+.global dict_inc_opened
 
 # ---------- Data Stack Memory ----------
 # Layout (grows downward):

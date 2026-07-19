@@ -18,8 +18,7 @@ Loads **on demand** (not at startup), independent of graphics — terminal
 programs can beep too:
 
 ```
-include ffi.fs        \ dlopen/dlsym/ccall (see docs/FFI.md)
-include sound.fs      \ the SDL3 audio backend
+require sound.fs      \ the SDL3 audio backend (pulls in ffi.fs itself)
 ```
 
 ## The words (sound.fs)
@@ -35,7 +34,7 @@ include sound.fs      \ the SDL3 audio backend
 | `snd-vol` | value | amplitude 0..32767 (default 8000); `to snd-vol` |
 
 ```
-> include ffi.fs  include sound.fs
+> require sound.fs
 > snd-open
 > 440 200 tone        \ concert A for 200 ms — returns immediately
 > beep
@@ -75,9 +74,7 @@ SDL3 headers by `tools/sdl3off.c`.
 ## The demo (examples/bounce.fs)
 
 ```
-include graphics.fs  include ffi.fs  include sdl3.fs
-include sound.fs
-include examples/bounce.fs
+include examples/bounce.fs    \ requires sdl3.fs + sound.fs itself
 bounce                \ blips on every wall hit
 ```
 

@@ -2642,6 +2642,62 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     state @ 0= if  ." cancel;: nothing to cancel" cr  exit  then
     ." canceled" cr  abort ; immediate
 
+\ ===================== require — load a file only once =====================
+\ A successful include/included/require records a no-op sentinel word
+\ (inc:<basename>) in the dictionary; REQUIRE skips a file whose sentinel is
+\ findable. The sentinel is defined AFTER the file's words, so a MARKER (or
+\ new/load) that forgets the library forgets the sentinel with it — the
+\ ledger can never disagree with the dictionary, and a forgotten library is
+\ simply require-able again. INCLUDE always loads (the edit-and-reload
+\ workflow); REQUIRE is for dependencies — each library requires what it
+\ needs, repeated requires are no-ops. Both report a missing file as an
+\ error; the deliberate silent-skip survives only for the startup loads
+\ (core.fs, session file), which call the assembly entry directly (main.s).
+
+create (inc-buf) 144 allot                  \ ": (inc:" + basename + ") ;"
+variable (inc-n)
+: (inc+) ( c-addr u -- )                    \ append to (inc-buf)
+    dup >r  (inc-buf) (inc-n) @ +  swap cmove  r> (inc-n) +! ;
+
+variable (bn-cut)
+: (inc-basename) ( c-addr u -- c-addr' u' ) \ strip any directory prefix
+    0 (bn-cut) !
+    dup 0 ?do
+        over i + c@ [char] / = if  i 1+ (bn-cut) !  then
+    loop
+    swap (bn-cut) @ +  swap (bn-cut) @ - ;
+
+: (inc-sentinel+) ( c-addr u -- )           \ append "(inc:<basename>)"
+    (inc-basename)
+    dup 128 > abort" require: filename too long"
+    s" (inc:" (inc+)  (inc+)  s" )" (inc+) ;
+
+: (inc-recorded?) ( c-addr u -- flag )      \ was this file loaded already?
+    0 (inc-n) !  (inc-sentinel+)
+    (inc-buf) (inc-n) @ find
+    if drop true else 2drop false then ;
+
+: (inc-mark) ( c-addr u -- )                \ record a load: define the sentinel
+    2dup (inc-recorded?) if 2drop exit then
+    0 (inc-n) !  s" : " (inc+)  (inc-sentinel+)  s"  ;" (inc+)
+    (inc-buf) (inc-n) @ evaluate ;
+
+: included ( c-addr u -- )                  \ load + record; error if missing
+    2dup included                           \ the assembly INCLUDED does the work
+    (inc-opened?) 0= if  ." cannot open " type cr abort  then
+    (inc-mark) ;
+
+: include ( "name" -- )
+    parse-word dup 0= if  2drop ." usage: include <file>" cr exit  then
+    included ;
+
+: required ( c-addr u -- )                  \ include only if not yet loaded
+    2dup (inc-recorded?) if  2drop exit  then  included ;
+
+: require ( "name" -- )
+    parse-word dup 0= if  2drop ." usage: require <file>" cr exit  then
+    required ;
+
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST
                                             \ here, so they forget the whole module (keep last!)
