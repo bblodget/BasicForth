@@ -36,21 +36,22 @@ and project phases.
 
 ## Status
 
-**v0.10.0** — The interactive **editing workflow**. Forth's dictionary is
-hyper-static — `:` layers a new binding and earlier words keep what they
-captured — so `save` replays your session verbatim, while the *mutation*
-verbs fix a definition in place: `edit <word>` opens it in your `$EDITOR`,
-**`:e <word>`** lets you retype it at the prompt, and `define <word>` drafts
-a new word in the editor. Each splices the module file over the old
-definition and reloads it, so every caller is rebuilt by construction
-(`compact` and caller recompilation are gone). Mutations auto-save — an edit
-implies the file is current — and a warning names anything a fix calls that
-is defined later in the file. Also new: **SDL3 audio** (`sound.fs` —
-square-wave `tone`/`beep`; `bye` no longer freezes with SDL threads
-running), **pipes** (`open-pipe`/`close-pipe` capture a command's output),
-tutorial progress (`[ step 7/25 ]`), and `clearstack`. Builds on v0.9.0's
-FFI + SDL3 graphics, named modules, and the Chase tutorial.
-119 unit tests + 610 integration tests.
+**v0.11.0** — The **built-in reference manual**. `help` is the front door:
+bare `help` lists every topic in aligned columns; `help <topic>` prints a
+page's summary — its "At a glance" table; `help <word>` prints every
+reference entry naming that word (`help begin` shows all three loop forms;
+`help ;` and `help (` work too). `tutorials` lists the interactive lessons;
+`man` and `topics` are retired. Behind it: every user-facing word now has a
+Language-Reference entry (a 79-gap audit closed them all, and a new
+integration test keeps it that way), every page opens with an at-a-glance
+summary, and topic names are lowercase-typeable. Also: **fault recovery is
+save-safe** (a crashed `reload` can no longer make `save` revert the file;
+definitions completed before the bad line survive), **`list`** pages your
+module BASIC-style, **`cancel;`** abandons a half-typed definition,
+`binary` joins `decimal`/`hex`, and `examples/cam.fs` is a Toffoli &
+Margolus-style 1-D cellular automata machine. Builds on v0.10.0's editing
+workflow.
+119 unit tests + 635 integration tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -69,7 +70,7 @@ What works today:
 - Multi-way branching: `CASE OF ENDOF ENDCASE`
 - Compiler words: `LITERAL`, `POSTPONE`, `[']`, `[CHAR]`, `EXIT`, `STATE`, `[ ]`
 - Double-cell arithmetic: `S>D`, `UM*`, `M*`, `UM/MOD`, `SM/REM`, `FM/MOD`, `D+`, `D-`, `D.`
-- Pictured numeric output: `<# # #S #> HOLD SIGN`, `BASE`, `HEX`, `DECIMAL`
+- Pictured numeric output: `<# # #S #> HOLD SIGN`, `BASE`, `HEX`, `DECIMAL`, `BINARY`
 - Formatted output: `.` (base-aware), `U.`, `.R`, `U.R`
 - String words: `TYPE`, `S"`, `."`, `COUNT`, `COMPARE`, `CMOVE`, `/STRING`, `-TRAILING`
 - System: `ABORT`, `ABORT"`, `QUIT`, `>NUMBER`, `SOURCE`, `>IN`, `EVALUATE`, `INCLUDED`, `INCLUDE`
@@ -82,7 +83,8 @@ What works today:
 - Editing: `EDIT <word>` / `:E <word>` / `DEFINE <word>` / bare `EDIT` —
   fix a definition in `$EDITOR` or at the prompt, draft a new one, or open
   the whole module; mutations splice the module file and reload it
-- Help system: `MAN`, `TOPICS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
+- Help system: `HELP` (topic list / topic summary / per-word entry),
+  `TUTORIALS`, `APROPOS`, interactive `TUTORIAL`/`NEXT`/`BACK`,
   and `SEE` (show a word's source via dictionary metadata)
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
 - Graphics (Phase 5): software 2D on a backend-agnostic surface — `set-surface`,
@@ -263,7 +265,7 @@ BasicForth/
     lines.fs                stdout/stderr split demo
   docs/                     Design documentation
     Tutorial/               Interactive tutorials (tutorial Snake)
-    Language-Reference/     Per-topic reference (man Stack, …)
+    Language-Reference/     Per-topic reference (help stack, …)
 ```
 
 ## Target Hardware

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.0 — 2026-07-19
 
 ### `help` — the reference manual, from the prompt
 - **New word `help`**, replacing `man` and `topics` (both retired; `apropos`
