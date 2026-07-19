@@ -22,8 +22,9 @@ At a glance:
     cursor-on   ( -- )            show it again
     color       ( n -- )          text color (0-15, QBasic palette)
     bold        ( -- )            bold text on
+    italic      ( -- )            italic text on
     reverse     ( -- )            reverse video on
-    normal      ( -- )            reset color/bold/reverse
+    normal      ( -- )            reset color/bold/italic/reverse
     ms          ( n -- )          sleep n milliseconds
     ms@         ( -- n )          monotonic milliseconds counter
     key_up key_down key_left key_right key_escape
@@ -105,6 +106,12 @@ Turn on bold text. `normal` turns it off.
 
     \ bold ." heading" normal cr
 
+## italic ( -- )
+Turn on italic text. `normal` turns it off. (How italics look depends on
+the terminal — a few older ones show them as color or reverse instead.)
+
+    \ italic ." emphasis" normal cr
+
 ## reverse ( -- )
 Turn on reverse video (swap foreground and background) — good for status bars
 and highlights. `normal` turns it off.
@@ -112,8 +119,8 @@ and highlights. `normal` turns it off.
     \ reverse ."  -- score: 42 --  " normal cr
 
 ## normal ( -- )
-Reset all text attributes: color, bold, and reverse. BasicForth also resets
-attributes automatically on exit.
+Reset all text attributes: color, bold, italic, and reverse. BasicForth also
+resets attributes automatically on exit.
 
 ## ms ( n -- )
 Pause for `n` milliseconds.

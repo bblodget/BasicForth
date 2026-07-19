@@ -2,16 +2,31 @@
 
 ## Unreleased
 
+### First topic lesson (Arrays) + descriptive tutorial listing
+- **`tutorial Arrays`** — the first *topic lesson*: a ~10-minute, 14-step
+  walk through `create` / `allot` / `cells`, the index-word idiom
+  (`: nth cells nums + ;`), loop fill/print, `,`-tables, `erase`, byte
+  arrays with `c@`/`c!`, and an honest step on unchecked indexing. Lessons
+  are ordinary tutorials — same engine, same `tutorial` command — written
+  in a shorter style (one idea and one thing to type per step, ending with
+  reference pointers). It also finally gives `allot` a narrative home.
+- **`tutorials` now lists each tutorial's title line** instead of bare
+  names — our `# <Name> — <what you'll learn>` convention makes the title
+  double as the description (`Snake — Build Your First Game`). Files
+  without a title still list by name. Author conventions documented in
+  Tutorial_System.md (which also had stale `man`-era notes cleaned up).
+
 ### Markdown-rendered help + text attributes
 - **Help pages and tutorials render on the terminal**: `## ` headings print
   bold with the hashes stripped, the indented at-a-glance tables and code
-  examples print cyan, inline `` `code` `` prints cyan and `**bold**` bold
-  with the markers stripped, and the `-- more --` bar is reverse video.
+  examples print cyan, inline `` `code` `` prints cyan, `**bold**` bold,
+  and `*italic*` italic with the markers stripped, and the `-- more --` bar
+  is reverse video.
   Piped/redirected output is untouched — byte-identical to the file — and
   `more`/`list` stay plain (they page Forth source, not markdown). The
   render pass is pure Forth in the pager's line printer; assembly knows
   nothing about markdown.
-- **New words `color` / `bold` / `reverse` / `normal`** — terminal text
+- **New words `color` / `bold` / `reverse` / `italic` / `normal`** — terminal
   attributes for your own programs (status bars, game screens):
   `color ( n -- )` takes the 16-color QBasic/VGA palette (4 = red, 14 =
   yellow, …); `normal` resets everything, and BasicForth also resets on

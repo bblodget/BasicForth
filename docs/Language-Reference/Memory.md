@@ -128,7 +128,10 @@ it for portable, self-documenting code.
     5 chars .         \ 5
 
 ## fill ( c-addr u char -- )
-Set `u` bytes starting at `c-addr` to `char`.
+Set `u` bytes starting at `c-addr` to `char`. Bytes, not cells: filling a
+cell array with 15 makes each cell eight 15-bytes glued together, not 15.
+To set every cell of an array to a value, loop with `!`; to zero anything,
+`erase`.
 
     create buf 8 allot  buf 5 char * fill  buf 5 type   \ *****
 

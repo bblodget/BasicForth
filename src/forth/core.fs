@@ -1317,6 +1317,7 @@ variable (tn-fw)                           \ field width for the column layout
 : bold ( -- ) 16 (attr!) ;
 : reverse ( -- ) 17 (attr!) ;
 : normal ( -- ) 18 (attr!) ;
+: italic ( -- ) 19 (attr!) ;
 
 \ --- markdown rendering ---
 \ Help pages and tutorials are Markdown; on a terminal the pager renders the
@@ -1328,12 +1329,13 @@ variable (tn-fw)                           \ field width for the column layout
 variable (mk?)                           \ render the current page as markdown?
 3 constant (mk-code)                     \ cyan: `code` spans + indented blocks
 variable (mk-b)                          \ **bold** span open?
+variable (mk-i)                          \ *italic* span open?
 variable (mk-c)                          \ `code` span open?
 variable (mk-x)                          \ any attribute emitted on this line?
 : (attr+) ( n -- )  (attr!) true (mk-x) ! ;
 : (mk-flush) ( -- )                      \ end of line: reset attrs + span state
     (mk-x) @ if 18 (attr!) then
-    false (mk-b) !  false (mk-c) !  false (mk-x) ! ;
+    false (mk-b) !  false (mk-i) !  false (mk-c) !  false (mk-x) ! ;
 : (mk-hashes) ( c-addr u -- n )          \ length of the leading '#' run
     0 swap 0 ?do over i + c@ [char] # <> if leave then 1+ loop nip ;
 : (mk-spaces) ( c-addr u -- n )          \ length of the leading blank run
@@ -1344,23 +1346,36 @@ variable (mk-x)                          \ any attribute emitted on this line?
     2dup > 0= if 2drop drop 0 exit then  \ nothing after the hashes
     rot over + c@ bl <> if 2drop 0 exit then
     nip 1+ ;
-\ Toggle a span attribute. Closing resets, then re-opens whichever span is
+\ Toggle a span attribute. Closing resets, then re-opens whichever spans are
 \ still live, so `code` inside **bold …** comes back bold when it closes.
 : (mk-tog) ( var on-code -- )
     over @ if
         drop  false swap !  18 (attr+)
         (mk-b) @ if 16 (attr+) then
+        (mk-i) @ if 19 (attr+) then
         (mk-c) @ if (mk-code) (attr+) then
     else
         swap true swap !  (attr+)
     then ;
-: (mk-span) ( c-addr u -- )              \ type with `code` / **bold** rendering
+: (mk-next) ( c-addr u -- ch )           \ char after the current one; -1 if none
+    2 u< if drop -1 exit then  1+ c@ ;
+\ At a '*' outside a code span: "**" toggles bold; a single '*' toggles
+\ italic — but only opens when a printable character follows (so a lone
+\ star in prose, like "5 * 3", stays literal).
+: (mk-star) ( c-addr u -- c-addr' u' )
+    2dup (mk-next) [char] * = if
+        (mk-b) 16 (mk-tog)  2 /string exit then
+    (mk-i) @ if
+        (mk-i) 19 (mk-tog)  1 /string exit then
+    2dup (mk-next) dup bl <> swap 0> and if
+        (mk-i) 19 (mk-tog)  1 /string exit then
+    [char] * emit  1 /string ;
+: (mk-span) ( c-addr u -- )              \ `code` / **bold** / *italic* spans
     begin dup 0> while
         over c@ [char] ` = if
             (mk-c) (mk-code) (mk-tog)  1 /string
-        else over c@ [char] * =  over 2 u< 0= and  (mk-c) @ 0= and
-             dup if drop over 1+ c@ [char] * = then if
-            (mk-b) 16 (mk-tog)  2 /string
+        else over c@ [char] * =  (mk-c) @ 0= and if
+            (mk-star)
         else
             over c@ emit  1 /string
         then then
@@ -1549,12 +1564,36 @@ variable (hw-any)                          \ printed any entry from this file?
     (tn-sort)
     (sec-a) @ (sec-u) @ type cr
     (3col) ;
+\ The tutorials listing shows each file's title line — our convention is
+\ "# <Name> — <what you'll learn>", so the title doubles as the description.
+: (tut-path) ( name u -- c-addr u )        \ "<dir>/<name>.md"; u=0 if too long
+    (build-path) dup 0= if exit then
+    dup 3 + (mpath-sz) > if 2drop (mpath) 0 exit then
+    2dup +  s" .md" drop  swap 3 cmove
+    3 + ;
+: (title?) ( fileid -- c-addr u true | false )   \ first line, sans "# "; closes fd
+    >r (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+    r> close-file drop
+    if 2drop false exit then               \ read error: no title
+    0= if drop false exit then             \ empty file
+    dup 3 < if drop false exit then
+    (pg-buf@) c@     [char] # <> if drop false exit then
+    (pg-buf@) 1+ c@  bl        <> if drop false exit then
+    (pg-buf@) 2 + swap 2 -  true ;
+: (tut-line) ( i -- )                      \ one row: the title line, or the name
+    space space
+    (tn-ptr-at) @ count                    ( name u )
+    2dup (tut-path) dup 0= if 2drop type cr exit then   ( name u pa pu )
+    r/o open-file if drop type cr exit then             ( name u fileid )
+    (title?) 0= if type cr exit then                    ( name u ta tu )
+    2swap 2drop type cr ;
 : (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorial sections
     2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+    2dup (md-dirn) ! (md-dir) !            \ (tut-path) builds against this dir
     (collect-in)
     (tn-n) @ 0= if exit then
     (tn-sort)
-    (3col) ;
+    (tn-n) @ 0 ?do  i (tut-line)  loop ;
 
 : tutorials ( -- )
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
