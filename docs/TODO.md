@@ -404,6 +404,27 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
+  `require disasm.fs`). Fills the gap `see` leaves for primitives (today it
+  punts to `help`). Shell out to binutils **`objdump`** — already a build
+  dependency, and it decodes **x86-64 AND aarch64** (and any future arch), so
+  no hand-rolled per-arch decompiler like BareMetalForth's x86 subset. Two
+  paths, because BasicForth code lives in two places:
+  - compiled `:` words live in the RWX dictionary mmap → write the word's byte
+    range to a temp file, `objdump -D -b binary -m <arch> --adjust-vma=<addr>`;
+  - primitives live in the binary's `.text` → `objdump --disassemble=<sym>
+    /proc/self/exe` (no temp file; objdump bounds it by symbol).
+
+  Capture output via `open-pipe`. **Payoff (STC-specific):** reverse-lookup each
+  `call <addr>` target in the dictionary and annotate it with the word name —
+  turning raw disassembly into a readable decompile (`call DUP` / `call +` /
+  `ret`), the half no external tool can do. On-demand module (fits the
+  native-core/`sh`-escape-hatch model), graceful when objdump is absent, and
+  never loaded on the appliance — where a native subset decompiler would be the
+  answer instead. Hard parts: bounding a `:` word's byte length in dict space;
+  the primitive path needs an **unstripped** binary; the address→name annotator
+  (map relative call targets from the real VMA back through the dictionary).
+  `see <primitive>` could point at `dis`.
 - [x] **Include guards + dependency includes (`require`)** — done 2026-07-19
   (`require` branch): `require`/`required` load a file only if not already
   loaded; the ledger is a dictionary sentinel `(inc:<basename>)` defined
@@ -467,6 +488,19 @@ write-up. Read-only + navigation first; filesystem mutators (`mkdir`/`rm`/`cp`/
     Manual section; `platform_chdir`/`platform_getcwd` added to Platform_Layer.md;
     Persistence.md updated for the session.fs startup-dir pin. Documented limit:
     `parse-word` path tokens can't contain spaces in v1.
+- [ ] **Design note — rewrite over `sh`, or remove? (2026-07-20)** Question:
+    now that `sh` exists, should ls/cat/pwd/cd/etc. shell out to the system
+    tools, or be dropped entirely (use `sh` directly)? **Leaning KEEP-NATIVE.**
+    These are raw-syscall (getdents/getcwd/chdir/read), so they work with **no
+    `/bin/sh` and no coreutils** — exactly what the Phase-7 boot-to-Forth
+    appliance (PID 1 / bare metal) needs, where there's no shell to exec. Both
+    alternatives couple core navigation to external binaries and move the wrong
+    way for that goal. Right model: native words for the core navigation you
+    always want; `sh` as the escape hatch to the long tail (grep/sed/find/git)
+    the system happens to provide — the two roles don't overlap. Only reconsider
+    a word that is BOTH rarely-used AND expensive to maintain. If pursued: audit
+    the set against that test, drop any dead weight, document the division in
+    Shell_Words.md.
 
 ---
 
