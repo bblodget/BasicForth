@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Graphics lesson
+- **`tutorial Graphics`** — the third topic lesson (~10 minutes, 12 steps),
+  and the first with a live window open beside the prompt: `require
+  sdl3.fs`, opening a scaled window (`4 to sdl-scale`), the frame sandwich
+  (`sdl-frame` … `sdl-show`) and the frames-start-blank rule (with the
+  `: f`/`: s` helper idiom), pixel/rect/line/circle, clipping, `$RRGGBB`
+  colors, composing a `scene` word and redefining it live, and a paced
+  `do`-loop animation. Ends pointing at `help graphics`/`help sdl3`,
+  bounce.fs, and the future sprites lesson.
+- **Frame pacing is now a timer, not vsync.** `SDL_SetRenderVSync(1)` blocks
+  the present under a compositing desktop — GNOME/Mutter throttled the
+  lesson's animation to ~1 fps once the window settled, regardless of render
+  driver (OpenGL and software both) or the WM-ping hint. `sdl-open` now turns
+  vsync off and `sdl-show` paces with `SDL_Delay` to a new `sdl-fps` value
+  (default 60; `120 to sdl-fps`, `0` = uncapped). Same pacing on desktop,
+  console, and a future bare-metal target — where vsync doesn't exist at all;
+  under a compositor the final output is still vsync'd, so nothing tears.
+- **`sdl-show` also pumps the event queue each frame** (`SDL_PumpEvents`): a
+  pure drawing loop that never reads events stays responsive to the desktop.
+  Pumping doesn't consume events — `sdl-poll` still sees everything.
+- The SDL3 reference page is now **`help sdl3`** (was `help window`), matching
+  its include file `sdl3.fs` — so every library page's topic name matches its
+  filename (ffi/sound/graphics/sdl3).
+
 ### Strings lesson
 - **`tutorial Strings`** — the second topic lesson (~10 minutes, 11 steps):
   a string is an address/length pair — `s"`/`type`/`.s`, printing with

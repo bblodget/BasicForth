@@ -1,4 +1,4 @@
-# Window — The SDL3 Display Backend
+# SDL3 — Window, Events, and Input
 
 Puts the `graphics.fs` surface on screen: a desktop window, or the raw console
 (KMSDRM) on a system with no desktop. It requires its own dependencies (the
@@ -7,7 +7,7 @@ FFI and the drawing surface), so one line loads everything:
     require sdl3.fs
 
 A frame is: `sdl-frame` (surface now points at the window's pixels), draw with
-the graphics words, `sdl-show` (present, paced by vsync). The texture is
+the graphics words, `sdl-show` (present, paced to `sdl-fps`). The texture is
 write-only and its contents vanish at `sdl-show`, so every frame draws from
 scratch — `clear` first.
 
@@ -22,8 +22,9 @@ At a glance:
 
     sdl-open       ( w h -- )        open window + renderer + texture
     sdl-scale      ( -- n )          pixel size (value; set before sdl-open)
+    sdl-fps        ( -- n )          frame-rate cap sdl-show holds (value)
     sdl-frame      ( -- )            start a frame: surface -> window pixels
-    sdl-show       ( -- )            present the frame (vsync)
+    sdl-show       ( -- )            present the frame, paced to sdl-fps
     sdl-close      ( -- )            tear it all down
     sdl-poll       ( -- flag )       poll one event
     sdl-event-type ( -- u )          type of the polled event
@@ -51,15 +52,33 @@ crisp and free). Default 1; sticky until you change it.
 
     \ 2 to sdl-scale  480 270 sdl-open   ( 960x540 window )
 
+## sdl-fps ( -- n )
+The frame-rate cap `sdl-show` holds, a `value` (change with `to`). Default
+60. A draw loop calling `sdl-show` each frame runs at this rate no matter how
+fast the machine draws — `sdl-show` sleeps off the rest of each frame's time
+budget (a frame that overran just doesn't sleep). Set it any time; `0`
+disables pacing (the loop runs flat out, spinning the CPU).
+
+    \ 120 to sdl-fps      ( match a 120 Hz panel )
+    \ 30  to sdl-fps      ( half-rate )
+
+Pacing is a millisecond timer, not vsync: `SDL_SetRenderVSync` blocks the
+present under a compositing desktop (the window throttles to a crawl once it
+settles) and doesn't exist on a bare-metal target, so a timer paces the same
+everywhere. Under a compositor the final output is still vsync'd, so nothing
+tears.
+
 ## sdl-frame ( -- )
 Begin a frame: lock the window texture and point the drawing surface at its
 pixels. The previous frame's contents are NOT preserved — draw everything,
 starting with `clear`.
 
 ## sdl-show ( -- )
-End the frame: present it, blocking until the display refresh (vsync), which
-paces a game loop to the monitor. The surface is invalid until the next
-`sdl-frame`.
+End the frame: present it and pace to `sdl-fps` (sleep off the rest of the
+frame's time budget). The surface is invalid until the next `sdl-frame`.
+Also pumps the window's event queue (without consuming it — `sdl-poll` sees
+everything), so a pure drawing loop stays responsive to the desktop even if
+it never reads events.
 
 ## sdl-close ( -- )
 Destroy the texture, renderer, and window and quit SDL. (If sound is open,

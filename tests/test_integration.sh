@@ -2956,8 +2956,10 @@ fi
 
 # The real-docs case that motivated multi-entry help: `help begin` must show
 # all three indefinite-loop entries from Language-Reference/Loops.md
+# timeout 5 (not 2): help begin scans the whole Language-Reference corpus,
+# which keeps growing; 2 s is marginal under qemu when the host is loaded.
 begin_out=$(printf 'help begin\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 5 $FORTH 2>&1)
 if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
     printf "  ${GREEN}PASS${NC}  help begin shows all three begin entries\n"; ((passed++))
 else
