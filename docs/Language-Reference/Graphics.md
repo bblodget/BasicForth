@@ -1,7 +1,7 @@
 # Graphics — 2D Drawing
 
 Software 2D drawing on the current *surface*: a 32-bpp pixel buffer set up by
-`set-surface` (usually by the SDL3 window backend — see `help window`). Load
+`set-surface` (usually by the SDL3 window backend — see `help sdl3`). Load
 with `include graphics.fs`. Coordinates are pixels, (0,0) top-left; colors are
 packed `$RRGGBB`. Everything clips: shapes may hang off any edge freely.
 
@@ -123,7 +123,7 @@ color: `$FF8000` is orange.
 
 ## See Also
 
-- `help window` — the SDL3 window these pixels appear in (`sdl-open`,
+- `help sdl3` — the SDL3 window these pixels appear in (`sdl-open`,
   `sdl-frame`/`sdl-show`, `sdl-scale`, events).
 - `help memory` — `allocate` for sprite and off-screen buffers, `l@`/`l!`.
 - docs/Graphics.md — the surface design; docs/Graphics_Planning.md — the GPU

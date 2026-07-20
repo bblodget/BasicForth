@@ -116,15 +116,17 @@ edit any program: change the word, run the word.
 
 ## Animation
 
-An animation is just frames in a loop. `sdl-show` waits for the display's
-refresh (vsync), so a loop is automatically paced — no timer needed:
+An animation is just frames in a loop. `sdl-show` paces the loop to a steady
+frame rate (`sdl-fps`, 60 by default), so it runs the same speed on any
+machine — no timer of your own:
 
     : slide  320 0 do  f  yellow i 90 10 fill-circle  s  loop ;
     slide
 
-The loop index `i` is the x coordinate: one frame per refresh, one pixel
-per frame, and the ball slides across in a few seconds. Every game loop
-you'll write is this shape — clear, draw at new positions, show, repeat.
+The loop index `i` is the x coordinate: one frame, one pixel, so the ball
+crosses in a few seconds (320 frames at 60 fps ≈ 5 s). Try `120 to sdl-fps`
+before running it again — twice as fast. Every game loop you'll write is
+this shape: clear, draw at new positions, show, repeat.
 
 ## Closing time
 
@@ -137,7 +139,7 @@ Window gone, session intact — `sdl-open` brings it back any time.
 You now hold the whole model: a surface of pixels, drawing words that
 clip, and the frame loop. In the reference, `help graphics` covers every
 drawing word (including sprites — `blit` and friends, a future lesson) and
-`help window` the window, events, and keys. The bouncing-ball demo is the
+`help sdl3` the window, events, and keys. The bouncing-ball demo is the
 natural next read — a complete game loop with keyboard and sound in ~60
 lines:
 

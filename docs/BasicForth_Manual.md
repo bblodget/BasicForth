@@ -594,7 +594,7 @@ work):
 
 Each frame draws from scratch between `sdl-frame` and `sdl-show` (vsync-paced,
 so a `begin ... until` game loop needs no timer). See `help graphics` and
-`help window`, `docs/Graphics.md`, and the demo `examples/bounce.fs`.
+`help sdl3`, `docs/Graphics.md`, and the demo `examples/bounce.fs`.
 
 ## Sound (SDL3 audio)
 

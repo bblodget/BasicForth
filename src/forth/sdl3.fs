@@ -36,6 +36,7 @@ require graphics.fs
 0 value (SDL_RenderTexture)   0 value (SDL_RenderPresent)
 0 value (SDL_PollEvent)       0 value (SDL_SetTextureScaleMode)
 0 value (SDL_SetHint)         0 value (SDL_PumpEvents)
+0 value (SDL_Delay)
 
 : (sdl-bind) ( -- )
     s" libSDL3.so.0" dlopen to (sdl3)
@@ -56,7 +57,8 @@ require graphics.fs
     (sdl3) s" SDL_PollEvent"       dlsym to (SDL_PollEvent)
     (sdl3) s" SDL_SetTextureScaleMode" dlsym to (SDL_SetTextureScaleMode)
     (sdl3) s" SDL_SetHint"         dlsym to (SDL_SetHint)
-    (sdl3) s" SDL_PumpEvents"      dlsym to (SDL_PumpEvents) ;
+    (sdl3) s" SDL_PumpEvents"      dlsym to (SDL_PumpEvents)
+    (sdl3) s" SDL_Delay"           dlsym to (SDL_Delay) ;
 (sdl-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
@@ -88,6 +90,14 @@ $40000051 constant key-down
 \ A 320x180 surface at scale 4 fills a 1280x720 window with 1/16 the pixels
 \ to draw. Sticky across sdl-close; 1 = one-to-one (the default).
 1 value sdl-scale
+
+\ Frame pacing: sdl-show sleeps to hold this rate. We DON'T pace with vsync --
+\ SDL_SetRenderVSync(1) blocks the present under a compositing desktop (Mutter
+\ throttles the swap to ~1 fps once the window settles), and vsync doesn't
+\ exist at all on a bare-metal target. A millisecond timer (SDL_Delay) paces
+\ identically everywhere. Set BEFORE sdl-show; 0 = uncapped (spin). 60 default.
+60 value sdl-fps
+variable (frame-last)   \ ms@ at the previous sdl-show (0 before the first)
 variable (sdl-px)     \ SDL_LockTexture out: pixel base (8 bytes)
 variable (sdl-pitch)  \ SDL_LockTexture out: pitch (4 bytes; read with l@)
 create sdl-event 128 allot   \ SDL_Event (type is a 32-bit int at offset 0)
@@ -115,7 +125,11 @@ create (z-off)      char 0 c,  0 c,
     4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then  to sdl-win
     sdl-win 0  2 (SDL_CreateRenderer) (ccall)
     dup 0= if sdl-error then  to sdl-ren
-    sdl-ren 1  2 (SDL_SetRenderVSync) (ccall) drop   \ best effort (dummy driver has no vsync)
+    \ vsync OFF: sdl-show paces with a timer instead (see sdl-fps). Under a
+    \ compositor vsync blocks the present hard; the compositor vsyncs the final
+    \ output anyway, so nothing tears.
+    sdl-ren 0  2 (SDL_SetRenderVSync) (ccall) drop
+    0 (frame-last) !
     sdl-ren XRGB8888 TEX_STREAMING sdl-width sdl-height
     5 (SDL_CreateTexture) (ccall)  dup 0= if sdl-error then  to sdl-tex
     \ default texture filtering is linear (blurry when scaled up)
@@ -134,6 +148,16 @@ create (z-off)      char 0 c,  0 c,
     4 (SDL_LockTexture) (ccall) (c-bool) 0= if sdl-error then
     (sdl-px) @  sdl-width sdl-height  (sdl-pitch) l@  set-surface ;
 
+\ Sleep off whatever remains of this frame's time budget, so a draw loop runs
+\ at sdl-fps regardless of how fast the machine draws. A frame that overran
+\ its budget just doesn't sleep (no catch-up). sdl-fps 0 = no pacing.
+: (frame-pace) ( -- )
+    sdl-fps 0= if  ms@ (frame-last) !  exit  then
+    1000 sdl-fps /                      \ target ms per frame
+    ms@ (frame-last) @ -  -             \ remaining = target - (now - last)
+    dup 0> if  1 (SDL_Delay) (ccall) drop  else  drop  then
+    ms@ (frame-last) ! ;
+
 : sdl-show ( -- )
     \ Pump the event queue every frame: a window whose events are never read
     \ gets frame-throttled (or declared hung) by a compositing desktop. Pump
@@ -143,6 +167,7 @@ create (z-off)      char 0 c,  0 c,
     sdl-tex 1 (SDL_UnlockTexture) (ccall) drop
     sdl-ren sdl-tex 0 0  4 (SDL_RenderTexture) (ccall) drop
     sdl-ren 1 (SDL_RenderPresent) (ccall) drop
+    (frame-pace)
     0 0 0 0 set-surface ;   \ pixels invalid until the next sdl-frame
 
 \ --- events ---
