@@ -35,7 +35,7 @@ require graphics.fs
 0 value (SDL_LockTexture)     0 value (SDL_UnlockTexture)
 0 value (SDL_RenderTexture)   0 value (SDL_RenderPresent)
 0 value (SDL_PollEvent)       0 value (SDL_SetTextureScaleMode)
-0 value (SDL_SetHint)
+0 value (SDL_SetHint)         0 value (SDL_PumpEvents)
 
 : (sdl-bind) ( -- )
     s" libSDL3.so.0" dlopen to (sdl3)
@@ -55,7 +55,8 @@ require graphics.fs
     (sdl3) s" SDL_RenderPresent"   dlsym to (SDL_RenderPresent)
     (sdl3) s" SDL_PollEvent"       dlsym to (SDL_PollEvent)
     (sdl3) s" SDL_SetTextureScaleMode" dlsym to (SDL_SetTextureScaleMode)
-    (sdl3) s" SDL_SetHint"         dlsym to (SDL_SetHint) ;
+    (sdl3) s" SDL_SetHint"         dlsym to (SDL_SetHint)
+    (sdl3) s" SDL_PumpEvents"      dlsym to (SDL_PumpEvents) ;
 (sdl-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
@@ -134,6 +135,11 @@ create (z-off)      char 0 c,  0 c,
     (sdl-px) @  sdl-width sdl-height  (sdl-pitch) l@  set-surface ;
 
 : sdl-show ( -- )
+    \ Pump the event queue every frame: a window whose events are never read
+    \ gets frame-throttled (or declared hung) by a compositing desktop. Pump
+    \ moves OS events into SDL's queue without consuming them — sdl-poll
+    \ still sees everything. A pure draw loop needs no event code at all.
+    0 (SDL_PumpEvents) (ccall) drop
     sdl-tex 1 (SDL_UnlockTexture) (ccall) drop
     sdl-ren sdl-tex 0 0  4 (SDL_RenderTexture) (ccall) drop
     sdl-ren 1 (SDL_RenderPresent) (ccall) drop

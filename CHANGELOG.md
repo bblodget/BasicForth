@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Graphics lesson
+- **`tutorial Graphics`** — the third topic lesson (~10 minutes, 12 steps),
+  and the first with a live window open beside the prompt: `require
+  sdl3.fs`, opening a scaled window (`4 to sdl-scale`), the frame sandwich
+  (`sdl-frame` … `sdl-show`) and the frames-start-blank rule (with the
+  `: f`/`: s` helper idiom), pixel/rect/line/circle, clipping, `$RRGGBB`
+  colors, composing a `scene` word and redefining it live, and a vsync-paced
+  `do`-loop animation. Ends pointing at `help graphics`/`help window`,
+  bounce.fs, and the future sprites lesson.
+- **`sdl-show` now pumps the event queue each frame** (`SDL_PumpEvents` —
+  found taking this lesson): a drawing loop that never reads events used to
+  get frame-throttled by a compositing desktop (GNOME slowed the lesson's
+  animation to a crawl until the window was clicked). Pumping doesn't
+  consume events — `sdl-poll` still sees everything.
+
 ### Strings lesson
 - **`tutorial Strings`** — the second topic lesson (~10 minutes, 11 steps):
   a string is an address/length pair — `s"`/`type`/`.s`, printing with

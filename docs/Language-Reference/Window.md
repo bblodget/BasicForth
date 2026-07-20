@@ -59,7 +59,9 @@ starting with `clear`.
 ## sdl-show ( -- )
 End the frame: present it, blocking until the display refresh (vsync), which
 paces a game loop to the monitor. The surface is invalid until the next
-`sdl-frame`.
+`sdl-frame`. Also pumps the window's event queue (without consuming it —
+`sdl-poll` sees everything), so a pure drawing loop stays responsive to the
+desktop even if it never reads events.
 
 ## sdl-close ( -- )
 Destroy the texture, renderer, and window and quit SDL. (If sound is open,
