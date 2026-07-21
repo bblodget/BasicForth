@@ -448,6 +448,63 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [ ] **Settable SDL window title.** `sdl-open` hardcodes `s" BasicForth" >z`,
+  so every window is named BasicForth; a game should be able to name itself.
+  Brandon's ask 2026-07-20.
+  - Prefer `sdl-title ( c-addr u -- )` that works **before or after**
+    `sdl-open`: SDL3 has `SDL_SetWindowTitle(window, zaddr)` which can be
+    called on a live window, so setting it after open should retitle
+    immediately rather than wait for the next open.
+  - Needs its own title buffer in the dictionary (say 128 bytes) — do NOT
+    hold onto a `>z` result, that scratch buffer is reused and would be
+    clobbered. sdl3.fs already hit this and keeps static NUL-terminated
+    strings (`(z-wm-ping)`, `(z-off)`) for the same reason.
+  - Default stays "BasicForth"; sticky across `sdl-close` like `sdl-scale`.
+    Then `examples/bounce.fs` and the lesson windows can title themselves.
+
+- [ ] **Binary (1-bit) sprites + a draw colour — `stamp`.** Designed with
+  Brandon 2026-07-20, not yet built. A sprite is a **monochrome bitmap** and
+  the colour is supplied at draw time: `stamp ( color src x y w h -- )`, with
+  0-bits transparent. This is the TI-99/4A model — TMS9918 sprites are 1-bit
+  patterns with a per-sprite colour attribute — and TurboForth exposes it as
+  `SPRITE ( sprite# y x pattern colour -- )` with `SPRCOL`/`SPRPAT` to change
+  either half independently.
+  - **The authoring half already works, no new syntax needed.** `%` binary
+    literals and `c,` give you the graph paper directly in the source:
+
+        create ship
+          %00111100 c,
+          %01000010 c,
+          %10100101 c,   \ ...one byte per row, 8x8 = 8 bytes
+
+    Verified: `%00111100` is 60. Hex (`$3C c,`) stays available when compact
+    beats legible. What's missing is only the *drawing* word.
+  - **Fix MSB-first** (leftmost pixel = high bit) so the literal reads as the
+    picture, and document it — get it backwards and everyone's art mirrors.
+    Row stride is `ceil(w/8)` bytes. Rows in plain reading order: do NOT copy
+    TI's 16x16-from-four-8x8-characters column-major quirk, that's a VDP
+    artifact. Since `stamp` takes `w h`, any size works.
+  - **Memory:** a 16x16 sprite is 32 bytes mono vs 1024 full-colour, 32x
+    smaller — a real win against the 256 KB dictionary, and it means art can
+    live in the dictionary instead of needing `allocate`.
+  - **Decided: no per-sprite scale initially.** TI's `CALL MAGNIFY` was a
+    single global 1-4 (8x8/16x16 x 1x/2x, pixel-doubling — size but not
+    resolution), which is the same idea as our `sdl-scale` one layer up.
+    `sdl-scale` already delivers the chunky look, and re-authoring a 32-byte
+    sprite is cheap, so a `stamp-scale` value only buys "same art at two
+    sizes in one frame". Left out to avoid two composing scales confusing
+    people (`4 to sdl-scale` + `2 to stamp-scale` = 8x). It is a
+    **non-breaking** addition later (a `value` defaulting to 1).
+    **Trigger to add it: fonts** — re-authoring a whole font at 2x is not
+    cheap, so if `text` wants big/small sizes, that is when it arrives.
+  - **Biggest payoff is fonts.** A 1-bit bitmap plus a colour IS a glyph; a
+    96-char 8x8 font is 768 bytes. If this lands first, text rendering is a
+    thin loop over `stamp` rather than a separate subsystem — worth doing
+    before the font item below.
+  - Later if profiling wants it: `expand ( color src dst w h -- )` to bake a
+    1-bit sprite into a normal 32-bpp one for fast repeated `blit-key`.
+    Start with direct drawing; the memory win is the point.
+
 - [ ] **Zero-padded numeric output (`u.0r`?)** — print a number right-justified
   to a fixed width, padded with **zeros** instead of spaces. Brandon's ask
   (2026-07-20): `hex __ .` prints `FF00FF` but `hex GG .` prints `FF00`, so
