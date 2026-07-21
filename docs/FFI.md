@@ -16,7 +16,7 @@ Primitives (built in, both architectures):
 | `(dlsym)` | ( handle zaddr -- fnptr ) | resolve a symbol; 0 on failure |
 | `(ccall)` | ( arg1 .. argN nargs fnptr -- ret ) | call a C function |
 
-Forth wrappers (`include ffi.fs`, on demand):
+Forth wrappers (`require ffi.fs`, on demand):
 
 | Word | Stack | Meaning |
 |------|-------|---------|
@@ -27,7 +27,7 @@ Forth wrappers (`include ffi.fs`, on demand):
 Example:
 
 ```
-include ffi.fs
+require ffi.fs
 : libc ( -- h ) s" libc.so.6" dlopen ;
 : pid ( -- n ) libc s" getpid" dlsym  >r 0 r> (ccall) ;
 pid .

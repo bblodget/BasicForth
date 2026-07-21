@@ -1,7 +1,7 @@
 # FFI — Calling C Libraries
 
 Load a shared C library and call its functions directly from Forth. Load the
-wrappers first: `include ffi.fs`. Arguments are integers/pointers, up to 6
+wrappers first: `require ffi.fs`. Arguments are integers/pointers, up to 6
 per call.
 
 Two string formats meet at this border. A Forth string is an address/length
@@ -21,7 +21,7 @@ At a glance:
 
 A complete example — the process id via libc:
 
-    include ffi.fs
+    require ffi.fs
     : pid ( -- n )
         s" libc.so.6" dlopen  s" getpid" dlsym  >r 0 r> (ccall) ;
     pid .

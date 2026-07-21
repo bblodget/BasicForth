@@ -559,11 +559,11 @@ points you to edit-and-`reload`, and primitives have no source. See
 
 ## Calling C Libraries (FFI)
 
-`include ffi.fs`, then `dlopen` a library, `dlsym` a function, and `(ccall)`
+`require ffi.fs`, then `dlopen` a library, `dlsym` a function, and `(ccall)`
 it with up to 6 integer/pointer arguments in C parameter order:
 
 ```
-> include ffi.fs
+> require ffi.fs
  ok
 > : pid ( -- n ) s" libc.so.6" dlopen s" getpid" dlsym >r 0 r> (ccall) ;
  ok

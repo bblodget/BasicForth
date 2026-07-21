@@ -2,8 +2,10 @@
 
 Software 2D drawing on the current *surface*: a 32-bpp pixel buffer set up by
 `set-surface` (usually by the SDL3 window backend — see `help sdl3`). Load
-with `include graphics.fs`. Coordinates are pixels, (0,0) top-left; colors are
-packed `$RRGGBB`. Everything clips: shapes may hang off any edge freely.
+with `require graphics.fs` — or just `require sdl3.fs`, which pulls in these
+drawing words along with the window. Coordinates are pixels, (0,0) top-left;
+colors are packed `$RRGGBB`. Everything clips: shapes may hang off any edge
+freely.
 
     require sdl3.fs
     320 180 sdl-open

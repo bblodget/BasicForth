@@ -2,7 +2,7 @@
 \ Copyright (C) 2026 Brandon Blodget
 \ SPDX-License-Identifier: GPL-2.0-only
 \
-\ Loaded on demand (include graphics.fs), NOT at startup. Provides software 2D
+\ Loaded on demand (require graphics.fs), NOT at startup. Provides software 2D
 \ drawing over an abstract "surface": a flat 32bpp pixel buffer described by a
 \ base address, width, height, and stride (bytes per row). A display backend
 \ (SDL3) points the surface at real presentation memory with set-surface; the

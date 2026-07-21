@@ -2,7 +2,7 @@
 \ Copyright (C) 2026 Brandon Blodget
 \ SPDX-License-Identifier: GPL-2.0-only
 \
-\ Loaded on demand (include ffi.fs), NOT at startup. Thin Forth layer over the
+\ Loaded on demand (require ffi.fs), NOT at startup. Thin Forth layer over the
 \ FFI primitives:
 \
 \   (dlopen) ( zaddr -- handle )            load a shared library (0 = failed)
