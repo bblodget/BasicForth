@@ -531,6 +531,24 @@ assert_output "gr blit-key transparent" "$GRP
 assert_output "gr grab/blit round-trip" "$GRP
 : g s red 2 2 pixel sp 2 2 2 2 grab 0 clear sp 2 2 2 2 blit 2 2 p 3 3 p depth . ; g" "16711680 0 0"
 
+# l, — packs 32-bit pixels, unlike , which would leave a 4-byte gap between
+# them. A create-table built with l, must blit as a sprite (the Sprites
+# lesson types art in this way), and the dictionary must survive being left
+# 4-byte rather than cell aligned: the colon definition after it has to run.
+assert_output "gr l, packs 32-bit pixels" "$GRP
+create art 11 l, 22 l, 33 l, 44 l,
+: g art l@ . art 4 + l@ . art 12 + l@ . ; g"        "11 22 44"
+assert_output "gr l, table blits as a sprite" "$GRP
+create art2 11 l, 22 l, 33 l, 44 l,
+: g s art2 1 1 2 2 blit 1 1 p 2 1 p 2 2 p ; g"      "11 22 44"
+assert_output "gr l, blit-key on a typed table" "$GRP
+create art3 11 l, 22 l, 33 l, 44 l,
+: g s 22 art3 0 0 2 2 blit-key 0 0 p 1 0 p 1 1 p ; g"  "11 0 44"
+assert_output "gr odd l, count leaves dict usable" "$GRP
+create odd 1 l, 2 l, 3 l,
+: after 4242 ;
+: g odd 8 + l@ . after . ; g"                       "3 4242"
+
 # =========================================================================
 section "FFI (dlopen / dlsym / ccall)"
 # =========================================================================
@@ -3177,6 +3195,24 @@ else
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
 fi
 
+# Markdown lint: a bare intraword asterisk in help prose is emphasis, not
+# multiplication — CommonMark (and our pager) turn "w*h*4" into "w<i>h</i>4",
+# eating the asterisks, and a lone "w*4" italicises the rest of the line.
+# `help grab` shipped reading "(wh4 bytes)" until 2026-07-20. Wrap such text
+# in backticks. Skipped: indented lines (code blocks) and "#" headings, both
+# of which the renderer passes through verbatim; `...` spans are stripped
+# first because their contents are already safe.
+md_star=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+    sed -e 's/`[^`]*`//g' "$f" | grep -nE '^[^ #].*[A-Za-z0-9]\*[A-Za-z0-9]' \
+        | sed "s|^|$(basename "$f"):|"
+done)
+if [ -z "$md_star" ]; then
+    printf "  ${GREEN}PASS${NC}  help prose has no unbackticked intraword '*'\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help prose has no unbackticked intraword '*'\n"
+    printf "    Would render as italics:\n%s\n" "$md_star"; ((failed++))
+fi
+
 # =========================================================================
 section "Interactive tutorial (tutorial / next / back)"
 # =========================================================================
@@ -3314,11 +3350,37 @@ assert_output "Strings lesson keep-a-string example" \
     $'create name 16 allot variable name-len\n: name! ( c-addr u -- ) dup name-len ! name swap cmove ;\n: name@ ( -- c-addr u ) name name-len @ ;\ns" Ada" name!\ns" x" s" y" s" z" 2drop 2drop 2drop\n: greet ." Hello, " name@ type ." !" cr ;\ngreet' \
     "Hello, Ada!"
 
+# The shipped Sprites lesson: opens with 14 steps, and its examples run. The
+# drawing examples need SDL, but the art table and the frame-picking idiom are
+# pure Forth over an off-screen surface, so they run everywhere (incl. QEMU).
+sprites_out=$(printf 'tutorial Sprites\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+if [[ "$sprites_out" == *"Pixel Art That Moves"* && "$sprites_out" == *"step 1/14"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Sprites lesson opens with 14 steps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  Sprites lesson opens with 14 steps\n"
+    printf "    Got:      %s\n" "$(echo "$sprites_out" | head -4)"; ((failed++))
+fi
+# The lesson's two-character color names typed as an art table, keyed blit:
+# the __ pixel leaves the red background, the GG pixel paints green.
+assert_output "Sprites lesson art table + transparency" "$GRP
+magenta constant __
+green   constant GG
+: inv-art __ l, GG l, ;
+create inv inv-art
+: g s red 0 0 8 6 fill-rect  magenta inv 0 0 2 1 blit-key  0 0 p 1 0 p ; g" \
+    "16711680 65280"
+# The animation idiom: frame counter divided down, then alternating.
+assert_output "Sprites lesson frame-picking idiom" \
+    $': pick 16 0 do i 8 / 2 mod if 1 else 0 then . loop ;\npick' \
+    "0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1"
+
 # The real-docs listing shows each tutorial's "# Name — description" title
 real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
 if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
    && "$real_tuts" == *"Strings — Text on the Stack"* \
+   && "$real_tuts" == *"Sprites — Pixel Art That Moves"* \
    && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
     printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
 else

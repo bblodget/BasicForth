@@ -132,6 +132,12 @@ variable (ci-d)  variable (ci-col) variable (ci-op)
 \ height, stride = w*4 (allocate w h * 4 * bytes and fill it, or grab one off
 \ the surface). Blits clip like fill-rect: the visible window is computed
 \ once and the sprite's start corner shifts by whatever was clipped away.
+
+\ Compile one pixel into the dictionary -- the 32-bit counterpart of `,`, for
+\ typing sprite art in as a create-table. Cells are 64-bit, so `,` would lay
+\ down two pixels' worth of space per entry. Leaves HERE 4-byte aligned, which
+\ is all the next definition needs (colon definitions align themselves).
+: l, ( x -- )  here 4 allot l! ;
 variable (bl-src) variable (bl-x) variable (bl-y) variable (bl-w) variable (bl-h)
 variable (bl-x0) variable (bl-x1) variable (bl-y0) variable (bl-y1)
 variable (bl-run) variable (bl-key)
