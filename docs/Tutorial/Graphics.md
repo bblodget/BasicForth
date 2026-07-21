@@ -137,14 +137,15 @@ Window gone, session intact — `sdl-open` brings it back any time.
 ## Where to go next
 
 You now hold the whole model: a surface of pixels, drawing words that
-clip, and the frame loop. In the reference, `help graphics` covers every
-drawing word (including sprites — `blit` and friends, a future lesson) and
-`help sdl3` the window, events, and keys. The bouncing-ball demo is the
-natural next read — a complete game loop with keyboard and sound in ~60
-lines:
+clip, and the frame loop. `tutorial Sprites` is the natural sequel — pixel
+art you stamp, animate, and move around. In the reference, `help graphics`
+covers every drawing word and `help sdl3` the window, events, and keys. The
+bouncing-ball demo is a good read too — a complete game loop with keyboard
+and sound in ~60 lines:
 
     include bounce.fs
     bounce             \ ESC quits
-    tutorials          \ pick your next lesson
+    tutorial Sprites   \ the next lesson
+    tutorials          \ or pick another
 
 Type `end-tutorial` to wrap up. Happy drawing!

@@ -27,18 +27,19 @@ At a glance:
     blit        ( src x y w h -- )         copy a sprite onto the surface
     blit-key    ( key src x y w h -- )     sprite copy with transparency
     grab        ( dst x y w h -- )         copy surface region to a buffer
+    l,          ( color -- )               compile one pixel (sprite tables)
     pixel-addr  ( x y -- addr )            address of a pixel (no clip)
     gr-base gr-width gr-height gr-stride ( -- a-addr )  surface variables
     black white red green blue yellow cyan magenta ( -- color )
 
 ## set-surface ( base w h stride -- )
 Point the drawing words at a pixel buffer: base address, width and height in
-pixels, stride in bytes per row (>= w*4). The SDL3 backend calls this for you
+pixels, stride in bytes per row (>= `w*4`). The SDL3 backend calls this for you
 each `sdl-frame`; call it yourself to draw into your own memory (for tests,
 sprite-building, or off-screen composition).
 
     \ 64x48 off-screen buffer:
-    \ 64 48 * 4 * allocate throw  64 48  64 4 *  set-surface
+    \ 64 48 * 4 * allocate drop  64 48  64 4 *  set-surface
 
 ## pixel ( color x y -- )
 Plot one pixel. Off-surface coordinates are silently ignored.
@@ -82,8 +83,8 @@ Fill the whole surface with one color.
 
 ## blit ( src x y w h -- )
 Copy a w-by-h sprite from the packed pixel block at `src` onto the surface
-with its top-left corner at (x,y). A sprite is just memory: w*h 32-bit pixels,
-row after row (stride w*4) — `allocate` one and fill it, or `grab` one off the
+with its top-left corner at (x,y). A sprite is just memory: `w*h` 32-bit pixels,
+row after row (stride `w*4`) — `allocate` one and fill it, or `grab` one off the
 surface. Clips on all edges.
 
     \ ship 100 50 16 16 blit
@@ -97,12 +98,29 @@ magenta).
 
 ## grab ( dst x y w h -- )
 The reverse of `blit`: copy the w-by-h surface region at (x,y) into the buffer
-at `dst` (w*h*4 bytes). Save the background before drawing a sprite over it,
+at `dst` (`w*h*4` bytes). Save the background before drawing a sprite over it,
 or draw art with the shape words and grab it as a sprite. Only the on-surface
 part of the region is copied.
 
-    \ 16 16 * 4 * allocate throw value saved
+    \ 16 16 * 4 * allocate drop value saved
     \ saved 100 50 16 16 grab
+
+## l, ( color -- )
+Compile one pixel into the dictionary — the 32-bit counterpart of `,`. A pixel
+is 4 bytes but a cell is 8, so `,` would leave a gap between every pixel;
+`l,` lays them down packed, which is what `blit` expects. Use it with `create`
+to type sprite art directly into your source, one row per line:
+
+    \ magenta constant __   white constant WW
+    \ create face
+    \   __ l, WW l, WW l, __ l,
+    \   WW l, __ l, __ l, WW l,
+    \   WW l, __ l, __ l, WW l,
+    \   __ l, WW l, WW l, __ l,
+    \ magenta face 100 50 4 4 blit-key
+
+`l,` leaves the dictionary 4-byte aligned rather than cell aligned, which is
+harmless — the next definition aligns itself.
 
 ## pixel-addr ( x y -- addr )
 The byte address of pixel (x,y) on the surface — no bounds check. For tight

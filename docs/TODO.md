@@ -7,6 +7,50 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **`save` silently drops data laid down after a `create`.** The capture
+  log records a line only when LATEST moves *forward* (see the comment at
+  `(capture-line)` in core.fs) — deliberate, so transient actions and marker
+  runs aren't logged. The side effect: a table built as
+
+        create inv
+          __ l, GG l, ...        \ these rows define nothing
+
+  logs as a bare `create inv`. The data is gone from the module, `list` shows
+  only `create inv`, and a reload leaves the word pointing at whatever
+  dictionary bytes follow it — no error, no warning, wrong pixels. Found
+  2026-07-20 when Brandon saved his Sprites-lesson session and `list` showed
+  `create inv` / `create inv2` with all the art missing.
+  - Note this is only a problem *across lines*: `create days 31 , 28 , ...`
+    on ONE line is captured whole (LATEST moved forward on that line), which
+    is why the Arrays lesson's table survives.
+  - Workaround in use: put the data in a colon word and run it —
+    `: inv-art  __ l, GG l, ... ;` then `create inv inv-art`. A multi-line
+    `:` is captured as one group, so it round-trips. The Sprites lesson now
+    teaches this form and explains why.
+  - Possible fixes, none obviously right: keep logging lines that moved HERE
+    (not just LATEST) while a `create` is the newest header; warn at `save`
+    when HERE moved without a header since the last logged group; or accept
+    it and just document. At minimum it should not fail *silently*.
+
+- [ ] **PTY suite fails 4 tests under QEMU (arm64): harness timing, not a
+  product bug.** `make run-pty` is 19/19 on x86 but 15/19 on arm64, failing
+  "help heading bold", "indented example cyan", "attributes reset", and
+  "*italic* span rendered". Diagnosed 2026-07-20: **nothing is broken on
+  arm64.** Given a longer wait, the arm64 binary under a PTY emits byte-for-byte
+  the same output as x86 — `ESC[1m` bold, `ESC[36m` cyan, `ESC[0m` reset,
+  hashes stripped. The suite uses **fixed sleeps**, and
+  `send(fd, b"help allot\r", 0.7)` allows 0.7 s; under emulation that step
+  needs **between 3 and 6 seconds**, because `help <word>` scans every
+  Language-Reference page for `## ` entries naming the word — the same
+  growing-corpus cost that already forced an integration-suite timeout from
+  2 s to 5 s. The italic failure is collateral: it runs on the stream the
+  timed-out help step left desynced.
+  - Cheap fix: raise that one timeout (and ideally scale the fixed sleeps when
+    running under QEMU, as the integration suite does).
+  - Better fix: replace fixed sleeps with drain-until-expected-substring plus a
+    generous deadline, so the suite is fast on native and correct under
+    emulation instead of trading one for the other.
+
 - [x] **`MOVE` (core.fs) copied the wrong direction on overlap.** `MOVE
   ( addr1 addr2 u )` must be overlap-safe (memmove semantics), but the original
   definition picked the copy direction backwards: `src < dest` (shift right)
@@ -403,6 +447,73 @@ docs/Graphics.md for the API.
 ---
 
 ## Future / Usability
+
+- [ ] **Zero-padded numeric output (`u.0r`?)** — print a number right-justified
+  to a fixed width, padded with **zeros** instead of spaces. Brandon's ask
+  (2026-07-20): `hex __ .` prints `FF00FF` but `hex GG .` prints `FF00`, so
+  colors won't line up and the channels are hard to read; he wanted `00FF00`.
+  - `.` prints the shortest form, so the zeros are gone before you can pad.
+    The workaround is pictured numeric output with a fixed count of `#` —
+    `0 <# # # # # # # #> type` — which is correct but too much ceremony to
+    retype at a prompt, so every user reinvents it.
+  - We already ship `.r ( n width -- )` and `u.r ( u width -- )`, both
+    **space**-padded (see Language-Reference/Printing.md). A zero-padded
+    sibling is the obvious gap; `u.0r ( u width -- )` reads consistently with
+    them, though the name is ours, not standard.
+  - Implementation is pure Forth on the existing pictured-output words, and
+    must save/restore `BASE` (`#` reads it) — a color-printing word that
+    leaves the REPL in hex is the classic bug here.
+  - Motivating uses: `$RRGGBB` colors at width 6, and 32-bit pixels read with
+    `l@` at width 8 (where you also see the unused X byte, `0000FF00`). If
+    this lands, the Sprites lesson can use it directly.
+
+- [ ] **`help <word>` should name the topic page each entry came from.** Today
+  a word lookup drops you into an entry with no sense of where you landed —
+  and the topic page is exactly where the related words are. Brandon's ask
+  (2026-07-20), after `help allocate` gave no hint that `help Memory` existed.
+  - **Decided form: a topic header before the entry**, not a footer, because
+    `help <word>` prints entries from EVERY page documenting that word (that
+    is how `help begin` shows all three loop forms) — a header labels each
+    group at the point you start reading it:
+
+        Memory:
+
+        allocate ( u -- a-addr ior )
+        Allocate u bytes. On success a-addr is the block and ior is 0.
+
+  - **Implementation is cheap but has one wrinkle.** `(hw-in)` (core.fs) has
+    `name namelen` on the stack exactly where `(page-entry)` reports a hit,
+    and `.md` is stripped with a plain `3 -` (see `(collect-in)`). BUT
+    `(page-entry)` *streams* — it prints lines as it scans, so it cannot know
+    there is a hit until it is already inside the file. So the header must be
+    printed **lazily**: on the first heading match, emit the topic name just
+    before that heading line. Pass the name in via a variable pair, the way
+    `(md-dir)`/`(md-dirn)` already are.
+  - Check the pager interaction (`(pg-quit)`) and whether the header should be
+    bold; the entry heading itself already renders bold.
+
+- [ ] **`catch` / `throw` — recoverable errors** (core, both arches). Today the
+  only unwind is `abort`, which resets `%r15`/`%rsp` to `sp0`/`rp0` and jumps
+  to `repl_loop` — i.e. we already have "throw to top level"; `catch` is the
+  general case, restoring to a *saved* point instead of always to the REPL.
+  - `catch ( xt -- 0 | n )` snapshots both stack pointers and a handler-chain
+    link, runs the xt, and returns 0 on normal completion; `throw ( n -- )`
+    with non-zero n restores that snapshot and lands n on the data stack.
+    An uncaught `throw` behaves like `abort` (standard).
+  - **No pure-Forth path** — there are no `sp@`/`rp@`/`rp!` primitives, so this
+    is new assembly on x86-64 AND arm64 plus a handler global. The fiddly part
+    is the STC frame: `catch` is itself a called word, so its own return
+    address sits on the return stack it is snapshotting.
+  - **Why we want it:** (1) `allocate throw` is the natural idiom — it slipped
+    into two `Language-Reference/Graphics.md` examples *because* it reads right
+    (fixed to `allocate drop` 2026-07-20). (2) A game loop could guarantee
+    `sdl-close`/`snd-close` on the way out instead of aborting with the window
+    and audio device still open. (3) It removes the need for `?`-variants —
+    `snd-open?` exists ONLY because there is no catch, and every future library
+    would otherwise grow its own. (4) Standard/gforth code ports more easily.
+  - Interacts with: `abort`, the REPL loop, markers, and save/reload — decide
+    what a `throw` across a `marker` means. Note `catch` restores the *stacks*
+    only; open files/devices are the programmer's problem (document that).
 
 - [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
   `require disasm.fs`). Fills the gap `see` leaves for primitives (today it

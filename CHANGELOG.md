@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Sprites lesson
+- **`tutorial Sprites`** — the fourth topic lesson (13 steps), the sequel to
+  `tutorial Graphics`: a sprite is just packed 32-bpp pixels, `grab` copies
+  one off the live frame (inside the sandwich — the only moment there's
+  anything to copy), `blit` stamps it, hand-typed art with `l,`, the
+  opaque-box problem and `blit-key` transparency, free clipping at the edges,
+  two-frame animation, motion, and a marching row of aliens.
+- **`l,` ( color -- )** in `graphics.fs` — compile one pixel into the
+  dictionary, the 32-bit counterpart of `,` (a pixel is 4 bytes, a cell is 8,
+  so `,` would leave a gap between every pixel). Lets sprite art be typed as
+  a `create` table with one row of pixels per source line. It leaves the
+  dictionary 4-byte rather than cell aligned, which is harmless — the next
+  definition aligns itself (verified on both architectures).
+- **Fixed: two `Language-Reference/Graphics.md` examples used `allocate
+  throw`**, but BasicForth has no `throw` — they failed with `? throw`.
+  `allocate` is `( u -- a-addr ior )`, so they now say `allocate drop`.
+  Adding `catch`/`throw` is filed under Future / Usability in TODO.md.
+- **Fixed: `help grab` rendered "(wh4 bytes)".** A bare intraword `*` in help
+  prose is emphasis, not multiplication — `w*h*4` becomes `w<i>h</i>4` and a
+  lone `w*4` italicises the rest of the line. This is correct CommonMark (and
+  GitHub renders the file the same way); the source was wrong. Four spots in
+  `Graphics.md` are now backticked, and a new integration lint fails on any
+  unbackticked intraword `*` in help prose, so it can't creep back.
+- **The lesson's art tables are built in a colon word** (`: inv-art … ;` then
+  `create inv inv-art`) rather than as rows of `l,` after a bare `create`.
+  The capture log only records a line that moved LATEST forward, so the bare
+  form saves as `create inv` with the art silently dropped — a reload gets a
+  sprite pointing at whatever dictionary bytes follow. A multi-line `:` is
+  captured as one group, so the word form round-trips; the lesson explains
+  why, a PTY test pins it, and the underlying gap is filed in TODO.md.
+- **Fixed: the Sprites lesson claimed a fresh `allocate` block holds garbage.**
+  It arrives zeroed (the kernel always hands over zeroed pages), which as
+  pixels is a black square — the lesson now says so and suggests `dump`.
+
 ### Graphics lesson
 - **`tutorial Graphics`** — the third topic lesson (~10 minutes, 12 steps),
   and the first with a live window open beside the prompt: `require

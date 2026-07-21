@@ -162,6 +162,45 @@ gone = send(fd, b"gw4 .\r")
 report("n on new discards the module", "? gw4" in gone.decode(errors="replace"))
 send(fd, b"bye\r"); os.close(fd)
 
+# 8b) The capture log only records a line that moved LATEST forward, so data
+#     laid down AFTER a `create` (rows of `l,` or `,`) is dropped from `save`
+#     silently — see TODO "save silently drops data laid down after a create".
+#     The Sprites lesson works around it by building the art in a colon word,
+#     which IS captured; this pins that the workaround keeps saving. Only
+#     testable here: the log records interactive lines, not piped ones.
+mfd, mpath = tempfile.mkstemp(suffix=".fs", prefix="bf-art-")
+os.close(mfd)
+fd = spawn()
+send(fd, b"require graphics.fs\r", 0.7)
+send(fd, b"magenta constant __\r")
+send(fd, b"green constant GG\r")
+send(fd, b": inv-art\r")            # a multi-line colon def: captured as one group
+send(fd, b"  __ l, GG l,\r")
+send(fd, b"  GG l, __ l, ;\r")
+send(fd, b"create inv inv-art\r")   # single line, moves LATEST: captured
+send(fd, ("save %s\r" % mpath).encode(), 0.7)
+try:
+    art = open(mpath).read()
+except OSError:
+    art = ""
+report("colon-built art table survives save",
+       ": inv-art" in art and "__ l, GG l," in art and "create inv inv-art" in art)
+# The bare form is the one that loses data: create logs, the rows do not.
+send(fd, b"create bare\r")
+send(fd, b"  7 l, 8 l,\r")
+send(fd, ("save %s\r" % mpath).encode(), 0.7)
+try:
+    art2 = open(mpath).read()
+except OSError:
+    art2 = ""
+report("bare create drops its data rows (documented gap)",
+       "create bare" in art2 and "7 l, 8 l," not in art2)
+send(fd, b"bye\r"); os.close(fd)
+try:
+    os.remove(mpath)
+except OSError:
+    pass
+
 # 9) Markdown rendering is terminal-only, so it can only be tested here: on a
 #    PTY, help output is rendered — the "## " heading comes out bold with the
 #    hashes stripped, the indented example cyan, attributes reset by line end.
