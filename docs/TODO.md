@@ -831,12 +831,19 @@ docs/Graphics.md for the API.
   require-able library so future sh-integration tools reuse reviewed code
   instead of re-rolling quoting (see docs/Shelling_Out.md).
   The Machine-Code tutorial lesson (`tutorial machine-code`) shipped
-  2026-07-22 — STC, primitives, literal desync, jumps, the create stub,
+  2026-07-22 — STC, primitives, literals, jumps, the create stub,
   reading `catch`; output described in prose since dict addresses vary
-  per session/build. Deferred (stage 2): split the dump at `call lit` /
-  string-literal idioms so inline data stops desyncing the listing
-  (self-calibrate the helper addresses by compiling a probe word and
-  reading its bytes back); `see <primitive>` pointing at `dis`.
+  per session/build. Stage 2 shipped 2026-07-22 (`dis-stage2` branch):
+  the dict path now scans for the compiler's two inline-data idioms
+  (call lit + value:8; s"-runtime + len:8 + chars, 4-aligned on arm64)
+  and lists alternating code spans (objdump --start/--stop-address over
+  one temp file) and data spans printed as data — `\ literal: 5`,
+  `\ s" hi there"`, and an xt-valued literal named as `\ xt: dup` — so
+  listings stay truthful through literals and strings on both arches.
+  Idiom addresses self-calibrate at load from two `:noname` probes (read
+  back out of their own compiled bytes; failure degrades to whole-range
+  stage-1 listings). `see <primitive>` now suggests `dis` alongside
+  `help`.
   docs/Disassembler.md, `help tools` entry, Manual section, integration
   tests (skip without objdump / without an aarch64-capable objdump under
   qemu).

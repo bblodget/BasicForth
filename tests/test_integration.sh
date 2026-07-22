@@ -2695,10 +2695,11 @@ if [[ "$see_multi" == ": m1 1 ;  : m2 2 ;" ]]; then
 else
     printf "  ${RED}FAIL${NC}  SEE finds a non-last definition on a shared line\n    Expected ': m1 1 ;  : m2 2 ;'\n    Got: %q\n" "$see_multi"; ((failed++))
 fi
-if [[ "$see_prim" == *"is a primitive (assembly)"* && "$see_prim" == *"try: help dup"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive and points at help\n"; ((passed++))
+if [[ "$see_prim" == *"is a primitive (assembly)"* && "$see_prim" == *"try: help dup"* \
+      && "$see_prim" == *"dis dup"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive, points at help and dis\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)' + 'try: help dup'\n    Got: %q\n" "$see_prim"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)' + 'try: help dup' + 'dis dup'\n    Got: %q\n" "$see_prim"; ((failed++))
 fi
 if [[ "$see_core" == ": SPACES"* ]]; then
     printf "  ${GREEN}PASS${NC}  SEE shows a core.fs word from its source file\n"; ((passed++))
@@ -4207,6 +4208,15 @@ else
         "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
     assert_output "dis primitive: banner" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
+    # stage 2: inline data is split out of the stream, not decoded as code
+    assert_output "dis shows a literal's value" \
+        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "literal: 5"
+    assert_output "dis keeps the ret after a literal" \
+        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "ret"
+    assert_output "dis decodes inline strings" \
+        "$(printf '%s\n: greet ." hi there" ;\ndis greet' "$dis_pre")"  's" hi there"'
+    assert_output "dis names an xt literal" \
+        "$(printf "%s\n: runner ['] dup execute ;\ndis runner" "$dis_pre")"  "xt: dup"
     assert_error  "dis unknown word" \
         "$(printf '%s\ndis nosuchword' "$dis_pre")"  "? nosuchword"
     assert_output "dis without a name" \

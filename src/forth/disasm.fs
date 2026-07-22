@@ -11,21 +11,23 @@
 \   dis half       \ a colon word: code lives in the dictionary
 \
 \ Two paths, because BasicForth code lives in two places:
-\  - dictionary words (header CodeLen != 0): the code bytes are written
-\    to a temp file and decoded with `objdump -D -b binary`; any call
-\    target that matches a dictionary word is annotated with the word's
-\    name (call 0x404f2a  \ dup) -- the readable half no external tool
-\    can do alone.
+\  - dictionary words (header CodeLen != 0): the word is scanned for the
+\    compiler's two inline-data idioms (call lit + value:8, and the s"
+\    runtime + len:8 + chars), then decoded as alternating code spans
+\    (objdump -D -b binary over a temp file) and data spans printed as
+\    what they are (\ literal: 5, \ s" hi", \ xt: dup). Call targets
+\    matching dictionary words are annotated with the word's name --
+\    the readable half no external tool can do alone. The idiom
+\    addresses are self-calibrated from :noname probes at load time.
 \  - primitives (CodeLen == 0): the code sits in the (unstripped,
 \    no-pie) binary itself; `objdump -d --start-address` finds it and
 \    the symbol table both bounds it and labels its call targets.
 \
 \ A Linux dev tool: it shells out (via shellutil.fs -- safe quoting,
 \ capture, temp files), so it needs /bin/sh and objdump on PATH, and
-\ reports gracefully when either is missing. Known limits (v1): an
-\ inline literal (call lit + 8 data bytes) desyncs the linear decode
-\ for a few instructions after it; :noname xts have no header, so
-\ there is nothing to look up. See docs/Disassembler.md.
+\ reports gracefully when either is missing. Known limit: :noname xts
+\ have no header, so there is nothing to look up.
+\ See docs/Disassembler.md.
 
 require shellutil.fs
 
@@ -75,6 +77,43 @@ variable (d0x-a)  variable (d0x-u)
     over c@ (hex-digit?) 0= if 2drop false exit then
     base @ >r hex  0 0 2swap >number  r> base !
     2drop drop true ;
+: (d-hexdig) ( u -- ch ) dup 10 < if [char] 0 + else 10 - [char] a + then ;
+: (d-h.)  ( u -- )                          \ lowercase hex, objdump-style
+    dup 4 rshift ?dup if recurse then  15 and (d-hexdig) emit ;
+: (d-h2.) ( b -- ) dup 4 rshift (d-hexdig) emit  15 and (d-hexdig) emit ;
+
+\ --- the compiler's inline-data idioms ---
+\ Compiled code embeds data in the instruction stream in exactly two
+\ shapes: CALL lit + value:8, and CALL s_quote_runtime + len:8 + chars
+\ (4-aligned on ARM64). A linear disassembler decodes that data as
+\ garbage, so the dict path splits the word into code spans (objdump)
+\ and data spans (printed as what they are). The helper addresses are
+\ SELF-CALIBRATED at load time: we compile :noname probes and read the
+\ call targets back out of our own bytes — no reliance on internal
+\ names, and automatic recalibration if the core ever moves them.
+0 value (d-x86?)    0 value (d-lit)    0 value (d-sq)
+: (sext32) ( u -- n ) dup $80000000 and if $100000000 - then ;
+: (sext26) ( u -- n ) dup $2000000 and if $4000000 - then ;
+: (d-call@) ( addr -- target true | false ) \ decode a CALL/BL at addr
+    (d-x86?) if
+        dup c@ $E8 <> if drop false exit then
+        dup 1+ l@ (sext32)  swap 5 + +  true
+    else
+        dup l@ dup $FC000000 and $94000000 <> if 2drop false exit then
+        $3FFFFFF and (sext26) 4 *  +  true
+    then ;
+: (d-cs) ( -- u ) (d-x86?) if 5 else 4 then ;   \ CALL/BL size
+: (d-lit?) ( p -- f )       \ (calibration failure -> 0 -> never matches)
+    (d-lit) 0= if drop false exit then
+    (d-call@) if (d-lit) = else false then ;
+: (d-sq?)  ( p -- f )
+    (d-sq) 0= if drop false exit then
+    (d-call@) if (d-sq) = else false then ;
+: (d-sq-size) ( p -- u )    \ inline data size of the string idiom at p
+    (d-cs) + @  8 +  (d-x86?) 0= if 3 + -4 and then ;
+: (d-target1) ( xt -- addr | 0 )    \ first CALL/BL target in a probe word
+    (d-x86?) 0= if 4 + then         \ ARM64 colon words open with STP
+    (d-call@) 0= if 0 then ;
 
 \ --- one-time probes (re-run until they succeed, so installing objdump
 \ --- mid-session just works) ---
@@ -138,27 +177,27 @@ create (d-od) 64 allot     variable (d-od#)     \ which objdump to run
     2dup type
     (d-last-0x) if
         (d-hexnum) if
-            (xt>nt) ?dup if ."   \ " (nt>name) type then
+            dup (xt>nt) ?dup if
+                nip ."   \ " (nt>name) type
+            else                        \ the string runtime has no entry,
+                (d-sq) = if             \ but the scanner knows its address
+                    ."   \ (s" [char] " emit ." )"
+                then
+            then
         then
     then cr ;
 
-\ --- dictionary words: dump the bytes, decode as raw binary ---
-: (d-rm-tmp) ( -- ) (d-tmp) (d-tmp#) @ (sh-rm) ;    \ error paths; the happy
-: (d-dict) ( xt len -- )                            \ path rm's in-command
-    s" basicforth-dis" (sh-mktemp) 0= if
-        2drop ." dis: cannot create a temp file (TMPDIR too long?)" cr exit then
-    (cmd-ln) swap (d-tmp) (d-tmp#) (d-keep)
-    (d-tmp) (d-tmp#) @ w/o open-file        ( xt len fileid ior )
-    if drop 2drop ." dis: cannot open the temp file" cr (d-rm-tmp) exit then
-    >r  2dup r@ write-file  r> close-file drop   ( xt len ior )
-    if 2drop ." dis: temp file write failed" cr (d-rm-tmp) exit then
+\ --- dictionary words: split into code spans (objdump) + data spans ---
+: (d-rm-tmp) ( -- ) (d-tmp) (d-tmp#) @ (sh-rm) ;
+variable (d-xt)                             \ the word's code start (for vma)
+: (d-objdump) ( start end -- )              \ decode one code span
     (cmd0) (d-od) (d-od#) @ (cmd+)
     s"  -D -b binary -m " (cmd+)  (d-arch) (d-arch#) @ (cmd+)
-    s"  --adjust-vma=" (cmd+)  over (cmd+x)
+    s"  --adjust-vma=" (cmd+)  (d-xt) @ (cmd+x)
+    s"  --stop-address=" (cmd+)  (cmd+x)
+    s"  --start-address=" (cmd+)  (cmd+x)
     s"  " (cmd+)  (d-tmp) (d-tmp#) @ (cmd+q)
-    s" ; rm -f " (cmd+)  (d-tmp) (d-tmp#) @ (cmd+q)
-    2drop
-    (cmd-open) 0= if ." dis: objdump failed to start" cr (d-rm-tmp) exit then
+    (cmd-open) 0= if ." dis: objdump failed to start" cr exit then
     begin (cmd-read) while
         \ instruction lines are indented; col-0 lines ("Disassembly of
         \ section", the synthetic <.data> label) are objdump boilerplate
@@ -167,6 +206,54 @@ create (d-od) 64 allot     variable (d-od#)     \ which objdump to run
             over c@ bl = if (d-annotate) else 2drop then
         else 2drop then
     repeat (cmd-close) ;
+: (d-data.) ( a u -- )      \ synthetic-line prefix: addr + capped hex column
+    2 spaces  over (d-h.) ." :" 9 emit
+    dup 16 min 0 do  over i + c@ (d-h2.) space  loop
+    dup 16 > if ." .. " then  2drop  9 emit ;
+: (d-text.) ( a u -- )      \ string body, unprintables as dots, capped
+    dup 40 min 0 ?do
+        over i + c@ dup 32 < over 126 > or if drop [char] . then emit
+    loop
+    40 > if ." ..." then  drop ;
+: (d-lit-line) ( a -- )     \ a = the 8 inline bytes of a literal
+    dup 8 (d-data.)
+    @ dup (xt>nt) ?dup if nip ." \ xt: " (nt>name) type cr exit then
+    ." \ literal: "
+    dup -65536 65536 within if . else ." 0x" (d-h.) then cr ;
+: (d-sq-line) ( a u -- )    \ a = len:8 + chars(+pad), u = total size
+    2dup (d-data.)
+    drop  dup @ swap 8 + swap           ( c-addr len )
+    ." \ s" [char] " emit space  (d-text.)  [char] " emit cr ;
+variable (d-p)  variable (d-span)  variable (d-end)
+: (d-flush) ( end -- )      \ objdump the pending code span up to end
+    (d-span) @ over 2dup < if (d-objdump) else 2drop then drop ;
+: (d-scan) ( xt len -- )    \ alternate code spans and data spans
+    over + (d-end) !  dup (d-span) !  (d-p) !
+    begin (d-p) @ (d-end) @ < while
+        (d-p) @ (d-lit?) if
+            (d-p) @ (d-cs) +  dup (d-flush)         \ span includes the call
+            dup (d-lit-line)
+            8 +  dup (d-span) !  (d-p) !
+        else (d-p) @ (d-sq?) if
+            (d-p) @ (d-cs) +  dup (d-flush)
+            (d-p) @ (d-sq-size)  2dup (d-sq-line)
+            +  dup (d-span) !  (d-p) !
+        else
+            (d-p) @  (d-x86?) if 1+ else 4 + then  (d-p) !
+        then then
+    repeat
+    (d-end) @ (d-flush) ;
+: (d-dict) ( xt len -- )
+    over (d-xt) !
+    s" basicforth-dis" (sh-mktemp) 0= if
+        2drop ." dis: cannot create a temp file (TMPDIR too long?)" cr exit then
+    (cmd-ln) swap (d-tmp) (d-tmp#) (d-keep)
+    (d-tmp) (d-tmp#) @ w/o open-file        ( xt len fileid ior )
+    if drop 2drop ." dis: cannot open the temp file" cr (d-rm-tmp) exit then
+    >r  2dup r@ write-file  r> close-file drop   ( xt len ior )
+    if 2drop ." dis: temp file write failed" cr (d-rm-tmp) exit then
+    (d-scan)
+    (d-rm-tmp) ;
 
 \ --- primitives: let objdump bound the code by symbol ---
 variable (d-in)                             \ inside our symbol's block?
@@ -207,3 +294,13 @@ variable (d-in)                             \ inside our symbol's block?
     dup (xt>nt) dup 0= if 2drop ." dis: word has no dictionary entry" cr exit then
     (d-banner)
     dup (nt>clen) ?dup if nip (d-dict) else drop (d-prim) then ;
+
+\ --- self-calibration (runs now, at load) ---
+\ Compile two probes and read the compiler's own idiom addresses out of
+\ their first call instructions. If either read fails, its address stays
+\ 0 and the scanner simply never splits (stage-1 whole-range listings).
+:noname 0 ;                                 ( lit-probe-xt )
+:noname s" x" 2drop ;                       ( lit-probe-xt str-probe-xt )
+over c@ $E8 = to (d-x86?)
+swap (d-target1) to (d-lit)
+(d-target1) to (d-sq)
