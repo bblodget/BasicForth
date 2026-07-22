@@ -722,6 +722,8 @@ help <word>   - one word's entry           (help allot)
 # Stack Manipulation
 ...
 > help allot                     \ a word: just its reference entry
+Memory:
+
 ## allot ( n -- )
 Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup                    \ which topics mention "dup"?
@@ -736,7 +738,9 @@ Snake (Tutorial)
   prints the page's summary: its preamble up to the first `## ` entry.
 - `help <word>` scans the reference pages for the `## ` entries documenting
   that word and prints each one — `help allot`, `help to`, `help ;`;
-  `help begin` shows all three `begin …` loop forms.
+  `help begin` shows all three `begin …` loop forms. Each page's group of
+  entries opens with a `<Topic>:` header naming the page it came from —
+  the place to `help` for the related words.
 - `apropos <keyword>` lists the topics whose file contains `<keyword>`
   (case-insensitive substring match), each labelled with its section.
 - Long output pages a screenful at a time — space for the next page, `q` to stop.

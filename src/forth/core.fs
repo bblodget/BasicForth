@@ -1481,11 +1481,13 @@ variable (pg-quit)                       \ true once the user pressed q
     reverse ." -- more (space=page, q=quit) --" normal key cr
     dup [char] q = swap [char] Q = or if  true (pg-quit) !  then
     0 (pg-row) ! ;
-: (pg-line) ( c-addr u -- )
-    (mk?) @ (otty?) and if (mk-line) else type then
-    cr  1 (pg-row) +!
+: (pg-count) ( -- )                      \ account one printed line, maybe pause
+    1 (pg-row) +!
     (tty?) 0= if exit then                 \ piped: no --more-- pause, ever
     (pg-row) @ screen-height 1 - < 0= if (pg-prompt) then ;
+: (pg-line) ( c-addr u -- )
+    (mk?) @ (otty?) and if (mk-line) else type then
+    cr  (pg-count) ;
 \ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
 \ a read-error flag (true if read-line failed) rather than aborting — it is a
 \ shared helper called from contexts that hold their own resources (e.g. (man-in)
@@ -1592,6 +1594,15 @@ variable (hh-1st)                          \ scanning the first token?
     repeat drop false ;
 variable (hw-hit)                          \ inside a matched entry?
 variable (hw-any)                          \ printed any entry from this file?
+variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
+\ Topic header before a file's FIRST matched entry — "Memory:" — so each
+\ group of entries names the page it came from (and what to `help` for the
+\ related words). Printed lazily, because (page-entry) streams: a hit is
+\ only known once the scan is already inside the file.
+: (hw-head) ( -- )
+    (hw-any) @ if exit then
+    bold (hw-t) @ (hw-tn) @ type [char] : emit normal
+    cr (pg-count)  cr (pg-count) ;
 \ Print EVERY entry whose "## " heading names the target word — a word like
 \ `begin` heads several entries (begin…until, begin…again, begin…while…repeat).
 \ Each heading re-decides whether the lines after it print. Closes the fd.
@@ -1606,7 +1617,7 @@ variable (hw-any)                          \ printed any entry from this file?
         ( u )
         (pg-buf@) over (head?) if
             (pg-buf@) over (head-word?) dup (hw-hit) !
-            if  true (hw-any) !  then
+            if  (hw-head) true (hw-any) !  then
         then
         (hw-hit) @ if  (pg-buf@) swap (pg-line)  else  drop  then
         (pg-quit) @ if  r> close-file drop  (hw-any) @ exit  then
@@ -1627,6 +1638,7 @@ variable (hw-any)                          \ printed any entry from this file?
         begin 2dup u> while                      ( end ptr )
             dup (de-name) dup (cstr-len)         ( end ptr name namelen )
             2dup (ends-md?) if
+                2dup 3 - (hw-tn) ! (hw-t) !      \ topic name for (hw-head)
                 2dup (build-path) r/o open-file
                 if drop else
                     (page-entry) if  true (mn-found) !  then

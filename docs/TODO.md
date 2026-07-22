@@ -748,7 +748,15 @@ docs/Graphics.md for the API.
     wide by definition; this is exactly where fixed-width output earns its
     keep. `binary inv c@ 8 u.0r` would read as the picture.
 
-- [ ] **`help <word>` should name the topic page each entry came from.** Today
+- [x] **`help <word>` should name the topic page each entry came from.** Done
+  2026-07-22 (branch help-topic-header), as designed below: lazy bold
+  `<Topic>:` header + blank line before each file's first matched entry,
+  printed by `(hw-head)` with the name passed via `(hw-t)`/`(hw-tn)` (set in
+  `(hw-in)` where the dirent name is on the stack; the getdents buffer is
+  not re-read while `(page-entry)` runs, so the pointer stays valid). Routed
+  through a factored `(pg-count)` so the header's two lines count toward the
+  `--more--` pause. Piped output stays escape-free ((attr!) self-gates).
+  Original notes: today
   a word lookup drops you into an entry with no sense of where you landed —
   and the topic page is exactly where the related words are. Brandon's ask
   (2026-07-20), after `help allocate` gave no hint that `help Memory` existed.
