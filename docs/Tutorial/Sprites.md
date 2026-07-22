@@ -86,10 +86,11 @@ You can see the little alien in the source. `l,` writes one pixel — it's the
 32-bit version of `,`, because a pixel is 4 bytes but a cell is 8. The art
 lives in a word, and `create inv inv-art` runs it to lay those pixels down.
 
-Writing the rows straight after `create inv` would draw the same alien, but
-it wouldn't survive `save`: the module log records *definitions*, and a row
-of `l,` defines nothing — you'd reload to a bare `create inv` with no art.
-Wrapped in a word, the art is a definition, so it saves and reloads intact.
+Writing the rows straight after `create inv` draws the same alien and saves
+just as well — filling dictionary space counts as changing your program. The
+word earns its keep for a different reason: it has a **name**, so you can
+retype the whole picture later with `:e inv-art` instead of hunting through
+the file for the right rows.
 
 ## The box problem
 

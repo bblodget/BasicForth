@@ -162,15 +162,12 @@ gone = send(fd, b"gw4 .\r")
 report("n on new discards the module", "? gw4" in gone.decode(errors="replace"))
 send(fd, b"bye\r"); os.close(fd)
 
-# 8b) The capture log only records a line that moved LATEST forward, so data
-#     laid down AFTER a `create` (rows of `l,` or `,`) is dropped from `save`
-#     silently — see TODO "save silently drops data laid down after a create".
-#     The Sprites lesson works around it by building the art in a colon word,
-#     which IS captured; this pins that the workaround keeps saving. Only
-#     testable here: the log records interactive lines, not piped ones.
-#     (`keep` is the explicit opt-out for the same gap — covered by the
-#     "Module lifecycle" integration section; the bare form below is still the
-#     silent default, which is why this test pins it.)
+# 8b) Data laid down AFTER a `create` — rows of `l,` or `,` on their own lines —
+#     used to be dropped from `save` silently, because capture only recorded a
+#     line that moved LATEST. It now also records a line that moved HERE, so
+#     both forms round-trip: the colon-word idiom the lessons teach, and the
+#     bare rows. Only testable here: the log records interactive lines, not
+#     piped ones.
 mfd, mpath = tempfile.mkstemp(suffix=".fs", prefix="bf-art-")
 os.close(mfd)
 fd = spawn()
@@ -188,7 +185,8 @@ except OSError:
     art = ""
 report("colon-built art table survives save",
        ": inv-art" in art and "__ l, GG l," in art and "create inv inv-art" in art)
-# The bare form is the one that loses data: create logs, the rows do not.
+# The bare form now round-trips too: `create` logs, and the rows log because
+# they moved HERE. (Regression guard for the silent-data-loss bug.)
 send(fd, b"create bare\r")
 send(fd, b"  7 l, 8 l,\r")
 send(fd, ("save %s\r" % mpath).encode(), 0.7)
@@ -196,8 +194,8 @@ try:
     art2 = open(mpath).read()
 except OSError:
     art2 = ""
-report("bare create drops its data rows (documented gap)",
-       "create bare" in art2 and "7 l, 8 l," not in art2)
+report("bare create keeps its data rows (HERE moved)",
+       "create bare" in art2 and "7 l, 8 l," in art2)
 send(fd, b"bye\r"); os.close(fd)
 try:
     os.remove(mpath)

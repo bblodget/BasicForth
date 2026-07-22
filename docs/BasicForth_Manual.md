@@ -433,18 +433,20 @@ not persisted, only the definitions).
 
 #### Setup lines — `keep`
 
-"Only definitions are captured" costs you the lines that *set the module up*,
-because those define nothing. `keep` overrides it for one line:
+`save` keeps a line that changed your program — one that defines a word, or one
+that fills dictionary space like the rows of `,` after a `create`. A line that
+does neither only made something *happen*, so it stays out of the file. `keep`
+overrides that for one line:
 
 ```
 > 320 180 sdl-open  keep       \ the module reopens its window when it loads
-> create tbl  1 , 2 , 3 ,  keep
+> 1000 hi-score !  keep        \ a variable's contents, otherwise lost
 ```
 
-The line is written verbatim where you typed it. That second case matters: the
-`create` is captured but the rows of `,` filling the table are not, so without
-`keep` the data is silently lost. `keep` acts only at the keyboard, so the copy
-saved in your file is an inert token when the module reloads.
+The line is written verbatim where you typed it. Those are the two cases it's
+for: setup the module needs on load, and a `variable`'s contents (a `value` set
+with a direct `to` is saved already). `keep` acts only at the keyboard, so the
+copy saved in your file is an inert token when the module reloads.
 
 #### Starting and stopping — `on-start` / `on-stop`
 
