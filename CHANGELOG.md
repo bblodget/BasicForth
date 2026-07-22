@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Help polish
+- **`help <word>` names the topic page each entry came from.** Every page's
+  group of entries now opens with a bold `<Topic>:` header — `help allocate`
+  starts with `Memory:`, which is also where the related words live
+  (`help memory`). One header per page: `help begin` shows a single
+  `Loops:` label over all three loop forms, while a word documented on two
+  pages gets each group labeled. Piped output stays escape-free as always.
+
 ### Binary sprites
 - **`tutorial Bitmaps`** — the fifth topic lesson (15 steps): one bit per
   pixel with the color chosen at draw time, art typed first as `%` binary
