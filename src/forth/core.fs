@@ -503,8 +503,14 @@ variable (ce-armed)  0 (ce-armed) !     \ a :e group is being typed: on completi
 variable (ce-hook)   0 (ce-hook) !      \ run (ce-hook) — splice + reload (set near EOF)
 variable (dirty)                        \ true = the log holds changes SAVE hasn't written
 variable (cap-assign)                   \ this line ran a direct TO/IS (read from (assign?))
+variable (cap-keep)                     \ this line ran KEEP (set by `keep`, below);
+                                        \ folded into (cap-assign) by (capture-line),
+                                        \ since both mean "log it anyway"
 variable (session-on)                   \ true only after (session-init) ran — i.e.
                                         \ an interactive session (scopes SAVE/RELOAD)
+variable (hook-busy)                    \ an ON-START/ON-STOP hook is running; declared
+                                        \ here because (capture-reset) clears it (see
+                                        \ (mod-hook), below, for what it guards)
 create (nl) 10 c,                       \ a single newline byte
 
 \ SEE directory: an index over (log) so SEE can show a word's source. Each
@@ -554,9 +560,12 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ log — or not — discard it. A line is a definition only when LATEST moved
 \ *forward* (a new header linked), so transient actions, bare ALLOT/,/C, and
 \ marker runs / -session (which move LATEST *backward*) are all not captured.
-\ RELOAD sets (skip-capture) so its own line is never logged either.
+\ RELOAD sets (skip-capture) so its own line is never logged either. KEEP is the
+\ deliberate override: it asks for a line that defined nothing to be logged.
 : (capture-line) ( c-addr u latest -- )
-    (assign?) (cap-assign) !            \ read+clear: did a direct TO/IS run this line?
+    (assign?)  (cap-keep) @ or  (cap-assign) !   \ read+clear the two "log it
+    false (cap-keep) !                           \ anyway" flags: a direct TO/IS
+                                                 \ ran this line, or KEEP did
     >r                                  ( c-addr u )   \ R: latest
     (pend) (buf-append)                 \ append the raw line...
     (nl) 1 (pend) (buf-append)          \ ...plus a newline
@@ -579,8 +588,8 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
         true (dirty) !
-    else (cap-assign) @ if              \ no new word, but a direct TO/IS ran:
-        (pend) (log) (buf-append-buf)    \ persist the assignment line (no SEE record)
+    else (cap-assign) @ if              \ no new word, but TO/IS or KEEP ran:
+        (pend) (log) (buf-append-buf)    \ persist the line (no SEE record)
         true (dirty) !
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
@@ -597,6 +606,8 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 : (capture-reset) ( latest -- )
     false (skip-capture) !
     (assign?) drop                      \ clear a stale assign flag from an errored line
+    false (cap-keep) !                  \ ...and a KEEP that never reached (capture-line)
+    false (hook-busy) !                 \ ...and a hook that faulted past its CATCH
     state @ if  drop exit  then         \ mid-definition: keep pending AND a :e arm
     false (ce-armed) !                  \ a :e whose definition errored is disarmed
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -668,13 +679,59 @@ variable (path-a-len)  variable (path-b-len)
     dup (slurp-into-log)                \ copy its text into the log
     close-file drop ;
 
+\ ===== Module lifecycle hooks: ON-STOP / ON-START =====
+\ A module can define either name to react to being torn down and (re)built:
+\
+\     : on-stop   sdl-close ;             \ before the dictionary is rolled back
+\     : on-start  320 180 sdl-open ;      \ after the file has been re-read
+\
+\ ON-STOP is the half KEEP cannot cover. A reload rolls the dictionary back and
+\ replays the file, so anything the file rebuilds comes back — but a resource the
+\ old module was HOLDING (an SDL window, an audio stream, a fileid) is stranded:
+\ its handle lives in a `value` that the rollback zeroes, while the resource
+\ itself survives with nothing left to reach or release it. Putting the cleanup
+\ at the top of the file cannot fix that; the file runs AFTER the rollback, when
+\ the handles are already gone. ON-STOP runs BEFORE it, while they are still
+\ valid, so no orphan is created in the first place.
+\
+\ Neither name is defined here: (mod-hook) looks the word up and does nothing
+\ when the module has not defined it.
+variable (mh-a)  variable (mh-u)        \ the hook name, kept for the error report
+
+\ (mod-hook): run the module's <name> word, if it has one.
+\ Errors are CAUGHT, not propagated: a broken hook must not abort the reload that
+\ is trying to rebuild the module — that would leave you with neither the old
+\ module nor the new one. It reports and carries on.
+\ (hook-busy) holds for the whole dynamic extent of the hook body, so a hook that
+\ itself reloads (an ON-START calling RELOAD, say) finds the inner hooks
+\ suppressed instead of recursing forever. A hook that faults past the CATCH — a
+\ guard-page fault longjmps, it is not a THROW — would leave the flag stuck, so
+\ (capture-reset) clears it at the top of every REPL line, the same safety net
+\ (skip-capture) already has.
+: (mod-hook) ( c-addr u -- )
+    (hook-busy) @ if  2drop exit  then
+    2dup (mh-u) !  (mh-a) !
+    \ NB: FIND leaves ( c-addr u 0 ) on failure — the name, untouched — and
+    \ ( xt n ) on success, so the miss path drops TWO cells, not one.
+    find 0= if  2drop exit  then        ( xt )   \ not defined → nothing to do
+    true (hook-busy) !
+    catch                               ( 0 | n )
+    false (hook-busy) !
+    ?dup if
+        ." error in " (mh-a) @ (mh-u) @ type ."  hook: " . cr
+    then ;
+
 \ (session-init): boot hook, run once when entering the interactive REPL, with
 \ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
 \ restore point, marks the session active, sets the current file, seeds the log.
 : (session-init) ( c-addr u -- )
     true (session-on) !                 \ mark this run as an interactive session
     dup if  (set-cur-file)  else  2drop  0 (cur-file-len) !  then
-    (seed-log) ;
+    (seed-log)
+    s" on-start" (mod-hook) ;           \ the startup file has already loaded (see
+                                        \ the NOTE below), so a fresh
+                                        \ `basicforth mymodule.fs` starts the
+                                        \ module exactly the way a RELOAD does
 \ NOTE: the -session restore mark is captured at the END of core.fs (below), not
 \ here — so -session/new/load forget the WHOLE module (the loaded file's words
 \ plus interactive ones), since the startup file loads after core.fs but before
@@ -715,6 +772,24 @@ variable (path-a-len)  variable (path-b-len)
     then
     (save) ;
 
+\ KEEP: put THIS line into the module even though it defined nothing. Capture is
+\ forward-only — a line is logged when LATEST moves forward — so a module's setup
+\ lines are invisible to SAVE: `320 180 sdl-open` never reaches the file, and
+\ neither do rows of `,`/`c,`/`l,` typed after a CREATE. KEEP sets the same
+\ "log it anyway" flag a direct TO/IS sets, so the line is written verbatim, in
+\ the order it was typed:
+\
+\     320 180 sdl-open  keep
+\
+\ It may appear anywhere on the line, not just last — the flag is read after the
+\ whole line has run. On a line that also defines a word it changes nothing (that
+\ line was already being logged).
+\
+\ Terminal-only, and that is what makes the saved line safe to replay: reloaded
+\ from the module file SOURCE-ID is the fileid, not 0, so KEEP does nothing and
+\ the surviving token is simply a no-op. Nothing has to strip it back out.
+: keep ( -- )  source-id 0= if  true (cap-keep) !  then ;
+
 \ ===== Dirty-guard: don't silently discard unsaved work =====
 \ (dirty) is set when the capture log gains something SAVE hasn't written (a
 \ definition, a direct to/is, an edit) and cleared by SAVE and (seed-log). When
@@ -748,7 +823,9 @@ variable (path-a-len)  variable (path-b-len)
 \ -session: low-level forget — restore HERE/LATEST to the startup mark, dropping
 \ every definition made since (the module's words). A no-op outside an interactive
 \ session. Used by NEW / LOAD / RELOAD; leaves the log and current file alone.
-: -session ( -- )  (session-restore) ;
+\ Runs ON-STOP first: this is the one place every rollback path goes through, so
+\ hooking it here covers RELOAD, LOAD, NEW, :e, EDIT and a bare -session at once.
+: -session ( -- )  s" on-stop" (mod-hook)  (session-restore) ;
 
 \ (open-module): forget the old module, (re)load the current file, reseed the log
 \ so SAVE rewrites it. (skip-capture) keeps this line out of the log.
@@ -762,7 +839,8 @@ variable (path-a-len)  variable (path-b-len)
                                         \ SAVE rewrites the file it read, never
                                         \ a stale image of the previous module
     (cur-file@) (included?)             ( ior )
-    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then ;
+    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then
+    s" on-start" (mod-hook) ;           \ the file has defined it by now, if at all
 
 \ LOAD <file>: open <file> as the current module — a clean swap, like
 \ `basicforth <file>` mid-session. Verified readable BEFORE anything is forgotten,

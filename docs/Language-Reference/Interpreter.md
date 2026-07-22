@@ -7,7 +7,7 @@ compile-time half — `[`, `]`, `literal`, `postpone` — is in `help compiler`.
 At a glance:
 
     words        ( -- )                 list the whole vocabulary
-    find         ( c-addr u -- xt n )   look a word up
+    find         ( c-addr u -- xt n | c-addr u 0 )  look a word up
     execute      ( xt -- )              run an execution token
     evaluate     ( i*x c u -- j*x )     interpret a string
     \            ( -- )                 comment to end of line
@@ -34,12 +34,20 @@ List every word currently in the dictionary, newest first.
 
     \ words            \ prints the whole vocabulary
 
-## find ( c-addr u -- xt n )
-Look up a name. On success `n` is non-zero (`-1` normal, `1` immediate) and `xt`
-is the word's execution token; on failure `n` is `0`.
+## find ( c-addr u -- xt n | c-addr u 0 )
+Look up a name. On success it **replaces** the name with `xt n`, where `n` is
+non-zero: `-1` for a normal word, `1` for an immediate one, `2` for immediate
+*and* compile-only (`if`, `[char]`). On failure it **leaves the name alone**
+and pushes `0` — so the two cases leave different stack depths, and a caller
+that may miss must drop two cells, not one:
 
-    : found?  s" dup" find nip . ;   found?     \ -1
-    : missing? s" nosuchword" find nip . ; missing?   \ 0
+    : run  ( c-addr u -- )  find 0= if  2drop  ." missing" cr  else  execute  then ;
+    s" cr" run
+
+Testing the flag with `nip` reads well but only balances on the success path:
+
+    : found?  s" dup" find nip . ;  found?            \ -1
+    : missing?  s" nope" find nip . drop ;  missing?   \ 0, and drop the name
 
 ## execute ( xt -- )
 Run the word identified by an execution token (from `'` or `find`).

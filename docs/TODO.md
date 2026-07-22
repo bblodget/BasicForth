@@ -7,7 +7,12 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
-- [ ] **A module reload leaves live external resources unreachable.**
+- [x] **A module reload leaves live external resources unreachable.** FIXED
+  2026-07-22 (branch module-hooks) with the `on-start`/`on-stop` module hooks
+  below — a module defines `: on-stop sdl-close ;` and the handles are released
+  *before* the rollback, while they are still valid, so the orphan is never
+  created. The analysis below stands as the reason the fix took that shape;
+  what follows it is the original report.
   Reproduced 2026-07-20 under a PTY with the dummy video driver: open a
   window, `save`, then `:e` any word — `sdl-win`/`sdl-ren`/`sdl-tex` all go
   from non-zero to **0** while the real OS window still exists. Nothing can
@@ -31,8 +36,9 @@ completed. See Planning.md for high-level vision and design decisions.
     library); give `require` a "loaded, do not re-run" mark that survives
     rollback; or have reload carry forward pre-existing `value`s. Worth
     deciding deliberately, since it defines what "edit while it runs" means.
-  - Until then, don't `:e` with a window open — the Bitmaps lesson does it
-    after `sdl-close` and explains why.
+  - ~~Until then, don't `:e` with a window open~~ — with `on-start`/`on-stop`
+    defined you can: the Bitmaps lesson now teaches the hooks and `:e`s a
+    shape with the window up, which closes and reopens it by itself.
 
 - [ ] **`save` silently drops data laid down after a `create`.** The capture
   log records a line only when LATEST moves *forward* (see the comment at
@@ -54,10 +60,15 @@ completed. See Planning.md for high-level vision and design decisions.
     `: inv-art  __ l, GG l, ... ;` then `create inv inv-art`. A multi-line
     `:` is captured as one group, so it round-trips. The Sprites lesson now
     teaches this form and explains why.
-  - Possible fixes, none obviously right: keep logging lines that moved HERE
-    (not just LATEST) while a `create` is the newest header; warn at `save`
-    when HERE moved without a header since the last logged group; or accept
-    it and just document. At minimum it should not fail *silently*.
+  - **Partly addressed 2026-07-22** (branch module-hooks): `keep` gives it an
+    explicit answer — `create tbl  1 , 2 , 3 ,  keep` round-trips. But `keep`
+    is opt-in, so the *silent* half of this bug is untouched: someone who does
+    not know about it still loses the data with no warning. Left open for that
+    reason.
+  - Possible fixes for the silence, none obviously right: log lines that moved
+    HERE (not just LATEST) while a `create` is the newest header; warn at
+    `save` when HERE moved without a header since the last logged group; or
+    accept it and document. At minimum it should not fail *silently*.
 
 - [ ] **PTY suite fails 4 tests under QEMU (arm64): harness timing, not a
   product bug.** `make run-pty` is 19/19 on x86 but 15/19 on arm64, failing
@@ -475,8 +486,37 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
-- [ ] **A way to put a non-definition line into the module (`keep`?).** The
-  capture log records a line only when LATEST moves forward, so setup lines
+- [ ] **Remove the stale `compact` references from the docs.** `compact` was
+  **deleted** in `724edd3` ("Stage 4 cleanup: delete propagation, compact, and
+  the mutation-tag save path") — `grep -rn compact src/` finds nothing, so the
+  word does not exist. But the docs still present it as shipped and usable:
+  - this file marks it `[x]` under Module System / Shipped ("`compact <name>` —
+    deduped, dependency-ordered, definitions-only snapshot");
+  - `docs/Persistence.md`, `docs/Module_Architecture.md`,
+    `docs/See_Metadata.md`, `docs/Core_Primitives.md` and
+    `docs/BasicForth_Manual.md` all reference it.
+
+  Anyone following those instructions gets `? compact`. Sweep all six, and say
+  in the TODO entry *why* it went (the mutation model made a
+  dedupe-and-reorder snapshot unsound — `save` is replay-faithful by design),
+  so the idea isn't silently lost if it's ever wanted again. Found 2026-07-22
+  while checking how `keep` would interact with it.
+
+- [x] **A way to put a non-definition line into the module — `keep`.** Done
+  2026-07-22 (branch module-hooks), as designed below: `keep` sets the same
+  "log it anyway" flag a direct `to`/`is` sets, folded into `(cap-assign)` at
+  the top of `(capture-line)` so the existing branch does the work. Resolved
+  open questions: the name is **`keep`**; it may appear **anywhere on the
+  line** (the flag is read after the whole line runs); a multi-line group
+  cannot contain one (it is interpretation-only in practice); and `list`/`see`
+  show kept lines like any other, which is what makes the file readable.
+  The one design call worth recording: `keep` acts **only when `source-id` is
+  0**, so the token replayed from the saved file is inert — nothing has to
+  strip it out, and re-saving a reloaded module stays byte-identical (tested).
+
+  Original write-up — the reasoning that led here:
+
+  The capture log records a line only when LATEST moves forward, so setup lines
   are invisible to `save`: `320 180 sdl-open` never reaches the file, and
   neither do rows of `,`/`c,`/`l,` after a `create`. Brandon's ask
   2026-07-20, after a reload stranded his window and he had to hand-edit
@@ -494,10 +534,38 @@ docs/Graphics.md for the API.
     line or may appear anywhere; what it means inside a multi-line group; and
     whether `list`/`see` should show kept lines differently from definitions.
 
-- [ ] **Module lifecycle hooks (`on-start` / `on-stop`?).** A module cannot
-  currently react to being loaded or reloaded, which is why a live window
-  does not survive `:e` (see the reload/resources bug under Known Bugs).
-  Brandon's idea 2026-07-20.
+- [x] **Module lifecycle hooks — `on-start` / `on-stop`.** Done 2026-07-22
+  (branch module-hooks). A module defines either name and `(mod-hook)` looks it
+  up and runs it; neither is predefined, so a module that wants neither is
+  unaffected. Where they went, and why those spots:
+  - `on-stop` is the first thing `-session` does. That is the single chokepoint
+    every rollback funnels through, so one call covers `reload`, `load`, `new`,
+    `:e`, `edit` and a bare `-session`.
+  - `on-start` runs at the end of `(open-module)` (the module must define it
+    before it can be called) **and** at the end of `(session-init)`, since the
+    startup file loads before that boot hook — without the second call a fresh
+    `basicforth game.fs` would not open the window a `reload` does.
+  - Errors are caught: `error in on-start hook: n`, and the load continues. A
+    hook that fails must not leave you with neither the old module nor the new.
+  - Re-entrancy: `(hook-busy)` is held for the hook's whole dynamic extent, so
+    an `on-start` that calls `reload` finds the inner hooks suppressed instead
+    of recursing. `(capture-reset)` clears it each REPL line in case a hook
+    faults past the `catch` (a guard-page fault longjmps, it is not a throw).
+  - Resolved open questions: they run on any load/reload, **not** at `bye`
+    (process exit releases what the OS knows about), and **not** on a `marker`
+    rollback (a marker is a dictionary tool, not a module verb).
+  - Gotcha found while building this, worth remembering: **`find` leaves
+    `( c-addr u 0 )` on failure**, not `( xt 0 )` — it keeps the name. The
+    first `(mod-hook)` dropped one cell and leaked one per hook lookup, which
+    surfaced as two unrelated module tests failing on stack depth. The
+    Language-Reference entry said `( c-addr u -- xt n )` flatly and its own
+    example leaked; both fixed.
+
+  Original write-up — the reasoning that led here:
+
+  A module cannot currently react to being loaded or reloaded, which is why a
+  live window does not survive `:e` (see the reload/resources bug under Known
+  Bugs). Brandon's idea 2026-07-20.
   - `on-start` after a load/reload — re-acquire resources (`320 180 sdl-open`).
   - `on-stop` **before** the reload — and this is the half `keep` cannot do.
     Putting `sdl-close` at the top of the file runs *after* the rollback, when
@@ -510,6 +578,33 @@ docs/Graphics.md for the API.
     whether `on-stop` runs at `bye`; ordering against the file body; and what
     happens if a hook errors — now that `catch`/`throw` exist, a reload can
     wrap each hook in `catch` and report rather than abort the whole load.
+
+- [ ] **`on-start` should be able to tell a boot from a reload.** Today
+  `(mod-hook)` calls `on-start` identically at startup, after `load`, and after
+  every `reload` — including the ones `:e`/`edit` perform — so a module cannot
+  say "launch the game when I'm started, but only reopen the window when I'm
+  edited". Brandon's ask 2026-07-22, from testing whether a module could
+  autostart a game: it can (`basicforth invaders.fs` boots straight into it,
+  which is the Phase-7 appliance feel and worth keeping), but the same line
+  then re-runs the game on every edit. A `:e` on a dirty module reloads
+  **twice** — auto-save reload then splice reload — so one edit ran the demo
+  twice over.
+  - **There is no workaround today, which is why this needs solving in the
+    hook.** Everything the module owns is rolled back and replayed, and so is
+    every library it `require`s (the `(inc:…)` sentinel goes too), so there is
+    no surviving flag a hook could test to spot a re-entry. Checked before
+    filing.
+  - Two shapes, roughly equal work: pass the reason in — `on-start ( boot? -- )`
+    or a richer reason code (boot / load / reload) — or add a separate
+    `on-boot` that only fires from `(session-init)`. The flag generalises
+    better (a module can branch); the second name is easier to explain and
+    keeps `on-start` zero-stack. Leaning **flag**, since `on-stop` may
+    eventually want the same treatment (tearing down for an edit vs for `bye`).
+  - Whatever the shape, keep the no-hook case free: a module defining neither
+    must stay unaffected, and a hook must not become mandatory-arity.
+  - Related caution to document alongside it: a hook that never returns never
+    gives you a REPL, because it runs mid-reload. Fine for a game loop with an
+    exit key; a hazard for an unconditional `begin … again`.
 
 - [ ] **`:` should say when it redefines an existing word.** Today a
   redefinition is completely silent — no message from `:`, `create`, `value`
@@ -533,9 +628,17 @@ docs/Graphics.md for the API.
     edit-a-word flow) should then mention the message — i.e. the shipped docs
     become correct rather than wrong.
 
-- [ ] **Settable SDL window title.** `sdl-open` hardcodes `s" BasicForth" >z`,
-  so every window is named BasicForth; a game should be able to name itself.
-  Brandon's ask 2026-07-20.
+- [x] **Settable SDL window title.** Done 2026-07-22 (branch module-hooks),
+  exactly as planned below: `sdl-title ( c-addr u -- )` copies into a static
+  128-byte `(z-title)` in the dictionary (NOT a `>z` result — SDL only borrows
+  the pointer, and that scratch is reused), defaults to `BasicForth`, is sticky
+  across `sdl-close` like `sdl-scale`, and calls `SDL_SetWindowTitle` when a
+  window is already up so it retitles live. Over-long names truncate to 127
+  rather than abort — a title is cosmetic. `sdl-open` now passes `(z-title)`.
+  The Bitmaps lesson names its window in `on-start`. Original write-up:
+
+  `sdl-open` hardcoded `s" BasicForth" >z`, so every window was named
+  BasicForth; a game should be able to name itself. Brandon's ask 2026-07-20.
   - Prefer `sdl-title ( c-addr u -- )` that works **before or after**
     `sdl-open`: SDL3 has `SDL_SetWindowTitle(window, zaddr)` which can be
     called on a live window, so setting it after open should retitle

@@ -168,6 +168,9 @@ send(fd, b"bye\r"); os.close(fd)
 #     The Sprites lesson works around it by building the art in a colon word,
 #     which IS captured; this pins that the workaround keeps saving. Only
 #     testable here: the log records interactive lines, not piped ones.
+#     (`keep` is the explicit opt-out for the same gap — covered by the
+#     "Module lifecycle" integration section; the bare form below is still the
+#     silent default, which is why this test pins it.)
 mfd, mpath = tempfile.mkstemp(suffix=".fs", prefix="bf-art-")
 os.close(mfd)
 fd = spawn()

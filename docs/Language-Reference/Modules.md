@@ -18,6 +18,9 @@ At a glance:
     define <name> ( "name" -- )    write a new word in your editor
     :e <name> ...;                 retype one definition at the prompt
     redo <name>   ( "name" -- )    re-evaluate a word's source
+    keep          ( -- )           save this line too, though it defined nothing
+    on-start      ( -- )           you define it: runs after the module loads
+    on-stop       ( -- )           you define it: runs before it is torn down
     -session      ( -- )           low-level: forget all module words
 
 ## save ( "name" -- )  /  save ( -- )
@@ -103,9 +106,46 @@ notice (hyper-static words otherwise keep the bindings they captured).
 
     \ redo snake              \ recompile snake from its source
 
+## keep ( -- )
+Put **this line** in the module even though it defined nothing. `save` records a
+line when it defines a word, so setup lines are normally invisible — a window
+you opened, a variable you initialised, rows of `,` after a `create`. End the
+line with `keep` and it is written verbatim, where you typed it.
+
+    \ 320 180 sdl-open  keep         \ the module reopens its window on load
+    \ create tbl  1 , 2 , 3 ,  keep  \ table data survives the save
+
+It can go anywhere on the line, not just last, and on a line that already
+defines a word it does nothing. `keep` only acts at the terminal, so the copy
+written into the file is an inert token when the module reloads — nothing to
+clean up.
+
+## on-start ( -- )  /  on-stop ( -- )
+Not words BasicForth defines — words **you** may define in a module, which it
+then calls at the right moment:
+
+    : on-start  320 180 sdl-open ;    \ after the module's file has loaded
+    : on-stop   sdl-close ;           \ before its words are forgotten
+
+`on-start` runs when the module is opened — at startup (`basicforth game.fs`),
+after `load`, and after every `reload`, including the reloads that `edit` and
+`:e` perform. Use it to (re)acquire whatever the module needs to run.
+
+`on-stop` runs just before the module's words are thrown away, by `reload`,
+`load`, `new` or `-session`. This is where you release things the *system* is
+holding for you — a window, an audio device, an open file. Reloading rebuilds
+everything in the file, but a handle stored in a `value` is zeroed by the
+rollback while the resource itself lives on, unreachable. `on-stop` still has
+the valid handle, so it can close it properly.
+
+Both are optional; a module that defines neither behaves exactly as before. If
+a hook fails it reports (`error in on-start hook: -4`) and the load continues —
+a broken hook can't leave you with no module at all.
+
 ## -session ( -- )
 Low-level "forget the module's words" back to the end of `core.fs` — the helper
-`new` / `load` / `reload` build on.
+`new` / `load` / `reload` build on. Runs `on-stop` first, which is why every one
+of those verbs releases the module's resources.
 
 ## See Also
 

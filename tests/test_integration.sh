@@ -693,6 +693,21 @@ else
         printf "  ${RED}FAIL${NC}  require sdl3.fs deps/idempotence\n    Got: %q\n" "$sdl_rq"; ((failed++))
     fi
 
+    # sdl-title: settable before AND after sdl-open (SDL_SetWindowTitle works on
+    # a live window), sticky across sdl-close, over-long names truncated to fit
+    # the 128-byte buffer, and every path leaves the stack balanced. The title
+    # buffer is checked directly — the dummy driver has no title bar to read.
+    sdl_ti=$(printf ': zlen ( a -- n ) dup begin dup c@ while 1+ repeat swap - ;\nrequire sdl3.fs\n(z-title) ztype cr\ns" Invaders" sdl-title\n32 16 sdl-open\n(z-title) ztype cr\ns" Live" sdl-title\n(z-title) ztype cr\nsdl-close\n(z-title) ztype cr\n: mk here 300 0 do [char] X c, loop 300 ;\nmk sdl-title\n.( LEN=) (z-title) zlen . .( D=) depth . cr\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_ti" | grep -q 'BasicForth' \
+       && printf '%s' "$sdl_ti" | grep -q 'Invaders' \
+       && printf '%s' "$sdl_ti" | grep -q 'Live' \
+       && printf '%s' "$sdl_ti" | grep -qE 'LEN=127 +D=0'; then
+        printf "  ${GREEN}PASS${NC}  sdl-title: default, pre/post-open, sticky, truncated at 127\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-title\n    Got: %q\n" "$sdl_ti"; ((failed++))
+    fi
+
     # Cold start: one include of bounce.fs loads the whole stack via require.
     sdl_cb=$(printf 'include bounce.fs\n3 bounce-frames depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB:$REPO_ROOT/examples" timeout 10 $FORTH 2>&1)
@@ -2920,6 +2935,126 @@ else
 fi
 
 # =========================================================================
+section "Module lifecycle (keep / on-start / on-stop)"
+# =========================================================================
+# `keep` marks a line that defined nothing to be logged anyway; on-start /
+# on-stop are optional words a module defines to (re)acquire and release the
+# resources a reload would otherwise strand. Same harness as the to/is section:
+# BASICFORTH_SESSION=1 forces capture on for piped input.
+
+# --- keep: a non-defining line reaches the file, and replays ---
+mk_dir="$(mktemp -d)"
+( cd "$mk_dir" && printf 'variable v\n7 v !\n42 v !  keep\nsave mod.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+mk_kept=$(grep -c '^42 v !  keep$' "$mk_dir/mod.fs")     # the kept line is written verbatim
+mk_dropped=$(grep -c '^7 v !$' "$mk_dir/mod.fs")         # the unkept one still is not
+mk_replay=$( cd "$mk_dir" && printf 'v @ .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^42' )
+# Re-saving the reloaded module must be byte-identical: the `keep` token replayed
+# from the file is inert (source-id is the fileid, not 0), so it must not re-log.
+cp "$mk_dir/mod.fs" "$mk_dir/before.fs"
+( cd "$mk_dir" && printf 'save\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+if cmp -s "$mk_dir/before.fs" "$mk_dir/mod.fs"; then mk_idem=SAME; else mk_idem=DIFF; fi
+rm -rf "$mk_dir"
+
+# --- keep: data rows after a CREATE survive (the documented capture gap) ---
+mk_dir="$(mktemp -d)"
+( cd "$mk_dir" && printf 'create tbl\n1 , 2 , 3 ,  keep\nsave mod.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+mk_tbl=$( cd "$mk_dir" && printf 'tbl @ . tbl cell+ @ . tbl 2 cells + @ .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^1 2 3')
+rm -rf "$mk_dir"
+
+# --- on-start / on-stop fire, in the right order, around each verb ---
+mk_dir="$(mktemp -d)"
+cat > "$mk_dir/mod.fs" <<'MKEOF'
+: on-start  ." [start]" cr ;
+: on-stop   ." [stop]" cr ;
+: mk-hi  ." hi" cr ;
+MKEOF
+# startup with a module file runs on-start (parity with reload)
+mk_boot=$( cd "$mk_dir" && printf 'bye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep -c '\[start\]')
+# load: start only (nothing was open yet); reload: stop then start; new: stop only
+mk_seq=$( cd "$mk_dir" && printf 'load mod.fs\nreload\nnew\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>/dev/null \
+    | grep -oE '\[(start|stop)\]' | tr '\n' ' ')
+# a reload must not leak cells (FIND leaves the name behind when a hook is absent)
+mk_depth=$( cd "$mk_dir" && printf 'reload\n.( D=) depth . cr\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep -oE 'D=[0-9]+')
+rm -rf "$mk_dir"
+
+# --- a module with no hooks is unaffected, and a throwing hook is non-fatal ---
+mk_dir="$(mktemp -d)"
+cat > "$mk_dir/plain.fs" <<'MKEOF'
+: mk-plain  99 ;
+MKEOF
+mk_plain=$( cd "$mk_dir" && printf 'reload\nmk-plain .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth plain.fs 2>/dev/null | grep '^99')
+cat > "$mk_dir/bad.fs" <<'MKEOF'
+: on-start  -9 throw ;
+: mk-alive  77 ;
+MKEOF
+mk_bad=$( cd "$mk_dir" && printf 'mk-alive .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth bad.fs 2>/dev/null)
+# a hook that reloads must not recurse forever (the timeout is the real assertion)
+cat > "$mk_dir/loop.fs" <<'MKEOF'
+: on-start  reload ;
+: mk-loop  55 ;
+MKEOF
+mk_loop=$( cd "$mk_dir" && printf 'mk-loop .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth loop.fs 2>/dev/null | grep '^55')
+rm -rf "$mk_dir"
+
+if [[ "$mk_kept" == "1" && "$mk_dropped" == "0" && "$mk_replay" == 42* ]]; then
+    printf "  ${GREEN}PASS${NC}  keep logs a non-defining line; an unkept one is still dropped\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  keep capture\n    kept: %q  dropped: %q  replay: %q\n" \
+        "$mk_kept" "$mk_dropped" "$mk_replay"; ((failed++))
+fi
+if [[ "$mk_idem" == "SAME" ]]; then
+    printf "  ${GREEN}PASS${NC}  a kept line replayed from the file is inert (re-save identical)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  keep re-save not idempotent\n    %q\n" "$mk_idem"; ((failed++))
+fi
+if [[ -n "$mk_tbl" ]]; then
+    printf "  ${GREEN}PASS${NC}  keep preserves data rows laid down after a create\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  keep after create\n    Expected '1 2 3'\n    Got: %q\n" "$mk_tbl"; ((failed++))
+fi
+if [[ "$mk_boot" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  on-start runs for a module given on the command line\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  on-start at startup\n    [start] count: %q\n" "$mk_boot"; ((failed++))
+fi
+if [[ "$mk_seq" == "[start] [stop] [start] [stop] " ]]; then
+    printf "  ${GREEN}PASS${NC}  load/reload/new fire the hooks in order (stop before start)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hook order\n    Expected '[start] [stop] [start] [stop] '\n    Got: %q\n" "$mk_seq"; ((failed++))
+fi
+if [[ "$mk_depth" == "D=0" ]]; then
+    printf "  ${GREEN}PASS${NC}  a reload leaves the stack balanced\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  reload leaked stack cells\n    Expected 'D=0'\n    Got: %q\n" "$mk_depth"; ((failed++))
+fi
+if [[ "$mk_plain" == 99* ]]; then
+    printf "  ${GREEN}PASS${NC}  a module defining no hooks reloads unchanged\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hookless module\n    Expected '99'\n    Got: %q\n" "$mk_plain"; ((failed++))
+fi
+if [[ "$mk_bad" == *"error in on-start hook: -9"* && "$mk_bad" == *77* ]]; then
+    printf "  ${GREEN}PASS${NC}  a throwing hook reports and leaves the module usable\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  throwing hook\n    Got: %q\n" "$mk_bad"; ((failed++))
+fi
+if [[ "$mk_loop" == 55* ]]; then
+    printf "  ${GREEN}PASS${NC}  a hook that reloads does not recurse\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  hook re-entrancy\n    Expected '55'\n    Got: %q\n" "$mk_loop"; ((failed++))
+fi
+
+# =========================================================================
 section "Snake Game Prerequisites (cont.)"
 # =========================================================================
 # Snake game words (test game helpers without loading the full file)
@@ -3471,15 +3606,15 @@ assert_output "Sprites lesson frame-picking idiom" \
     $': pick 16 0 do i 8 / 2 mod if 1 else 0 then . loop ;\npick' \
     "0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1"
 
-# The shipped Bitmaps lesson: opens with 13 steps, and its examples run. The
+# The shipped Bitmaps lesson: opens with 17 steps, and its examples run. The
 # art and the colour-per-call payoff are pure Forth over an off-screen
 # surface, so they run everywhere (incl. QEMU) without SDL.
 bitmaps_out=$(printf 'tutorial Bitmaps\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
-if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/16"* ]]; then
-    printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 16 steps\n"; ((passed++))
+if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/17"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 17 steps\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  Bitmaps lesson opens with 16 steps\n"
+    printf "  ${RED}FAIL${NC}  Bitmaps lesson opens with 17 steps\n"
     printf "    Got:      %s\n" "$(echo "$bitmaps_out" | head -4)"; ((failed++))
 fi
 # The lesson's alien, stamped in two colours from one piece of art.
