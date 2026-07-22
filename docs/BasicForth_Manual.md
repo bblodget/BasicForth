@@ -635,6 +635,32 @@ so `allocate throw`-style ior checks read naturally); uncaught, it resets to
 the REPL like `abort`. `abort` and `abort"` are throws themselves (-1/-2), so
 `catch` traps them too. See `help catch` and `docs/Exceptions.md`.
 
+## Looking Under the Hood (dis)
+
+`see` shows a word's source; `dis` shows the machine code it compiled to,
+decoded by the system's `objdump`. Colon words are listed from the
+dictionary with every `call` annotated with the word it targets — a readable
+view of what `:` actually built — and primitives are listed from the binary
+itself:
+
+```
+> require disasm.fs
+ ok
+> : sq dup * ;
+ ok
+> dis sq
+sq: 11 bytes at 0043AEE4 (dictionary)
+  43aee4:  e8 fb 67 fc ff    call   0x4016e4  \ dup
+  43aee9:  e8 df 68 fc ff    call   0x4017cd  \ *
+  43aeee:  c3                ret
+ ok
+```
+
+Works on both architectures (objdump does the decoding). A compiled literal
+places 8 data bytes after its `call lit`, which a linear disassembler
+renders as a few garbage instructions before resyncing — the `\ lit`
+annotation marks the spot. See `docs/Disassembler.md`.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

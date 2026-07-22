@@ -697,27 +697,35 @@ docs/Graphics.md for the API.
   abandons the definition — which also retires the old bogus "unresolved
   control flow" report at `;` after a typo'd tick.
 
-- [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
-  `require disasm.fs`). Fills the gap `see` leaves for primitives (today it
-  punts to `help`). Shell out to binutils **`objdump`** — already a build
-  dependency, and it decodes **x86-64 AND aarch64** (and any future arch), so
-  no hand-rolled per-arch decompiler like BareMetalForth's x86 subset. Two
-  paths, because BasicForth code lives in two places:
-  - compiled `:` words live in the RWX dictionary mmap → write the word's byte
-    range to a temp file, `objdump -D -b binary -m <arch> --adjust-vma=<addr>`;
-  - primitives live in the binary's `.text` → `objdump --disassemble=<sym>
-    /proc/self/exe` (no temp file; objdump bounds it by symbol).
-
-  Capture output via `open-pipe`. **Payoff (STC-specific):** reverse-lookup each
-  `call <addr>` target in the dictionary and annotate it with the word name —
-  turning raw disassembly into a readable decompile (`call DUP` / `call +` /
-  `ret`), the half no external tool can do. On-demand module (fits the
-  native-core/`sh`-escape-hatch model), graceful when objdump is absent, and
-  never loaded on the appliance — where a native subset decompiler would be the
-  answer instead. Hard parts: bounding a `:` word's byte length in dict space;
-  the primitive path needs an **unstripped** binary; the address→name annotator
-  (map relative call targets from the real VMA back through the dictionary).
-  `see <primitive>` could point at `dis`.
+- [x] **`dis` — disassemble a word via `objdump`** — done 2026-07-22
+  (`disasm` branch): pure-Forth `src/forth/disasm.fs` (`require disasm.fs`),
+  no core changes. Two paths keyed off the header's `CodeLen` field (which
+  it turned out already solved the bounding problem — `;`/create/does>
+  fill it; primitives carry 0): dictionary words dump `xt..xt+CodeLen` to a
+  `mktemp`-made `/tmp` file (0600, unpredictable — no symlink target) and
+  decode with `objdump -D -b binary -m <arch> --adjust-vma` (the same shell
+  command rm's the file; all spliced paths are shell-quoted); primitives use
+  `objdump -d --start-address=<xt>` on the running binary, stopping at the
+  next symbol header. The STC payoff works: every call/bl target is
+  reverse-looked-up through the LATEST chain and annotated `\ dup`. The
+  binary is found via `0 arg` (argv[0], resolved against `(startup-dir)`;
+  fallback `readlink /proc/$PPID/exe`) and its arch read from the ELF
+  header's `e_machine` — both chosen because a shelled-out child under
+  qemu is a *native* process (uname/readlink/PPID all lie); with
+  `aarch64-linux-gnu-objdump` preferred for aarch64 targets, `dis` works
+  correctly under qemu too. Probes run once on first use and retry until
+  they succeed; without objdump it degrades to a one-line message.
+  The shell plumbing (quoted command builder, pipe capture, the guarded
+  mktemp pattern) was extracted to **`src/forth/shellutil.fs`** — a
+  require-able library so future sh-integration tools reuse reviewed code
+  instead of re-rolling quoting (see docs/Shelling_Out.md).
+  Deferred (stage 2): split the dump at `call lit` / string-literal idioms
+  so inline data stops desyncing the listing (self-calibrate the helper
+  addresses by compiling a probe word and reading its bytes back);
+  `see <primitive>` pointing at `dis`; a Machine-Code tutorial lesson.
+  docs/Disassembler.md, `help tools` entry, Manual section, integration
+  tests (skip without objdump / without an aarch64-capable objdump under
+  qemu).
 - [x] **Include guards + dependency includes (`require`)** — done 2026-07-19
   (`require` branch): `require`/`required` load a file only if not already
   loaded; the ledger is a dictionary sentinel `(inc:<basename>)` defined
