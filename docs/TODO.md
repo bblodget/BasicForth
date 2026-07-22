@@ -791,7 +791,15 @@ docs/Graphics.md for the API.
     wide by definition; this is exactly where fixed-width output earns its
     keep. `binary inv c@ 8 u.0r` would read as the picture.
 
-- [ ] **`help <word>` should name the topic page each entry came from.** Today
+- [x] **`help <word>` should name the topic page each entry came from.** Done
+  2026-07-22 (branch help-topic-header), as designed below: lazy bold
+  `<Topic>:` header + blank line before each file's first matched entry,
+  printed by `(hw-head)` with the name passed via `(hw-t)`/`(hw-tn)` (set in
+  `(hw-in)` where the dirent name is on the stack; the getdents buffer is
+  not re-read while `(page-entry)` runs, so the pointer stays valid). Routed
+  through a factored `(pg-count)` so the header's two lines count toward the
+  `--more--` pause. Piped output stays escape-free ((attr!) self-gates).
+  Original notes: today
   a word lookup drops you into an entry with no sense of where you landed —
   and the topic page is exactly where the related words are. Brandon's ask
   (2026-07-20), after `help allocate` gave no hint that `help Memory` existed.
@@ -866,12 +874,19 @@ docs/Graphics.md for the API.
   require-able library so future sh-integration tools reuse reviewed code
   instead of re-rolling quoting (see docs/Shelling_Out.md).
   The Machine-Code tutorial lesson (`tutorial machine-code`) shipped
-  2026-07-22 — STC, primitives, literal desync, jumps, the create stub,
+  2026-07-22 — STC, primitives, literals, jumps, the create stub,
   reading `catch`; output described in prose since dict addresses vary
-  per session/build. Deferred (stage 2): split the dump at `call lit` /
-  string-literal idioms so inline data stops desyncing the listing
-  (self-calibrate the helper addresses by compiling a probe word and
-  reading its bytes back); `see <primitive>` pointing at `dis`.
+  per session/build. Stage 2 shipped 2026-07-22 (`dis-stage2` branch):
+  the dict path now scans for the compiler's two inline-data idioms
+  (call lit + value:8; s"-runtime + len:8 + chars, 4-aligned on arm64)
+  and lists alternating code spans (objdump --start/--stop-address over
+  one temp file) and data spans printed as data — `\ literal: 5`,
+  `\ s" hi there"`, and an xt-valued literal named as `\ xt: dup` — so
+  listings stay truthful through literals and strings on both arches.
+  Idiom addresses self-calibrate at load from two `:noname` probes (read
+  back out of their own compiled bytes; failure degrades to whole-range
+  stage-1 listings). `see <primitive>` now suggests `dis` alongside
+  `help`.
   docs/Disassembler.md, `help tools` entry, Manual section, integration
   tests (skip without objdump / without an aarch64-capable objdump under
   qemu).

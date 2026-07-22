@@ -699,11 +699,13 @@ sq: 11 bytes at 0043AEE4 (dictionary)
  ok
 ```
 
-Works on both architectures (objdump does the decoding). A compiled literal
-places 8 data bytes after its `call lit`, which a linear disassembler
-renders as a few garbage instructions before resyncing — the `\ lit`
-annotation marks the spot. See `docs/Disassembler.md`, or take the
-interactive lesson: `tutorial machine-code`.
+Works on both architectures (objdump does the decoding). `dis` also knows
+the compiler's inline-data idioms — a literal's 8 bytes after `call lit`,
+a string's length+characters after its runtime call — and prints those
+spans as data instead of letting the decoder chew them into garbage:
+`\ literal: 5`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`. See
+`docs/Disassembler.md`, or take the interactive lesson:
+`tutorial machine-code`.
 
 ## Built-in Help
 
@@ -724,6 +726,8 @@ help <word>   - one word's entry           (help allot)
 # Stack Manipulation
 ...
 > help allot                     \ a word: just its reference entry
+Memory:
+
 ## allot ( n -- )
 Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup                    \ which topics mention "dup"?
@@ -738,7 +742,9 @@ Snake (Tutorial)
   prints the page's summary: its preamble up to the first `## ` entry.
 - `help <word>` scans the reference pages for the `## ` entries documenting
   that word and prints each one — `help allot`, `help to`, `help ;`;
-  `help begin` shows all three `begin …` loop forms.
+  `help begin` shows all three `begin …` loop forms. Each page's group of
+  entries opens with a `<Topic>:` header naming the page it came from —
+  the place to `help` for the related words.
 - `apropos <keyword>` lists the topics whose file contains `<keyword>`
   (case-insensitive substring match), each labelled with its section.
 - Long output pages a screenful at a time — space for the next page, `q` to stop.

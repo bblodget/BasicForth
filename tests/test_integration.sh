@@ -2698,10 +2698,11 @@ if [[ "$see_multi" == ": m1 1 ;  : m2 2 ;" ]]; then
 else
     printf "  ${RED}FAIL${NC}  SEE finds a non-last definition on a shared line\n    Expected ': m1 1 ;  : m2 2 ;'\n    Got: %q\n" "$see_multi"; ((failed++))
 fi
-if [[ "$see_prim" == *"is a primitive (assembly)"* && "$see_prim" == *"try: help dup"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive and points at help\n"; ((passed++))
+if [[ "$see_prim" == *"is a primitive (assembly)"* && "$see_prim" == *"try: help dup"* \
+      && "$see_prim" == *"dis dup"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SEE labels an assembly primitive, points at help and dis\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)' + 'try: help dup'\n    Got: %q\n" "$see_prim"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SEE primitive label\n    Expected 'is a primitive (assembly)' + 'try: help dup' + 'dis dup'\n    Got: %q\n" "$see_prim"; ((failed++))
 fi
 if [[ "$see_core" == ": SPACES"* ]]; then
     printf "  ${GREEN}PASS${NC}  SEE shows a core.fs word from its source file\n"; ((passed++))
@@ -3251,6 +3252,30 @@ else
     printf "    Got:      %s\n" "$(echo "$oil_out" | head -8)"; ((failed++))
 fi
 
+# Each file's group of entries is labeled with the topic page it came from:
+# a "<Topic>:" header before the FIRST matched entry — once per file, even
+# when the file contributes several entries (spin heads two in Widgets.md)
+if [[ $(echo "$ent_out" | grep -c "^Widgets:$") -eq 1 ]]; then
+    printf "  ${GREEN}PASS${NC}  help <word> names the topic page, once per file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help <word> names the topic page, once per file\n"
+    printf "    Got:      %s\n" "$(echo "$ent_out" | head -8)"; ((failed++))
+fi
+
+# ...and a word documented on two pages gets both headers, each ahead of
+# its own group (Widgets: before Lubricate, Sound: before speaker bearings)
+w_at=$(echo "$oil_out" | grep -n "^Widgets:$" | head -1 | cut -d: -f1)
+s_at=$(echo "$oil_out" | grep -n "^Sound:$"   | head -1 | cut -d: -f1)
+lub_at=$(echo "$oil_out" | grep -n "Lubricate"        | head -1 | cut -d: -f1)
+spk_at=$(echo "$oil_out" | grep -n "speaker bearings" | head -1 | cut -d: -f1)
+if [[ -n "$w_at" && -n "$s_at" && -n "$lub_at" && -n "$spk_at" \
+   && "$w_at" -lt "$lub_at" && "$s_at" -lt "$spk_at" ]]; then
+    printf "  ${GREEN}PASS${NC}  cross-page entries: each group led by its own topic header\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  cross-page entries: each group led by its own topic header\n"
+    printf "    Got:      %s\n" "$(echo "$oil_out" | head -10)"; ((failed++))
+fi
+
 # The real-docs case that motivated multi-entry help: `help begin` must show
 # all three indefinite-loop entries from Language-Reference/Loops.md
 # timeout 5 (not 2): help begin scans the whole Language-Reference corpus,
@@ -3262,6 +3287,12 @@ if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
 else
     printf "  ${RED}FAIL${NC}  help begin shows all three begin entries\n"
     printf "    Got %s '## begin' headings\n" "$(echo "$begin_out" | grep -c '^## begin')"; ((failed++))
+fi
+if [[ $(echo "$begin_out" | grep -c "^Loops:$") -eq 1 ]]; then
+    printf "  ${GREEN}PASS${NC}  help begin: one Loops: header for the whole group\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help begin: one Loops: header for the whole group\n"
+    printf "    Got %s 'Loops:' headers\n" "$(echo "$begin_out" | grep -c '^Loops:$')"; ((failed++))
 fi
 
 # Markdown rendering is tty-only: piped help output must stay byte-identical
@@ -4225,6 +4256,15 @@ else
         "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
     assert_output "dis primitive: banner" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
+    # stage 2: inline data is split out of the stream, not decoded as code
+    assert_output "dis shows a literal's value" \
+        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "literal: 5"
+    assert_output "dis keeps the ret after a literal" \
+        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "ret"
+    assert_output "dis decodes inline strings" \
+        "$(printf '%s\n: greet ." hi there" ;\ndis greet' "$dis_pre")"  's" hi there"'
+    assert_output "dis names an xt literal" \
+        "$(printf "%s\n: runner ['] dup execute ;\ndis runner" "$dis_pre")"  "xt: dup"
     assert_error  "dis unknown word" \
         "$(printf '%s\ndis nosuchword' "$dis_pre")"  "? nosuchword"
     assert_output "dis without a name" \

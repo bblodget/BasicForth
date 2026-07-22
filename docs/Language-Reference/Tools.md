@@ -33,7 +33,8 @@ At a glance:
 ## see ( "name" -- )
 Print the source of a word's most recent definition, exactly as written —
 whether typed this session or loaded from a file (including `core.fs`).
-Assembly primitives have no source; `see` points you at `help <name>` instead.
+Assembly primitives have no source; `see` points you at `help <name>` and
+`dis <name>` instead.
 See docs/See.md.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;

@@ -83,16 +83,14 @@ Numbers need different treatment — there's no `call 5`. Look:
     dis five
 
 The line after the banner calls `lit`, the runtime that pushes an inline
-value. The next 8 bytes *are the number 5* — data sitting in the
-instruction stream. The disassembler doesn't know that, so it decodes
-your data as garbage instructions. How bad that looks depends on the
-architecture: x86-64 instructions have no fixed width, so the decoder
-loses step — find the stray `05` in the hex column, and notice the
-word's final `ret` is gone, its `c3` byte swallowed by the last bogus
-instruction. ARM64's fixed 4-byte instructions can't lose step: the data
-shows as two impossible `udf` lines (the first reading a tidy `#5`) and
-the `ret` survives. Either way — when a listing goes weird right after a
-`\ lit`, that's data, not code. `next`.
+value — and the next 8 bytes *are the number 5*, data sitting in the
+middle of the instruction stream. Find the `05` at the start of that
+line's hex column. A plain disassembler would chew those bytes into
+garbage instructions (on x86-64 it even loses step and swallows the
+following `ret`) — but `dis` knows the compiler's idiom, so it prints
+the span as what it is: `\ literal: 5`, hex intact, and the `ret` after
+it stays honest. Strings work the same way: try `: hi ." hello" ;` then
+`dis hi` and read your text back out of the code. `next`.
 
 ## Control flow becomes jumps
 
@@ -104,8 +102,8 @@ the `ret` survives. Either way — when a listing goes weird right after a
 After the `call` to `and` comes a short test-and-branch sequence, and the
 jump's target is an address *inside this same listing* — skip ahead and
 you'll find the instruction it lands on. `if`/`else`/`then` vanish at
-compile time; only jumps remain. (The literals bring their inline bytes
-along, as you now expect.) `next`.
+compile time; only jumps remain. (The three literals show up as
+`\ literal:` lines, as you now expect.) `next`.
 
 ## A variable is code too
 
@@ -113,9 +111,10 @@ along, as you now expect.) `next`.
     dis hits
 
 Even a variable compiles code: a call to `lit` with the *address* of its
-cell inline, then `ret` — that's how `hits` pushes its address when you
-run it. The stub also leaves `does>` (see `help defining-words`) room to
-graft new behavior onto a created word later: on x86-64 that's the
+cell inline — shown as a `\ literal:` whose hex value is exactly where
+your data lives — then `ret`. That's how `hits` pushes its address when
+you run it. The stub also leaves `does>` (see `help defining-words`) room
+to graft new behavior onto a created word later: on x86-64 that's the
 trailing `nop`s you see after the `ret`; on ARM64 `does>` instead
 overwrites the `ret` itself with a branch. `next`.
 
