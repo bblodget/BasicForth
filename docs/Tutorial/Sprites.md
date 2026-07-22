@@ -22,6 +22,9 @@ typing:
 
 `f` starts a blank frame, `s` presents it. Everything below goes between them.
 
+As in that lesson, the window grabs the keyboard when it opens — click back on
+your BasicForth terminal before typing the rest.
+
 ## A sprite is just memory
 
 There's no sprite type and no file format. A sprite is `w*h` pixels, 4 bytes

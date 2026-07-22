@@ -22,6 +22,16 @@ Window plus the two helpers that save typing:
     320 180 sdl-open
     : f  sdl-frame  black clear ;
     : s  sdl-show ;
+    f s
+
+`f` starts a blank frame, `s` presents it — so that last line wipes the window
+to black. A brand-new window shows whatever garbage was in memory until you
+present something; run `f s` and you have a clean slate to draw on.
+
+Heads up on the third line: when the window appears your desktop gives it the
+keyboard, so click back on the terminal running BasicForth before typing the
+rest. The window doesn't take input — it just draws — and it stays put while
+you work.
 
 ## A different kind of sprite
 
@@ -199,15 +209,44 @@ typed it. Notice the art *is* there. That's the payoff for putting it inside
 `: inv-art … ;` words back at the start; loose rows of `row,` would have been
 dropped and you'd have reloaded to empty sprites.
 
+If you ever do want a line saved that defines nothing, end it with `keep`:
+
+    create dot  %10000000 c,  keep
+
+Same rule, opted out of, one line at a time. For art the colon word still
+reads better — but `keep` is what saves a setup line.
+
 `bitmaps.fs` is an ordinary source file. `include bitmaps.fs` in a fresh
 session brings it all back.
 
+## Teach the module to start and stop itself
+
+One thing is missing from that listing: `320 180 sdl-open`. It opened your
+window, but it defined nothing, so `save` never recorded it — reload this file
+tomorrow and you get the words with no window.
+
+Give the module two words and it handles itself:
+
+    : on-start  s" Invaders" sdl-title  320 180 sdl-open ;
+    : on-stop   sdl-close ;
+    save
+
+These aren't words you call. BasicForth looks them up: `on-start` runs whenever
+the module is loaded, `on-stop` just before its words are thrown away. Your
+file now knows how to bring its own window up — and how to put it down.
+
+`sdl-title` names the window while we're here. Every BasicForth window is
+called `BasicForth` by default, which is fine until you have two of them and
+can't tell which is which.
+
+(`4 to sdl-scale` is already in the file — a direct `to` gets recorded — and it
+replays before `on-start` runs, so the hook only needs the line that was
+missing.)
+
 ## Changing a shape later
 
-    sdl-close
-
-Window gone, session intact. Now suppose the alien's legs bother you. You
-don't retype the file — you retype the word:
+Now suppose the alien's legs bother you. You don't retype the file — you
+retype the word:
 
     :e inv-art
       s" ..####.." row,
@@ -220,20 +259,25 @@ don't retype the file — you retype the word:
       s" #......#" row, ;
     list
 
+    f  green inv 40 40 8 8 stamp  s
+
 `:e` replaces `inv-art` *where it stands* in the file — look at the listing,
 there's still exactly one `inv-art`, with the new legs. A plain `:`
 redefinition would have appended a second copy instead. `edit inv-art` does
 the same thing through your `$EDITOR` if you'd rather not retype it.
 
-Notice we closed the window first. `:e` doesn't just patch the word in
-memory — it rewrites the file and **reloads it**, so your live state becomes
-whatever the file rebuilds. Definitions come back; things you set at the
-prompt mostly come back too, because a direct `to` is recorded. But an open
-window isn't in the file — `sdl-open` set that up from inside a word — so a
-reload leaves it stranded. Close it first, edit, then open again.
+Watch what happened to the window: it blinked. `:e` doesn't just patch the
+word in memory — it rewrites the file and **reloads it**, so your live state
+becomes whatever the file rebuilds. That's why `on-stop` and `on-start`
+matter. Without them the reload would forget `sdl-win` while the window
+itself kept existing, and the next `stamp` would fail with
+`Parameter 'texture' is invalid` — a window on screen that nothing could
+draw to or close. Instead `on-stop` closed it properly on the way down and
+`on-start` opened a fresh one on the way back up.
 
-That's the trade for a module you can edit a word at a time: the file is the
-truth, and reloading replays it.
+That's the deal with a module you can edit a word at a time: the file is the
+truth, reloading replays it, and the two hooks are how anything *outside*
+the file gets handed over cleanly.
 
 ## Where to go next
 

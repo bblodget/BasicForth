@@ -431,6 +431,43 @@ always pulls from disk; pipes and scripts never prompt). See `docs/Persistence.m
 for the full module model and limitations (notably: variable/value *contents* are
 not persisted, only the definitions).
 
+#### Setup lines — `keep`
+
+"Only definitions are captured" costs you the lines that *set the module up*,
+because those define nothing. `keep` overrides it for one line:
+
+```
+> 320 180 sdl-open  keep       \ the module reopens its window when it loads
+> create tbl  1 , 2 , 3 ,  keep
+```
+
+The line is written verbatim where you typed it. That second case matters: the
+`create` is captured but the rows of `,` filling the table are not, so without
+`keep` the data is silently lost. `keep` acts only at the keyboard, so the copy
+saved in your file is an inert token when the module reloads.
+
+#### Starting and stopping — `on-start` / `on-stop`
+
+Reloading a module forgets its words and replays the file, so everything the
+file builds comes back. What doesn't come back is anything the module was
+*holding* — a window, an audio device, an open file. The handle lived in a
+`value`, the rollback took it, and the resource is still there with nothing left
+to reach it. Define either of these names and BasicForth will call them:
+
+```
+> : on-start  320 180 sdl-open ;    \ after the module's file is (re)read
+> : on-stop   sdl-close ;           \ before its words are forgotten
+```
+
+`on-start` runs at startup, after `load`, and after every `reload` — including
+the ones `edit` and `:e` do for you. `on-stop` runs first on the way down, while
+the handles are still valid, which is why it can't be replaced by a line at the
+top of your file (that runs *after* the rollback, too late).
+
+With both defined you can `:e` a word while the program is running and the
+window closes, reloads and reopens by itself. Both are optional, and a hook that
+fails reports rather than aborting the reload.
+
 ### Looking at a definition (`see`)
 
 `see <name>` prints the source of a word's most recent definition — exactly what
@@ -585,6 +622,8 @@ work):
 ```
 > require sdl3.fs
  ok
+> s" Demo" sdl-title
+ ok
 > 4 to sdl-scale  320 180 sdl-open
  ok
 > sdl-frame  black clear  yellow 160 90 40 fill-circle
@@ -592,9 +631,11 @@ work):
  ok
 ```
 
-Each frame draws from scratch between `sdl-frame` and `sdl-show` (vsync-paced,
-so a `begin ... until` game loop needs no timer). See `help graphics` and
-`help sdl3`, `docs/Graphics.md`, and the demo `examples/bounce.fs`.
+Each frame draws from scratch between `sdl-frame` and `sdl-show`, which paces
+the loop to `sdl-fps` (default 60) — so a `begin ... until` game loop needs no
+timer of its own. `sdl-title` names the window and works before or after
+`sdl-open`; without it every window is called `BasicForth`. See `help graphics`
+and `help sdl3`, `docs/Graphics.md`, and the demo `examples/bounce.fs`.
 
 ## Sound (SDL3 audio)
 
