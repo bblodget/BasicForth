@@ -32,6 +32,11 @@ desktop, but *your* surface is 320×180: `sdl-scale 4` shows each of your
 pixels as a fat 4×4 block. Chunky retro pixels, and 1/16 the drawing work —
 that trade is what makes software rendering fast.
 
+One practical thing: your desktop hands the keyboard to the new window, so
+**click back on the terminal running BasicForth** before you type again. The
+window never takes input — it only draws — so it's the terminal you talk to
+from here on.
+
 ## The frame sandwich
 
 The window is still showing garbage — you haven't drawn a frame. A frame is

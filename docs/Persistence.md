@@ -114,9 +114,10 @@ Two words skip the prompt on purpose:
 ## What gets captured
 
 While you type at the interactive prompt, BasicForth watches each line. A line
-(or group of lines) is captured if it **adds to the dictionary** (defines a word)
-or **performs a direct `to`/`is` assignment** (so a `value`'s contents and a
-deferred word's action persist). Other transient actions are *not* captured:
+(or group of lines) is captured if it **adds to the dictionary** (defines a word),
+**performs a direct `to`/`is` assignment** (so a `value`'s contents and a
+deferred word's action persist), or **ends with `keep`** (see below). Other
+transient actions are *not* captured:
 
 ```
 > : double dup + ;      \ captured (defines a word)
@@ -125,7 +126,34 @@ deferred word's action persist). Other transient actions are *not* captured:
 > 5 to hits             \ captured (a direct assignment)
 > 5 double .            \ NOT captured (just prints 10)
 > page                  \ NOT captured (just clears the screen)
+> 320 180 sdl-open      \ NOT captured (opens a window, defines nothing)
+> 320 180 sdl-open keep \ captured — you asked for it
 ```
+
+### `keep` — save a line that defined nothing
+
+The rule above is what keeps a module file clean, but it has a cost: the lines
+that *set your module up* are exactly the ones that define nothing, so they
+vanish. `keep` is the override. Put it on the line and the line is written
+verbatim, in the order you typed it:
+
+```
+> 320 180 sdl-open  keep      \ the module reopens its window when it loads
+> create tbl  1 , 2 , 3 ,  keep
+```
+
+That second case is the answer to a sharp edge: `create` moves the dictionary
+pointer, so it is captured, but the rows of `,` that fill the table are not —
+without `keep`, `save` writes a bare `create tbl` and the data is silently gone.
+(Building the table inside a colon word, `: tbl-data 1 , 2 , 3 ; create tbl
+tbl-data`, is the other way, and stays the nicer one for anything long.)
+
+`keep` may appear anywhere on the line, not only at the end, and on a line that
+already defines a word it does nothing. It acts **only at the terminal**: when
+the saved line is replayed on load, `source-id` is the file, not the keyboard, so
+the `keep` token sitting in your file is inert. That is why the token can simply
+stay there — nothing has to strip it back out, and re-saving a reloaded module is
+still byte-identical.
 
 Only a *direct* assignment counts — a `to`/`is` performed inside a word you call
 runs as compiled code, not as the interpreter, so calling that word is not
@@ -149,6 +177,54 @@ leaves one definition, in place. Saving is **idempotent** (saving twice
 writes a byte-identical file). A bare `save` with nothing captured prints
 `nothing to save`; with no current file it prints
 `save: no current file (use: save <name>)`.
+
+## Module lifecycle hooks: `on-start` and `on-stop`
+
+A reload rolls the dictionary back to the end of `core.fs` and replays the module
+file. Anything the file builds comes back — that is the whole idea. What does
+*not* come back is anything the module was **holding**: an SDL window, an audio
+device, an open file. Its handle lives in a `value`, the rollback takes the
+`value` with everything else, and the resource carries on existing with nothing
+left that can reach or release it.
+
+A module fixes this by defining either or both of these names. BasicForth does
+not define them; it just looks them up and calls them if they exist.
+
+```forth
+: on-start  320 180 sdl-open ;    \ after the module's file has been (re)read
+: on-stop   sdl-close ;           \ before the module's words are forgotten
+```
+
+| Hook | Runs | Use it to |
+|------|------|-----------|
+| `on-start` | after the file loads — at startup (`basicforth game.fs`), after `load`, and after every `reload`, including those `edit` and `:e` perform | (re)acquire what the module needs to run |
+| `on-stop` | just before the words are forgotten, by `reload`, `load`, `new` or `-session` | release what the system is holding for you |
+
+`on-stop` is the half `keep` cannot do. Putting `sdl-close` at the top of your
+file does not work: the file runs *after* the rollback, when the handles are
+already zeroed. `on-stop` runs *before* it, while they are still valid, so the
+orphan is never created.
+
+This is what makes `:e` usable on a program that is running. Without hooks you
+must close the window by hand first; with them:
+
+```
+> : on-stop   sdl-close ;
+> : on-start  320 180 sdl-open ;
+> :e ship-art  s" ..####.." row,  s" .#....#." row, ;
+```
+
+closes the window, reloads the module, and reopens it — one command.
+
+Both are optional, and a module that defines neither behaves exactly as it always
+has. A hook that fails is **reported, not fatal** (`error in on-start hook: -4`)
+— a broken hook must not abort the reload that is rebuilding your module, or you
+would be left with neither the old one nor the new one. A hook that itself
+reloads finds the inner hooks suppressed, so it cannot recurse.
+
+Two things they deliberately do *not* do: they don't run at `bye` (process exit
+releases what the OS knows about), and `marker` rollbacks don't call `on-stop` —
+a marker is a dictionary tool, not a module verb.
 
 ## Scope: interactive sessions only
 
@@ -182,8 +258,8 @@ runtime state. A `variable`'s contents (set with `!`) are not captured, so a
 ```
 
 A `value` set with a direct `to` *does* survive (`0 value hits` then `5 to hits`).
-For other mutable state, prefer a `value` you assign with `to`, or initialize it
-inside a defining word.
+For other mutable state, prefer a `value` you assign with `to`, initialize it
+inside a defining word, or mark the line with `keep` (`10 hits !  keep`).
 
 Other notes:
 

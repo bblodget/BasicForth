@@ -21,6 +21,7 @@ scratch — `clear` first.
 At a glance:
 
     sdl-open       ( w h -- )        open window + renderer + texture
+    sdl-title      ( c-addr u -- )   name the window (before or after open)
     sdl-scale      ( -- n )          pixel size (value; set before sdl-open)
     sdl-fps        ( -- n )          frame-rate cap sdl-show holds (value)
     sdl-frame      ( -- )            start a frame: surface -> window pixels
@@ -42,6 +43,22 @@ your own pace.
 
     \ 640 360 sdl-open
     \ 4 to sdl-scale  320 180 sdl-open   ( 1280x720 window )
+
+## sdl-title ( c-addr u -- )
+Name the window. Works **before or after** `sdl-open`: set it first and the
+next window opens with that name, set it while a window is up and the title
+bar changes immediately. Default `BasicForth`, and sticky like `sdl-scale` —
+it survives `sdl-close`, so every window you open keeps the name until you
+change it.
+
+    \ s" Invaders" sdl-title  320 180 sdl-open
+    \ s" Invaders - paused" sdl-title      ( retitles the live window )
+
+Worth doing in anything that reopens its window (a module with an `on-start`
+hook, say): every BasicForth window is called `BasicForth` otherwise, and two
+of them on one desktop are impossible to tell apart. Names longer than 127
+characters are truncated rather than refused — a title is cosmetic and
+shouldn't abort a game's startup.
 
 ## sdl-scale ( -- n )
 The pixel size, a `value` (change with `to`) read by `sdl-open`: the window is

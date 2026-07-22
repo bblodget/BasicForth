@@ -29,6 +29,7 @@ require graphics.fs
 0 value (SDL_Init)            0 value (SDL_Quit)
 0 value (SDL_GetError)
 0 value (SDL_CreateWindow)    0 value (SDL_DestroyWindow)
+0 value (SDL_SetWindowTitle)
 0 value (SDL_CreateRenderer)  0 value (SDL_DestroyRenderer)
 0 value (SDL_SetRenderVSync)
 0 value (SDL_CreateTexture)   0 value (SDL_DestroyTexture)
@@ -45,6 +46,7 @@ require graphics.fs
     (sdl3) s" SDL_GetError"        dlsym to (SDL_GetError)
     (sdl3) s" SDL_CreateWindow"    dlsym to (SDL_CreateWindow)
     (sdl3) s" SDL_DestroyWindow"   dlsym to (SDL_DestroyWindow)
+    (sdl3) s" SDL_SetWindowTitle"  dlsym to (SDL_SetWindowTitle)
     (sdl3) s" SDL_CreateRenderer"  dlsym to (SDL_CreateRenderer)
     (sdl3) s" SDL_DestroyRenderer" dlsym to (SDL_DestroyRenderer)
     (sdl3) s" SDL_SetRenderVSync"  dlsym to (SDL_SetRenderVSync)
@@ -113,6 +115,29 @@ create (z-off)      char 0 c,  0 c,
 
 : sdl-error ( -- )  ." sdl: " 0 (SDL_GetError) (ccall) ztype cr abort ;
 
+\ --- window title ---
+\ The title needs a home of its own: SDL only borrows the pointer at
+\ CreateWindow time, and >z's scratch buffer is reused by the next caller, so
+\ a >z result would be overwritten out from under a live window. Sticky across
+\ sdl-close, like sdl-scale -- set it once and every window you open is named.
+128 constant (title-max)                     \ including the NUL
+create (z-title) (title-max) allot
+s" BasicForth" 2dup (z-title) swap cmove   \ default title...
+    nip (z-title) +  0 swap c!             \ ...NUL-terminated
+
+\ sdl-title ( c-addr u -- ): name the window. Works before OR after sdl-open --
+\ SDL_SetWindowTitle retitles a live window, so a title set mid-session shows up
+\ immediately rather than waiting for the next open. Over-long names are cut to
+\ fit rather than refused; a title is cosmetic, and truncating beats aborting a
+\ game's startup over it.
+: sdl-title ( c-addr u -- )
+    (title-max) 1- min                       ( c-addr u )   \ leave room for the NUL
+    dup >r  (z-title) swap cmove             ( )    \ R: u
+    0  (z-title) r> +  c!                    \ NUL-terminate at the copied length
+    sdl-win ?dup if                          \ a window is up: retitle it now
+        (z-title) 2 (SDL_SetWindowTitle) (ccall) drop
+    then ;
+
 \ --- open / close ---
 : sdl-open ( w h -- )
     to sdl-height  to sdl-width
@@ -121,7 +146,7 @@ create (z-off)      char 0 c,  0 c,
     \ perfectly healthy prompt. Must be set before the window is created.
     (z-wm-ping) (z-off) 2 (SDL_SetHint) (ccall) drop
     SDL_INIT_VIDEO 1 (SDL_Init) (ccall) (c-bool) 0= if sdl-error then
-    s" BasicForth" >z  sdl-width sdl-scale *  sdl-height sdl-scale *  0
+    (z-title)  sdl-width sdl-scale *  sdl-height sdl-scale *  0
     4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then  to sdl-win
     sdl-win 0  2 (SDL_CreateRenderer) (ccall)
     dup 0= if sdl-error then  to sdl-ren
