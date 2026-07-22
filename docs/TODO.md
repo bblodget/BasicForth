@@ -502,11 +502,21 @@ docs/Graphics.md for the API.
   - TO works with locals (compile a locals-stack-relative store)
   - Reentrant and thread-safe (each thread gets its own locals stack)
   - Required for safe multi-threaded Forth words
-- [ ] Threading support (pthreads or clone syscall)
-  - Per-thread data stack, return stack, and locals stack
-  - Shared dictionary (read-only after compilation)
-  - Thread-local state: SOURCE, >IN, STATE, BASE
-  - Synchronization primitives (mutex, semaphore)
+- [ ] Threading support — **decided 2026-07-22: pthreads via the FFI, not
+  raw clone; design in docs/Threading.md.** The binary is already
+  dynamically linked and `pthread_create` lives in libc (glibc ≥ 2.34);
+  SDL already threads this process (`bye`'s exit_group fix paid for that).
+  - Per-arch asm trampoline: pthread entry sets up the thread's own data +
+    return stacks and DSP register, then EXECUTEs the xt
+  - `thread ( xt -- tid ior )` / `join ( tid -- ior )`
+  - v1 rule (documented, not enforced): the REPL thread owns the
+    dictionary — workers run compiled words only, no `:`/`create`/
+    interpret-`s"`/`save`, BASE read-only
+  - Channels as the blessed communication path: `chan`/`ch!`/`ch@`/`ch?`
+    (ring buffer + pthread mutex/cond)
+  - Must-settle list in the doc: `handler` (catch/throw chain global) must
+    be per-thread or catch forbidden in workers; worker fault story
+    (signals are process-wide); per-thread locals stack; stack sizing
 
 ---
 
@@ -649,6 +659,29 @@ docs/Graphics.md for the API.
     gives you a REPL, because it runs mid-reload. Fine for a game loop with an
     exit key; a hazard for an unconditional `begin … again`.
 
+- [ ] **TCP sockets library — the plumbing under chat, BBS, and anything
+  networked.** Design in **docs/Sockets.md** (2026-07-22). Platform-layer
+  raw syscalls, both arches — sockets are fds, so `read-file`/`write-file`/
+  `close-file` already work on them; new words are only `tcp-connect`/
+  `tcp-listen`/`tcp-accept`/`fd-nonblock`/`fd-poll`/`ip` plus internal
+  sockaddr/htons plumbing. Design rule: **non-blocking + poll is the paved
+  road** — the chat prompt-peek then needs zero concurrency. DNS is the
+  sneaky gap (getaddrinfo is libc, not a syscall): v1 numeric IPs, v1.5
+  `getent hosts` via shellutil.fs. Tests via socketpair/UNIX-domain +
+  loopback TCP, never the real network. TLS: never build it.
+
+- [ ] **Community arc — chat client, then a BasicForth BBS.** Ideas in
+  **docs/Community.md** (2026-07-22): community lives inside the tool.
+  IRC first (line-based plaintext, Strings-lesson-difficulty parsing,
+  ~150-line client, real people on day one); REPL experience escalates
+  pull (`msgs`) → prompt-peek (deferred hook before ` ok`) → live
+  (needs threading). Destination: a BBS written in BasicForth itself,
+  merged with the package registry — boards + packages + door games.
+  Network games ride the same sockets (lockstep: send inputs, not state;
+  ladder = high-score server → turn-based → LAN tron → BBS lobbies).
+  Sequencing: sockets.fs → chat v1 (no threads) → registry stages →
+  threading → BBS.
+
 - [ ] **Package registry — sharing user-generated libraries and programs.**
   Design captured in **docs/Package_Registry.md** (2026-07-22, nothing
   implemented). One-file packages with a comment header + leading "dep
@@ -658,11 +691,13 @@ docs/Graphics.md for the API.
   one-level federation (`add-registry` = explicit trust, `install
   brandon/snake` disambiguates); git is the only network layer, so the sole
   new primitive is run-an-external-command — the same one `dis` needs for
-  objdump. Prerequisites: the exec primitive, and the
-  `save`-drops-`create`-data bug above (silently-corrupt shared games
-  otherwise). Implementation stages (each independently useful, in order):
-  - [ ] exec primitive — run an external command (design with `dis`'s
-    objdump/`open-pipe` needs in mind; one primitive serves both)
+  objdump. Both prerequisites have since landed: shellutil.fs (2026-07-22,
+  disasm branch) is the exec/capture plumbing, and the
+  `save`-drops-`create`-data bug is FIXED (create-data-capture branch) —
+  saved modules round-trip data now, so `publish` is unblocked.
+  Implementation stages (each independently useful, in order):
+  - [x] exec primitive — landed as shellutil.fs ((cmd-run)/(cmd-open)/
+    (cmd-line1) over `open-pipe`, quoted interpolation via (cmd+q))
   - [ ] `needs-cmd` / `needs-lib` — polite system-requirement probes at
     load time (useful today: sdl3.fs, sound.fs, future disasm.fs)
   - [ ] `deps <name>` — soft-check a file's leading dep block without
@@ -676,7 +711,7 @@ docs/Graphics.md for the API.
   - [ ] federation — `add-registry` / `registries` / `name/pkg`
     disambiguation / REGISTRIES phone book
   - [ ] `publish` — saved module → your registry clone → commit/push
-    (blocked on the `save`-drops-`create`-data fix)
+    (was blocked on the `save`-drops-`create`-data bug; fixed 2026-07-22)
 
 - [ ] **`:` should say when it redefines an existing word.** Today a
   redefinition is completely silent — no message from `:`, `create`, `value`
