@@ -62,9 +62,38 @@ the header `CodePtr` fields) and appends the word's name:
   43aee4:  e8 fb 67 fc ff    call   0x4016e4  \ dup
 ```
 
-That turns the listing into a readable decompile of the definition. Targets
-with no dictionary entry (internal helpers like the string-literal runtime)
-stay unannotated.
+That turns the listing into a readable decompile of the definition.
+
+## Idiom-aware listings
+
+Compiled code embeds data in the instruction stream in exactly two shapes:
+a literal is `call lit` + 8 value bytes, and `s"` / `."` / `abort"`
+compile a call to the string runtime + an 8-byte length + the characters
+(padded to 4 alignment on ARM64). A linear disassembler decodes that data
+as garbage instructions — on x86 the variable-width decode can even lose
+step and swallow the following real instructions.
+
+`dis` knows both idioms. The dict path *scans* the word first, splitting
+it into code spans (each decoded by objdump with `--start/--stop-address`
+over one shared temp file) and data spans, which are printed as what they
+are — hex column intact, meaning in the margin:
+
+```
+  43d5f1:  05 00 00 00 00 00 00 00   \ literal: 5
+  43d629:  08 00 ... 68 69 20 74 ..  \ s" hi there"
+  43d669:  e4 16 40 00 00 00 00 00   \ xt: dup
+```
+
+A literal that matches a word's `CodePtr` is named (`['] dup` reads as
+`\ xt: dup`); the string runtime's own call is annotated `\ (s")` even
+though it has no dictionary entry.
+
+The idiom addresses are **self-calibrated**: at load time the module
+compiles two `:noname` probes (`0` and `s" x"`) and reads the call targets
+back out of its own compiled bytes. No dependence on internal names, and
+if the core ever moves those helpers, `dis` recalibrates on the next
+load. If calibration fails, the addresses stay 0, no call ever matches,
+and the scanner degrades to whole-range listings.
 
 ## Finding the binary and its architecture
 
@@ -96,24 +125,16 @@ installing binutils mid-session just works. Without objdump, `dis` prints
 `dis: needs objdump (binutils) on PATH` and returns; it is never loaded on
 a system where you don't ask for it (`require disasm.fs`).
 
-## Limits (v1)
+## Limits
 
-- **Inline literals desync the listing.** A compiled literal is `call lit`
-  followed by 8 bytes of data in the instruction stream; a linear
-  disassembler decodes those data bytes as garbage instructions until it
-  resyncs. Same for `s"` string payloads and the data address in a
-  `create` stub. The `call ... \ lit` annotation marks where it happens.
-  (Planned second pass: split the dump at each literal idiom and print the
-  operand as data — the module can self-calibrate the helper addresses by
-  compiling a probe word and reading its own bytes back.)
 - **`:noname` code has no header**, so there is no `CodeLen` to bound it
   and nothing to look up — `dis` needs a name.
 - **Hidden words** (`lit` and friends) are not findable by `dis <name>`,
   though the annotator still names them when they are call targets.
 - A **stripped or PIE build** would break the primitive path (no symbols /
   shifted addresses). The stock build is neither.
-- `see <primitive>` still points at `help`; teaching it to suggest `dis`
-  is a possible follow-up.
+- Long strings show their first 40 characters (and 16 hex bytes) with an
+  ellipsis; unprintable bytes display as dots, like `dump`.
 
 ## Testing
 

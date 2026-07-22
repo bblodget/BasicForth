@@ -697,11 +697,13 @@ sq: 11 bytes at 0043AEE4 (dictionary)
  ok
 ```
 
-Works on both architectures (objdump does the decoding). A compiled literal
-places 8 data bytes after its `call lit`, which a linear disassembler
-renders as a few garbage instructions before resyncing — the `\ lit`
-annotation marks the spot. See `docs/Disassembler.md`, or take the
-interactive lesson: `tutorial machine-code`.
+Works on both architectures (objdump does the decoding). `dis` also knows
+the compiler's inline-data idioms — a literal's 8 bytes after `call lit`,
+a string's length+characters after its runtime call — and prints those
+spans as data instead of letting the decoder chew them into garbage:
+`\ literal: 5`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`. See
+`docs/Disassembler.md`, or take the interactive lesson:
+`tutorial machine-code`.
 
 ## Built-in Help
 
