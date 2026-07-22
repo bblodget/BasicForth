@@ -181,6 +181,64 @@ variable (bl-run) variable (bl-key)
         (bl-x0) @ i pixel-addr  i (bl-row)  (bl-run) @ 4 *  cmove
     loop ;
 
+\ Binary (1-bit) sprites. Here a sprite is a MONOCHROME bitmap and the color
+\ is supplied at draw time -- the TI-99/4A model, where a sprite is a bit
+\ pattern with a separate color attribute. One bit per pixel, MSB first, so a
+\ binary literal reads exactly as the picture looks:
+\
+\   create ship
+\     %00111100 c,   \ ..####..
+\     %01000010 c,   \ .#....#.
+\
+\ Rows are in plain reading order, stride = ceil(w/8) bytes; bits past w in
+\ the last byte of a row are ignored. 0-bits are transparent (nothing is
+\ written), so stamping never disturbs the background. 32x smaller than the
+\ same art in full color -- a 16x16 is 32 bytes vs 1024 -- which is why art
+\ can live in the dictionary instead of needing ALLOCATE.
+variable (st-src) variable (st-x) variable (st-y) variable (st-w)
+variable (st-h) variable (st-col) variable (st-stride)
+
+\ Is bit (i,j) of the sprite set?  MSB first: column 0 is bit 7 of byte 0.
+: (st-bit?) ( i j -- flag )
+    (st-stride) @ *  (st-src) @ +        ( i rowaddr )
+    over 8 / +  c@                       ( i byte )
+    swap 7 and  7 swap -  rshift  1 and  0<> ;
+
+\ Plot through `pixel`, which already clips -- so a stamp hanging off any
+\ edge (or entirely off-surface) costs nothing but the loop.
+: stamp ( color src x y w h -- )
+    (st-h) !  (st-w) !  (st-y) !  (st-x) !  (st-src) !  (st-col) !
+    (st-w) @ 7 +  8 /  (st-stride) !
+    (st-h) @ 0 ?do
+        (st-w) @ 0 ?do
+            i j (st-bit?) if
+                (st-col) @  (st-x) @ i +  (st-y) @ j +  pixel
+            then
+        loop
+    loop ;
+
+\ Compile one row of bitmap art from a string, so the source looks like the
+\ picture:  s" ..####.." row,  is the same two bytes as %00111100 c, would be
+\ for an 8-wide row. '.', space and '0' leave the pixel clear; anything else
+\ ('#', '*', 'X', '1', ...) sets it. Bits pack MSB first and each row starts a
+\ fresh byte, matching what `stamp` reads: a row of u characters compiles
+\ ceil(u/8) bytes, and the spare bits of a partial last byte are zero. Rows of
+\ a sprite must all be the same length -- that length is the w you pass stamp.
+variable (rw-acc)  variable (rw-n)
+: (rw-on?) ( c -- 0|1 )
+    dup [char] . =  over bl = or  swap [char] 0 = or  0= 1 and ;
+: (rw-bit) ( n -- )
+    (rw-acc) @ 2* or  (rw-acc) !
+    (rw-n) @ 1+ dup (rw-n) !
+    8 = if  (rw-acc) @ c,  0 (rw-acc) !  0 (rw-n) !  then ;
+: row, ( c-addr u -- )
+    0 (rw-acc) !  0 (rw-n) !
+    over + swap ?do  i c@ (rw-on?) (rw-bit)  loop
+    (rw-n) @ ?dup if                       \ left-align a partial last byte
+        8 swap -  (rw-acc) @ swap lshift  c,
+        0 (rw-acc) !  0 (rw-n) !
+    then ;
+
 \ Named colors (0x00RRGGBB)
 $000000 constant black
 $FFFFFF constant white

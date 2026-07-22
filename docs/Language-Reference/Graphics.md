@@ -27,6 +27,8 @@ At a glance:
     blit        ( src x y w h -- )         copy a sprite onto the surface
     blit-key    ( key src x y w h -- )     sprite copy with transparency
     grab        ( dst x y w h -- )         copy surface region to a buffer
+    stamp       ( color src x y w h -- )   draw a 1-bit sprite in one color
+    row,        ( c-addr u -- )            compile a row of bitmap art
     l,          ( color -- )               compile one pixel (sprite tables)
     pixel-addr  ( x y -- addr )            address of a pixel (no clip)
     gr-base gr-width gr-height gr-stride ( -- a-addr )  surface variables
@@ -39,7 +41,7 @@ each `sdl-frame`; call it yourself to draw into your own memory (for tests,
 sprite-building, or off-screen composition).
 
     \ 64x48 off-screen buffer:
-    \ 64 48 * 4 * allocate drop  64 48  64 4 *  set-surface
+    \ 64 48 * 4 * allocate throw  64 48  64 4 *  set-surface
 
 ## pixel ( color x y -- )
 Plot one pixel. Off-surface coordinates are silently ignored.
@@ -102,8 +104,64 @@ at `dst` (`w*h*4` bytes). Save the background before drawing a sprite over it,
 or draw art with the shape words and grab it as a sprite. Only the on-surface
 part of the region is copied.
 
-    \ 16 16 * 4 * allocate drop value saved
+    \ 16 16 * 4 * allocate throw value saved
     \ saved 100 50 16 16 grab
+
+## stamp ( color src x y w h -- )
+Draw a **1-bit** sprite: `src` is a monochrome bitmap and the color is given
+at draw time, so one shape can be drawn in any color. 1-bits are painted,
+0-bits are transparent — the background shows through untouched. Clips on all
+edges like every other drawing word.
+
+One bit per pixel, most significant bit first, so a binary literal reads
+exactly as the picture looks. Rows are in reading order and each starts on a
+byte boundary (stride `ceil(w/8)`); bits past `w` in a row's last byte are
+ignored.
+
+    \ : ship-art
+    \   %00111100 c,     \ ..####..
+    \   %01000010 c,     \ .#....#.
+    \   %10100101 c,     \ #.#..#.#
+    \   %10000001 c,     \ #......#
+    \   %10100101 c,     \ #.#..#.#
+    \   %10011001 c,     \ #..##..#
+    \   %01000010 c,     \ .#....#.
+    \   %00111100 c, ;   \ ..####..
+    \ create ship ship-art
+    \ cyan ship 100 50 8 8 stamp
+    \ red  ship 120 50 8 8 stamp     ( same art, different color )
+
+The art is built by a word rather than written straight after `create` so it
+survives `save`: the module log records definitions, and bare rows of `c,`
+define nothing (see `tutorial Bitmaps`).
+
+## row, ( c-addr u -- )
+Compile one row of bitmap art from a string, so the source looks like the
+picture. `.`, space and `0` leave a pixel clear; anything else — `#`, `*`,
+`X`, `1` — sets it.
+
+    \ : ship-art
+    \   s" ..####.." row,
+    \   s" .#....#." row,
+    \   s" #.#..#.#" row, ;
+    \ create ship ship-art
+    \ cyan ship 100 50 8 8 stamp
+
+This compiles exactly the bytes the equivalent `%00111100 c,` rows would —
+it's a nicer way to write the same data, not a different format. Bits pack
+most significant first and every row starts a fresh byte, so a row of `u`
+characters compiles `ceil(u/8)` bytes and the spare bits of a partial last
+byte are zero (`s" ###" row,` compiles one byte, `%11100000`).
+
+All rows of a sprite must be the same length — that length is the `w` you
+pass to `stamp`. Nothing checks this for you; a short row silently shifts the
+rest of the picture.
+
+A binary sprite is 32x smaller than the same art in full color — a 16x16 is
+32 bytes against 1024 — so art can live in the dictionary with `c,` instead
+of needing `allocate`. Use `blit`/`blit-key` when a sprite needs more than
+one color; use `stamp` when a solid color will do, which for simple games is
+most of the time.
 
 ## l, ( color -- )
 Compile one pixel into the dictionary — the 32-bit counterpart of `,`. A pixel

@@ -110,8 +110,8 @@ Drawing words compose like any Forth words. A picture is a definition:
         s ;
     scene
 
-Now improve it — redefine `scene` with a bigger sun (the `redefined scene`
-message is normal), run it again. You're editing a picture the way you
+Now improve it — redefine `scene` with a bigger sun and run it again. The new
+definition quietly replaces the old one. You're editing a picture the way you
 edit any program: change the word, run the word.
 
 ## Animation
