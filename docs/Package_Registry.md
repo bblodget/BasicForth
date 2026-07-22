@@ -211,13 +211,16 @@ new word serves both features.
 
 ## Prerequisites and Open Questions
 
-1. **The `save`-drops-`create`-data bug is upstream of all of this.** If
-   saved modules are the distribution format, a shared game whose sprite
-   tables were built across lines after a `create` would be silently corrupt
-   on someone else's machine (see TODO, Known Bugs). Ecosystem-blocker; fix
-   before `publish` exists.
-2. **Exec primitive design** — fork/exec + wait, capture output or inherit
-   the terminal? Needed by `dis` too; design once, use twice.
+1. **The `save`-drops-`create`-data bug is upstream of all of this.**
+   ~~If saved modules are the distribution format, a shared game whose
+   sprite tables were built across lines after a `create` would be
+   silently corrupt on someone else's machine.~~ **RESOLVED 2026-07-22**
+   (create-data-capture branch): save now captures lines that fill
+   dictionary space, so saved modules round-trip their data.
+2. **Exec primitive design** — ~~fork/exec + wait, capture output or
+   inherit the terminal?~~ **RESOLVED 2026-07-22**: landed as
+   `shellutil.fs` (disasm branch) — quoted command composition +
+   `open-pipe` capture; `install`/`update`/`publish` should build on it.
 3. **`publish` mechanics** — how much git ceremony to hide (commit message?
    push? auth is git's problem, but the UX needs a shape).
 4. **Flat-dictionary name collisions** — two packages defining `open`
