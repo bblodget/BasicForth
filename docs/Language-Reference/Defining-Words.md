@@ -143,7 +143,8 @@ edit/compile/run loop. See docs/Marker.md.
 
 ## ' ( "name" -- xt )
 "Tick": parse the next word and push its *execution token* (xt) — a handle you
-can run with `execute` or store.
+can run with `execute` or store. An undefined name reports `? name` and
+aborts the line (so a typo can't hand `execute` or `catch` a bogus xt).
 
     2 3 ' + execute .     \ 5
 

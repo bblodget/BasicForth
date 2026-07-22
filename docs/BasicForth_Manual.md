@@ -614,6 +614,27 @@ no-ops — games open with `snd-open? drop` to run soundless on a system with
 no audio instead of aborting. See `help sound` and `docs/Sound.md`; the
 bouncing-ball demo `examples/bounce.fs` blips off the walls.
 
+## Recoverable Errors (catch / throw)
+
+Normally an error clears the stacks and returns to the prompt. `catch` runs a
+word while trapping that: it returns 0 if the word completed, or the thrown
+code with the stacks restored, and your code keeps control — so a game can
+close its window and audio device on the way out instead of aborting with
+them open:
+
+```
+> : risky  true abort" went boom" ;
+ ok
+> ' risky catch .
+went boom-2  ok
+> : game  ['] play catch  snd-close sdl-close  throw ;
+```
+
+`throw ( n -- )` raises a code for the nearest `catch` (`0 throw` is a no-op,
+so `allocate throw`-style ior checks read naturally); uncaught, it resets to
+the REPL like `abort`. `abort` and `abort"` are throws themselves (-1/-2), so
+`catch` traps them too. See `help catch` and `docs/Exceptions.md`.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

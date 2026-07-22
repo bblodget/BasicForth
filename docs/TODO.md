@@ -492,28 +492,32 @@ docs/Graphics.md for the API.
   - Check the pager interaction (`(pg-quit)`) and whether the header should be
     bold; the entry heading itself already renders bold.
 
-- [ ] **`catch` / `throw` — recoverable errors** (core, both arches). Today the
-  only unwind is `abort`, which resets `%r15`/`%rsp` to `sp0`/`rp0` and jumps
-  to `repl_loop` — i.e. we already have "throw to top level"; `catch` is the
-  general case, restoring to a *saved* point instead of always to the REPL.
-  - `catch ( xt -- 0 | n )` snapshots both stack pointers and a handler-chain
-    link, runs the xt, and returns 0 on normal completion; `throw ( n -- )`
-    with non-zero n restores that snapshot and lands n on the data stack.
-    An uncaught `throw` behaves like `abort` (standard).
-  - **No pure-Forth path** — there are no `sp@`/`rp@`/`rp!` primitives, so this
-    is new assembly on x86-64 AND arm64 plus a handler global. The fiddly part
-    is the STC frame: `catch` is itself a called word, so its own return
-    address sits on the return stack it is snapshotting.
-  - **Why we want it:** (1) `allocate throw` is the natural idiom — it slipped
-    into two `Language-Reference/Graphics.md` examples *because* it reads right
-    (fixed to `allocate drop` 2026-07-20). (2) A game loop could guarantee
-    `sdl-close`/`snd-close` on the way out instead of aborting with the window
-    and audio device still open. (3) It removes the need for `?`-variants —
-    `snd-open?` exists ONLY because there is no catch, and every future library
-    would otherwise grow its own. (4) Standard/gforth code ports more easily.
-  - Interacts with: `abort`, the REPL loop, markers, and save/reload — decide
-    what a `throw` across a `marker` means. Note `catch` restores the *stacks*
-    only; open files/devices are the programmer's problem (document that).
+- [x] **`catch` / `throw` — recoverable errors** — done 2026-07-21 (branch
+  catch-throw), as planned: new asm on both arches + a `handler` chain global.
+  `catch ( xt -- 0 | n )` pushes an exception frame on the return stack
+  (chain link, DSP, and — standard-required — the input-source spec + file
+  error context, so a throw across `evaluate`/`included` leaves the
+  interpreter parsing the right buffer); `throw` unwinds to it. `abort` is
+  now `-1 throw` and `abort"` throws -2 (so both are catchable; -1/-2 stay
+  silent when uncaught, other codes report `uncaught exception: n`).
+  Handler-staleness
+  rules: `repl_loop` clears per line (covers fault recovery + dict_full),
+  `quit`/uncaught-reset clear directly, and the compile-error longjmp walks
+  the chain unlinking only frames inside the abandoned region. Guard faults
+  and interpreter errors are NOT throws (v1 — noted in Exceptions.md
+  scope/next as a possible later mapping to standard codes). Unit +
+  integration tests both arches; docs/Exceptions.md, Error_Handling.md,
+  `help catch`/`help throw` (Interpreter page), Manual section. Deferred:
+  retiring `?`-variants (lessons teach them); a throw out of `included`
+  leaks the file mmap/fd (same class as the fault-time include leak above).
+  Also fixed en route (found live-testing the Exceptions lesson): `'` of an
+  undefined word silently pushed 0, and `catch`/`execute` jumped through it
+  — segfault, PC=0, outside the guard pages so no recovery (pre-existing on
+  main; a typo'd `' name catch` was the day-one way to hit it). Tick now
+  errors `? name` like every other lookup: interpret mode keeps the stack
+  (new `.Lcf_longjmp` entry below the compile-state restore), compile mode
+  abandons the definition — which also retires the old bogus "unresolved
+  control flow" report at `;` after a typo'd tick.
 
 - [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
   `require disasm.fs`). Fills the gap `see` leaves for primitives (today it

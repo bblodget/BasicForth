@@ -310,6 +310,32 @@ test_to_r_r_fetch_r_from:
     LDP X29, X30, [SP], #16
     RET
 
+.equ CELL, 8
+
+// --- CATCH/THROW test xts ---
+// Only caught throws are unit-testable: an uncaught throw jumps to the
+// repl_loop stub with an unwound stack. Uncaught behavior is covered by
+// the integration suite.
+
+// test_throw7: ( -- )  throw 7
+.global test_throw7
+test_throw7:
+    MOV X9, #7
+    STR X9, [X19, #-CELL]!
+    B forth_throw
+
+// test_throw_deep: ( -- )  push two cells of garbage, then throw 9 —
+// CATCH must restore the pre-CATCH stack depth.
+.global test_throw_deep
+test_throw_deep:
+    MOV X9, #111
+    STR X9, [X19, #-CELL]!
+    MOV X9, #222
+    STR X9, [X19, #-CELL]!
+    MOV X9, #9
+    STR X9, [X19, #-CELL]!
+    B forth_throw
+
 // Error handler stubs — set a flag so C tests can detect guard triggers.
 .data
 .global error_flag

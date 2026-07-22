@@ -286,6 +286,30 @@ test_to_r_r_fetch_r_from:
     call forth_r_from           # return->data
     ret
 
+# --- CATCH/THROW test xts ---
+# Only caught throws are unit-testable: an uncaught throw jumps to the
+# repl_loop stub with an unwound stack. Uncaught behavior is covered by
+# the integration suite.
+
+# test_throw7: ( -- )  throw 7
+.global test_throw7
+test_throw7:
+    sub $8, %r15
+    movq $7, (%r15)
+    jmp forth_throw
+
+# test_throw_deep: ( -- )  push two cells of garbage, then throw 9 —
+# CATCH must restore the pre-CATCH stack depth.
+.global test_throw_deep
+test_throw_deep:
+    sub $8, %r15
+    movq $111, (%r15)
+    sub $8, %r15
+    movq $222, (%r15)
+    sub $8, %r15
+    movq $9, (%r15)
+    jmp forth_throw
+
 # Error handler stubs for test harness.
 # Guard pages don't exist in the test binary, so stack_underflow/overflow
 # are stubs. dict_full is still used by CHECK_DICT.
