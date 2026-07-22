@@ -511,6 +511,35 @@ docs/Graphics.md for the API.
     happens if a hook errors — now that `catch`/`throw` exist, a reload can
     wrap each hook in `catch` and report rather than abort the whole load.
 
+- [ ] **Package registry — sharing user-generated libraries and programs.**
+  Design captured in **docs/Package_Registry.md** (2026-07-22, nothing
+  implemented). One-file packages with a comment header + leading "dep
+  block" (`require` / new `needs-cmd` / new `needs-lib`); saved modules are
+  the distribution format (`save` → `publish` → `install`); a registry is
+  any git repo in a standard layout, main registry curated via PRs, flat
+  one-level federation (`add-registry` = explicit trust, `install
+  brandon/snake` disambiguates); git is the only network layer, so the sole
+  new primitive is run-an-external-command — the same one `dis` needs for
+  objdump. Prerequisites: the exec primitive, and the
+  `save`-drops-`create`-data bug above (silently-corrupt shared games
+  otherwise). Implementation stages (each independently useful, in order):
+  - [ ] exec primitive — run an external command (design with `dis`'s
+    objdump/`open-pipe` needs in mind; one primitive serves both)
+  - [ ] `needs-cmd` / `needs-lib` — polite system-requirement probes at
+    load time (useful today: sdl3.fs, sound.fs, future disasm.fs)
+  - [ ] `deps <name>` — soft-check a file's leading dep block without
+    loading it; report all missing requirements at once
+  - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
+    BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
+    third-party packages)
+  - [ ] main registry repo — layout, INDEX generation, CI convention checks
+  - [ ] REPL registry words — `packages` / `install` / `remove` / `run` /
+    `update` (git clone/pull via the exec primitive)
+  - [ ] federation — `add-registry` / `registries` / `name/pkg`
+    disambiguation / REGISTRIES phone book
+  - [ ] `publish` — saved module → your registry clone → commit/push
+    (blocked on the `save`-drops-`create`-data fix)
+
 - [ ] **`:` should say when it redefines an existing word.** Today a
   redefinition is completely silent — no message from `:`, `create`, `value`
   or anything else. gforth prints `redefined foo`, and that is genuinely
