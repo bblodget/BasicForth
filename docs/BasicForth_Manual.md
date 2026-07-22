@@ -700,7 +700,8 @@ sq: 11 bytes at 0043AEE4 (dictionary)
 Works on both architectures (objdump does the decoding). A compiled literal
 places 8 data bytes after its `call lit`, which a linear disassembler
 renders as a few garbage instructions before resyncing — the `\ lit`
-annotation marks the spot. See `docs/Disassembler.md`.
+annotation marks the spot. See `docs/Disassembler.md`, or take the
+interactive lesson: `tutorial machine-code`.
 
 ## Built-in Help
 

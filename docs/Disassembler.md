@@ -130,3 +130,5 @@ on the host.
   composition layer `dis` is built on.
 - docs/See.md — `see`, the source-level view.
 - `help tools` — the reference entry for `dis`.
+- docs/Tutorial/Machine-Code.md — the interactive lesson
+  (`tutorial machine-code`).

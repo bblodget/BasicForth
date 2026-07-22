@@ -822,10 +822,13 @@ docs/Graphics.md for the API.
   mktemp pattern) was extracted to **`src/forth/shellutil.fs`** — a
   require-able library so future sh-integration tools reuse reviewed code
   instead of re-rolling quoting (see docs/Shelling_Out.md).
-  Deferred (stage 2): split the dump at `call lit` / string-literal idioms
-  so inline data stops desyncing the listing (self-calibrate the helper
-  addresses by compiling a probe word and reading its bytes back);
-  `see <primitive>` pointing at `dis`; a Machine-Code tutorial lesson.
+  The Machine-Code tutorial lesson (`tutorial machine-code`) shipped
+  2026-07-22 — STC, primitives, literal desync, jumps, the create stub,
+  reading `catch`; output described in prose since dict addresses vary
+  per session/build. Deferred (stage 2): split the dump at `call lit` /
+  string-literal idioms so inline data stops desyncing the listing
+  (self-calibrate the helper addresses by compiling a probe word and
+  reading its bytes back); `see <primitive>` pointing at `dis`.
   docs/Disassembler.md, `help tools` entry, Manual section, integration
   tests (skip without objdump / without an aarch64-capable objdump under
   qemu).
