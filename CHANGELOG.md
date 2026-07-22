@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Binary sprites
+- **`tutorial Bitmaps`** — the fifth topic lesson (15 steps): one bit per
+  pixel with the color chosen at draw time, art typed first as `%` binary
+  rows and then with `row,` strings, the same-shape-six-colors payoff that
+  full-color sprites can't do, free transparency, rows wider than 8, the 32x
+  size win, two-frame animation, a colored marching row, and an honest
+  `stamp` vs `blit` comparison. It's also the first lesson to keep a session:
+  `save bitmaps.fs` early, `save`/`list` at the end to see the whole thing,
+  and a closing `:e` showing art mutated *in place* rather than appended.
+- **`row,` ( c-addr u -- )** — compile a row of bitmap art from a string, so
+  the source looks like the picture: `s" ..####.." row,` compiles exactly the
+  byte `%00111100 c,` would. `.`, space and `0` leave a pixel clear; anything
+  else (`#`, `*`, `X`, `1`) sets it. A row of `u` characters compiles
+  `ceil(u/8)` bytes with a partial last byte left-aligned.
+- Fixed: the Graphics lesson told readers to expect a `redefined scene`
+  message. BasicForth prints no such message — `:` redefines silently. (Added
+  as a TODO: it arguably *should* say something.)
+- **`stamp` ( color src x y w h -- )** — draw a **1-bit** sprite in a color
+  supplied at draw time, so one shape can be drawn in any color; 1-bits are
+  painted, 0-bits are transparent. This is the TI-99/4A model, where a sprite
+  is a bit pattern with a separate color attribute (TurboForth exposes it as
+  `SPRITE`/`SPRCOL`/`SPRPAT`).
+- Bits are **most significant first**, rows in reading order, stride
+  `ceil(w/8)`; bits past `w` in a row's last byte are ignored. Combined with
+  `%` binary literals and `c,`, that puts the graph paper straight in the
+  source — `%00111100 c,` *is* the row it draws — with no new defining syntax.
+- A binary sprite is **32x smaller** than the same art in full color (a 16x16
+  is 32 bytes against 1024), so art can live in the dictionary instead of
+  needing `allocate`. Use `blit`/`blit-key` for multi-color sprites, `stamp`
+  when a solid color will do.
+- No per-sprite scale for now: `sdl-scale` already provides the chunky look,
+  and a second composing scale is easy to add later as a defaulted `value`
+  if font work wants big and small text (recorded in TODO.md).
+
 ### Sprites lesson
 - **`tutorial Sprites`** — the fourth topic lesson (13 steps), the sequel to
   `tutorial Graphics`: a sprite is just packed 32-bpp pixels, `grab` copies
@@ -15,10 +49,6 @@
   a `create` table with one row of pixels per source line. It leaves the
   dictionary 4-byte rather than cell aligned, which is harmless — the next
   definition aligns itself (verified on both architectures).
-- **Fixed: two `Language-Reference/Graphics.md` examples used `allocate
-  throw`**, but BasicForth has no `throw` — they failed with `? throw`.
-  `allocate` is `( u -- a-addr ior )`, so they now say `allocate drop`.
-  Adding `catch`/`throw` is filed under Future / Usability in TODO.md.
 - **Fixed: `help grab` rendered "(wh4 bytes)".** A bare intraword `*` in help
   prose is emphasis, not multiplication — `w*h*4` becomes `w<i>h</i>4` and a
   lone `w*4` italicises the rest of the line. This is correct CommonMark (and

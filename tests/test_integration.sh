@@ -544,6 +544,60 @@ create art2 11 l, 22 l, 33 l, 44 l,
 assert_output "gr l, blit-key on a typed table" "$GRP
 create art3 11 l, 22 l, 33 l, 44 l,
 : g s 22 art3 0 0 2 2 blit-key 0 0 p 1 0 p 1 1 p ; g"  "11 0 44"
+# stamp — 1-bit sprites drawn in a colour supplied at draw time. The bit
+# order is the thing most likely to be wrong, so the asymmetric pattern
+# %10000000 pins that column 0 is the HIGH bit (a mirrored implementation
+# would light column 7 instead). 0-bits must leave the background alone.
+assert_output "gr stamp bit order is MSB-first" "$GRP
+create bs %10000000 c, %00000001 c,
+: g s red bs 0 0 8 2 stamp  0 0 p 7 0 p 7 1 p 0 1 p ; g"   "16711680 0 16711680 0"
+assert_output "gr stamp 0-bits are transparent" "$GRP
+create bs2 %10100000 c,
+: g s blue 0 0 8 1 fill-rect  red bs2 0 0 8 1 stamp
+  0 0 p 1 0 p 2 0 p ; g"                                   "16711680 255 16711680"
+assert_output "gr stamp colour is per-call" "$GRP
+create bs3 %11000000 c,
+: g s red bs3 0 0 2 1 stamp  green bs3 0 1 2 1 stamp  0 0 p 0 1 p ; g" \
+    "16711680 65280"
+# Width not a multiple of 8: stride is ceil(w/8), and the spare bits in the
+# last byte (columns 12..15 here) must NOT be drawn. The surface is only 8
+# wide, so shift the sprite left by 8 to bring its SECOND byte on-screen:
+# sprite columns 8..11 land at x=0..3, and if the loop overran w they would
+# also paint x=4..7.
+assert_output "gr stamp stride ceil(w/8), spare bits ignored" "$GRP
+create bs4 %00000000 c, %11111111 c,
+: g s red bs4 -8 0 12 1 stamp  0 0 p 3 0 p 4 0 p ; g"      "16711680 16711680 0"
+assert_output "gr stamp clips off every edge" "$GRP
+create bs5 %11111111 c,
+: g s red bs5 -4 0 8 1 stamp  0 0 p
+  red bs5 99 99 8 1 stamp  red bs5 0 0 0 1 stamp  depth . ; g"  "16711680 0"
+# row, — bitmap art from strings. The point is that it is not a second
+# format: it must compile byte-for-byte what the % binary rows would.
+assert_output "gr row, matches the binary form byte for byte" "$GRP
+: b-art %00111100 c, %01111110 c, ;
+create bart b-art
+: s-art s\" ..####..\" row,  s\" .######.\" row, ;
+create sart s-art
+: g bart c@ sart c@ =  bart 1+ c@ sart 1+ c@ =  and . ; g"      "-1"
+# '.', space and '0' are clear; '#', '*', '1', 'X' all draw.
+assert_output "gr row, off chars are . space 0" "$GRP
+: m-art s\" .#  0*1X\" row, ;
+create mart m-art
+: g mart c@ . ; g"                                              "71"
+# A row of u chars compiles ceil(u/8) bytes, partial byte left-aligned.
+assert_output "gr row, pads a partial byte left" "$GRP
+: p-art s\" ###\" row, ;
+create part p-art
+: g part c@ . ; g"                                              "224"
+assert_output "gr row, 12 wide is two bytes" "$GRP
+: t-art s\" ############\" row, ;
+create tart t-art
+: g tart c@ . tart 1+ c@ . ; g"                                 "255 240"
+# row,-built art must stamp identically to the same art in binary.
+assert_output "gr row, art stamps correctly" "$GRP
+: a-art s\" #.#\" row, ;
+create aart a-art
+: g s red aart 0 0 3 1 stamp  0 0 p 1 0 p 2 0 p ; g"   "16711680 0 16711680"
 assert_output "gr odd l, count leaves dict usable" "$GRP
 create odd 1 l, 2 l, 3 l,
 : after 4242 ;
@@ -3375,12 +3429,36 @@ assert_output "Sprites lesson frame-picking idiom" \
     $': pick 16 0 do i 8 / 2 mod if 1 else 0 then . loop ;\npick' \
     "0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1"
 
+# The shipped Bitmaps lesson: opens with 13 steps, and its examples run. The
+# art and the colour-per-call payoff are pure Forth over an off-screen
+# surface, so they run everywhere (incl. QEMU) without SDL.
+bitmaps_out=$(printf 'tutorial Bitmaps\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/16"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 16 steps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  Bitmaps lesson opens with 16 steps\n"
+    printf "    Got:      %s\n" "$(echo "$bitmaps_out" | head -4)"; ((failed++))
+fi
+# The lesson's alien, stamped in two colours from one piece of art.
+assert_output "Bitmaps lesson one shape two colours" "$GRP
+: a-art %11000000 c, %01100000 c, ;
+create a a-art
+: g s red a 0 0 2 2 stamp  green a 0 3 2 2 stamp
+  0 0 p 1 1 p 0 3 p 1 4 p ; g"   "16711680 16711680 65280 65280"
+# The palette table the lesson indexes with cells (one line, so save keeps it).
+assert_output "Bitmaps lesson palette table" "include $GR
+create palette  red , green , blue , yellow , cyan , magenta ,
+: pick ( i -- ) cells palette + @ . ;
+0 pick 3 pick 5 pick"   "16711680 16776960 16711935"
+
 # The real-docs listing shows each tutorial's "# Name — description" title
 real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
 if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
    && "$real_tuts" == *"Strings — Text on the Stack"* \
    && "$real_tuts" == *"Sprites — Pixel Art That Moves"* \
+   && "$real_tuts" == *"Bitmaps — Sprites You Type in Binary"* \
    && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
     printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
 else

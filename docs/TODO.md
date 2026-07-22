@@ -7,6 +7,33 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **A module reload leaves live external resources unreachable.**
+  Reproduced 2026-07-20 under a PTY with the dummy video driver: open a
+  window, `save`, then `:e` any word — `sdl-win`/`sdl-ren`/`sdl-tex` all go
+  from non-zero to **0** while the real OS window still exists. Nothing can
+  draw to it or close it; `sdl-close` sees zeros and skips the destroys
+  (it still calls `SDL_Quit`, so close+reopen does recover).
+  - **Mostly by design, and worth stating that way.** `:e`/`edit`/`load` roll
+    the dictionary back and replay the module file, so the live state is
+    whatever the file rebuilds. Runtime values set at the prompt survive only
+    because a **direct** interactive `to`/`is` is captured — `4 to sdl-scale`
+    comes back, but `sdl-win` was assigned *inside* `sdl-open`, so it was
+    never logged and there is nothing to replay. (The rollback also drops the
+    `(inc:sdl3)` sentinel so `require sdl3.fs` re-runs, re-executing
+    `0 value sdl-win`; either path loses it.)
+  - **The part that is not just state loss:** a reset counter is recoverable,
+    an orphaned OS window is not. The same shape applies to `snd-open`'s audio
+    stream and any fileid held in a library value. So the goal isn't
+    "reload must preserve everything" — it's that reload shouldn't strand a
+    resource with no way to reach or release it.
+  - Fix candidates: have `sdl3.fs`/`sound.fs` initialise handles only when
+    unset, so a re-include doesn't clobber a live one (smallest, but per
+    library); give `require` a "loaded, do not re-run" mark that survives
+    rollback; or have reload carry forward pre-existing `value`s. Worth
+    deciding deliberately, since it defines what "edit while it runs" means.
+  - Until then, don't `:e` with a window open — the Bitmaps lesson does it
+    after `sdl-close` and explains why.
+
 - [ ] **`save` silently drops data laid down after a `create`.** The capture
   log records a line only when LATEST moves *forward* (see the comment at
   `(capture-line)` in core.fs) — deliberate, so transient actions and marker
@@ -448,6 +475,64 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [ ] **A way to put a non-definition line into the module (`keep`?).** The
+  capture log records a line only when LATEST moves forward, so setup lines
+  are invisible to `save`: `320 180 sdl-open` never reaches the file, and
+  neither do rows of `,`/`c,`/`l,` after a `create`. Brandon's ask
+  2026-07-20, after a reload stranded his window and he had to hand-edit
+  `sdl-close` / `320 180 sdl-open` into the file to make reloads work.
+  - He suggested a marker comment, `sdl-close   \ __log__`. A plain word
+    reads better and needs no comment-scanning: `320 180 sdl-open  keep`.
+  - **The mechanism already exists.** `(capture-line)` (core.fs) logs a group
+    when LATEST moved forward **or** when `(cap-assign)` reports a direct
+    `to`/`is` ran on that line — i.e. there is already a "log this line even
+    though it defined nothing" path. `keep` sets the same kind of flag.
+  - Solves more than graphics: module setup lines, and the
+    data-after-`create` gap above (`%00111100 c,  keep`), though the
+    colon-word idiom stays the nicer answer for art.
+  - Open: the name (`keep`, `+log`, `stet`); whether it must be last on the
+    line or may appear anywhere; what it means inside a multi-line group; and
+    whether `list`/`see` should show kept lines differently from definitions.
+
+- [ ] **Module lifecycle hooks (`on-start` / `on-stop`?).** A module cannot
+  currently react to being loaded or reloaded, which is why a live window
+  does not survive `:e` (see the reload/resources bug under Known Bugs).
+  Brandon's idea 2026-07-20.
+  - `on-start` after a load/reload — re-acquire resources (`320 180 sdl-open`).
+  - `on-stop` **before** the reload — and this is the half `keep` cannot do.
+    Putting `sdl-close` at the top of the file runs *after* the rollback, when
+    the handles are already zeroed; it only works today because `sdl-close`
+    ends in `SDL_Quit`, which destroys every SDL window whether we still have
+    a handle or not. That bluntness would not save a leaked fileid or audio
+    stream. A pre-rollback hook still holds valid handles and can release
+    them properly, so no orphan is created in the first place.
+  - Open: names; whether they run on plain `load`/`include` or only reload;
+    whether `on-stop` runs at `bye`; ordering against the file body; and what
+    happens if a hook errors — now that `catch`/`throw` exist, a reload can
+    wrap each hook in `catch` and report rather than abort the whole load.
+
+- [ ] **`:` should say when it redefines an existing word.** Today a
+  redefinition is completely silent — no message from `:`, `create`, `value`
+  or anything else. gforth prints `redefined foo`, and that is genuinely
+  useful: it catches a name collision you did not intend, and confirms the
+  one you did. Brandon's ask 2026-07-20.
+  - Found because **the docs already claimed this message exists**: the
+    Graphics lesson told readers "(the `redefined scene` message is normal)"
+    and a draft of the Bitmaps lesson said the same. Both corrected — but the
+    fact that it read as obviously-true to two of us is an argument for
+    adding it.
+  - **Implementation trap:** core.fs itself redefines words while loading —
+    `*/` (double-width intermediate), `.` (base-aware), interpreted `s"`/`."`
+    (STATE-smart wrappers over the ASM primitives), `.s`. A naive warning
+    would spew several lines on every startup. So it must be suppressed while
+    loading core.fs (or generally while `included` is running) and only speak
+    for interactive definitions — which is also where it is useful.
+  - Decide whether `create`/`value`/`constant`/`defer` warn too, and where it
+    writes (stdout with the `ok` flow, like other REPL messages).
+  - Lessons that redefine on purpose (Graphics redefines `scene`, and any
+    edit-a-word flow) should then mention the message — i.e. the shipped docs
+    become correct rather than wrong.
+
 - [ ] **Settable SDL window title.** `sdl-open` hardcodes `s" BasicForth" >z`,
   so every window is named BasicForth; a game should be able to name itself.
   Brandon's ask 2026-07-20.
@@ -523,6 +608,13 @@ docs/Graphics.md for the API.
   - Motivating uses: `$RRGGBB` colors at width 6, and 32-bit pixels read with
     `l@` at width 8 (where you also see the unused X byte, `0000FF00`). If
     this lands, the Sprites lesson can use it directly.
+  - **Second sighting, 2026-07-20, and the more damaging one:** walking the
+    Bitmaps lesson, the obvious way to check a row of art is
+    `binary inv c@ . decimal` — which prints `111100`, not `00111100`. The
+    lesson has just told the reader that byte *is* `%00111100`, so the check
+    that should confirm it appears to contradict it. Bitmap art is 8 bits
+    wide by definition; this is exactly where fixed-width output earns its
+    keep. `binary inv c@ 8 u.0r` would read as the picture.
 
 - [ ] **`help <word>` should name the topic page each entry came from.** Today
   a word lookup drops you into an entry with no sense of where you landed —
@@ -548,29 +640,6 @@ docs/Graphics.md for the API.
     `(md-dir)`/`(md-dirn)` already are.
   - Check the pager interaction (`(pg-quit)`) and whether the header should be
     bold; the entry heading itself already renders bold.
-
-- [ ] **`catch` / `throw` — recoverable errors** (core, both arches). Today the
-  only unwind is `abort`, which resets `%r15`/`%rsp` to `sp0`/`rp0` and jumps
-  to `repl_loop` — i.e. we already have "throw to top level"; `catch` is the
-  general case, restoring to a *saved* point instead of always to the REPL.
-  - `catch ( xt -- 0 | n )` snapshots both stack pointers and a handler-chain
-    link, runs the xt, and returns 0 on normal completion; `throw ( n -- )`
-    with non-zero n restores that snapshot and lands n on the data stack.
-    An uncaught `throw` behaves like `abort` (standard).
-  - **No pure-Forth path** — there are no `sp@`/`rp@`/`rp!` primitives, so this
-    is new assembly on x86-64 AND arm64 plus a handler global. The fiddly part
-    is the STC frame: `catch` is itself a called word, so its own return
-    address sits on the return stack it is snapshotting.
-  - **Why we want it:** (1) `allocate throw` is the natural idiom — it slipped
-    into two `Language-Reference/Graphics.md` examples *because* it reads right
-    (fixed to `allocate drop` 2026-07-20). (2) A game loop could guarantee
-    `sdl-close`/`snd-close` on the way out instead of aborting with the window
-    and audio device still open. (3) It removes the need for `?`-variants —
-    `snd-open?` exists ONLY because there is no catch, and every future library
-    would otherwise grow its own. (4) Standard/gforth code ports more easily.
-  - Interacts with: `abort`, the REPL loop, markers, and save/reload — decide
-    what a `throw` across a `marker` means. Note `catch` restores the *stacks*
-    only; open files/devices are the programmer's problem (document that).
 
 - [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
   `require disasm.fs`). Fills the gap `see` leaves for primitives (today it

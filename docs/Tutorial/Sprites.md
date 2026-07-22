@@ -28,11 +28,13 @@ There's no sprite type and no file format. A sprite is `w*h` pixels, 4 bytes
 each, packed row after row — nothing else. So you can make one with plain
 memory:
 
-    16 16 * 4 * allocate drop value ball
+    16 16 * 4 * allocate throw value ball
 
 That's 16x16 pixels at 4 bytes = 1024 bytes of heap. `allocate` returns the
-address *and* an error code, so `drop` throws the code away and `value` names
-the address `ball`.
+address *and* an error code; `throw` raises that code if it's non-zero (out
+of memory) and does nothing when it's zero, so on success `value` just names
+the address `ball`. (`throw` is the standard way to pass an error up — see
+`tutorial Exceptions`.)
 
 The block arrives zeroed — the kernel always hands over fresh memory that
 way — and a zero pixel is black, so `ball` is a 16x16 black square right now.
@@ -179,6 +181,12 @@ hands it back (it returns an error code — `drop` it). Sprites made with
 You now have the whole sprite model: a sprite is packed pixels, `grab` makes
 one from the screen and `l,` makes one by hand, `blit` stamps it, `blit-key`
 makes it transparent, and picking between pictures each frame animates it.
+
+There's a second kind of sprite worth knowing about: `stamp` draws a
+*one-bit* sprite in a color you pick at draw time, so the same shape can be
+red one frame and cyan the next. The art is written a row per byte —
+`%00111100 c,` is literally the row it draws — and takes 32x less space. See
+`help stamp`.
 
 In the reference, `help graphics` has every drawing word, `help sdl3` covers
 the window and keyboard, and `help memory` explains `allocate`/`free`. Then

@@ -201,6 +201,32 @@ try:
 except OSError:
     pass
 
+# 8c) The Bitmaps lesson's module flow: save, then change a word with :e and
+#     see it MUTATED in place rather than appended. Terminal-only, because :e
+#     needs an active session and the capture log only records typed lines.
+bfd, bpath = tempfile.mkstemp(suffix=".fs", prefix="bf-bitmaps-")
+os.close(bfd)
+fd = spawn()
+send(fd, b"require graphics.fs\r", 0.7)
+send(fd, b': inv-art  s" ..####.." row,  s" .#....#." row, ;\r')
+send(fd, b"create inv inv-art\r")
+send(fd, ("save %s\r" % bpath).encode(), 0.7)
+send(fd, b':e inv-art  s" ..####.." row,  s" #......#" row, ;\r', 0.9)
+try:
+    saved_bm = open(bpath).read()
+except OSError:
+    saved_bm = ""
+# exactly one definition, carrying the NEW art -- a plain ':' would append a
+# second copy and leave the old rows in the file.
+report("lesson :e mutates art in place, not appended",
+       saved_bm.count("\n: inv-art") + saved_bm.startswith(": inv-art") == 1
+       and "#......#" in saved_bm and ".#....#." not in saved_bm)
+send(fd, b"bye\r"); os.close(fd)
+try:
+    os.remove(bpath)
+except OSError:
+    pass
+
 # 9) Markdown rendering is terminal-only, so it can only be tested here: on a
 #    PTY, help output is rendered — the "## " heading comes out bold with the
 #    hashes stripped, the indented example cyan, attributes reset by line end.
