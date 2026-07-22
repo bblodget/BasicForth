@@ -4108,6 +4108,108 @@ else
 fi
 
 # =========================================================================
+section "SHELLUTIL (shell-command plumbing)"
+# =========================================================================
+# the composition layer other libraries require before shelling out
+shu_pre="include $FORTH_LIB/shellutil.fs"
+assert_output "shellutil quotes embedded quotes" \
+    "$(printf "%s\n(cmd0) s\" a b'c\" (cmd+q) (cmd\$) type" "$shu_pre")" \
+    "'a b'\\''c'"
+assert_output "shellutil hex append" \
+    "$(printf '%s\n(cmd0) 255 (cmd+x) (cmd$) type' "$shu_pre")"  "0xFF"
+assert_output "shellutil line capture" \
+    "$(printf '%s\n: t (cmd0) s" echo hello" (cmd+) (cmd-line1) if (cmd-ln) swap type then ; t' "$shu_pre")" \
+    "hello"
+shu_forth="${FORTH/.\//$PWD/}"        # absolute, so it survives a cd
+# a shell-syntax stem must be refused outright. The payload is a harmless
+# canary: if the guard ever regresses, the evidence is a file appearing in
+# a private directory — never a destructive command.
+shu_inj="$(mktemp -d)"
+shu_io=$( cd "$shu_inj" && printf '%s\n: t s" x$(touch pwn)x" (sh-mktemp) . ; t\n' "$shu_pre" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $shu_forth 2>&1 )
+if printf '%s' "$shu_io" | grep -q "0  ok" && [ ! -e "$shu_inj/pwn" ]; then
+    printf "  ${GREEN}PASS${NC}  shellutil rejects a shell-syntax mktemp stem\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  shellutil stem rejection\n    Got: %q\n" "$shu_io"; ((failed++))
+fi
+rm -rf "$shu_inj"
+# an overflowed command must refuse to run, not execute truncated
+shu_ovf="$(mktemp -d)"
+shu_oo=$( cd "$shu_ovf" && printf '%s\n: t (cmd0) 300 0 do s" 0123456789abcdef" (cmd+) loop s" touch pwn" (cmd+) (cmd-run) . ; t\n' "$shu_pre" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $shu_forth 2>&1 )
+if printf '%s' "$shu_oo" | grep -q -- "-1" && [ ! -e "$shu_ovf/pwn" ]; then
+    printf "  ${GREEN}PASS${NC}  shellutil refuses to run an overflowed command\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  shellutil overflow refusal\n    Got: %q\n" "$shu_oo"; ((failed++))
+fi
+rm -rf "$shu_ovf"
+# mktemp round-trip: file exists after (sh-mktemp), gone after (sh-rm)
+shu_tmp="$(mktemp -d)"
+shu_out=$(printf '%s\n: t s" shtest" (sh-mktemp) if (cmd-ln) swap 2dup type cr (sh-rm) then ; t\n' "$shu_pre" \
+    | TMPDIR="$shu_tmp" timeout 5 $FORTH 2>&1)
+if printf '%s' "$shu_out" | grep -q "shtest-" \
+   && [ -z "$(ls -A "$shu_tmp" 2>/dev/null)" ]; then
+    printf "  ${GREEN}PASS${NC}  shellutil mktemp + rm round-trip\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  shellutil mktemp + rm round-trip\n    Got: %q\n" "$shu_out"; ((failed++))
+fi
+rm -rf "$shu_tmp"
+
+# =========================================================================
+section "DIS (disassembler)"
+# =========================================================================
+# dis shells out to objdump, so it needs binutils; under qemu the child
+# processes run natively, so decoding the aarch64 guest needs the cross
+# objdump (same package as the cross assembler this build already used).
+if ! command -v objdump >/dev/null 2>&1; then
+    printf "  ${YELLOW}SKIP${NC}  dis tests (objdump not installed)\n"
+elif [[ "$FORTH" == *qemu* ]] && ! command -v aarch64-linux-gnu-objdump >/dev/null 2>&1; then
+    printf "  ${YELLOW}SKIP${NC}  dis tests (no aarch64-capable objdump on the host)\n"
+else
+    dis_pre="include $FORTH_LIB/disasm.fs"
+    assert_output "dis colon word: banner" \
+        "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  "bytes at"
+    assert_output "dis colon word: call targets annotated" \
+        "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  '\ dup'
+    assert_output "dis colon word: ends at ret" \
+        "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  "ret"
+    assert_output "dis primitive: bounded by symbol" \
+        "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
+    assert_output "dis primitive: banner" \
+        "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
+    assert_error  "dis unknown word" \
+        "$(printf '%s\ndis nosuchword' "$dis_pre")"  "? nosuchword"
+    assert_output "dis without a name" \
+        "$(printf '%s\ndis' "$dis_pre")"  "usage: dis <word>"
+    # the temp file (dictionary path) must not survive the command; a private
+    # TMPDIR keeps this assertion blind to other sessions' files in /tmp
+    dis_tmp="$(mktemp -d)"
+    printf '%s\n: sq dup * ;\ndis sq\n' "$dis_pre" \
+        | TMPDIR="$dis_tmp" timeout 5 $FORTH >/dev/null 2>&1
+    if [ -n "$(ls -A "$dis_tmp" 2>/dev/null)" ]; then
+        printf "  ${RED}FAIL${NC}  dis cleans up its temp file\n    Left: %s\n" \
+            "$(ls "$dis_tmp")"; ((failed++))
+    else
+        printf "  ${GREEN}PASS${NC}  dis cleans up its temp file\n"; ((passed++))
+    fi
+    rm -rf "$dis_tmp"
+    # an overlong TMPDIR (path won't fit dis's buffers) must fail with a
+    # message and leave no file behind — the child shell removes its own
+    # mktemp file, so no leak even though Forth never saw the full path
+    dis_deep="$(mktemp -d)"; dis_c="$(printf 'x%.0s' {1..150})"
+    mkdir -p "$dis_deep/$dis_c/$dis_c"
+    dis_lo=$(printf '%s\n: sq dup * ;\ndis sq\n' "$dis_pre" \
+        | TMPDIR="$dis_deep/$dis_c/$dis_c" timeout 5 $FORTH 2>&1)
+    if printf '%s' "$dis_lo" | grep -q "cannot create a temp file" \
+       && [ -z "$(find "$dis_deep" -type f 2>/dev/null)" ]; then
+        printf "  ${GREEN}PASS${NC}  dis overlong TMPDIR: clean failure, no leak\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  dis overlong TMPDIR\n    Got: %q\n" "$dis_lo"; ((failed++))
+    fi
+    rm -rf "$dis_deep"
+fi
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

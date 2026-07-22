@@ -7,6 +7,7 @@ inspecting words, browsing the docs, running tutorials, and shelling out.
 At a glance:
 
     see <name>     ( "name" -- )      show a word's source
+    dis <name>     ( "name" -- )      show a word's machine code (require disasm.fs)
     words          ( -- )             list every word in the dictionary
     marker <name>  ( "name" -- )      set a forget-point (help defining-words)
     version        ( -- )             print the build version banner
@@ -36,6 +37,21 @@ Assembly primitives have no source; `see` points you at `help <name>` instead.
 See docs/See.md.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;
+
+## dis ( "name" -- )
+Disassemble a word's machine code — the other side of `see`. Colon words show
+their compiled code straight from the dictionary, each `call` annotated with
+the word it targets; primitives show their assembly from the binary, bounded
+by symbol. Needs `require disasm.fs` and binutils `objdump` on PATH. See
+docs/Disassembler.md.
+
+    require disasm.fs
+    : sq dup * ;
+    dis sq
+    \ sq: 11 bytes at 0043AEE4 (dictionary)
+    \   43aee4:  e8 fb 67 fc ff   call 0x4016e4  \ dup
+    \   43aee9:  e8 df 68 fc ff   call 0x4017cd  \ *
+    \   43aeee:  c3               ret
 
 ## words ( -- )
 List **every** word in the dictionary, newest first — the built-ins plus
@@ -120,6 +136,7 @@ Leave the tutorial: forgets which step `next` would show, nothing else —
 
 - `help modules` — `save` / `load` / `edit` and friends (moved from this page).
 - docs/See.md — how `see` reconstructs source.
+- docs/Disassembler.md — how `dis` decodes and annotates machine code.
 - docs/Help_System.md — `help`, `tutorials`, `apropos`, and sections.
 - docs/Tutorial_System.md — the tutorial system, including writing lessons.
 - docs/Shelling_Out.md — `sh` / `(system)`: running Linux programs.

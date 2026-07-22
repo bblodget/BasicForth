@@ -139,6 +139,44 @@ Rules of the road:
 - Up to 8 pipes can be open at once (a 9th `open-pipe` returns ior 24,
   EMFILE).
 
+## shellutil.fs — safe command composition for library code
+
+When *library code* builds commands from data — paths, addresses, captured
+output — quoting and temp-file discipline stop being optional. `require
+shellutil.fs` provides the vetted plumbing (grown out of `disasm.fs` and
+hardened by review there), so each new tool doesn't re-roll it:
+
+    (cmd0)   ( -- )                start a new command
+    (cmd+)   ( a u -- )            append text (bounds-checked)
+    (cmd+c)  ( ch -- )             append one character
+    (cmd+q)  ( a u -- )            append 'single-quoted', ' escaped —
+                                   use for EVERY interpolated path/datum
+    (cmd+x)  ( u -- )              append as 0x<hex>
+    (cmd$)   ( -- a u )            the composed command
+    (cmd-run)   ( -- status )      run it, output to the terminal
+    (cmd-open)  ( -- f )           run it, capture stdout (then:)
+    (cmd-read)  ( -- u t | f )       next line into (cmd-ln)
+    (cmd-close) ( -- )               reap the child
+    (cmd-line1) ( -- u t | f )     run; first output line -> (cmd-ln)
+    (sh-fname?) ( a u -- f )       plain filename fragment? (letters,
+                                   digits, - _ . — nothing shell-live)
+    (sh-mktemp) ( stem-a stem-u -- u t | f )  safe temp file, path in (cmd-ln)
+    (sh-rm)     ( a u -- )         remove a file, path quoted
+
+Two rules are enforced, not just documented. A command that overflowed the
+build buffer **refuses to run** (`(cmd-run)` returns -1, `(cmd-open)` /
+`(cmd-line1)` return false) — a truncated command could have lost its
+cleanup tail or a closing quote, so executing it is never safe. And
+`(sh-mktemp)` **validates its stem** with `(sh-fname?)` — the stem sits
+inside the shell's double quotes, where `` $ ` \ " `` would still be live
+syntax, so anything but a plain filename fragment is refused.
+
+`(sh-mktemp)` creates the file with `mktemp` under `$TMPDIR` (default
+`/tmp`): mode 0600 and an unpredictable name, so a predictable-name
+symlink attack has nothing to aim at — and the child shell removes its own
+file (printing nothing) if the path exceeds 255 bytes, so an overlong
+`$TMPDIR` can't leak one.
+
 ## What you can and can't do (yet)
 
 Available now:
