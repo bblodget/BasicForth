@@ -1445,6 +1445,81 @@ static void test_execute_add(void)
              "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
 }
 
+/* --- CATCH/THROW tests --- */
+
+extern void forth_catch(void);
+extern void forth_throw(void);
+extern void test_throw7(void);
+extern void test_throw_deep(void);
+
+static void test_catch_clean(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* Stack: ( 42 xt_dup ). CATCH runs DUP, then pushes 0 (no throw). */
+    dsp_in = setup_2(42, (int64_t)forth_dup);
+    call_primitive(forth_catch, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 3 && dsp_out[0] == 0
+        && dsp_out[1] == 42 && dsp_out[2] == 42)
+        pass("CATCH: clean xt returns 0");
+    else
+        fail("CATCH: clean xt returns 0",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_catch_throw(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* xt throws 7: CATCH returns 7 with the pre-CATCH depth. */
+    dsp_in = setup_1((int64_t)test_throw7);
+    call_primitive(forth_catch, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 7)
+        pass("CATCH: thrown 7 returned");
+    else
+        fail("CATCH: thrown 7 returned",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
+static void test_catch_depth_restore(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* xt pushes two garbage cells before throwing 9: the throw must
+     * restore the data-stack pointer CATCH saved, leaving ( 5 9 ). */
+    dsp_in = setup_2(5, (int64_t)test_throw_deep);
+    call_primitive(forth_catch, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 2 && dsp_out[0] == 9 && dsp_out[1] == 5)
+        pass("CATCH: depth restored on throw");
+    else
+        fail("CATCH: depth restored on throw",
+             "[0]=%ld [1]=%ld depth=%d",
+             dsp_out[0],
+             stack_depth(dsp_out) >= 2 ? dsp_out[1] : -1,
+             stack_depth(dsp_out));
+}
+
+static void test_throw_zero(void)
+{
+    int64_t *dsp_in, *dsp_out;
+
+    /* 0 THROW is a no-op: drops the 0, keeps the rest. */
+    dsp_in = setup_2(5, 0);
+    call_primitive(forth_throw, dsp_in, &dsp_out);
+
+    if (stack_depth(dsp_out) == 1 && dsp_out[0] == 5)
+        pass("THROW: 0 throw is a no-op");
+    else
+        fail("THROW: 0 throw is a no-op",
+             "[0]=%ld depth=%d", dsp_out[0], stack_depth(dsp_out));
+}
+
 /* --- Compiler tests --- */
 
 extern void forth_lit(void);
@@ -1735,6 +1810,12 @@ int main(void)
     section("Execute");
     test_execute();
     test_execute_add();
+
+    section("Catch/Throw");
+    test_catch_clean();
+    test_catch_throw();
+    test_catch_depth_restore();
+    test_throw_zero();
 
     section("Compiler");
     /* Make dict_space executable for compiler tests */

@@ -275,7 +275,7 @@ _start:
     ADR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
     ADR X21, dict_space             // HERE
-    ADR X22, dict_inc_opened        // LATEST (head of the built-in dictionary chain)
+    ADR X22, dict_throw             // LATEST (head of the built-in dictionary chain)
 
     // Initialize saved state for error recovery
     ADR X9, saved_latest
@@ -467,6 +467,8 @@ repl_loop:
     MOV X9, SP
     ADR X10, rp0
     STR X9, [X10]
+    ADR X10, handler
+    STR XZR, [X10]                  // any CATCH frames died with the last line
 
     // Save LATEST and HERE for guard page recovery
     ADR X9, saved_latest

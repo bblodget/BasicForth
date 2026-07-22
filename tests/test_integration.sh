@@ -269,6 +269,48 @@ section "Error Handling"
 assert_error  "unknown word"       "foobar"              "? foobar"
 assert_error  "compile-only >r"    ">r"                  "compile only"
 
+# tick of an undefined word errors instead of silently pushing 0 (which
+# EXECUTE/CATCH would then jump through: segfault, found 2026-07-21 in the
+# Exceptions lesson). Interpret mode keeps the stack; compile mode abandons
+# the definition cleanly (no bogus "unresolved control flow" at ;).
+assert_error  "tick of undefined word"  "' nosuchword execute"  "? nosuchword"
+assert_output "tick error keeps the stack" \
+    "$(printf "1 2 3 ' nosuchword catch\ndepth . . . .")"  "3 3 2 1"
+assert_output "tick error aborts definition cleanly" \
+    "$(printf ": t ' missingword ;\n: t2 42 . ;\nt2")"  "42"
+
+# =========================================================================
+section "CATCH / THROW"
+# =========================================================================
+
+assert_output "catch clean xt returns 0"  ": good 1 2 + ; ' good catch . ."  "0 3"
+assert_output "catch returns thrown code" \
+    ": boom 111 222 5 throw 333 ; ' boom catch . depth ."  "5 0"
+assert_output "0 throw is a no-op"        "1 2 0 throw + ."  "3"
+assert_error  "uncaught throw reports"    "77 throw"  "uncaught exception: 77"
+assert_output "session survives uncaught throw" \
+    "$(printf '77 throw\n1 2 + .')"  "3  ok"
+assert_output "uncaught abort stays silent" \
+    "$(printf '1 2 3 abort\n5 5 + . depth .')"  "10 0"
+assert_output "catch intercepts abort\" as -2" \
+    ": risky true abort\" boom\" ; ' risky catch ."  "boom-2"
+assert_output "nested catch rethrows outward" \
+    ": inner 7 throw ; : outer ['] inner catch 100 + throw ; ' outer catch ."  "107"
+assert_output "throw across evaluate restores source" \
+    ": t s\" 5 throw\" evaluate 999 ; ' t catch . 123 ."  "5 123"
+assert_output "outer catch survives error inside evaluate" \
+    ": bad s\" nosuchword\" evaluate ; : run ['] bad catch drop 42 throw ; ' run catch ."  "42"
+
+# throw out of an INCLUDED file: the load stops, the code reaches the catch,
+# and the interpreter's file context is restored (the rest of the line runs).
+# Depth ends at 2: the c-addr u the xt consumed are unspecified cells but
+# still counted — CATCH restores the stack POINTER, not the contents.
+ct_dir="$(mktemp -d)"
+printf '111 9 throw 222\n' > "$ct_dir/thrower.fs"
+assert_output "throw across included restores context" \
+    "s\" $ct_dir/thrower.fs\" ' included catch . 5 . depth ."  "9 5 2"
+rm -rf "$ct_dir"
+
 # =========================================================================
 section "Comments"
 # =========================================================================

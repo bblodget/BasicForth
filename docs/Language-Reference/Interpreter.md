@@ -22,6 +22,8 @@ At a glance:
     >body        ( xt -- a-addr )       a created word's data address
     unused       ( -- u )               dictionary space remaining
     environment? ( c-addr u -- ... )    standard environment query
+    catch        ( xt -- 0 | n )        run xt, trapping any throw
+    throw        ( n -- )               jump back to the nearest catch
     quit         ( -- )                 restart the interpreter loop
     abort        ( -- )                 clear the stacks, restart
     abort"       ( flag -- )            abort with a message when flag set
@@ -115,16 +117,51 @@ space (the whole dictionary is 256 KB; prefer `allocate` for big buffers).
 Query a system attribute by name (e.g. `/COUNTED-STRING`, `MAX-N`). Returns
 `false` if the name is unknown, otherwise the value(s) and `true`.
 
+## catch ( i*x xt -- j*x 0 | i*x n )
+Run the execution token like `execute`, but trap any `throw` (or `abort`)
+that happens inside it. Returns 0 on top if the word completed normally;
+otherwise the thrown code n, with the stack depth restored to what it was
+before `catch` ran (the cells the word consumed are unspecified — usually
+you drop them). This is how a word cleans up after a failure instead of
+losing control to the REPL:
+
+    : risky  true abort" went boom" ;
+    ' risky catch .        \ went boom-2   (we kept control)
+    : game  ['] play catch  snd-close sdl-close  throw ;
+
+The final `throw` re-raises a non-zero code after the cleanup — and is a
+no-op for the normal 0.
+
+## throw ( n -- )
+If n is non-zero, jump back to the nearest enclosing `catch`, which returns
+n; the stacks and input source are restored to their state at that `catch`.
+`0 throw` does nothing (so an error code of 0 means "fine"). With no
+enclosing `catch`, non-zero n resets to the REPL like `abort`, reporting
+`uncaught exception: n` first — except for the standard codes -1 (`abort`)
+and -2 (`abort"`), which stay silent because their message, if any, was
+already printed.
+
+    : must-fit ( n -- )  10 > if 1 throw then ;
+    : try  ['] must-fit catch if ." too big" cr then ;
+
+Codes are yours to define, but keep to positive numbers or the two standard
+negatives above — the standard reserves the rest of the negative range.
+`catch` restores the *stacks*, not the world: files, devices, and allocated
+memory opened by the aborted word are still open (clean up like `game`
+above).
+
 ## quit ( -- )
 Reset the return stack and re-enter the interpreter loop, without clearing the
 data stack — the normal "stop what you're doing and listen" reset.
 
 ## abort ( -- )
 Clear the data stack and `quit`. The blunt-instrument error recovery.
+Equivalent to `-1 throw`, so a `catch` traps it.
 
 ## abort" ( flag -- )  (compile-only; text follows)
-Inside a definition, compile a guard: at run time, if the flag is true, print the
-message and `abort`.
+Inside a definition, compile a guard: at run time, if the flag is true, print
+the message and `-2 throw` (the standard `abort"` code) — a `catch` traps it
+as -2, message already printed.
 
     : checked  1 abort" went boom" ;
     checked           \ went boom  (and aborts)
@@ -141,3 +178,4 @@ the dirty-guard asks first. (Scripts that need an exit *status* use
 - `help compiler` — `[`, `]`, `literal`, `postpone`, `compile,`.
 - `help defining-words` — `'`, `[']`, and the words `>body` inspects.
 - docs/Outer_Interpreter.md — how the REPL ties these together.
+- docs/Exceptions.md — how `catch`/`throw` are built and their limits.

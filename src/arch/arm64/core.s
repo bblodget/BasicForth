@@ -1488,6 +1488,9 @@ msg_not_defer: .ascii ": not a deferred word\n"
 .equ msg_not_defer_len, . - msg_not_defer
 msg_not_value: .ascii ": not a value or deferred word\n"
 .equ msg_not_value_len, . - msg_not_value
+msg_uncaught: .ascii "uncaught exception: "
+.equ msg_uncaught_len, . - msg_uncaught
+msg_uncaught_nl: .ascii "\n"
 .text
 
 // ---------- LIT (runtime) ----------
@@ -2220,11 +2223,21 @@ forth_tick:
     RET
 
 .Ltick_not_found:
-    // Not found — drop flag, u, c-addr; push 0 as error
-    ADD X19, X19, #3*CELL           // drop flag, u, c-addr
-    STR XZR, [X19, #-CELL]!        // push 0 (invalid xt)
-    LDP X29, X30, [SP], #16
-    RET
+    // Not found — report "? name" and abort the line. (This used to push 0
+    // silently; EXECUTE or CATCH would then jump through it: segfault.)
+    // No LDP epilog: both longjmp targets abandon this frame with the rest.
+    ADD X19, X19, #CELL             // drop 0 flag
+    LDR X9, [X19]                   // u
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]            // c-addr
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #2*CELL           // drop c-addr u
+    ADR X9, state
+    LDR X9, [X9]
+    CBNZ X9, .Lcf_abort             // compiling: abandon the definition
+    B .Lcf_longjmp                  // interpreting: error, keep the stack
 
 // ---------- INTERPRET-LINE ----------
 // ( -- ) Returns status in X0: 0=success, 1=error
@@ -2953,6 +2966,26 @@ cf_check_tag:
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count
     STR XZR, [X9]                   // reset leave chain
+.Lcf_longjmp:
+    // Bare error longjmp — report err_token and return error 1 from
+    // interpret_line WITHOUT the compile-state restore above (entry point
+    // for interpret-mode errors, which must leave the data stack alone).
+    // Unlink exception frames inside the region this longjmp abandons
+    // (return-stack addresses below il_sp). A CATCH established outside
+    // this interpret_line nest (deeper stack, address >= il_sp) stays
+    // armed — the error return unwinds to it cooperatively.
+    ADR X9, il_sp
+    LDR X10, [X9]
+    ADR X11, handler
+    LDR X12, [X11]
+.Lcf_unlink:
+    CBZ X12, .Lcf_unlinked
+    CMP X12, X10
+    B.HS .Lcf_unlinked
+    LDR X12, [X12]                  // follow the chain link
+    B .Lcf_unlink
+.Lcf_unlinked:
+    STR X12, [X11]
     // Longjmp back to forth_interpret_line's error return
     ADR X9, il_sp
     LDR X10, [X9]
@@ -4578,17 +4611,143 @@ forth_source:
     STR X9, [X19, #-CELL]!
     RET
 
-// ABORT ( i*x -- ) ( R: j*x -- )  Clear stacks, reset to REPL.
-.global forth_abort
-forth_abort:
+// ---------- Exception wordset: CATCH / THROW / ABORT / QUIT ----------
+// handler holds the return-stack address of the innermost live exception
+// frame (0 = none). CATCH pushes the frame; besides the chain link and the
+// data-stack pointer it snapshots the input-source specification (Forth 2012:
+// THROW restores the input source in use at the corresponding CATCH) plus the
+// file-error-reporting context — exactly the state EVALUATE and INCLUDED keep
+// in globals and restore cooperatively on normal return, which a THROW
+// unwinds past. Open files/mmaps of an unwound INCLUDED are not cleaned up.
+//
+// Frame layout (relative to handler; return stack grows down, STP pairs so
+// SP stays 16-byte aligned):
+//   [ 0] previous handler (chain link)
+//   [ 8] cur_line_off   [16] cur_source_id  [24] file_line_num
+//   [32] file_name_len  [40] file_name_addr [48] il_sp
+//   [56] source_id      [64] to_in          [72] source_len
+//   [80] source_addr    [88] saved DSP      [96] X29  [104] X30
+
+// CATCH ( xt -- 0 | n )  Run xt; 0 on normal completion, n if it THROWs.
+.global forth_catch
+forth_catch:
+    LDR X9, [X19], #CELL            // pop xt (saved DSP excludes it)
+    STP X29, X30, [SP, #-16]!       // save frame pointer + return address
+    ADR X10, source_addr
+    LDR X10, [X10]
+    STP X10, X19, [SP, #-16]!       // frame: source_addr, data-stack pointer
+    ADR X10, to_in
+    LDR X10, [X10]
+    ADR X11, source_len
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // frame: to_in, source_len
+    ADR X10, il_sp
+    LDR X10, [X10]
+    ADR X11, source_id
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // frame: il_sp, source_id
+    ADR X10, file_name_len
+    LDR X10, [X10]
+    ADR X11, file_name_addr
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // frame: file_name_len, file_name_addr
+    ADR X10, cur_source_id
+    LDR X10, [X10]
+    ADR X11, file_line_num
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // frame: cur_source_id, file_line_num
+    ADR X12, handler
+    LDR X10, [X12]
+    ADR X11, cur_line_off
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // frame: chain link, cur_line_off
+    MOV X10, SP
+    STR X10, [X12]                  // handler = this frame
+    BLR X9                          // run the xt
+    LDR X10, [SP]                   // normal return: unlink the frame,
+    ADR X11, handler
+    STR X10, [X11]
+    ADD SP, SP, #96                 //   discard the snapshot (globals are live)
+    LDP X29, X30, [SP], #16
+    STR XZR, [X19, #-CELL]!         // report success
+    RET
+
+// THROW ( n -- | never returns locally )  0 throw is a no-op. Otherwise
+// unwind to the innermost CATCH frame; with no handler, do what ABORT always
+// did (clear both stacks, reset to the REPL), reporting n first unless it is
+// -1 (ABORT: silent) or -2 (ABORT": the thrower already printed its message).
+.global forth_throw
+forth_throw:
+    LDR X9, [X19], #CELL            // n
+    CBZ X9, .Lthrow_noop
+    ADR X10, handler
+    LDR X11, [X10]
+    CBZ X11, .Lthrow_uncaught
+    MOV SP, X11                     // unwind the return stack to the frame
+    LDP X12, X13, [SP], #16
+    STR X12, [X10]                  // relink the previous handler
+    ADR X10, cur_line_off
+    STR X13, [X10]                  // restore input source + error context
+    LDP X12, X13, [SP], #16
+    ADR X10, cur_source_id
+    STR X12, [X10]
+    ADR X10, file_line_num
+    STR X13, [X10]
+    LDP X12, X13, [SP], #16
+    ADR X10, file_name_len
+    STR X12, [X10]
+    ADR X10, file_name_addr
+    STR X13, [X10]
+    LDP X12, X13, [SP], #16
+    ADR X10, il_sp
+    STR X12, [X10]
+    ADR X10, source_id
+    STR X13, [X10]
+    LDP X12, X13, [SP], #16
+    ADR X10, to_in
+    STR X12, [X10]
+    ADR X10, source_len
+    STR X13, [X10]
+    LDP X12, X19, [SP], #16         // source_addr + DSP saved by CATCH
+    ADR X10, source_addr
+    STR X12, [X10]
+    LDP X29, X30, [SP], #16         // CATCH's frame record
+    STR X9, [X19, #-CELL]!          // push n
+.Lthrow_noop:
+    RET                             // returns from CATCH to its caller
+.Lthrow_uncaught:
+    CMN X9, #1                      // n = -1 (ABORT)?
+    B.EQ .Lthrow_reset
+    CMN X9, #2                      // n = -2 (ABORT")?
+    B.EQ .Lthrow_reset
+    MOV X20, X9                     // n survives platform_write in X20
+    ADR X0, msg_uncaught
+    MOV X1, #msg_uncaught_len
+    BL platform_write
+    MOV X0, X20
+    BL .Lprint_signed               // decimal, like error line numbers
+    ADR X0, msg_uncaught_nl
+    MOV X1, #1
+    BL platform_write
+.Lthrow_reset:
     ADR X9, sp0
-    LDR X19, [X9]                  // reset data stack
+    LDR X19, [X9]                   // reset data stack
     ADR X9, rp0
     LDR X9, [X9]
-    MOV SP, X9                     // reset return stack
+    MOV SP, X9                      // reset return stack
     ADR X9, state
-    STR XZR, [X9]                  // reset compile state
+    STR XZR, [X9]                   // reset compile state
+    ADR X9, handler
+    STR XZR, [X9]                   // no live frames on a reset stack
     B repl_loop
+
+// ABORT ( i*x -- ) ( R: j*x -- )  Forth 2012 exception ext: ABORT is -1
+// THROW, so a CATCH intercepts it; uncaught it resets to the REPL as before.
+.global forth_abort
+forth_abort:
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!
+    B forth_throw
 
 // QUIT ( -- ) ( R: i*x -- )  Reset return stack, enter interpreter loop.
 .global forth_quit
@@ -4598,6 +4757,8 @@ forth_quit:
     MOV SP, X9                     // reset return stack
     ADR X9, state
     STR XZR, [X9]                  // reset compile state
+    ADR X9, handler
+    STR XZR, [X9]                  // frames died with the return stack
     B repl_loop
 
 // ---------- Compiler Words ----------
@@ -5376,6 +5537,8 @@ DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
 DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
+DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_catch
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5393,6 +5556,8 @@ DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 .global dict_text_attr
 .global dict_otty
 .global dict_inc_opened
+.global dict_catch
+.global dict_throw
 
 // ---------- Data Stack Memory ----------
 // Layout (grows downward):
@@ -5515,6 +5680,9 @@ session_mark_latest:                // session restore point (LATEST) — 0 = un
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
     .quad 0
+.global handler
+handler:                            // Innermost CATCH frame on the return stack
+    .quad 0                         //   (0 = no handler; cleared at repl_loop)
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0

@@ -641,6 +641,33 @@ docs/Graphics.md for the API.
   - Check the pager interaction (`(pg-quit)`) and whether the header should be
     bold; the entry heading itself already renders bold.
 
+- [x] **`catch` / `throw` — recoverable errors** — done 2026-07-21 (branch
+  catch-throw), as planned: new asm on both arches + a `handler` chain global.
+  `catch ( xt -- 0 | n )` pushes an exception frame on the return stack
+  (chain link, DSP, and — standard-required — the input-source spec + file
+  error context, so a throw across `evaluate`/`included` leaves the
+  interpreter parsing the right buffer); `throw` unwinds to it. `abort` is
+  now `-1 throw` and `abort"` throws -2 (so both are catchable; -1/-2 stay
+  silent when uncaught, other codes report `uncaught exception: n`).
+  Handler-staleness
+  rules: `repl_loop` clears per line (covers fault recovery + dict_full),
+  `quit`/uncaught-reset clear directly, and the compile-error longjmp walks
+  the chain unlinking only frames inside the abandoned region. Guard faults
+  and interpreter errors are NOT throws (v1 — noted in Exceptions.md
+  scope/next as a possible later mapping to standard codes). Unit +
+  integration tests both arches; docs/Exceptions.md, Error_Handling.md,
+  `help catch`/`help throw` (Interpreter page), Manual section. Deferred:
+  retiring `?`-variants (lessons teach them); a throw out of `included`
+  leaks the file mmap/fd (same class as the fault-time include leak above).
+  Also fixed en route (found live-testing the Exceptions lesson): `'` of an
+  undefined word silently pushed 0, and `catch`/`execute` jumped through it
+  — segfault, PC=0, outside the guard pages so no recovery (pre-existing on
+  main; a typo'd `' name catch` was the day-one way to hit it). Tick now
+  errors `? name` like every other lookup: interpret mode keeps the stack
+  (new `.Lcf_longjmp` entry below the compile-state restore), compile mode
+  abandons the definition — which also retires the old bogus "unresolved
+  control flow" report at `;` after a typo'd tick.
+
 - [ ] **`dis` — disassemble a word via `objdump`** (Linux dev module,
   `require disasm.fs`). Fills the gap `see` leaves for primitives (today it
   punts to `help`). Shell out to binutils **`objdump`** — already a build

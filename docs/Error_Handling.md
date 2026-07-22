@@ -174,6 +174,16 @@ After any error recovery (guard page or software), the system state is:
 | STATE       | 0 (interpreting)                          |
 | Execution   | Resumes at `repl_loop` (prints prompt) — but see "Startup Script Errors" below |
 
+## Recoverable Errors (CATCH / THROW)
+
+The resets above go all the way to the REPL. The Forth 2012 exception
+wordset bounds that: `catch` snapshots both stack pointers (plus the input
+source) in a frame on the return stack, and a `throw` — including `abort`,
+which is `-1 throw` — restores to that frame instead of to `sp0`/`rp0`.
+Guard-page faults and interpreter errors are *not* throws (v1) and still
+recover as described here. Design and safety rules (the `handler` chain,
+who clears it where): [Exceptions.md](Exceptions.md).
+
 ## Startup Script Errors (Exit Non-Zero)
 
 The recovery above returns to the interactive REPL, which is correct when a

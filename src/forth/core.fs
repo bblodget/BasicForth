@@ -149,8 +149,11 @@
     repeat ;
 
 \ ABORT" ( flag "ccc" -- )  IMMEDIATE, COMPILE_ONLY
-\ If flag is true at runtime, print message and abort.
-: ABORT"  postpone if  postpone s"  postpone type  postpone abort  postpone then ; immediate
+\ If flag is true at runtime, print message and -2 throw (the standard
+\ ABORT" code, distinguishable from plain abort's -1 in a catch handler).
+\ Deviation: the message prints at throw time, not via the handler.
+: ABORT"  postpone if  postpone s"  postpone type
+    -2 postpone literal  postpone throw  postpone then ; immediate
 
 \ WORD ( char "<chars>ccc<char>" -- c-addr )
 \ Parse delimited string, return counted string at HERE.
