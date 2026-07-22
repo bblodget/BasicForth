@@ -114,42 +114,50 @@ Two words skip the prompt on purpose:
 ## What gets captured
 
 While you type at the interactive prompt, BasicForth watches each line. A line
-(or group of lines) is captured if it **adds to the dictionary** (defines a word),
-**performs a direct `to`/`is` assignment** (so a `value`'s contents and a
-deferred word's action persist), or **ends with `keep`** (see below). Other
-transient actions are *not* captured:
+(or group of lines) is captured if it **defines a word**, **fills or reserves
+dictionary space** (rows of `,`/`c,`/`l,`, an `allot`), **performs a direct
+`to`/`is` assignment** (so a `value`'s contents and a deferred word's action
+persist), or **ends with `keep`** (see below). Other transient actions are
+*not* captured:
 
 ```
 > : double dup + ;      \ captured (defines a word)
 > variable count        \ captured
 > 0 value hits          \ captured
 > 5 to hits             \ captured (a direct assignment)
+> create tbl            \ captured
+>   1 , 2 , 3 ,         \ captured (fills tbl's space — defines nothing)
 > 5 double .            \ NOT captured (just prints 10)
 > page                  \ NOT captured (just clears the screen)
-> 320 180 sdl-open      \ NOT captured (opens a window, defines nothing)
+> 320 180 sdl-open      \ NOT captured (opens a window, changes no dictionary)
 > 320 180 sdl-open keep \ captured — you asked for it
 ```
 
+The test is what the line *changed*, not what it looked like: a definition
+moves LATEST, data rows move HERE, and both are your program. A line that moves
+neither only made something happen, and belongs in your session rather than
+your file. Rollbacks (`marker`, `-session`) move the pointers backward and are
+never captured.
+
 ### `keep` — save a line that defined nothing
 
-The rule above is what keeps a module file clean, but it has a cost: the lines
-that *set your module up* are exactly the ones that define nothing, so they
-vanish. `keep` is the override. Put it on the line and the line is written
-verbatim, in the order you typed it:
+The rule above is what keeps a module file clean, but it has a cost: a line that
+changes no dictionary is invisible to `save`, and some of those matter. `keep` is
+the override. Put it on the line and the line is written verbatim, in the order
+you typed it:
 
 ```
 > 320 180 sdl-open  keep      \ the module reopens its window when it loads
-> create tbl  1 , 2 , 3 ,  keep
+> 1000 hi-score !  keep       \ a variable's contents, which are otherwise lost
 ```
 
-That second case is the answer to a sharp edge: `create` moves the dictionary
-pointer, so it is captured, but the rows of `,` that fill the table are not —
-without `keep`, `save` writes a bare `create tbl` and the data is silently gone.
-(Building the table inside a colon word, `: tbl-data 1 , 2 , 3 ; create tbl
-tbl-data`, is the other way, and stays the nicer one for anything long.)
+Those are the two shapes it is for: **setup** (something the module needs done
+when it loads) and **state** (a `variable`'s contents — a `value` set with a
+direct `to` is captured already). Data rows after a `create` do **not** need it:
+they move the dictionary pointer, so they are captured on their own.
 
 `keep` may appear anywhere on the line, not only at the end, and on a line that
-already defines a word it does nothing. It acts **only at the terminal**: when
+is already being captured it does nothing. It acts **only at the terminal**: when
 the saved line is replayed on load, `source-id` is the file, not the keyboard, so
 the `keep` token sitting in your file is inert. That is why the token can simply
 stay there — nothing has to strip it back out, and re-saving a reloaded module is

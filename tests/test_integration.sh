@@ -2105,11 +2105,14 @@ gone_out=$( cd "$gone_dir" && rmdir "$gone_dir" && printf '3 4 + .\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
 t1=$(date +%s.%N); ms=$(elapsed_ms "$t0" "$t1"); update_slowest "$ms" "module persistence"
 
+# `100 allot` IS captured: it moved HERE, so it is dictionary state a replay
+# needs (the same rule that keeps a CREATE'd table's data rows). `42 .` moved
+# neither pointer, so it stays out.
 if [[ "$sv_file" == *": dbl dup + ;"* && "$sv_file" == *"dup dup * *"* \
-      && "$sv_file" != *"42 ."* && "$sv_file" != *"100 allot"* ]]; then
-    printf "  ${GREEN}PASS${NC}  SAVE <name> captures definitions (multi-line), not transient actions or bare ALLOT\n"; ((passed++))
+      && "$sv_file" != *"42 ."* && "$sv_file" == *"100 allot"* ]]; then
+    printf "  ${GREEN}PASS${NC}  SAVE <name> captures definitions (multi-line) + dictionary-moving lines, not transient actions\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  SAVE captures definitions, not transient actions/ALLOT\n    Got: %q\n" "$sv_file"; ((failed++))
+    printf "  ${RED}FAIL${NC}  SAVE captures definitions + dict-moving lines, not transient actions\n    Got: %q\n" "$sv_file"; ((failed++))
 fi
 if [[ "$sv_reload" == *"14"* && "$sv_reload" == *"27"* ]]; then
     printf "  ${GREEN}PASS${NC}  basicforth <module> loads the saved definitions\n"; ((passed++))
@@ -2967,6 +2970,35 @@ mk_tbl=$( cd "$mk_dir" && printf 'tbl @ . tbl cell+ @ . tbl 2 cells + @ .\nbye\n
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^1 2 3')
 rm -rf "$mk_dir"
 
+# --- data laid down after a CREATE survives save (HERE moved, LATEST did not) ---
+mk_dir="$(mktemp -d)"
+( cd "$mk_dir" && printf 'create tbl\n1 , 2 , 3 ,\ncreate art\n%%00111100 c,\n%%11111111 c,\n5 5 + .\nsave mod.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+mk_rows=$( cd "$mk_dir" && printf 'tbl @ . tbl cell+ @ . tbl 2 cells + @ . art c@ . art 1+ c@ .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>/dev/null | grep '^1 2 3 60 255')
+mk_transient=$(grep -c '^5 5 + \.$' "$mk_dir/mod.fs")     # still dropped: moved neither
+# re-saving the reloaded module must stay byte-identical
+cp "$mk_dir/mod.fs" "$mk_dir/before.fs"
+( cd "$mk_dir" && printf 'save\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs >/dev/null 2>&1 )
+if cmp -s "$mk_dir/before.fs" "$mk_dir/mod.fs"; then mk_rows_idem=SAME; else mk_rows_idem=DIFF; fi
+rm -rf "$mk_dir"
+
+# --- a marker rollback moves the pointers BACKWARD: still not captured ---
+mk_dir="$(mktemp -d)"
+( cd "$mk_dir" && printf 'marker -try\n: doomed 1 ;\n-try\n: keeper 2 ;\nsave mod.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+mk_marker=$(grep -cE '^-try$' "$mk_dir/mod.fs")
+mk_keeper=$(grep -c '^: keeper 2 ;$' "$mk_dir/mod.fs")
+rm -rf "$mk_dir"
+
+# --- the module verbs must not capture themselves (they move neither pointer) ---
+mk_dir="$(mktemp -d)"
+( cd "$mk_dir" && printf ': w1 1 ;\nsave mod.fs\n.module\nlist\n-session\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth >/dev/null 2>&1 )
+mk_verbs=$(grep -cE '^(save|list|\.module|-session|reload)' "$mk_dir/mod.fs")
+rm -rf "$mk_dir"
+
 # --- on-start / on-stop fire, in the right order, around each verb ---
 mk_dir="$(mktemp -d)"
 cat > "$mk_dir/mod.fs" <<'MKEOF'
@@ -3018,6 +3050,22 @@ if [[ "$mk_idem" == "SAME" ]]; then
     printf "  ${GREEN}PASS${NC}  a kept line replayed from the file is inert (re-save identical)\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  keep re-save not idempotent\n    %q\n" "$mk_idem"; ((failed++))
+fi
+if [[ -n "$mk_rows" && "$mk_transient" == "0" && "$mk_rows_idem" == "SAME" ]]; then
+    printf "  ${GREEN}PASS${NC}  data rows after a create survive save (HERE moved); transient line still dropped\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  create-data capture\n    rows: %q  transient-lines: %q  re-save: %q\n" \
+        "$mk_rows" "$mk_transient" "$mk_rows_idem"; ((failed++))
+fi
+if [[ "$mk_marker" == "0" && "$mk_keeper" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  a marker rollback (pointers move backward) is still not captured\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  marker rollback captured\n    marker-lines: %q  keeper: %q\n" "$mk_marker" "$mk_keeper"; ((failed++))
+fi
+if [[ "$mk_verbs" == "0" ]]; then
+    printf "  ${GREEN}PASS${NC}  the module verbs do not capture themselves\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a module verb leaked into the file\n    matched lines: %q\n" "$mk_verbs"; ((failed++))
 fi
 if [[ -n "$mk_tbl" ]]; then
     printf "  ${GREEN}PASS${NC}  keep preserves data rows laid down after a create\n"; ((passed++))

@@ -107,18 +107,22 @@ notice (hyper-static words otherwise keep the bindings they captured).
     \ redo snake              \ recompile snake from its source
 
 ## keep ( -- )
-Put **this line** in the module even though it defined nothing. `save` records a
-line when it defines a word, so setup lines are normally invisible — a window
-you opened, a variable you initialised, rows of `,` after a `create`. End the
-line with `keep` and it is written verbatim, where you typed it.
+Put **this line** in the module even though it changed no dictionary. `save`
+records a line that defines a word or fills dictionary space; a line that does
+neither only made something happen, and is left out. `keep` overrides that —
+the line is written verbatim, where you typed it.
 
-    \ 320 180 sdl-open  keep         \ the module reopens its window on load
-    \ create tbl  1 , 2 , 3 ,  keep  \ table data survives the save
+    \ 320 180 sdl-open  keep    \ the module reopens its window on load
+    \ 1000 hi-score !  keep     \ a variable's contents, otherwise lost
 
-It can go anywhere on the line, not just last, and on a line that already
-defines a word it does nothing. `keep` only acts at the terminal, so the copy
-written into the file is an inert token when the module reloads — nothing to
-clean up.
+Those are the two cases: **setup** the module needs when it loads, and **state**
+a `variable` holds (a `value` set with a direct `to` is captured already). Rows
+of `,` after a `create` do *not* need it — they move the dictionary pointer, so
+they save on their own.
+
+It can go anywhere on the line, not just last, and on a line already being
+captured it does nothing. `keep` only acts at the terminal, so the copy written
+into the file is an inert token when the module reloads — nothing to clean up.
 
 ## on-start ( -- )  /  on-stop ( -- )
 Not words BasicForth defines — words **you** may define in a module, which it

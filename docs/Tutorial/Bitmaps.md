@@ -48,19 +48,19 @@ That's the whole idea; the rest of this lesson is consequences.
 Eight bits fit in a byte, so an 8-wide row is one byte and `c,` compiles it.
 Write the rows in binary with `%` and you can see what you're making:
 
-    : bar-art
+    create bar
       %00111100 c,     \ ..####..
       %01111110 c,     \ .######.
-      %11111111 c, ;   \ ########
-    create bar bar-art
+      %11111111 c,     \ ########
     f  cyan bar 40 40 8 3 stamp  s
 
 Three rows of a shape, and there it is on screen. Leftmost pixel is the high
 bit, so the picture never comes out mirrored.
 
-The art lives in a word for a reason: rows of `c,` define nothing on their
-own, so writing them straight after `create bar` would vanish when you save.
-As a word it's a definition, so it survives — which we're about to rely on.
+`create bar` names the spot; each `c,` lays one byte down after it. Nothing
+here is a definition — the rows just fill dictionary space — but `save` keeps
+them anyway, because filling the dictionary *is* a change to your program.
+You'll see them in the file later.
 
 ## Save your work
 
@@ -76,6 +76,8 @@ a real file, so pick a directory you don't mind writing to. From here on,
 
 Counting ones and zeros gets old fast. `row,` takes the picture as a string:
 `.`, space and `0` leave a pixel clear, anything else sets it.
+
+This one goes in a **word**, which is the shape we'll use from here on:
 
     : inv-art
       s" ..####.." row,
@@ -95,6 +97,11 @@ Now the source *is* the picture. And it isn't a second format — check:
 `60`, the very byte `%00111100` gave you for the top of `bar`. `row,`
 compiles exactly what you were typing by hand; you just stopped counting
 bits. Strings from here on.
+
+Why a word this time, when `bar`'s loose rows were fine? Because a word has a
+**name**, and a name is something you can go back and change — the last step
+of this lesson retypes `inv-art` to fix the alien's legs. Loose rows have
+nowhere to aim that at; you'd be editing the file by hand.
 
 Curious what the bits look like? `binary inv c@ . decimal` shows `111100` —
 `.` prints the shortest form, so the two leading zeros of `00111100` don't
@@ -205,16 +212,21 @@ They share a surface, so mix them freely in one frame.
 
 There's your whole session: `require`, both aliens, the saucer, the palette,
 and every word you defined — in order, with the art laid out exactly as you
-typed it. Notice the art *is* there. That's the payoff for putting it inside
-`: inv-art … ;` words back at the start; loose rows of `row,` would have been
-dropped and you'd have reloaded to empty sprites.
+typed it. `bar`'s loose `c,` rows are there too, right where you typed them.
 
-If you ever do want a line saved that defines nothing, end it with `keep`:
+What's *not* there is `f  cyan bar 40 40 8 3 stamp  s` and every other line
+that just drew something. `save` keeps what changed your program — a
+definition, or a line that filled dictionary space — and drops what merely
+happened. That's what stops a module file turning into a transcript.
 
-    create dot  %10000000 c,  keep
+When you want one of those dropped lines anyway, end it with `keep`:
 
-Same rule, opted out of, one line at a time. For art the colon word still
-reads better — but `keep` is what saves a setup line.
+    variable hi-score
+    1000 hi-score !  keep
+
+`variable hi-score` is a definition and would be saved regardless; the `1000
+hi-score !` moved no dictionary at all, so without `keep` your high score
+would reload as zero.
 
 `bitmaps.fs` is an ordinary source file. `include bitmaps.fs` in a fresh
 session brings it all back.

@@ -498,6 +498,9 @@ variable (ap-len)                       \ scratch: byte count for (buf-append)
 create (log)  3 cells allot             \ accumulated definitions (seed + session)
 create (pend) 3 cells allot             \ lines of the definition being entered
 variable (cap-latest)                   \ LATEST at the start of the pending group
+variable (cap-here)                     \ HERE likewise: a line that moved HERE
+                                        \ forward changed the dictionary, so it is
+                                        \ module state even if it defined no word
 variable (skip-capture)                 \ one-shot: skip logging the next line (RELOAD)
 variable (ce-armed)  0 (ce-armed) !     \ a :e group is being typed: on completion,
 variable (ce-hook)   0 (ce-hook) !      \ run (ce-hook) — splice + reload (set near EOF)
@@ -557,11 +560,21 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
 \ (capture-line): the asm REPL calls this after each successfully interpreted
 \ line, passing the current LATEST. Accumulate the line in (pend); when STATE
 \ returns to interpret, decide whether the group defined a word — flush it to the
-\ log — or not — discard it. A line is a definition only when LATEST moved
-\ *forward* (a new header linked), so transient actions, bare ALLOT/,/C, and
-\ marker runs / -session (which move LATEST *backward*) are all not captured.
-\ RELOAD sets (skip-capture) so its own line is never logged either. KEEP is the
-\ deliberate override: it asks for a line that defined nothing to be logged.
+\ log — or not — discard it.
+\
+\ Two things make a line worth keeping. LATEST moving *forward* means a word was
+\ defined, and that group is logged with SEE records. HERE moving forward means
+\ the line changed the dictionary without naming anything — rows of `,`/`c,`/`l,`
+\ filling a CREATE'd table, an ALLOT, an ALIGN — which is still module state a
+\ faithful replay needs, so it is logged too (no SEE record: it defines nothing).
+\ Before that second test existed, `create tbl` logged and the rows that filled
+\ it did not, so SAVE wrote a bare CREATE and the data was silently gone.
+\
+\ Both tests are `u>`, so anything moving the pointers *backward* — a marker run,
+\ -session — is still not captured. Lines that move neither (transient actions:
+\ printing, `sh`, `help`, the module verbs themselves) are still discarded, which
+\ is what keeps a saved file clean; KEEP is the deliberate override for those.
+\ RELOAD sets (skip-capture) so its own line is never logged either.
 : (capture-line) ( c-addr u latest -- )
     (assign?)  (cap-keep) @ or  (cap-assign) !   \ read+clear the two "log it
     false (cap-keep) !                           \ anyway" flags: a direct TO/IS
@@ -572,6 +585,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     state @ if  r> drop exit  then      \ still compiling → wait for more lines
     (skip-capture) @ if                 \ RELOAD etc.: discard, don't log
         false (skip-capture) !
+        here (cap-here) !
         (pend) (buf-reset)  r> (cap-latest) !  exit
     then
     r@ (cap-latest) @ u> if             \ LATEST moved forward → a word was defined
@@ -581,6 +595,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
                 execute
                 false (skip-capture) !   \ the hook's reload armed it for OUR line
                 (pend) (buf-reset)  r> drop
+                here (cap-here) !
                 (latest@) (cap-latest) !  exit
             then
         then
@@ -588,13 +603,17 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
         (pend) (log) (buf-append-buf)    \ flush the group into the log FIRST, so an OOM
         (cap-latest) @  r@  (dir-add-group)  \ here aborts before any SEE record is
         true (dirty) !
-    else (cap-assign) @ if              \ no new word, but TO/IS or KEEP ran:
+    else
+        (cap-assign) @                  \ a direct TO/IS, or KEEP, ran; or...
+        here (cap-here) @ u> or         \ ...the line filled/reserved dict space
+    if                                  \ (a CREATE'd table's data rows)
         (pend) (log) (buf-append-buf)    \ persist the line (no SEE record)
         true (dirty) !
     then then                           \ otherwise discard (transient line)
     (pend) (buf-reset)                  \ clear pending
     r> drop                             \ done with the latest param
-    (latest@) (cap-latest) ! ;          \ baseline = current LATEST
+    here (cap-here) !                   \ baselines = current HERE...
+    (latest@) (cap-latest) ! ;          \ ...and LATEST
 
 \ (capture-reset): called at the top of the REPL loop with the current LATEST.
 \ Drops a pending partial definition left behind by a line error or fault (only
@@ -611,7 +630,8 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     state @ if  drop exit  then         \ mid-definition: keep pending AND a :e arm
     false (ce-armed) !                  \ a :e whose definition errored is disarmed
     (pend) cell+ @ if  (pend) (buf-reset)  then
-    (cap-latest) ! ;
+    here (cap-here) !                   \ resync both baselines (an errored line
+    (cap-latest) ! ;                    \ may have moved HERE before it failed)
 
 : (slurp-into-log) ( fileid -- )        \ append a whole file to the log
     >r

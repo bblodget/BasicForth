@@ -40,10 +40,43 @@ completed. See Planning.md for high-level vision and design decisions.
     defined you can: the Bitmaps lesson now teaches the hooks and `:e`s a
     shape with the window up, which closes and reopens it by itself.
 
-- [ ] **`save` silently drops data laid down after a `create`.** The capture
-  log records a line only when LATEST moves *forward* (see the comment at
-  `(capture-line)` in core.fs) — deliberate, so transient actions and marker
-  runs aren't logged. The side effect: a table built as
+- [x] **`save` silently drops data laid down after a `create`.** FIXED
+  2026-07-22 (branch create-data-capture): `(capture-line)` now logs a line
+  that moved **HERE** forward as well as one that moved LATEST. A line that
+  filled dictionary space changed the program, so a faithful replay needs it;
+  it gets no SEE record, because it defines nothing. Both `u>` tests, so
+  rollbacks (marker, `-session`) are still excluded, and lines that move
+  neither pointer are still dropped — which is what keeps a module file from
+  becoming a transcript.
+  - **Measured before choosing the rule:** every ordinary transient leaves
+    HERE at 0 — `.s`, `words`, `see`, `.module`, `type`, `.`, `hex`, `within`,
+    `pad blank`, `help`, `apropos`, `pwd`, `ls`, `sh`, `dis`, and critically
+    `save`/`list`/`reload`/`-session`, so the module verbs cannot write
+    themselves into the file. Only `require`/`include` (which also moves
+    LATEST, so already captured) and `align` (0–7 bytes, real dictionary
+    state) move it. The failure directions are asymmetric: a false positive
+    writes one harmless extra line, a false negative silently corrupts a
+    saved program.
+  - **Rejected:** restricting it to "while a `create` is the newest header".
+    More fragile (what counts as create-made? `variable` is create+allot) and
+    it would drop a meaningful `allot` after a colon definition. The simple
+    rule is easier to explain and to predict.
+  - Fallout, all handled: the integration test asserting a bare `100 allot`
+    is NOT captured was inverted (it is now, correctly); PTY block 8b, which
+    deliberately pinned the broken behaviour, now pins the fix; and the
+    Sprites/Bitmaps lessons no longer justify the colon-word art idiom by
+    "loose rows would vanish" — they justify it by the real remaining reason,
+    that a named word can be retyped with `:e`. Bitmaps now teaches the loose
+    form first and moves to the word form when it needs a name.
+  - `keep` is still needed, for lines that move *neither* pointer:
+    `320 180 sdl-open`, `1000 hi-score !`. The two split cleanly along "did
+    you change the dictionary or not".
+
+  Original report:
+
+  The capture log records a line only when LATEST moves *forward* (see the
+  comment at `(capture-line)` in core.fs) — deliberate, so transient actions
+  and marker runs aren't logged. The side effect: a table built as
 
         create inv
           __ l, GG l, ...        \ these rows define nothing
@@ -60,15 +93,8 @@ completed. See Planning.md for high-level vision and design decisions.
     `: inv-art  __ l, GG l, ... ;` then `create inv inv-art`. A multi-line
     `:` is captured as one group, so it round-trips. The Sprites lesson now
     teaches this form and explains why.
-  - **Partly addressed 2026-07-22** (branch module-hooks): `keep` gives it an
-    explicit answer — `create tbl  1 , 2 , 3 ,  keep` round-trips. But `keep`
-    is opt-in, so the *silent* half of this bug is untouched: someone who does
-    not know about it still loses the data with no warning. Left open for that
-    reason.
-  - Possible fixes for the silence, none obviously right: log lines that moved
-    HERE (not just LATEST) while a `create` is the newest header; warn at
-    `save` when HERE moved without a header since the last logged group; or
-    accept it and document. At minimum it should not fail *silently*.
+  - Interim step 2026-07-22 (branch module-hooks): `keep` gave it an explicit
+    opt-out before the real fix landed.
 
 - [ ] **PTY suite fails 4 tests under QEMU (arm64): harness timing, not a
   product bug.** `make run-pty` is 19/19 on x86 but 15/19 on arm64, failing
@@ -578,6 +604,23 @@ docs/Graphics.md for the API.
     whether `on-stop` runs at `bye`; ordering against the file body; and what
     happens if a hook errors — now that `catch`/`throw` exist, a reload can
     wrap each hook in `catch` and report rather than abort the whole load.
+
+- [ ] **`see <table>` should show the data rows, not just the `create`.**
+  Fallout from the create-data fix above, deliberately left for a later batch.
+  A line that moves HERE is now logged, but it gets **no SEE record** (it
+  defines no word), so `see inv` on a table built as `create inv` + loose rows
+  prints only `create inv` — the rows are in the file and reload correctly,
+  they just aren't part of what `see` considers the word's source. The
+  colon-word idiom (`: inv-art … ; create inv inv-art`) shows in full, which
+  is one more reason the lessons still teach it.
+  - Shape of the fix: when a HERE-only line is logged and LATEST has not moved
+    since the last group, **extend that group's `(dir)` record length** to
+    swallow the line instead of adding nothing. The record is `[log-off,
+    log-len, xt]` and the new text is appended contiguously, so it is a
+    length bump on the newest record — but check the multi-line and
+    `(dir-add-group)` (several words on one line) cases before assuming that.
+  - Decide what happens when data rows are separated from their `create` by an
+    unrelated captured line; probably stop extending at the first such line.
 
 - [ ] **`on-start` should be able to tell a boot from a reload.** Today
   `(mod-hook)` calls `on-start` identically at startup, after `load`, and after
