@@ -26,7 +26,11 @@ environment variable; `help` is the front door.
    name `<name>` (case-insensitive), and **every** matching entry block —
    heading to the next `## ` — is printed. A word like `begin` heads three
    entries (`begin…until`, `begin…again`, `begin…while…repeat`); all three
-   appear, in page order. Tutorial sections are skipped in this pass; their
+   appear, in page order. Each page's group of entries opens with a
+   `<Topic>:` header naming the page it came from — `help allocate` starts
+   with `Memory:`, which is also where the related words live (`help
+   memory`). One header per page, so a word documented on two pages shows
+   two labeled groups. Tutorial sections are skipped in this pass; their
    `## ` headings are lesson steps, not word entries.
 
 When neither matches: `no help for <name>  (try:  help  or  apropos <keyword>)`.
@@ -90,6 +94,8 @@ help <word>   - one word's entry           (help allot)
 # Stack Manipulation
 ...the page preamble, ending at its "At a glance" table...
 > help allot
+Memory:
+
 ## allot ( n -- )
 Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup
@@ -119,6 +125,11 @@ Long output still pages a screenful at a time at a terminal
   `## ` line. **Word lookup** tokenizes each `## ` heading — `(head-word?)` —
   and `(page-entry)` prints every matching entry (each heading re-decides
   whether the lines after it print), scanning all pages even after a hit.
+  The `<Topic>:` group header is printed lazily by `(hw-head)` — the scan
+  streams, so a hit is only known once it is already inside the file; the
+  page name is passed in via `(hw-t)`/`(hw-tn)` and the header prints just
+  before the file's first matched heading, routed through the pager's row
+  accounting so `--more--` pauses stay aligned.
 - **Paging** reads the file with `read-line` and prints `screen-height - 1`
   lines before pausing for a key. The getdents buffer and the line buffer are
   allocated on the heap (`allocate`) on first use, so the feature adds very
