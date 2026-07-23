@@ -869,7 +869,34 @@ docs/Graphics.md for the API.
     1-bit sprite into a normal 32-bpp one for fast repeated `blit-key`.
     Start with direct drawing; the memory win is the point.
 
-- [ ] **Zero-padded numeric output (`u.0r`?)** — print a number right-justified
+- [x] **Zero-padded numeric output (`u.0r`)** — done 2026-07-22 (branch `u0r`),
+  as `: U.0R >r 0 <# #S #> r> over - begin dup 0 > while [char] 0 emit 1-
+  repeat drop type ;` beside `U.R` in core.fs — the same word with a different
+  pad character. Notes from building it, against the design below:
+  - **No BASE save/restore after all.** The note below anticipated a word that
+    sets `hex` itself; `u.0r` just follows the current base and leaves it
+    alone, which is what makes it work for colors *and* bitmap rows. The
+    save/restore pattern still belongs to `h.2`/`h.addr`, which do switch.
+  - **The `#` prefix is what makes the motivating example work.** Written as
+    `binary inv c@ 8 u.0r`, it fails: in base 2 the width literal `8` has no
+    reading. `binary inv c@ #8 u.0r` is correct — `#` forces decimal. Worth
+    knowing before reaching for a wrapper word.
+  - **`.hex`/`.bits` wrappers were considered and dropped.** They would have
+    set the base internally so no `#` was needed, but they buy one character
+    over `hex … u.0r decimal` and hide two things the lessons already teach
+    (the base words and the `#` prefix). Substrate before sugar; revisit only
+    if the explicit form proves annoying in practice.
+  - Bitmaps' bit-check now reads `binary inv c@ #8 u.0r decimal` → `00111100`,
+    replacing a paragraph that conceded `.` prints `111100`. The old step had
+    *two* byte checks (`inv c@ .` → `60`, then the bits); `u.0r` collapses them
+    into one, because `00111100` matches the `..####..` you typed and needs no
+    apology. That step ran past a page, so it split in two — "A more readable
+    way" (the art) and "Same bytes underneath" (the check). "Changing a shape
+    later" split the same way, into the `:e` mechanics and "Why the window
+    blinked" (the reload/hooks payoff). 17 steps → 19; every step now fits a
+    28-row terminal, and only 15/16 spill at 24.
+
+  Original design notes, kept for the reasoning — print a number right-justified
   to a fixed width, padded with **zeros** instead of spaces. Brandon's ask
   (2026-07-20): `hex __ .` prints `FF00FF` but `hex GG .` prints `FF00`, so
   colors won't line up and the channels are hard to read; he wanted `00FF00`.

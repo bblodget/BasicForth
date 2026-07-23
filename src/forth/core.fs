@@ -173,6 +173,11 @@
 : WITHIN    over - >r - r> u< ;
 : ERASE     0 fill ;
 : U.R       >r 0 <# #S #> r> over - spaces type ;
+\ Like U.R but padded with ZEROS, so fixed-width fields line up digit for
+\ digit: colors as $RRGGBB, bitmap rows as 8 bits. Follows BASE (as #S does)
+\ and leaves it alone; a number wider than the field prints in full.
+: U.0R      >r 0 <# #S #> r> over -
+            begin dup 0 > while [char] 0 emit 1- repeat drop  type ;
 : HOLDS     begin dup 0 > while 1- 2dup + c@ hold repeat 2drop ;
 : .(        \ parse and print text up to the closing paren
             [char] ) parse type ; immediate
