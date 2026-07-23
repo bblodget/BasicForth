@@ -522,7 +522,7 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
-- [ ] **Remove the stale `compact` references from the docs.** `compact` was
+- [x] **Remove the stale `compact` references from the docs.** `compact` was
   **deleted** in `724edd3` ("Stage 4 cleanup: delete propagation, compact, and
   the mutation-tag save path") — `grep -rn compact src/` finds nothing, so the
   word does not exist. But the docs still present it as shipped and usable:
@@ -537,6 +537,16 @@ docs/Graphics.md for the API.
   dedupe-and-reorder snapshot unsound — `save` is replay-faithful by design),
   so the idea isn't silently lost if it's ever wanted again. Found 2026-07-22
   while checking how `keep` would interact with it.
+
+  Done 2026-07-22. Persistence.md and the Manual already carried the "there
+  is no `compact`" note; See_Metadata.md and Core_Primitives.md only use
+  the word as an adjective. Real fixes: this file's Shipped entry now
+  records the deletion and why; Module_Architecture.md's status header now
+  says the log-canonical sections are historical rationale. Bonus (missed
+  by the case-sensitive grep above): the `:NONAME` header comments in both
+  arches' core.s justified real headers via "COMPACT can replay it" — now
+  "the capture log can replay it". CHANGELOG entries are dated history and
+  stay.
 
 - [x] **A way to put a non-definition line into the module — `keep`.** Done
   2026-07-22 (branch module-hooks), as designed below: `keep` sets the same
@@ -1027,7 +1037,11 @@ see docs/Persistence.md, Line_Editor.md, Deferred_Words.md, Shelling_Out.md.
   captured); `(system)` is the underlying primitive.
 - [x] `compact <name>` — deduped, dependency-ordered, definitions-only
   snapshot written next to the append-only `save` file; final `is`/`to`
-  bindings preserved.
+  bindings preserved. **Since deleted** (`724edd3`, Stage 4 cleanup): the
+  file-canonical model made a dedupe-and-reorder snapshot unsound — dedup
+  rewires hyper-static bindings, and with mutations splicing the file
+  directly nothing accumulates to compact. `save` is replay-faithful by
+  design. Rationale in docs/Module_Architecture.md.
 - [x] Dirty-guard: `new`/`load`/`bye` prompt "save first? (y/n)" when the
   module has unsaved changes.
 - [x] Typed dictionary headers (Flags2 byte: code/defer/value/noname);

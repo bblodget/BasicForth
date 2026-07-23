@@ -2,7 +2,10 @@
 
 **Status: AGREED 2026-07-10; revised 2026-07-11 with the hyper-static
 principle (which decides *what* gets spliced). The staged plan at the bottom
-is the roadmap; docs/TODO.md tracks progress.**
+is the roadmap; docs/TODO.md tracks progress. IMPLEMENTED through stage 4
+(2026-07-11): `compact` and the propagation machinery are deleted — the
+present-tense descriptions of the log-canonical model below are the
+historical rationale, not the current system.**
 
 This is the design doc for the editing-workflow arc's Step 4 (module
 ownership), expanded to cover a more fundamental question that came out of
