@@ -1411,6 +1411,9 @@ msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
+msg_redefined: .ascii "redefined "
+.equ msg_redefined_len, . - msg_redefined
+msg_one_space: .ascii " "
 cf_mismatch_name: .ascii "mismatched-control-flow"
 .equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
@@ -1836,6 +1839,43 @@ build_header:
 
     test %rcx, %rcx
     jz .Lbh_err                     # empty name — bail
+
+    # Interactive redefinition warning ("redefined foo", gforth's text).
+    # Gated OFF inside included (cur_source_id != 0): core.fs redefines
+    # words on purpose at startup, module reloads replay whole files, and
+    # skipping the gate first means file loads never pay for the scan.
+    cmpq $0, cur_source_id(%rip)
+    jne .Lbh_build
+    cmpq $0, redef_quiet(%rip)      # :e armed a one-shot skip?
+    je .Lbh_dowarn
+    movq $0, redef_quiet(%rip)      # consume it
+    jmp .Lbh_build
+.Lbh_dowarn:
+    push %rsi                       # keep the name across find/write
+    push %rcx
+    sub $2*CELL, %r15               # push ( c-addr u ) for find
+    mov %rsi, CELL(%r15)
+    mov %rcx, (%r15)
+    call forth_find                 # hit: ( xt flag )  miss: ( c-addr u 0 )
+    mov (%r15), %rax
+    test %rax, %rax
+    jz .Lbh_fresh
+    add $2*CELL, %r15               # drop xt + flag
+    lea msg_redefined(%rip), %rsi
+    mov $msg_redefined_len, %rdx
+    call platform_write
+    mov CELL(%rsp), %rsi            # the name, as the user typed it
+    mov (%rsp), %rdx
+    call platform_write
+    lea msg_one_space(%rip), %rsi
+    mov $1, %rdx
+    call platform_write
+    jmp .Lbh_checked
+.Lbh_fresh:
+    add $3*CELL, %r15               # drop ( c-addr u 0 ) — find keeps a miss
+.Lbh_checked:
+    pop %rcx
+    pop %rsi
     jmp .Lbh_build
 
 # build_header_anon: build_header with an EMPTY name (for :NONAME). A zero-
@@ -4320,6 +4360,16 @@ forth_state:
     mov %rax, (%r15)
     ret
 
+# (redef-quiet) ( -- a-addr )
+# Address of the one-shot redefinition-warning skip flag. Internal: :e
+# stores 1 here before opening its definition; build_header consumes it.
+.global forth_redef_quiet
+forth_redef_quiet:
+    sub $CELL, %r15
+    lea redef_quiet(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
 # [ ( -- )  Switch to interpret mode.  IMMEDIATE.
 .global forth_left_bracket
 forth_left_bracket:
@@ -4947,7 +4997,8 @@ DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
 DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
 DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
 DEFWORD dict_state,      "state",      forth_state,       dict_u_less
-DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_state, F_IMMEDIATE
+DEFWORD dict_redef_quiet, "(redef-quiet)", forth_redef_quiet, dict_state
+DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_redef_quiet, F_IMMEDIATE
 DEFWORD dict_rbracket,   "]",          forth_right_bracket, dict_lbracket
 DEFWORD dict_literal,    "literal",    forth_literal,     dict_rbracket, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_bracket_tick, "[']",      forth_bracket_tick, dict_literal, F_IMMEDIATE+F_COMPILE_ONLY
@@ -5153,6 +5204,8 @@ colon_code_len_addr:                # Saved code_len field address for ; to fill
 .global colon_dsp
 colon_dsp:                          # DSP at start of : for control-flow balance check
     .quad 0
+redef_quiet:                        # one-shot: skip the next "redefined" warning
+    .quad 0                         # (set by :e, whose whole job is redefinition)
 .global saved_latest
 saved_latest:                       # LATEST before current : for error recovery
     .quad 0

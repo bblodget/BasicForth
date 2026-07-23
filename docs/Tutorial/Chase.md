@@ -249,6 +249,9 @@ the real `done?` (we're done when `caught`):
     :noname  step-player  eat? ;  is update
     :noname  caught @ ;           is done?
 
+(The `redefined new-game` note is BasicForth confirming the swap — your new
+definition shadows the old one. You'll see it again each time we grow a word.)
+
 Ready to play? Almost — there's a catch, and it's worth its own step. Type
 `next`.
 

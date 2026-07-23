@@ -350,8 +350,10 @@ create (write-nl) 10 c,
 \ (One read-line = one line; an over-long line is truncated, not continued — a
 \ deliberate choice over the ANS "return the rest next call" behavior.) No state
 \ is kept between calls, so reading several files or reused fds is always safe.
-\ One read() syscall per byte — fine for source/text; a buffered version can
-\ replace this later behind the same interface.
+\ One read() syscall per byte — the price of statelessness, and why the docs
+\ browser (which scans the whole corpus per lookup) reads through its own
+\ buffered (bl-line) instead. Fine for everything else that reads a line or
+\ two; a caller that must stay stateless (pipes, interleaved fds) stays here.
 variable (rl-fid)                       \ open file id
 variable (rl-buf)                       \ buffer base address
 variable (rl-max)                       \ buffer size (u1)
@@ -1514,6 +1516,55 @@ variable (pg-quit)                       \ true once the user pressed q
 : (pg-line) ( c-addr u -- )
     (mk?) @ (otty?) and if (mk-line) else type then
     cr  (pg-count) ;
+\ --- buffered line reader for the docs browser ---
+\ read-line issues one read() syscall per byte (see its comment), which is fine
+\ for occasional lines but not for help/apropos scanning the whole docs corpus
+\ — one `help <word>` cost ~546k read() calls. This reader refills a 4 KB chunk
+\ via READ-FILE and hands out lines from it: same results as read-line into
+\ (pg-buf) (truncation, CRLF strip, EOF flag), ~4000x fewer syscalls.
+\ One shared chunk, so it serves ONE fd at a time: every user below reads its
+\ file start-to-close with no other (bl-line) consumer in between, and resets
+\ with (bl0) on entry (fd numbers are reused after close, so staleness cannot
+\ be detected — it must be declared). Not a general read-line replacement:
+\ read-line's statelessness stays the contract everywhere else (pipes, user fds).
+4096 constant (bl-bufsz)
+variable (bl-buf)                        \ chunk buffer (heap, lazy)
+variable (bl-pos)  variable (bl-len)     \ consumed / valid bytes in the chunk
+variable (bl-fid)                        \ fd of the current (bl-line) call
+variable (bl-ior)                        \ sticky read error (0 = none)
+: (bl-buf@) ( -- a )
+    (bl-buf) @ ?dup if exit then
+    (bl-bufsz) allocate abort" help: out of memory" dup (bl-buf) ! ;
+: (bl0) ( -- )  0 (bl-pos) !  0 (bl-len) !  0 (bl-ior) ! ;
+: (bl-ch) ( -- ch true | false )         \ next byte, refilling; false = EOF/error
+    (bl-pos) @ (bl-len) @ < 0= if
+        (bl-buf@) (bl-bufsz) (bl-fid) @ read-file   ( u ior )
+        ?dup if  (bl-ior) !  drop false exit  then
+        dup 0= if  drop false exit  then
+        (bl-len) !  0 (bl-pos) !
+    then
+    (bl-buf@) (bl-pos) @ + c@  1 (bl-pos) +!  true ;
+: (bl-line) ( fileid -- u2 flag ior )    \ read-line semantics, into (pg-buf)
+    (bl-fid) !
+    0                                    ( count )
+    begin
+        (bl-ch) 0= if
+            (bl-ior) @ ?dup if  >r dup 0> r> exit  then   ( count flag ior )
+            dup 0> 0 exit                ( count flag 0 )  \ EOF
+        then
+        ( count ch )
+        dup 10 = if                      \ LF → end of line
+            drop
+            dup 0> if                    \ strip a trailing CR if present
+                dup 1- (pg-buf@) + c@ 13 = if 1- then
+            then
+            true 0 exit                  ( count true 0 )
+        then
+        over (pg-bufsz) < if             \ room left? store it; else discard
+            over (pg-buf@) + c!  1+
+        else  drop  then
+    again ;
+
 \ page-file: page a file fd a screenful at a time. Always closes the fd. Returns
 \ a read-error flag (true if read-line failed) rather than aborting — it is a
 \ shared helper called from contexts that hold their own resources (e.g. (man-in)
@@ -1521,9 +1572,9 @@ variable (pg-quit)                       \ true once the user pressed q
 \ Each caller decides whether to abort.
 : page-file ( fileid -- read-error? )
     0 (pg-row) ! false (pg-quit) !  false (mk?) !   \ arbitrary files: plain
-    >r
+    (bl0) >r
     begin
-        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        r@ (bl-line)                        ( u flag ior )
         if  2drop  ." (read error)" cr  r> close-file drop  true exit  then  \ I/O error
         if  (pg-buf@) swap (pg-line)
         else  drop  r> close-file drop  false exit  then   \ EOF: done, no error
@@ -1540,9 +1591,9 @@ variable (pg-quit)                       \ true once the user pressed q
 \ Page a file's preamble: top of file to the first "## " heading. Closes the fd.
 : (page-preamble) ( fileid -- read-error? )
     0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ help pages are markdown
-    >r
+    (bl0) >r
     begin
-        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        r@ (bl-line)                        ( u flag ior )
         if  2drop  ." (read error)" cr  r> close-file drop  true exit  then
         0= if  drop  r> close-file drop  false exit  then     \ EOF
         (pg-buf@) over (head?) if  drop  r> close-file drop  false exit  then
@@ -1635,9 +1686,9 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
 : (page-entry) ( fileid -- found? )
     0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ help pages are markdown
     false (hw-hit) !  false (hw-any) !
-    >r
+    (bl0) >r
     begin
-        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        r@ (bl-line)                        ( u flag ior )
         if  2drop  r> close-file drop  (hw-any) @ exit  then   \ I/O error
         0= if  drop  r> close-file drop  (hw-any) @ exit  then \ EOF
         ( u )
@@ -1692,7 +1743,7 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     2dup +  s" .md" drop  swap 3 cmove
     3 + ;
 : (title?) ( fileid -- c-addr u true | false )   \ first line, sans "# "; closes fd
-    >r (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+    (bl0) >r r@ (bl-line)                  ( u flag ior )
     r> close-file drop
     if 2drop false exit then               \ read error: no title
     0= if drop false exit then             \ empty file
@@ -1762,9 +1813,9 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     repeat 2drop false ;
 : (file-has-kw?) ( name namelen -- f )   \ open <dir>/<name>, true if any line has kw
     (build-path) r/o open-file if drop false exit then   ( fileid )
-    >r
+    (bl0) >r
     begin
-        (pg-buf@) (pg-bufsz) r@ read-line   ( u flag ior )
+        r@ (bl-line)                        ( u flag ior )
         if  2drop r> close-file drop false exit  then
         if  (pg-buf@) swap (akw) @ (akn) @ (ci-has?)
             if  r> close-file drop true exit  then
@@ -1966,9 +2017,9 @@ variable (ts-any)                          \ printed any line of the wanted step
     (tty?) if page then
     0 (pg-row) ! false (pg-quit) !  true (mk?) !    \ tutorials are markdown
     1 (ts-cur) !  false (ts-any) !
-    >r
+    (bl0) >r
     begin
-        (pg-buf@) (pg-bufsz) r@ read-line  ( u flag ior )
+        r@ (bl-line)                       ( u flag ior )
         if  2drop  r> close-file drop (ts-any) @ exit  then     \ I/O error
         0= if  drop  r> close-file drop                         \ EOF
             (ts-cur) @ (tut-total) !
@@ -2728,6 +2779,9 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     false (skip-capture) !                   \ (edit-sync)'s reload armed the skip for
                                              \ THIS line — but the :e group must reach
                                              \ the completion hook, not be discarded
+    1 (redef-quiet) !                        \ :e's whole job is redefinition — no
+                                             \ "redefined" note (one-shot, consumed
+                                             \ by the : this evaluate opens)
     (def-buf) (def-n) @ evaluate ;           \ opens ": <name>"; the line continues in it
 : (ce-try) ( -- handled? )
     (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )

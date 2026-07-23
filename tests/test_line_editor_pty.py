@@ -53,6 +53,30 @@ def send(fd, data, t=0.25):
     os.write(fd, data)
     return drain(fd, t)
 
+def send_until_done(fd, data, timeout=60.0):
+    # For steps whose duration depends on the host — the help scan walks the
+    # whole reference corpus, which takes seconds of emulated CPU under qemu
+    # and grows with the docs. A fixed drain is a guess that rots; instead
+    # queue a sentinel line behind the command and read until its output
+    # appears. The sentinel is echoed/executed only after the command
+    # finishes, so this is deterministic at any host speed. Not safe for
+    # steps that can hit the pager pause (it would eat sentinel chars).
+    os.write(fd, data)
+    os.write(fd, b'." PTY-STEP-DONE" cr\r')
+    out = b""; end = time.time() + timeout
+    while time.time() < end and b"PTY-STEP-DONE" not in out:
+        r, _, _ = select.select([fd], [], [], 0.15)
+        if not r:
+            continue
+        try:
+            d = os.read(fd, 4096)
+        except OSError:
+            break
+        if not d:
+            break
+        out += d
+    return out
+
 def report(name, ok, detail=""):
     global passed, failed
     if ok:
@@ -235,7 +259,7 @@ except OSError:
 os.environ["BASICFORTH_DOCS"] = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "docs", "Language-Reference")
 fd = spawn()
-out = send(fd, b"help allot\r", 0.7)
+out = send_until_done(fd, b"help allot\r")
 txt = out.decode(errors="replace")
 report("help heading bold, hashes stripped",
        "\x1b[1mallot" in txt and "## allot" not in txt)
