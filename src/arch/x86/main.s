@@ -353,6 +353,9 @@ _start:
     lea version_str(%rip), %rsi
     mov $version_len, %rdx
     call platform_write
+    lea banner_str(%rip), %rsi
+    mov $banner_len, %rdx
+    call platform_write
 .Lno_banner:
 
     # ---- Interactive session: capture, seeded from the startup file if any ----
@@ -626,6 +629,11 @@ err_msg:    .ascii "? "
 .equ err_len, . - err_msg
 msg_dict_full:  .ascii "dictionary full\n"
 .equ msg_dict_full_len, . - msg_dict_full
+# Lines 2-3 of the interactive banner. Kept here rather than in the generated
+# version.inc because nothing in them varies with the build; version.inc stays
+# a single line so `basicforth -v` prints exactly one line for scripts.
+banner_str: .ascii "Copyright (C) 2026 Brandon Blodget.  No warranty; type `license'.\nType `help' for the manual, `tutorials' to learn, `bye' to exit.\n"
+.equ banner_len, . - banner_str
 core_fs_name:   .ascii "core.fs"
 .equ core_fs_len, . - core_fs_name
 warn_no_core:   .ascii "basicforth: core.fs not found - only built-in primitives are available.\n  Set BASICFORTH_PATH to the directory containing core.fs.\n"

@@ -10,7 +10,8 @@ At a glance:
     dis <name>     ( "name" -- )      show a word's machine code (require disasm.fs)
     words          ( -- )             list every word in the dictionary
     marker <name>  ( "name" -- )      set a forget-point (help defining-words)
-    version        ( -- )             print the build version banner
+    version        ( -- )             print the build version line
+    license        ( -- )             print the copyright and warranty notice
     sh <command>   ( "cmd<eol>" -- )  run a shell command
     (system)       ( c-addr u -- status )  run a command, return its status
 
@@ -64,9 +65,20 @@ Define a dictionary restore point (also a defining word — see
 `help defining-words` and docs/Marker.md).
 
 ## version ( -- )
-Print the version banner shown at startup (the build's `git describe` string).
+Print the version line — the first line of the startup banner, and exactly
+what `basicforth -v` prints (the build's `git describe` string).
 
-    version           \ *** BasicForth v0.10.0 (Linux/x86-64) ***
+    version           \ *** BasicForth v0.12.0 (Linux/x86-64) ***
+
+## license ( -- )
+Print the copyright and warranty notice, as the startup banner invites. The
+notice is built in rather than read from the `LICENSE` file, so it works from
+an installed binary that has no source tree to look in.
+
+    license           \ GPL-2.0-only, no warranty, where the full text lives
+
+BasicForth is free software under the GNU General Public License, version 2.
+The complete text ships as `LICENSE` in the source distribution.
 
 ## Shelling out
 

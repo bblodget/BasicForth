@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Startup banner and `license`
+- **The interactive banner is three lines**, following the convention GPL
+  programs use (and gforth's shape), but spending the third line on what to
+  type next rather than on more legal text:
+
+      *** BasicForth v0.12.0 (Linux/x86-64) ***
+      Copyright (C) 2026 Brandon Blodget.  No warranty; type `license'.
+      Type `help' for the manual, `tutorials' to learn, `bye' to exit.
+
+  `bye` is the least useful word to advertise on its own — BasicForth has a
+  built-in manual and seven interactive lessons that a newcomer is far better
+  off meeting first — so `help` and `tutorials` lead and `bye` comes last.
+- **`license` ( -- )** — print the copyright and warranty notice, as line 2
+  invites. Built into the binary rather than read from the `LICENSE` file: an
+  installed copy has no source tree to look in, and a banner that names a word
+  must not be able to fail.
+- **`basicforth -v` is unchanged and still exactly one line.** The two new
+  lines live in `main.s` rather than the generated `version.inc`, so scripts
+  parsing `-v` see what they always did; a test now pins the line count. The
+  `version` word likewise prints the one line, not the banner.
+- The banner remains gated on stdout being a terminal and is printed after
+  `core.fs` and any command-line file load, so piped and scripted runs are
+  untouched — which is also why its three lines are covered by the PTY suite
+  rather than the pipe suite.
+
 ## v0.12.0 — 2026-07-22
 
 ### Zero-padded numeric output

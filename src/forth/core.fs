@@ -1850,9 +1850,27 @@ variable (ap-l)  variable (ap-ln)  variable (ap-k)  variable (ap-kn)   \ scratch
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
     ['] (apropos-in) (each-dir) ;
 
-\ Print the version/banner string (same text shown at startup). The string is
-\ supplied by the (version-str) primitive so it always matches the build.
+\ Print the version string — line 1 of the startup banner, and what `-v`
+\ prints. Supplied by the (version-str) primitive so it always matches the
+\ build.
 : version ( -- )  (version-str) type ;
+
+\ The notice line 2 of the startup banner points at. Printed inline rather
+\ than paged out of the LICENSE file: an installed binary cannot reliably
+\ find that file, and a promise made in the banner must not be able to fail.
+: license ( -- )
+    cr
+    ." BasicForth - a Forth environment for ARM64 and x86-64 Linux" cr
+    ." Copyright (C) 2026 Brandon Blodget" cr cr
+    ." This program is free software; you can redistribute it and/or modify" cr
+    ." it under the terms of the GNU General Public License version 2 as" cr
+    ." published by the Free Software Foundation." cr cr
+    ." This program is distributed in the hope that it will be useful, but" cr
+    ." WITHOUT ANY WARRANTY; without even the implied warranty of" cr
+    ." MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU" cr
+    ." General Public License for more details." cr cr
+    ." The full text is in the LICENSE file of the source distribution, or" cr
+    ." at https://www.gnu.org/licenses/old-licenses/gpl-2.0.html" cr ;
 
 \ --- SHELL-LIKE WORDS: navigate and inspect the filesystem from the REPL.
 \ `cd` changes the real process directory (so relative include/open agree with

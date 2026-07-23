@@ -212,9 +212,23 @@ Notes:
   REPL (a script ending in `bye`/`bye-code` exits first) and only when stdout
   is a terminal, so a script run as a utility produces clean output whether its
   output goes to a terminal, a pipe, or a file.
-- `basicforth -v` (or `--version`) prints the version/banner string and exits
+- `basicforth -v` (or `--version`) prints the version **line** and exits
   immediately. Unlike the startup banner it is not gated on a terminal, so it
-  works through a pipe. At the REPL, the `version` word prints the same string.
+  works through a pipe, and it is always exactly one line — the banner's other
+  two lines are deliberately kept out of it so scripts can parse it. At the
+  REPL, the `version` word prints that same line.
+
+The interactive banner is three lines:
+
+    *** BasicForth v0.12.0 (Linux/x86-64) ***
+    Copyright (C) 2026 Brandon Blodget.  No warranty; type `license'.
+    Type `help' for the manual, `tutorials' to learn, `bye' to exit.
+
+`license` prints the copyright and warranty notice in full. It is built into
+the binary rather than read from the `LICENSE` file, so it still works from an
+installed copy with no source tree — a banner that names a word must never be
+able to fail. BasicForth is free software under the GNU General Public License,
+version 2; the complete text ships as `LICENSE` in the source distribution.
 
 ### Command-Line Arguments
 
