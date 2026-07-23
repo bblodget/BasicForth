@@ -23,9 +23,11 @@ a separate word — `snake` still calls the **old** one:
 > snake
 OLD
 > : setup ." NEW" cr ;   \ improved leaf
+redefined setup
 > snake
 OLD                       \ snake still calls the old setup
 > redo snake             \ recompile snake from its source
+redefined snake
 > snake
 NEW                       \ now it calls the new setup
 ```

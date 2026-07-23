@@ -32,6 +32,13 @@ than run.
     : square  dup * ;
     5 square .        \ 25
 
+If the name already exists, the new definition shadows the old one and a
+`redefined square` note is printed — it catches accidental name collisions
+and confirms intentional ones. Every defining word does this (`create`,
+`variable`, `constant`, `defer`, …), but only for definitions typed at the
+prompt: a file loaded with `include`/`require` (and startup itself)
+redefines silently, and so does `:e` — redefining is its whole job.
+
 ## cancel; ( -- )
 Abandon the definition being typed (a `:`, `:noname`, or `:e`): nothing is
 defined, the rest of the input line is discarded, and a pending `:e` splice

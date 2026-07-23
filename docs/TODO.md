@@ -733,7 +733,56 @@ docs/Graphics.md for the API.
   - [ ] `publish` — saved module → your registry clone → commit/push
     (was blocked on the `save`-drops-`create`-data bug; fixed 2026-07-22)
 
-- [ ] **`:` should say when it redefines an existing word.** Today a
+- [x] **`:` should say when it redefines an existing word.** Done 2026-07-22
+  (branch redefined-warning), gforth's exact text: `redefined foo`. One
+  check in `build_header` (both arches) covers every named defining word;
+  `:noname` enters below the parse and never warns. The suppression trap
+  below was solved by gating on `cur_source_id != 0` BEFORE the dictionary
+  scan — so startup/include/require/module reloads are both silent and
+  free. `evaluate` at the prompt warns (so `redo foo` confirms itself —
+  a feature), EXCEPT `:e`: it requires the word to exist, so the note is
+  noise there — `(ce-go)` arms a one-shot `(redef-quiet)` flag that
+  `build_header` consumes (Brandon's call after live-testing the
+  `redefined 3beep :e: warning:` mashup). Field evidence arrived the same
+  day it shipped: gforth
+  printed `redefined count` three times during the count-to-a-billion
+  session while BasicForth silently shadowed the standard word `count`.
+  Two follow-ups filed the day it shipped (Brandon's live testing):
+  - [ ] **`delete <name>` — remove a definition from the module file and
+    reload** (DECIDED 2026-07-22 after a design walk: undo-def → forget →
+    this). The warning creates the moment: you see `redefined count`, you
+    want it gone. Rejected shapes: surgical dictionary removal (unsafe in
+    STC — callers hold compiled `call` addresses); classic FORGET
+    retroactive-marker semantics (takes everything defined after — the
+    over-forget foot-gun is why Forth 2012 dropped it for `marker`).
+    Chosen shape is file-level, Brandon's idea: edit the truth. `delete
+    3beep` removes the definition's group from the module file and
+    reloads — the name matches classic BASIC's DELETE-a-program-line, and
+    `rm` stays reserved for files (shell words operate on files).
+    - Survivors replay fine; a word that DEPENDED on the deleted one fails
+      its replay line with an honest `? name` — dependency surfacing, not
+      dangling pointers. No over-forgetting possible.
+    - Nearly built: `:e` already locates a definition's file span
+      ((edit-span?)) and splices replacement text ((edit-splice)) then
+      reloads. `delete` is `:e` splicing EMPTY text.
+    - Decide: a name with several groups in the file (redefinitions
+      append) — remove only the newest group (reload RESURRECTS the
+      previous definition = "undo my redefinition", the wish that started
+      this) vs all groups (word fully gone). Maybe both: `delete` takes
+      newest, a flag or second word for all.
+    - Needs an active session/file; scratch sessions keep `marker`/`new`.
+    - Update Modules.md/Module_Architecture ("explicit delete" gap) and
+      the Manual's module section when built.
+  - **DECIDED (2026-07-22): library-word entries stay lean; the topic
+    header is the setup pointer.** `help beep` shows no require/snd-open
+    info — that story lives in the page preamble, which a word lookup
+    never prints. Considered per-entry setup lines and rejected them (a
+    beep fix was written and reverted): every `help <word>` now opens
+    with its `<Topic>:` header, so `help sound` is one obvious hop away,
+    and per-entry boilerplate across Sound/Graphics/SDL3/FFI isn't worth
+    the maintenance. Revisit only if users demonstrably don't follow the
+    header hop.
+  Original notes: today a
   redefinition is completely silent — no message from `:`, `create`, `value`
   or anything else. gforth prints `redefined foo`, and that is genuinely
   useful: it catches a name collision you did not intend, and confirms the
