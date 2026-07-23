@@ -970,6 +970,19 @@ assert_output "erase"             'create buf 3 allot buf 3 65 fill buf 2 erase 
 # U.R
 assert_output "u.r"               '42 5 u.r'                          "   42"
 
+# U.0R — same field, zeros for padding
+assert_output "u.0r pads"         '42 6 u.0r'                         "000042"
+assert_output "u.0r zero"         '0 4 u.0r'                          "0000"
+assert_output "u.0r exact fit"    '4242 4 u.0r'                       "4242"
+assert_output "u.0r overflows"    '255 2 u.0r'                        "255"
+assert_output "u.0r width 0"      '7 0 u.0r'                          "7"
+assert_output "u.0r unsigned"     '-1 4 u.0r'         "18446744073709551615"
+# follows BASE, and leaves it alone (the classic bug in this family)
+assert_output "u.0r hex color"    'hex FF00 6 u.0r decimal'           "00FF00"
+assert_output "u.0r binary row"   'binary #60 #8 u.0r decimal'        "00111100"
+assert_output "u.0r keeps base"   'hex FF 4 u.0r decimal space base @ .' "00FF 10"
+assert_output "u.0r stack clean"  '42 6 u.0r space depth .'           "000042 0"
+
 # UNUSED
 assert_output "unused"            'unused 0 > .'                      "-1"
 
@@ -3685,15 +3698,15 @@ assert_output "Sprites lesson frame-picking idiom" \
     $': pick 16 0 do i 8 / 2 mod if 1 else 0 then . loop ;\npick' \
     "0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1"
 
-# The shipped Bitmaps lesson: opens with 17 steps, and its examples run. The
+# The shipped Bitmaps lesson: opens with 19 steps, and its examples run. The
 # art and the colour-per-call payoff are pure Forth over an off-screen
 # surface, so they run everywhere (incl. QEMU) without SDL.
 bitmaps_out=$(printf 'tutorial Bitmaps\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
-if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/17"* ]]; then
-    printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 17 steps\n"; ((passed++))
+if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/19"* ]]; then
+    printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 19 steps\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  Bitmaps lesson opens with 17 steps\n"
+    printf "  ${RED}FAIL${NC}  Bitmaps lesson opens with 19 steps\n"
     printf "    Got:      %s\n" "$(echo "$bitmaps_out" | head -4)"; ((failed++))
 fi
 # The lesson's alien, stamped in two colours from one piece of art.

@@ -74,10 +74,11 @@ a real file, so pick a directory you don't mind writing to. From here on,
 
 ## A more readable way
 
-Counting ones and zeros gets old fast. `row,` takes the picture as a string:
-`.`, space and `0` leave a pixel clear, anything else sets it.
-
-This one goes in a **word**, which is the shape we'll use from here on:
+Counting ones and zeros gets old fast. `row,` takes the picture as a
+string: `.`, space and `0` leave a pixel clear, anything else sets it.
+This one goes in a **word** — the shape we use from here on, because a
+name is something you can go back and change. The last step of this
+lesson retypes `inv-art` to fix the alien's legs.
 
     : inv-art
       s" ..####.." row,
@@ -90,22 +91,16 @@ This one goes in a **word**, which is the shape we'll use from here on:
       s" .#....#." row, ;
     create inv inv-art
 
-Now the source *is* the picture. And it isn't a second format — check:
+## Same bytes underneath
 
-    inv c@ .
+The source *is* the picture now — but it isn't a second format. A row is
+8 bits wide, so print the first one 8 wide:
 
-`60`, the very byte `%00111100` gave you for the top of `bar`. `row,`
-compiles exactly what you were typing by hand; you just stopped counting
-bits. Strings from here on.
+    binary inv c@ #8 u.0r decimal
 
-Why a word this time, when `bar`'s loose rows were fine? Because a word has a
-**name**, and a name is something you can go back and change — the last step
-of this lesson retypes `inv-art` to fix the alien's legs. Loose rows have
-nowhere to aim that at; you'd be editing the file by hand.
-
-Curious what the bits look like? `binary inv c@ . decimal` shows `111100` —
-`.` prints the shortest form, so the two leading zeros of `00111100` don't
-appear. The row is always 8 bits wide even when the number doesn't look it.
+`00111100`, the row you just typed, bit for bit. `row,` compiles exactly
+what you were counting out by hand. (`#` marks a number as decimal: once
+you are in binary, `8` has no reading.)
 
 ## Stamp it
 
@@ -271,21 +266,25 @@ retype the word:
       s" #......#" row, ;
     list
 
-    f  green inv 40 40 8 8 stamp  s
-
 `:e` replaces `inv-art` *where it stands* in the file — look at the listing,
 there's still exactly one `inv-art`, with the new legs. A plain `:`
 redefinition would have appended a second copy instead. `edit inv-art` does
 the same thing through your `$EDITOR` if you'd rather not retype it.
 
-Watch what happened to the window: it blinked. `:e` doesn't just patch the
-word in memory — it rewrites the file and **reloads it**, so your live state
-becomes whatever the file rebuilds. That's why `on-stop` and `on-start`
-matter. Without them the reload would forget `sdl-win` while the window
-itself kept existing, and the next `stamp` would fail with
-`Parameter 'texture' is invalid` — a window on screen that nothing could
-draw to or close. Instead `on-stop` closed it properly on the way down and
-`on-start` opened a fresh one on the way back up.
+## Why the window blinked
+
+`:e` doesn't just patch the word in memory — it rewrites the file and
+**reloads it**, so your live state becomes whatever the file rebuilds.
+That's why the window blinked. Stamp the alien again to see the new legs:
+
+    f  green inv 40 40 8 8 stamp  s
+
+The reload is also why `on-stop` and `on-start` matter. Without them it
+would forget `sdl-win` while the window itself kept existing, and that
+`stamp` would have failed with `Parameter 'texture' is invalid` — a window
+on screen that nothing could draw to or close. Instead `on-stop` closed it
+properly on the way down and `on-start` opened a fresh one on the way back
+up.
 
 That's the deal with a module you can edit a word at a time: the file is the
 truth, reloading replays it, and the two hooks are how anything *outside*
