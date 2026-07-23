@@ -96,7 +96,7 @@ completed. See Planning.md for high-level vision and design decisions.
   - Interim step 2026-07-22 (branch module-hooks): `keep` gave it an explicit
     opt-out before the real fix landed.
 
-- [ ] **PTY suite fails 4 tests under QEMU (arm64): harness timing, not a
+- [x] **PTY suite fails 4 tests under QEMU (arm64): harness timing, not a
   product bug.** `make run-pty` is 19/19 on x86 but 15/19 on arm64, failing
   "help heading bold", "indented example cyan", "attributes reset", and
   "*italic* span rendered". Diagnosed 2026-07-20: **nothing is broken on
@@ -114,6 +114,16 @@ completed. See Planning.md for high-level vision and design decisions.
   - Better fix: replace fixed sleeps with drain-until-expected-substring plus a
     generous deadline, so the suite is fast on native and correct under
     emulation instead of trading one for the other.
+
+  Done 2026-07-22, the better fix: the harness queues a sentinel line
+  (`." PTY-STEP-DONE" cr`) behind `help allot` and reads until its output
+  appears — deterministic at any host speed, no sleep to retune as the
+  corpus grows. 22/22 on both arches. (By then the step needed ~10 s under
+  qemu, not 3–6.) The same session also buffered the docs browser's file
+  reads (read-line's one-syscall-per-byte × the whole corpus — ~546k reads
+  per `help <word>`, now ~213), which is a big native win (`help allot` sys
+  time 134 ms → 2 ms) but did NOT fix qemu: emulation cost is the
+  per-character Forth scan itself, not the syscalls.
 
 - [x] **`MOVE` (core.fs) copied the wrong direction on overlap.** `MOVE
   ( addr1 addr2 u )` must be overlap-safe (memmove semantics), but the original

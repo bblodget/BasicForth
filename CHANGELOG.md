@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Help browser: 2,500x fewer syscalls
+- **The docs browser reads files through a buffered line reader.** `read-line`
+  deliberately does one `read()` syscall per byte (stateless, safe on pipes);
+  fine for a line, brutal for `help <word>`, which scans the whole reference
+  corpus — one lookup cost ~546,000 syscalls. The pager, `help`, `apropos`,
+  tutorial titles and the tutorial runner now share a 4 KB-chunk reader
+  (`(bl-line)`), dropping that to ~213 reads; `help allot` sys time fell from
+  134 ms to 2 ms. `read-line` itself is unchanged — its documented
+  stateless contract still holds everywhere else (pipes, user fds).
+- **The arm64 PTY suite is green under qemu (22/22, was 18/22).** The four
+  markdown-rendering failures were the harness draining a fixed 0.7 s after
+  `help allot`, which under emulation takes ~10 s of CPU (the scan itself,
+  not syscalls — qemu executes the per-character Forth loop slowly). The
+  harness now queues a sentinel line behind the command and reads until its
+  output appears, so the step is deterministic at any host speed.
+
 ### Help polish
 - **`help <word>` names the topic page each entry came from.** Every page's
   group of entries now opens with a bold `<Topic>:` header — `help allocate`
