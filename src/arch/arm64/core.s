@@ -3518,7 +3518,7 @@ forth_noname:
     // Begin an anonymous colon definition. Builds a REAL dictionary header —
     // empty (unfindable) name, Flags2 type T_NONAME — so the body carries the
     // same source metadata as a named word: SEE can show a defer's :noname
-    // action and COMPACT can replay it. Pushes the xt (the code area, exactly
+    // action and the capture log can replay it. Pushes the xt (the code area, exactly
     // what the header's CodePtr points to); ; finishes it like a named word.
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
