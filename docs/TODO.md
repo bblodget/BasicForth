@@ -1296,6 +1296,50 @@ command-line file loading already work; these tiers fill the gaps.
 
 ---
 
+## Performance / Optimizer
+
+Fallout from the 2026-07-22 count-to-a-billion play session (x86 laptop,
+1e9 iterations, wall clock incl. startup; g++ -O0, gforth 0.7.3,
+Python 3.10). Same-file cross-system runs:
+
+    C++ -O0                          0.38 s   counter in memory, 3 instrs/iter
+    BasicForth  do loop (empty)      0.42 s   inline loop, ZERO calls/iter
+    BasicForth  do 1+ loop           1.03 s   real accumulator, 1 call/iter
+    gforth-fast do loop / do 1+ loop 1.02 s / 1.27 s
+    gforth      do loop / do 1+ loop 1.26 s / 1.52 s
+    BasicForth  begin 1+ dup lit =   3.3 s    4 calls/iter
+    Python      while +=1            30.9 s
+
+Headline: our `loop` compiles fully inline (pop/pop, inc, cmp, je,
+push/push, jmp — index+limit on the hardware return stack), so counted
+loops run at ~C -O0 speed and beat gforth-fast outright. The per-word tax
+is where we lose: adding `1+` to the body costs us +0.62 ns/iter
+(call/ret + load/store at `(%r15)`) vs gforth-fast's +0.26 ns (dispatch
+with TOS in register) — a several-word body would flip the ranking.
+
+- [ ] **Docs: a performance note.** `docs/Performance.md` (or a Manual
+  aside): the benchmark story above with the `dis` walkthrough — "prefer
+  `do`/`loop` for hot counted loops, and here is the machine code that
+  explains why"; the honest-accumulator variant; loop-structure choice as
+  an 8× lever within one language. Also the best video segment we have:
+  time it, then `dis` it — no other system in the table can disassemble
+  its own benchmark at the prompt.
+- [ ] **Peephole inliner: open-code short primitives at the call site.**
+  `call 1+` becomes `incq (%r15)`; same for dup/drop/swap/over/@/!/
+  lit/+/-/1+/1-/= and friends — a table of copyable bodies, or "inline if
+  the primitive is under N bytes and ends in ret". Measured payoff: the
+  0.62 ns/iter per-word tax drops toward zero, putting loop bodies below
+  gforth-fast at every size (and closing most of the 9× begin/until gap
+  to C). Interacts with `dis` (annotator would show fewer names) and
+  `see` metadata — keep the capture log source-faithful.
+- [ ] **Registerized `loop` for empty/rstack-free bodies.** The emitted
+  loop parks index+limit on the return stack every iteration
+  (push/push/jmp → pop/pop) solely so `i` works inside the body. When the
+  body is empty — or provably never touches the return stack or `i` — keep
+  the pair in registers: the loop becomes inc/cmp/jne, which IS the C -O0
+  loop. Smaller win than the inliner (0.42 s → ~0.38 s on the empty
+  benchmark) but a cute, self-contained peephole.
+
 ## Future / Hardening
 
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup
