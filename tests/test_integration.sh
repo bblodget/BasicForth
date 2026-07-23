@@ -225,6 +225,62 @@ assert_output "cube"               ": cube dup dup * * ; 3 cube ."    "27  ok"
 assert_output "multi-line def" "$(printf ': double dup + ;\n5 double .')" "10  ok"
 
 # =========================================================================
+section "Redefinition warning"
+# =========================================================================
+# Interactive redefinitions print gforth's "redefined foo" (build_header
+# checks find before building, gated on cur_source_id == 0 so file loads —
+# startup core.fs, include/require, module reloads — stay silent and free).
+
+assert_output "colon redefine warns"    ": rw1 1 ; : rw1 2 ;"          "redefined rw1"
+assert_output "variable redefine warns" "variable rw2 variable rw2"    "redefined rw2"
+assert_output "create redefine warns"   "create rw3 create rw3"        "redefined rw3"
+assert_output "constant redefine warns" "1 constant rw4 2 constant rw4" "redefined rw4"
+assert_output "defer redefine warns"    "defer rw5 defer rw5"          "redefined rw5"
+assert_output "cross-definer warns"     "variable rw6 : rw6 1 ;"       "redefined rw6"
+assert_output "warns with name as typed" ": rw7 1 ; : RW7 2 ;"         "redefined RW7"
+assert_output "evaluate redefine warns" $': rw8 1 ;\ns" : rw8 2 ;" evaluate' "redefined rw8"
+
+# First definitions must stay silent (and so must startup: any "redefined"
+# during core.fs would show up in every test above this line)
+fresh_out=$(run_forth ": rw9 1 ; variable rw10 rw9 .")
+if [[ "$fresh_out" == *"1  ok"* && "$fresh_out" != *"redefined"* ]]; then
+    printf "  ${GREEN}PASS${NC}  first definitions are silent\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  first definitions are silent\n"
+    printf "    Got:      %s\n" "$(echo "$fresh_out" | head -4)"; ((failed++))
+fi
+
+# :e never warns — it REQUIRES the word to exist, so "redefined" is its
+# whole job description ((ce-go) arms the one-shot (redef-quiet) skip).
+# The next plain redefinition must still warn (the skip is consumed).
+rde_dir="$(mktemp -d)"
+rde_forth="${FORTH/.\//$PWD/}"   # absolutize ./basicforth in place — $FORTH may be
+                                 # a multi-word qemu command, and the test cds away
+rde_out=$( cd "$rde_dir" && printf 'save t\n: f 1 ;\n:e f 2 ;\nf .\n: f 3 ;\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $rde_forth 2>&1 )
+if [[ $(echo "$rde_out" | grep -c "redefined f") -eq 1 && "$rde_out" == *"2  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e redefines silently; next plain redefine still warns\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  :e redefines silently; next plain redefine still warns\n"
+    printf "    Got:      %s\n" "$(echo "$rde_out" | head -8)"; ((failed++))
+fi
+rm -rf "$rde_dir"
+
+# Redefinitions INSIDE an included file are silent — libraries and module
+# reloads redefine on purpose
+rdw_dir="$(mktemp -d)"
+printf ': rwf 1 ;\n: rwf 2 ;\nvariable rwf\n' > "$rdw_dir/redefs.fs"
+rdw_out=$(run_forth "include $rdw_dir/redefs.fs  : rwf 9 ;")
+# exactly ONE warning: the interactive : rwf 9 ; — none from inside the file
+if [[ $(echo "$rdw_out" | grep -o "redefined rwf" | wc -l) -eq 1 ]]; then
+    printf "  ${GREEN}PASS${NC}  include: file redefinitions silent, next interactive warns\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  include: file redefinitions silent, next interactive warns\n"
+    printf "    Got:      %s\n" "$(echo "$rdw_out" | head -4)"; ((failed++))
+fi
+rm -rf "$rdw_dir"
+
+# =========================================================================
 section "Return Stack"
 # =========================================================================
 

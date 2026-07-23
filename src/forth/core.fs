@@ -2723,6 +2723,9 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     false (skip-capture) !                   \ (edit-sync)'s reload armed the skip for
                                              \ THIS line — but the :e group must reach
                                              \ the completion hook, not be discarded
+    1 (redef-quiet) !                        \ :e's whole job is redefinition — no
+                                             \ "redefined" note (one-shot, consumed
+                                             \ by the : this evaluate opens)
     (def-buf) (def-n) @ evaluate ;           \ opens ": <name>"; the line continues in it
 : (ce-try) ( -- handled? )
     (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )

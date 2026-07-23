@@ -585,9 +585,11 @@ you typed, so it picks up the redefined leaf:
 > : setup ." OLD" cr ;
 > : snake setup ;
 > : setup ." NEW" cr ;   \ improved leaf
+redefined setup
 > snake
 OLD                       \ still the old setup
 > redo snake
+redefined snake           \ redo's whole job is redefinition
 > snake
 NEW                       \ recompiled against the new setup
 ```

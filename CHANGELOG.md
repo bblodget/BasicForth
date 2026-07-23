@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Redefinition warning
+- **Defining a name that already exists now prints `redefined foo`**
+  (gforth's text) — every defining word (`:`, `create`, `variable`,
+  `constant`, `defer`, …; they share one header path), but only for
+  definitions typed at the prompt: startup, `include`/`require`, and
+  module reloads redefine silently on purpose, and the gate runs before
+  the dictionary scan so file loads pay nothing. `redo foo` confirms
+  itself with `redefined foo` — that's its whole job — while `:e foo`
+  stays quiet: it *requires* the word to exist, so the note would be
+  pure noise (a one-shot internal flag skips it). Both architectures.
+
 ### Help polish
 - **`help <word>` names the topic page each entry came from.** Every page's
   group of entries now opens with a bold `<Topic>:` header — `help allocate`
