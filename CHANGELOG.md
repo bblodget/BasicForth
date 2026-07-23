@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.12.0 — 2026-07-22
+
+### Zero-padded numeric output
+- **`u.0r` ( u width -- )** — `u.r` with zeros for padding, so a value whose
+  width is part of its meaning keeps it: `hex FF00 6 u.0r` prints `00FF00`
+  rather than `FF00`, and a column of colors lines up. It follows `base` and
+  leaves it alone — no save/restore — which is what lets one word serve both
+  `$RRGGBB` colors and 8-bit bitmap rows. A number wider than the field
+  prints in full, as with `u.r`.
+- Reading a bitmap row needs the `#` prefix: `binary inv c@ 8 u.0r` cannot
+  work, because in base 2 the *width* literal `8` has no reading. `#8` forces
+  decimal. That disposed of the `.hex`/`.bits` wrappers this looked like it
+  needed — they would have hidden two things the lessons already teach.
 
 ### Redefinition warning
 - **Defining a name that already exists now prints `redefined foo`**
@@ -29,6 +41,51 @@
   harness now queues a sentinel line behind the command and reads until its
   output appears, so the step is deterministic at any host speed.
 
+### `save` keeps data laid down after a `create`
+- **Fixed silent data loss.** Capture logged a line only when `latest` moved
+  forward, so `create tbl` was recorded and the rows of `,` / `c,` / `l,`
+  that filled it were not. `save` wrote a bare `create`, `list` showed a bare
+  `create`, and the reloaded word pointed at whatever bytes happened to
+  follow — no error, no warning, wrong data. Found when a saved Sprites
+  session came back with the art missing.
+- A line that moves **`here`** forward is now logged too: filling the
+  dictionary changes the program, so a faithful replay needs it. The line
+  gets no `see` record, since it defines nothing. Both tests stay `u>`, so
+  rollbacks (`marker`, `-session`) are still excluded, and a line that moves
+  neither pointer is still dropped — which is what keeps a module file from
+  becoming a transcript.
+- The rule was chosen **by measurement, not guesswork**: every ordinary
+  transient leaves `here` unmoved — `.s`, `words`, `see`, `.module`, `type`,
+  `.`, `help`, `apropos`, `pwd`, `ls`, `dis`, and critically
+  `save`/`list`/`reload`/`-session`, so the module verbs cannot write
+  themselves into the file. Only `require`/`include` (which also move
+  `latest`, so were already captured) and `align` move it. The narrower
+  "only while a `create` is the newest header" rule was rejected as more
+  fragile — `variable` is `create`+`allot` — and it would drop a meaningful
+  `allot` after a colon definition.
+- **`keep` now has a clear boundary**: it covers lines that move *neither*
+  pointer — `320 180 sdl-open`, `1000 hi-score !`. Its docs and examples were
+  rewritten accordingly.
+- Two tests that asserted the old behavior were **inverted, not worked
+  around**: the integration test requiring a bare `100 allot` to be absent
+  (it is dictionary state and belongs in the file), and the PTY block that
+  deliberately pinned the drop-the-rows bug.
+
+### `dis` stage 2: idiom-aware listings
+- **Listings stay truthful through literals and strings.** The dictionary
+  path now scans a word for the compiler's two inline-data idioms before
+  decoding — `call lit` plus an 8-byte value, and the `s"`/`."` runtime plus
+  length plus characters (4-aligned on ARM64). Code spans go to objdump; data
+  spans print synthetically with the hex column kept: `\ literal: 5`,
+  `\ s" hi there"`, and an xt-valued literal named as `\ xt: dup`. x86's
+  variable-width decoder no longer loses the `ret` after a literal, and ARM64
+  shows no more `udf` lines.
+- **Idiom addresses are self-calibrated at load** — two `:noname` probes are
+  compiled and their call targets read back out of their own bytes, so
+  nothing depends on internal symbol names. If calibration fails the
+  addresses stay 0, nothing matches, and the scanner degrades cleanly to the
+  stage-1 whole-range listing.
+
 ### Help polish
 - **`help <word>` names the topic page each entry came from.** Every page's
   group of entries now opens with a bold `<Topic>:` header — `help allocate`
@@ -37,8 +94,65 @@
   `Loops:` label over all three loop forms, while a word documented on two
   pages gets each group labeled. Piped output stays escape-free as always.
 
+### Machine-Code lesson
+- **`tutorial Machine-Code`** — twelve steps on reading what your words
+  compile to: subroutine-threaded code (a call per word, `ret` for `;`),
+  inside a primitive, user words called exactly like built-ins, the
+  literal-in-the-code-stream desync, `if` compiling to test-and-branch, the
+  `create` stub and how `does>` patches it (nops on x86-64, the `ret`
+  overwritten with a branch on ARM64), and reading `forth_catch` with
+  objdump's named globals. Output is described in prose rather than
+  `\` comments, since dictionary addresses vary per session and build; every
+  code line is validated on both architectures.
+
+### Module lifecycle: `keep`, `on-start`/`on-stop`
+- **`on-start` / `on-stop`** — names a module may define, called around its
+  own teardown and rebuild. A reload replays the file, so anything the file
+  *builds* comes back; but a resource the module was *holding* — an SDL
+  window, an audio stream, a fileid — was stranded, its handle zeroed by the
+  rollback while the resource lived on. `on-stop` runs **before** the
+  rollback, while the handles are still valid, so no orphan is made. One hook
+  point covers everything: `-session`, the chokepoint every rollback goes
+  through (`reload`, `load`, `new`, `:e`, `edit`). `on-start` runs at the end
+  of `(open-module)` *and* of `(session-init)` — the startup file loads
+  before that boot hook, so without the second call a fresh
+  `basicforth game.fs` would not open the window a reload does.
+- Hook errors are **caught and reported, never fatal**: a broken hook must
+  not leave you with neither the old module nor the new. A flag held for the
+  hook's dynamic extent stops a hook that reloads from recursing.
+- **`keep` ( -- )** — put *this* line into the module even though it defined
+  nothing, for setup that capture cannot see. It acts only when `source-id`
+  is 0, which is what makes the saved token safe to replay: reloaded from the
+  file it is inert, so nothing has to strip it out and re-saving stays
+  byte-identical.
+- **`sdl-title` ( c-addr u -- )** — name the window, before or after
+  `sdl-open` (SDL retitles a live window). It gets its own static buffer
+  rather than a `>z` result: SDL only borrows the pointer, and that scratch is
+  reused. Sticky across `sdl-close`, like `sdl-scale`; over-long names
+  truncate rather than abort.
+- Fixed: `find` leaves `( c-addr u 0 )` on failure — it *keeps* the name — but
+  Interpreter.md documented a flat `( c-addr u -- xt n )` and its own example
+  leaked a cell. The entry, the example, and the third flag value (`2` =
+  immediate and compile-only) are all corrected.
+
+### `dis` — read what your words compile to
+- **`require disasm.fs` gives `dis <name>`.** Colon words are dumped from the
+  dictionary (bounded by the header's CodeLen field) and decoded with
+  `objdump -D -b binary`, every call target reverse-looked-up through `latest`
+  and annotated with the word's name. Primitives are listed from the
+  unstripped binary via `--start-address`, bounded by symbol. The binary is
+  found via `argv[0]` and its architecture read from the ELF `e_machine`, so
+  `dis` decodes correctly under qemu user-mode emulation too.
+- **`shellutil.fs`** — the shell plumbing, require-able on its own: a
+  bounds-checked command builder that single-quote escapes every interpolated
+  path, pipe capture, and a guarded `mktemp` pattern (mode 0600, unpredictable
+  name; the child shell removes its own file when the path exceeds our
+  buffers, so an overlong `TMPDIR` cannot leak). Overflowed commands refuse to
+  run and `mktemp` stems are validated against shell syntax — both
+  regression-tested with harmless canaries.
+
 ### Binary sprites
-- **`tutorial Bitmaps`** — the fifth topic lesson (15 steps): one bit per
+- **`tutorial Bitmaps`** — the fifth topic lesson (19 steps): one bit per
   pixel with the color chosen at draw time, art typed first as `%` binary
   rows and then with `row,` strings, the same-shape-six-colors payoff that
   full-color sprites can't do, free transparency, rows wider than 8, the 32x
@@ -71,8 +185,25 @@
   and a second composing scale is easy to add later as a defaulted `value`
   if font work wants big and small text (recorded in TODO.md).
 
+### Exceptions: `catch` / `throw`
+- **The Forth 2012 exception wordset**, both architectures. `catch
+  ( xt -- 0 | n )` and `throw ( n -- )` as primitives with a handler chain on
+  the return stack; frames snapshot the input-source spec and file error
+  context, so a `throw` across `evaluate`/`included` restores the interpreter,
+  as the standard requires. `abort` is now `-1 throw` and `abort"` prints then
+  throws `-2`, so every existing guard is catchable; uncaught behavior is
+  unchanged (`-1`/`-2` silent, other codes report `uncaught exception: n`).
+- Handler staleness is handled at each exit: the REPL clears per line
+  (covering fault recovery and a full dictionary), `quit` and the uncaught
+  reset clear directly, and the compile-error longjmp unlinks only frames
+  inside the abandoned region.
+- **`tutorial Exceptions`** — twelve steps, output-validated.
+- Fixed en route, found while live-testing the lesson: tick of an undefined
+  word silently pushed 0, and `catch`/`execute` then jumped through it — a
+  segfault, pre-existing on main. Tick now errors `? name` in both modes.
+
 ### Sprites lesson
-- **`tutorial Sprites`** — the fourth topic lesson (13 steps), the sequel to
+- **`tutorial Sprites`** — the fourth topic lesson (14 steps), the sequel to
   `tutorial Graphics`: a sprite is just packed 32-bpp pixels, `grab` copies
   one off the live frame (inside the sandwich — the only moment there's
   anything to copy), `blit` stamps it, hand-typed art with `l,`, the
@@ -102,7 +233,7 @@
   pixels is a black square — the lesson now says so and suggests `dump`.
 
 ### Graphics lesson
-- **`tutorial Graphics`** — the third topic lesson (~10 minutes, 12 steps),
+- **`tutorial Graphics`** — the third topic lesson (~10 minutes, 14 steps),
   and the first with a live window open beside the prompt: `require
   sdl3.fs`, opening a scaled window (`4 to sdl-scale`), the frame sandwich
   (`sdl-frame` … `sdl-show`) and the frames-start-blank rule (with the

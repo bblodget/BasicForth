@@ -36,22 +36,26 @@ and project phases.
 
 ## Status
 
-**v0.11.0** — The **built-in reference manual**. `help` is the front door:
-bare `help` lists every topic in aligned columns; `help <topic>` prints a
-page's summary — its "At a glance" table; `help <word>` prints every
-reference entry naming that word (`help begin` shows all three loop forms;
-`help ;` and `help (` work too). `tutorials` lists the interactive lessons;
-`man` and `topics` are retired. Behind it: every user-facing word now has a
-Language-Reference entry (a 79-gap audit closed them all, and a new
-integration test keeps it that way), every page opens with an at-a-glance
-summary, and topic names are lowercase-typeable. Also: **fault recovery is
-save-safe** (a crashed `reload` can no longer make `save` revert the file;
-definitions completed before the bad line survive), **`list`** pages your
-module BASIC-style, **`cancel;`** abandons a half-typed definition,
-`binary` joins `decimal`/`hex`, and `examples/cam.fs` is a Toffoli &
-Margolus-style 1-D cellular automata machine. Builds on v0.10.0's editing
-workflow.
-119 unit tests + 635 integration tests.
+**v0.12.0** — **Graphics, and the tools to see what you built.** SDL3 gets
+2D primitives (lines, rects, circles), full-color sprites you can `grab` off
+the live frame and `blit` back, and **1-bit sprites** — `stamp` draws a bit
+pattern in a color chosen at draw time, so one shape serves any color and
+art typed as `%00111100 c,` *is* the row it draws; `row,` takes the same art
+as a picture-shaped string. **`dis`** disassembles any word — your colon
+definitions from the dictionary, primitives from the binary — with call
+targets named and inline literals and strings shown as data rather than
+mis-decoded. **`catch`/`throw`** bring the Forth 2012 exception wordset, with
+`abort` and `abort"` now catchable. Modules learned to survive their own
+reload: **`on-start`/`on-stop`** hand a held resource (an SDL window, an
+audio stream) across the rebuild instead of stranding it, and **`keep`**
+records a setup line that defined nothing. `save` no longer drops the data
+rows laid down after a `create` — art you typed now comes back. Plus seven
+new interactive lessons (Arrays, Strings, Graphics, Sprites, Bitmaps,
+Exceptions, Machine-Code), help rendered on the terminal and **2,500x fewer
+syscalls** per lookup, `require` for load-once includes, a `redefined foo`
+warning at the prompt, and `u.0r` for zero-padded output. Builds on
+v0.11.0's reference manual.
+123 unit tests + 766 integration tests + 22 PTY tests.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -71,15 +75,18 @@ What works today:
 - Compiler words: `LITERAL`, `POSTPONE`, `[']`, `[CHAR]`, `EXIT`, `STATE`, `[ ]`
 - Double-cell arithmetic: `S>D`, `UM*`, `M*`, `UM/MOD`, `SM/REM`, `FM/MOD`, `D+`, `D-`, `D.`
 - Pictured numeric output: `<# # #S #> HOLD SIGN`, `BASE`, `HEX`, `DECIMAL`, `BINARY`
-- Formatted output: `.` (base-aware), `U.`, `.R`, `U.R`
+- Formatted output: `.` (base-aware), `U.`, `.R`, `U.R`, `U.0R` (zero-padded)
 - String words: `TYPE`, `S"`, `."`, `COUNT`, `COMPARE`, `CMOVE`, `/STRING`, `-TRAILING`
+- Exceptions: `CATCH`, `THROW` (Forth 2012) — `ABORT`/`ABORT"` are catchable
 - System: `ABORT`, `ABORT"`, `QUIT`, `>NUMBER`, `SOURCE`, `>IN`, `EVALUATE`, `INCLUDED`, `INCLUDE`
 - Facility: `KEY?`, `MS`, `MS@`, `PAGE`, `AT-XY`, `CURSOR-OFF`, `CURSOR-ON`, `SCREEN-WIDTH`, `SCREEN-HEIGHT`
 - File access: `OPEN-FILE`, `CREATE-FILE`, `CLOSE-FILE`, `READ-FILE`, `READ-LINE`,
   `WRITE-FILE`, `WRITE-LINE`, `FILE-SIZE`, `RENAME-FILE` (methods `R/O W/O R/W BIN`)
 - Dynamic memory (ANS MEMORY): `ALLOCATE`, `FREE`, `RESIZE`
 - Modules: `SAVE <name>` / `LOAD <name>` / `NEW` / `RELOAD` / `USES`
-  (named source-replay files) and `MARKER` dictionary restore points
+  (named source-replay files) and `MARKER` dictionary restore points;
+  `ON-START`/`ON-STOP` hand a held resource across a reload, `KEEP` records
+  a setup line that defined nothing
 - Editing: `EDIT <word>` / `:E <word>` / `DEFINE <word>` / bare `EDIT` —
   fix a definition in `$EDITOR` or at the prompt, draft a new one, or open
   the whole module; mutations splice the module file and reload it
@@ -89,15 +96,19 @@ What works today:
 - Shell-like words: `PWD`, `CD`, `LS`, `CAT`, `MORE`, `PUSHD`, `POPD`, `DIRS`
 - Graphics (Phase 5): software 2D on a backend-agnostic surface — `set-surface`,
   `pixel`, `fill-rect`, `clear`, `fill32`, named colors (`graphics.fs`) —
-  presented in a desktop window via the SDL3 backend (`sdl3.fs`): vsync'd
-  frames, keyboard/quit events; try `examples/bounce.fs`
+  plus lines, rects and circles, full-color sprites (`GRAB`/`BLIT`/`BLIT-KEY`)
+  and 1-bit sprites colored at draw time (`STAMP`/`ROW,`) — presented in a
+  desktop window via the SDL3 backend (`sdl3.fs`): timer-paced frames
+  (`SDL-FPS`), `SDL-SCALE` chunky pixels, `SDL-TITLE`, keyboard/quit events;
+  try `examples/bounce.fs`
 - Sound: square-wave tones through SDL3's default playback device
   (`sound.fs`): `SND-OPEN`, `TONE`, `BEEP`, `SND-WAIT` — queued, so game
   loops keep running while a sound plays
 - FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
   (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
 - Tools: `WORDS`, `.MODULE` (list the module's words), `DUMP`, `.S`,
-  `VERSION` (also `basicforth -v`)
+  `VERSION` (also `basicforth -v`), and `DIS` — disassemble any word, your
+  own or a primitive, with call targets named (`disasm.fs`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
   `BYE-CODE` (exit status), clean stdout for use as a pipe/utility
 - Game support: arrow key parsing, key constants, random number generator
@@ -109,9 +120,9 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: more Phase 5 — sound (SDL3 audio), more 2D primitives and font
-rendering, a GPU backend (SDL_GPU) behind the surface API — plus locals word
-set, threading, and more games.
+What's next: font and text rendering, a GPU backend (SDL_GPU) behind the
+surface API, sockets and threading — plus a package registry, the locals word
+set, and more games.
 
 ## Building
 
