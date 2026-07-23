@@ -271,5 +271,23 @@ report("*italic* span rendered",
 send(fd, b"\r")                # continue past a pager pause, or just re-prompt
 send(fd, b"bye\r"); os.close(fd)
 
+# 10) The startup banner is gated on stdout being a terminal, so its extra
+#     lines are invisible to the pipe suite and can only be checked here.
+#     Line 1 is the version, line 2 the copyright + no-warranty notice that
+#     points at `license`, line 3 what to type next. The pipe suite asserts
+#     the complementary half: `-v` stays exactly one line for scripts.
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(CMD[0], CMD); os._exit(1)
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+time.sleep(0.5)
+banner = drain(fd, 0.8).decode(errors="replace")
+send(fd, b"bye\r"); os.close(fd)
+report("banner line 1: version", "*** BasicForth" in banner)
+report("banner line 2: copyright and no warranty",
+       "Copyright (C) 2026 Brandon Blodget" in banner and "No warranty" in banner)
+report("banner line 3: what to type next",
+       "`license'" in banner and "`help'" in banner and "`bye'" in banner)
+
 print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 sys.exit(1 if failed else 0)

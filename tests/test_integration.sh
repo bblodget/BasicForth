@@ -3985,10 +3985,12 @@ fi
 # =========================================================================
 section "Version"
 # =========================================================================
-# -v / --version print the banner string to stdout and exit 0, before any
+# -v / --version print the VERSION LINE to stdout and exit 0, before any
 # startup work — and unlike the interactive banner, they are NOT gated on a tty
 # (so the output is captured here through a pipe). The `version` word prints the
-# same string at the REPL.
+# same line at the REPL. The interactive banner adds a copyright/warranty line
+# and a what-to-type-next line, but those live in main.s rather than the
+# generated version.inc precisely so that -v stays one line for scripts.
 
 t0=$(date +%s.%N)
 v_out=$(printf '' | timeout 2 $FORTH -v 2>&1);        v_status=$?
@@ -4010,8 +4012,25 @@ else
     printf "    Expected: '*** BasicForth ...', status 0, no prompt\n    Got:      status %s / %s\n" "$ver_status" "$(echo "$ver_out" | head -3)"; ((failed++))
 fi
 
-# the `version` word prints the banner string at the REPL
+# the `version` word prints the version line at the REPL
 assert_output "version word"       "version"             "*** BasicForth"
+
+# -v must stay exactly ONE line: scripts parse it, and the interactive banner's
+# extra two lines must not leak into it.
+if [[ "$(printf '' | timeout 2 $FORTH -v 2>&1 | wc -l)" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  -v is exactly one line\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  -v is exactly one line\n"
+    printf "    Got:      %s lines\n" "$(printf '' | timeout 2 $FORTH -v 2>&1 | wc -l)"; ((failed++))
+fi
+
+# `license` — the word the startup banner tells you to type. It must exist (a
+# banner promising a word that errors is worse than no banner) and must carry
+# both halves of the GPL notice.
+assert_output "license names the GPL" "license"  "GNU General Public License"
+assert_output "license disclaims"     "license"  "WITHOUT ANY WARRANTY"
+assert_output "license is copyright"  "license"  "Copyright (C) 2026 Brandon Blodget"
+assert_output "license stack clean"   "license depth ."  "0"
 
 # =========================================================================
 section "Line Editor (BASICFORTH_EDITOR)"
