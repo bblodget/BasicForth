@@ -702,6 +702,52 @@ create odd 1 l, 2 l, 3 l,
 : g odd 8 + l@ . after . ; g"                       "3 4242"
 
 # =========================================================================
+section "Fonts (text on a surface)"
+# =========================================================================
+# font-terminus-8x16.fs is loaded on demand; its own `require graphics.fs` resolves through
+# BASICFORTH_PATH. Rendering is verified by reading pixels back -- no display.
+# Probe glyph is $DB (full block, all 128 bits set), so it fills its whole 8x16
+# cell in the draw colour -- lets us assert exact pixels without depending on
+# any letter's shape. Space (32) is all-zero, so it draws nothing.
+# Surface: 32x32, stride 128; helper p prints the pixel at (x,y).
+FNT="include $FORTH_LIB/font-terminus-8x16.fs
+32 32 * 4 * allocate drop value fb
+: p pixel-addr l@ . ;
+: s fb 32 32  32 4 *  set-surface  0 clear ;"
+
+# geometry constants
+assert_output "font cell is 8x16"     "$FNT
+: g font-w . font-h . ; g"                             "8 16"
+# glyph draws in the given colour: the full block fills its cell top-left..bottom-right
+assert_output "font glyph fills cell in colour" "$FNT
+: g s red \$DB 0 0 glyph  0 0 p  7 15 p ; g"           "16711680 16711680"
+# 0-bits are transparent: a space leaves the background untouched
+assert_output "font space is transparent" "$FNT
+: g s blue clear  red 32 0 0 glyph  0 0 p ; g"         "255"
+# text advances font-w per glyph: a two-block string lights x=0 and x=8, not x=16
+assert_output "font text advances font-w" "$FNT
+create two \$DB c, \$DB c,
+: g s red two 2 0 0 text  0 0 p  8 0 p  16 0 p ; g"    "16711680 16711680 0"
+# newline (10) returns to the start column and drops font-h
+assert_output "font text newline wraps down" "$FNT
+create nl \$DB c, 10 c, \$DB c,
+: g s red nl 3 0 0 text  0 0 p  0 16 p  8 0 p ; g"     "16711680 16711680 0"
+# carriage return (13) is ignored -- second block still lands at x=8
+assert_output "font text ignores CR" "$FNT
+create cr1 \$DB c, 13 c, \$DB c,
+: g s red cr1 3 0 0 text  8 0 p ; g"                   "16711680"
+# glyphs clip off every edge, like stamp -- no crash, stack clean
+assert_output "font glyph clips off-screen" "$FNT
+: g s red \$DB -4 0 glyph  red \$DB 99 99 glyph  0 0 p depth . ; g"  "16711680 0"
+# >glyph: consecutive characters are font-h bytes apart in the table
+assert_output "font >glyph stride is font-h" "$FNT
+: g [char] B >glyph  [char] A >glyph  - . ; g"         "16"
+# text with colour chosen per call: same bytes, two colours
+assert_output "font colour is per call" "$FNT
+create one \$DB c,
+: g s red one 1 0 0 text  green one 1 0 16 text  0 0 p  0 16 p ; g"  "16711680 65280"
+
+# =========================================================================
 section "FFI (dlopen / dlsym / ccall)"
 # =========================================================================
 # Calls into libc through the same path SDL bindings use. Works under QEMU

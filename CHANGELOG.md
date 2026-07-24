@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Text on the framebuffer: `require font-terminus-8x16.fs`
+- **`text ( color c-addr u x y -- )`** draws a string on the graphics surface,
+  and **`glyph ( color ch x y -- )`** one character. A glyph is a 1-bit sprite
+  and the color is chosen at draw time, so `text` is a thin loop over `stamp`
+  (see the Bitmaps lesson): 0-bits are transparent, everything clips off the
+  edges, and the same string is any color you pass. Fixed-width 8×16, so
+  layout is arithmetic — column `c`, row `r` is `c font-w *  r font-h *`. A
+  newline (10) wraps to the start column and drops `font-h`; a carriage
+  return (13) is ignored. Also `>glyph ( ch -- addr )` for a glyph's bitmap
+  and the cell-size constants `font-w`/`font-h`.
+- **The font is Terminus 8×16, full CP437** — printable ASCII plus
+  box-drawing, block shading and accented letters. It ships as generated
+  BasicForth source (`src/forth/font-terminus-8x16.fs`), so no build-time step
+  is needed; `tools/psf2font.py` regenerates it from a PSF console font. The
+  glyph data is derived from Terminus Font under the SIL Open Font License 1.1
+  (`fonts/OFL.txt`) — the first non-GPL artifact in the tree, kept clearly
+  scoped: the file's header dual-licenses by content (GPL code, OFL data) and
+  marks it a Modified Version (format changed, a few block glyphs synthesized).
+- **The file name carries the font family and size** — `font-terminus-8x16.fs`
+  — so a second font is just another file (`font-<family>-<size>.fs`), and it
+  does not shadow a user module named `font.fs`. ("Terminus" as a filename
+  credits the source, as Debian's own `*Terminus*.psf` packaging does; the
+  Reserved Font Name governs the presented font name, not the file.)
+- **`tutorial Fonts`** — nine steps building a score display and a box-framed
+  panel, showing that a letter is just a `stamp` and that fixed-width layout
+  is multiplication.
+- Named `glyph`, not `char`: `char ( "name" -- c )` is the standard word you
+  use to *get* a character code to pass in.
+
 ### Startup banner and `license`
 - **The interactive banner is three lines**, following the convention GPL
   programs use (and gforth's shape), but spending the third line on what to

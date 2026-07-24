@@ -7,6 +7,23 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **A `require`/`include` cycle blows the stack instead of stopping.**
+  Found 2026-07-23 while a user's own module, saved as `font.fs`, sat in the
+  launch directory: `require` searches the current directory first, so
+  `require font.fs` matched *their* file, whose own `require font.fs` line then
+  matched itself — infinite recursion until the 512-cell data stack hit its
+  guard (`stack overflow`, then a rollback that left `unused` unchanged, which
+  is the tell). Root cause: load-once records a file as loaded only *after* it
+  finishes, so a cycle never trips the (inc-recorded?) check. Fix: a
+  "currently loading" set distinct from "loaded" — if asked to load something
+  already mid-load, skip it (a clean no-op), then promote to "loaded" on
+  completion. Turns the stack overflow into, at worst, a plain `? word` for an
+  undefined name. Keep the retry-after-failure behaviour (a *failed* load must
+  still be retryable), so track "loading" separately, do not just pre-mark
+  "loaded". Own branch — this is `require` robustness, not a font issue.
+  Mitigated meanwhile by naming libraries so they are unlikely to be shadowed
+  (`font-terminus-8x16.fs`, not `font.fs`), but the guard is the real fix.
+
 - [x] **A module reload leaves live external resources unreachable.** FIXED
   2026-07-22 (branch module-hooks) with the `on-start`/`on-stop` module hooks
   below — a module defines `: on-stop sdl-close ;` and the handles are released
@@ -476,7 +493,14 @@ docs/Graphics.md for the API.
   (midpoint), `blit`/`blit-key`/`grab` sprites (packed 32bpp, color-key
   transparency); `sdl-scale` pixel size (320×180 at 4× = 1280×720 window,
   nearest-neighbor GPU stretch); bounce.fs demo updated
-- [ ] Font / text rendering (show characters on the framebuffer)
+- [x] Font / text rendering (show characters on the framebuffer) — done
+  2026-07-23 (branch `fonts`). `require font-terminus-8x16.fs` gives `text`/`glyph` over
+  `stamp`; Terminus 8×16 CP437, generated to `src/forth/font-terminus-8x16.fs` by
+  `tools/psf2font.py`, OFL 1.1 (`fonts/OFL.txt`). `tutorial Fonts`. The
+  chosen size was **8×16, not the 10×18** BareMetalForth used: PSF1 is always
+  8-wide (1 byte/row = native `stamp` stride), and a thresholded TTF was the
+  reason 10×18 was needed there — Terminus is a purpose-drawn bitmap, crisp at
+  8-wide. `stamp-scale`/`text-scale` deliberately deferred to the next batch.
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
@@ -826,8 +850,13 @@ docs/Graphics.md for the API.
   - Default stays "BasicForth"; sticky across `sdl-close` like `sdl-scale`.
     Then `examples/bounce.fs` and the lesson windows can title themselves.
 
-- [ ] **Binary (1-bit) sprites + a draw colour — `stamp`.** Designed with
-  Brandon 2026-07-20, not yet built. A sprite is a **monochrome bitmap** and
+- [x] **Binary (1-bit) sprites + a draw colour — `stamp`.** Designed with
+  Brandon 2026-07-20, SHIPPED in v0.12.0 (branch `binary-sprites`); this box
+  was left unchecked by mistake and closed 2026-07-23. `stamp`, `row,` and the
+  Bitmaps lesson are all live; `glyph`/`text` in `font-terminus-8x16.fs` now build on it. The
+  design notes below are kept as record (and `stamp-scale` is still pending —
+  see the Font item above, its designated trigger). A sprite is a **monochrome
+  bitmap** and
   the colour is supplied at draw time: `stamp ( color src x y w h -- )`, with
   0-bits transparent. This is the TI-99/4A model — TMS9918 sprites are 1-bit
   patterns with a per-sprite colour attribute — and TurboForth exposes it as
