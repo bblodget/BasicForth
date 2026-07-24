@@ -101,6 +101,9 @@ What works today:
   desktop window via the SDL3 backend (`sdl3.fs`): timer-paced frames
   (`SDL-FPS`), `SDL-SCALE` chunky pixels, `SDL-TITLE`, keyboard/quit events;
   try `examples/bounce.fs`
+- Text: `TEXT`/`GLYPH` draw strings and characters on the surface (`font-terminus-8x16.fs`) —
+  a bundled Terminus 8×16 CP437 bitmap font (SIL OFL 1.1), rendered through
+  `STAMP` so text is any color and clips like a sprite
 - Sound: square-wave tones through SDL3's default playback device
   (`sound.fs`): `SND-OPEN`, `TONE`, `BEEP`, `SND-WAIT` — queued, so game
   loops keep running while a sound plays
@@ -120,8 +123,8 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: font and text rendering, a GPU backend (SDL_GPU) behind the
-surface API, sockets and threading — plus a package registry, the locals word
+What's next: scaled text and sprites (`stamp-scale`), a GPU backend (SDL_GPU)
+behind the surface API, sockets and threading — plus a package registry, the locals word
 set, and more games.
 
 ## Building

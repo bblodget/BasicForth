@@ -21,3 +21,4 @@ pumpkin-scripts/
 
 # temporty testig directory
 testing/
+__pycache__/
