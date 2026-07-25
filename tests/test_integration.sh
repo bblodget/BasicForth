@@ -700,12 +700,32 @@ assert_output "gr odd l, count leaves dict usable" "$GRP
 create odd 1 l, 2 l, 3 l,
 : after 4242 ;
 : g odd 8 + l@ . after . ; g"                       "3 4242"
+# stamp-scale — each set bit becomes a scale x scale block. The diagonal
+# sprite (col0,row0 and col1,row1 set) at 2x lights the two 2x2 blocks on the
+# main diagonal (0,0)/(3,3) and leaves the off-diagonal cells transparent.
+assert_output "gr stamp-scale magnifies each set bit" "$GRP
+create ds %10000000 c, %01000000 c,
+: g s red ds 0 0 2 2 2 stamp-scale
+  0 0 p 1 1 p 2 2 p 3 3 p  2 0 p 0 2 p ; g" \
+    "16711680 16711680 16711680 16711680 0 0"
+# scale 1 is exactly stamp (the fast pixel path): a 1-wide sprite lights only
+# column 0, never a magnified column 1.
+assert_output "gr stamp-scale at 1x does not magnify" "$GRP
+create d1 %10000000 c,
+: g s red d1 0 0 1 1 1 stamp-scale  0 0 p 1 0 p ; g"   "16711680 0"
+# a big magnification hanging off any edge clips like stamp -- no crash, clean
+assert_output "gr stamp-scale clips off-screen" "$GRP
+create d2 %10000000 c,
+: g s red d2 99 99 1 1 3 stamp-scale
+  red d2 -2 -2 1 1 3 stamp-scale  depth . ; g"         "0"
 
 # =========================================================================
 section "Fonts (text on a surface)"
 # =========================================================================
-# font-terminus-8x16.fs is loaded on demand; its own `require graphics.fs` resolves through
-# BASICFORTH_PATH. Rendering is verified by reading pixels back -- no display.
+# font-terminus-8x16.fs is loaded on demand; it `require`s fontcore.fs (the
+# engine), which `require`s graphics.fs, all resolved through BASICFORTH_PATH,
+# and the data file selects itself. Rendering is verified by reading pixels
+# back -- no display.
 # Probe glyph is $DB (full block, all 128 bits set), so it fills its whole 8x16
 # cell in the draw colour -- lets us assert exact pixels without depending on
 # any letter's shape. Space (32) is all-zero, so it draws nothing.
@@ -746,6 +766,33 @@ assert_output "font >glyph stride is font-h" "$FNT
 assert_output "font colour is per call" "$FNT
 create one \$DB c,
 : g s red one 1 0 0 text  green one 1 0 16 text  0 0 p  0 16 p ; g"  "16711680 65280"
+# font-scale (sticky, default 1): at 2x a full-block glyph fills a 16x32 cell,
+# so (8,0) -- background at 1x -- is now lit, and (16,0) past the cell is not.
+assert_output "font-scale magnifies a glyph" "$FNT
+: g s 2 to font-scale  red \$DB 0 0 glyph
+  0 0 p  15 31 p  8 0 p  16 0 p ; g"                   "16711680 16711680 16711680 0"
+# the pen advance scales too: two 2x blocks span x=0..31, so the second glyph's
+# far edge (31,0) is lit only if text advanced by font-w*2, not font-w.
+assert_output "font-scale scales the pen advance" "$FNT
+create two2 \$DB c, \$DB c,
+: g s 2 to font-scale  red two2 2 0 0 text
+  0 0 p  16 0 p  31 0 p ; g"                           "16711680 16711680 16711680"
+# sticky but resettable: back to 1 and the glyph is native 8x16 again
+assert_output "font-scale resets to native" "$FNT
+: g s 2 to font-scale  1 to font-scale  red \$DB 0 0 glyph
+  7 0 p  8 0 p ; g"                                    "16711680 0"
+# The engine (fontcore.fs) loads on its own -- text/glyph/font-scale live there,
+# not in the font data file. With no font selected yet, the metrics are 0 and
+# font-scale defaults to 1.
+assert_output "fontcore loads standalone" "include $FORTH_LIB/fontcore.fs
+: g font-w . font-h . font-scale . ; g"                "0 0 1"
+# font! registers a font's table + cell size and derives the row stride
+# (ceil(w/8)); a data file's selector word calls it. A 12-wide font strides 2
+# bytes/row; re-calling terminus-8x16 switches the current font back to 8x16.
+assert_output "font! sets metrics, selector switches" "$FNT
+create wide 64 allot
+: g wide 12 16 font!  font-w . font-h . font-stride .
+  terminus-8x16  font-w . font-h . font-stride . ; g"  "12 16 2 8 16 1"
 
 # =========================================================================
 section "FFI (dlopen / dlsym / ccall)"

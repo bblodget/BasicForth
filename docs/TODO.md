@@ -500,7 +500,32 @@ docs/Graphics.md for the API.
   chosen size was **8×16, not the 10×18** BareMetalForth used: PSF1 is always
   8-wide (1 byte/row = native `stamp` stride), and a thresholded TTF was the
   reason 10×18 was needed there — Terminus is a purpose-drawn bitmap, crisp at
-  8-wide. `stamp-scale`/`text-scale` deliberately deferred to the next batch.
+  8-wide. ~~`stamp-scale`/`text-scale` deliberately deferred to the next batch.~~
+- [x] Integer sprite/text magnification — done 2026-07-24 (branch `stamp-scale`).
+  `stamp-scale ( color src x y w h n -- )` in `graphics.fs` draws each set bit of
+  a 1-bit sprite as an `n×n` **`fill-rect` block** (not `n²` `pixel` calls — the
+  per-sub-pixel path the perf notes warned against); `n<2` delegates straight to
+  `stamp`, so 1× is a zero-cost drop-in. Text scaling is a **sticky `font-scale`
+  value** (default 1, `sdl-scale` idiom) that `glyph`/`text` read — so their
+  stack signatures are unchanged and every existing lesson/test/example keeps
+  working; `text` scales the pen advance too. Integer scales only (fractional
+  nearest = lumpy, smooth = blurry + fights the crisp aesthetic; arbitrary whole-
+  screen scaling belongs at the GPU present, not per-sprite software). Docs:
+  `help graphics` (`stamp-scale`), `help fonts` (`font-scale`); +6 integration
+  tests both arches. The `text-scale` word was folded into `font-scale` (a value
+  reads cleaner than a per-call arg and keeps `text`'s signature stable).
+  Same branch, a font-architecture refactor: `text`/`glyph`/`font-scale`/
+  `>glyph`/`font-w`/`font-h` moved into a shared engine **`fontcore.fs`** that
+  draws a *current font* (values set via `font! ( data w h -- )`), so a font
+  data file is now just its glyph table + a selector word named after it
+  (`terminus-8x16`), which registers itself and is called on load. Multiple
+  fonts can coexist and you switch with the selector word; `font!` derives the
+  row stride from the width, so fonts wider than 8px work. `psf2font.py` emits
+  the data+selector form (names derived from the output filename). Prompted by
+  Brandon: the old single-file design would have duplicated the engine per font
+  and the words would redefine each other. Engine file named `fontcore.fs`
+  (not `font-*` — that pattern reads as a font family; not the collision-prone
+  `font.fs`).
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
