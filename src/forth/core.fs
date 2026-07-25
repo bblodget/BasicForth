@@ -704,7 +704,13 @@ variable (path-a-len)  variable (path-b-len)
     (cur-file@) r/o open-file           ( fileid ior )
     if drop exit then                   \ file does not exist yet → log stays empty
     dup (slurp-into-log)                \ copy its text into the log
-    close-file drop ;
+    close-file drop
+    \ A file whose last line has no newline would otherwise be run together with
+    \ the first line captured this session — visible in LIST, and written that
+    \ way by SAVE (`: tail 2 ;: extra 5 ;`). The log is line-structured: keep it so.
+    (log) cell+ @ ?dup 0= if  exit  then            ( len )
+    (log) @ + 1- c@ 10 = if  exit  then
+    (nl) 1 (log) (buf-append) ;
 
 \ ===== Module lifecycle hooks: ON-STOP / ON-START =====
 \ A module can define either name to react to being torn down and (re)built:
@@ -1592,6 +1598,26 @@ variable (bl-ior)                        \ sticky read error (0 = none)
         (pg-quit) @ if  r> close-file drop  false exit  then  \ user quit: not an error
     again ;
 
+\ page-mem: the same pager over a block of text already in memory (the capture
+\ log — see LIST). No fd, no read errors, and no line-length cap: (pg-line)
+\ types a slice of the block in place, where the file path copies through the
+\ 256-byte (pg-buf). Bookkeeping lives in variables, mirroring (rd-eval-lines).
+variable (pm-a)  variable (pm-u)          \ the block being paged: addr, bytes left
+: (pm-nl) ( -- n )                        \ bytes before the next LF, or all of them
+    (pm-u) @ 0 ?do
+        (pm-a) @ i + c@ 10 = if  i unloop exit  then
+    loop  (pm-u) @ ;
+: (page-mem) ( c-addr u -- )
+    0 (pg-row) ! false (pg-quit) !  false (mk?) !   \ Forth source: plain
+    (pm-u) !  (pm-a) !
+    begin (pm-u) @ 0> while
+        (pm-nl)                           ( linelen )
+        (pm-a) @ over (pg-line)           ( linelen )
+        (pg-quit) @ if  drop exit  then
+        dup (pm-u) @ < if 1+ then         ( consumed, +1 for the newline )
+        dup (pm-a) +!  (pm-u) @ swap - (pm-u) !
+    repeat ;
+
 \ Does the line begin with "## " (an entry heading / tutorial step boundary)?
 : (head?) ( c-addr u -- f )
     3 u< if drop false exit then
@@ -1970,16 +1996,15 @@ create (tilde-buf) (tilde-sz) allot
     \ `more` doesn't return " ok". Safe here: top-level word, no fd held.
     page-file if  abort  then ;
 
-\ list: page the CURRENT MODULE file — BASIC's LIST, your whole program at
-\ once. Bindings typed since the last save live only in the capture log, so
-\ a dirty session gets a one-line reminder that the file view is behind.
+\ list: page the capture log — BASIC's LIST, your whole program at once. The log
+\ IS the file image (the seeded file text plus every line captured since), so
+\ this shows a word defined seconds ago exactly like one loaded from disk — no
+\ "unsaved changes" caveat to print, and no current file required: a scratch
+\ session lists what you have typed, the way BASIC lists before you SAVE.
 : list ( -- )
-    (cur-file-len) @ 0= if
-        ." list: no current file — save <name> to start one, or load <name>" cr  exit  then
-    (dirty) @ if  ." (unsaved changes - save to include them)" cr  then
-    (cur-file@) r/o open-file if
-        drop ." list: cannot open " (cur-file@) type cr abort  then
-    page-file if  abort  then ;
+    (log) cell+ @ 0= if
+        ." nothing to list — define a word, or load <name>" cr  exit  then
+    (log) @ (log) cell+ @ (page-mem) ;
 
 \ Directory stack: pushd saves the current dir (absolute) and cd's to a new one;
 \ popd returns to the most recently saved dir; dirs lists current + saved (top

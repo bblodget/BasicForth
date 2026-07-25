@@ -10,7 +10,7 @@ At a glance:
     save <name>   ( "name" -- )    write the module to a file (bare: re-save)
     load <name>   ( "name" -- )    switch to a module file
     new           ( -- )           clear the module, clean slate
-    list          ( -- )           page the current module file
+    list          ( -- )           page your whole program, unsaved lines too
     reload        ( -- )           re-read the current file from disk
     .module       ( -- )           list the words you have defined
     uses <name>   ( "name" -- )    which of your words mention <name>?
@@ -46,9 +46,12 @@ Clear the module — forget every definition, back to a clean slate (core only).
 If you have unsaved changes it asks "save first? (y/n)" at the terminal.
 
 ## list ( -- )
-Page the current module file — BASIC's `LIST`, your whole program at once.
-Bindings typed since the last save live in the capture log, not the file,
-so a dirty session prints "(unsaved changes - save to include them)" first.
+Page your whole program at once — BASIC's `LIST`. It lists the *capture log*,
+which is the file image: the text loaded from disk plus every line you have
+typed since. So a word defined seconds ago lists like one read from the file,
+and you can `list` before you have ever `save`d — a scratch session shows what
+you have built so far. `q` stops the listing. Only an empty session has
+nothing to show.
 
 ## reload ( -- )
 Re-read the current file from disk — the edit/compile/run loop (`-session` then

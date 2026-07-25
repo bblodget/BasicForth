@@ -25,11 +25,11 @@ CTRL_A = b"\x01"; CTRL_E = b"\x05"; BS = b"\x7f"
 
 passed = failed = 0
 
-def spawn():
+def spawn(rows=24):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(CMD[0], CMD); os._exit(1)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, COLS, 0, 0))
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, COLS, 0, 0))
     time.sleep(0.5)
     drain(fd)                  # discard the banner
     return fd
@@ -320,6 +320,24 @@ report("banner line 2: copyright and no warranty",
        "Copyright (C) 2026 Brandon Blodget" in banner and "No warranty" in banner)
 report("banner line 3: what to type next",
        "`license'" in banner and "`help'" in banner and "`bye'" in banner)
+
+# 11) LIST pages the capture log, and the pause only exists on a terminal: the
+#     pipe suite sees the text but never the --more-- bar, so the pause and the
+#     q-quits path can only be tested here. A short window makes a nine-line
+#     program overflow one screenful.
+fd = spawn(rows=8)                          # pause after screen-height-1 = 7 lines
+for i in range(1, 10):
+    send(fd, (": a%d %d ;\r" % (i, i)).encode(), 0.2)
+paged = send(fd, b"list\r", 0.8).decode(errors="replace")
+after_q = send(fd, b"q", 0.5).decode(errors="replace")
+still_live = send(fd, b"1 2 + .\r", 0.4).decode(errors="replace")
+send(fd, b"bye\r"); send(fd, b"n\r"); os.close(fd)
+report("list pauses at a screenful", "-- more" in paged,
+       "no --more-- bar in: %r" % paged)
+report("list q quits mid-program", ": a9 9 ;" not in after_q,
+       "kept printing after q: %r" % after_q)
+report("prompt is live after quitting the pager", "3  ok" in still_live,
+       "got: %r" % still_live)
 
 print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 sys.exit(1 if failed else 0)
