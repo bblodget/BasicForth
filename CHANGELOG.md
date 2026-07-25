@@ -55,7 +55,6 @@
   derives the row stride from the width, so a font wider than 8 px works.
   `tools/psf2font.py` emits this data-plus-selector form. `font-w`/`font-h`
   became `value`s tracking the current font (same read behavior).
->>>>>>> main
 
 ### Text on the framebuffer: `require font-terminus-8x16.fs`
 - **`text ( color c-addr u x y -- )`** draws a string on the graphics surface,
