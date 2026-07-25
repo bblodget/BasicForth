@@ -2601,6 +2601,72 @@ else
     printf "  ${RED}FAIL${NC}  cancel; multi-line :e\n    Got: %q\n" "$cq2_out"; ((failed++))
 fi
 
+# DELETE <name> — :e with nothing as the replacement: the word's newest group
+# is spliced OUT of the module file and the module reloads. Survivors replay
+# fine; the deleted word is gone from file and dictionary both.
+dl_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: mid 2 ;\n' > "$dl_dir/mod.fs"
+dl_out=$( cd "$dl_dir" && printf 'delete leaf\nmid .\nleaf\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$dl_dir"
+if [[ "$dl_out" == *"deleted leaf"* && "$dl_out" == *"2  ok"* && "$dl_out" == *"? leaf"* \
+      && "$dl_out" == *"FILE:"*": mid 2 ;"* && "$dl_out" != *"FILE:"*"leaf"* ]]; then
+    printf "  ${GREEN}PASS${NC}  delete splices the group out of the file and reloads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  delete basic\n    Got: %q\n" "$dl_out"; ((failed++))
+fi
+# Deleting a redefinition resurrects the prior definition — the "undo my
+# redefinition" the warning invites. The dirty session auto-saves first
+# (appending the new group), then the newest group is removed.
+dr_dir="$(mktemp -d)"
+printf ': greet 111 . ;\n' > "$dr_dir/mod.fs"
+dr_out=$( cd "$dr_dir" && printf ': greet 222 . ;\ndelete greet\ngreet\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$dr_dir"
+if [[ "$dr_out" == *"redefined greet"* && "$dr_out" == *"deleted greet"* \
+      && "$dr_out" == *"111"* && "$dr_out" == *"FILE:"*": greet 111 . ;"* \
+      && "$dr_out" != *"FILE:"*"222"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deleting a redefinition resurrects the prior definition\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  delete resurrection\n    Got: %q\n" "$dr_out"; ((failed++))
+fi
+# Deleting a depended-on word: the dependent fails its replay line with an
+# honest `? name` (dependency surfacing, not dangling pointers) — and the
+# delete still lands.
+dd_dir="$(mktemp -d)"
+printf ': basew 42 . ;\n: caller basew ;\n' > "$dd_dir/mod.fs"
+dd_out=$( cd "$dd_dir" && printf 'delete basew\ncaller\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$dd_dir"
+if [[ "$dd_out" == *"? basew"* && "$dd_out" == *"module may be incomplete"* \
+      && "$dd_out" == *"deleted basew"* && "$dd_out" == *"? caller"* \
+      && "$dd_out" == *"FILE:"*": caller basew ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deleting a depended-on word surfaces the dependent via replay\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  delete dependent\n    Got: %q\n" "$dd_out"; ((failed++))
+fi
+# Refusals: unknown word, primitive, a word not in the module file (core.fs
+# words), a missing name, and no current file at all.
+dg_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$dg_dir/mod.fs"
+dg_out=$( cd "$dg_dir" && printf 'delete nosuch\ndelete dup\ndelete erase\ndelete\nleaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$dg_dir"
+dg_nf=$( printf ': w 1 ;\ndelete w\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1 )
+if [[ "$dg_out" == *"delete: nosuch not found"* \
+      && "$dg_out" == *"delete: dup is a primitive (assembly); cannot delete"* \
+      && "$dg_out" == *"delete: erase is not in"* \
+      && "$dg_out" == *"delete: needs a word name"* && "$dg_out" == *"1  ok"* \
+      && "$dg_nf" == *"delete: no current file — only saved words can be deleted"* ]]; then
+    printf "  ${GREEN}PASS${NC}  delete refusals: unknown, primitive, not-in-module, no name, no file\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  delete refusals\n    Got: %q\n    NoFile: %q\n" "$dg_out" "$dg_nf"; ((failed++))
+fi
+
 # LIST pages the current module file (BASIC's LIST); a dirty session gets a
 # one-line reminder that unsaved bindings aren't in the file view yet, and
 # with no current file it explains itself.

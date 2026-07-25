@@ -241,8 +241,9 @@ and a crash never loses work.
 - **The trade-off to watch in use testing:** today an unsaved session is a
   scratchpad — you can experiment freely and walk away. Under auto-sync
   every experiment lands in the file the moment it compiles. Splicing keeps
-  *redefinitions* clean, but an abandoned word needs an explicit delete
-  verb (today you just don't save it). Scratch sessions (no current file)
+  *redefinitions* clean, and the explicit delete verb now exists —
+  `delete <name>` (2026-07-24) splices a word's group out of the file and
+  reloads — so auto-sync inherits it. Scratch sessions (no current file)
   keep the old freedom either way.
 - **Staging:** keep explicit `save` through the first implementation
   stages; adopt auto-sync as a later stage once splice-on-save has proven

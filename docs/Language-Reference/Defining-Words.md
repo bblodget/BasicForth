@@ -38,6 +38,8 @@ and confirms intentional ones. Every defining word does this (`create`,
 `variable`, `constant`, `defer`, …), but only for definitions typed at the
 prompt: a file loaded with `include`/`require` (and startup itself)
 redefines silently, and so does `:e` — redefining is its whole job.
+Regret a redefinition? `delete <name>` removes it from the module file
+and brings the previous definition back (`help modules`).
 
 ## cancel; ( -- )
 Abandon the definition being typed (a `:`, `:noname`, or `:e`): nothing is

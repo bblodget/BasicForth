@@ -2733,6 +2733,49 @@ variable (def-n)
     2drop 2drop
     (def-template) (edit-src) drop ;
 
+\ ===== DELETE: remove a definition from the module file and reload =====
+\ `delete <name>` is `edit <name>` with nothing as the replacement: the word's
+\ newest group is spliced OUT of the module file and the module reloads. A
+\ recorded span includes its trailing newline, so no blank line is left
+\ behind. Deleting the newest group of a redefined name RESURRECTS the prior
+\ definition — the "undo my redefinition" the `redefined` warning invites. A
+\ word that depended on the deleted one fails its replay line with an honest
+\ `? name` — dependency surfacing, not dangling pointers (surgical dictionary
+\ removal is unsafe under STC: callers hold compiled call addresses).
+: (delete-target) ( nt -- handled? )        \ splice EMPTY text over nt's span
+    dup (edit-span?) 0= if  drop  false exit  then  ( nt off len )
+    (es-len) !  (es-off) !                   ( nt )
+    (nt-src) 0= if  (msg:) ." cannot read source" cr  true exit  then  ( src-a src-u )
+    (es-su) !  (es-src) !                    \ points into the source-file cache:
+    0 (es-nu) !  0 (es-na) !                 \ keep (uf-buf) alive through the splice
+    (edit-splice)                            ( ok? )
+    (uf-free)
+    if  reload
+        ." deleted " (see-a) @ (see-u) @ type cr  then
+    true ;
+: (delete-try) ( -- handled? )
+    (see-a) @ (see-u) @ (nt-by-name) 0= if  false exit  then   ( nt )
+    (delete-target) ;
+: delete ( "name" -- )
+    s" delete" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop  (msg:) ." needs a word name" cr  exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (find-meta)          ( xt off len srcid flag )
+    0= if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  2drop 2drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly); cannot delete" cr exit  then
+    2drop 2drop
+    (cur-file-len) @ 0= if
+        (msg:) ." no current file — only saved words can be deleted" cr exit  then
+    (edit-sync)                              \ unsaved work → auto-save + reload
+    (delete-try) if  exit  then
+    \ the binding isn't in the module file (saved earlier, metadata stale)
+    \ → reload to converge, and retry
+    reload
+    (delete-try) if  exit  then
+    (msg:) (see-a) @ (see-u) @ type ."  is not in " (cur-file@) type cr ;
+
 
 \ ===== :e — inline mutation: retype a definition, splice the file, reload =====
 \ `:e <name>` is `edit <name>` with the prompt as the editor: type the new

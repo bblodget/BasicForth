@@ -797,31 +797,28 @@ docs/Graphics.md for the API.
   printed `redefined count` three times during the count-to-a-billion
   session while BasicForth silently shadowed the standard word `count`.
   Two follow-ups filed the day it shipped (Brandon's live testing):
-  - [ ] **`delete <name>` — remove a definition from the module file and
-    reload** (DECIDED 2026-07-22 after a design walk: undo-def → forget →
-    this). The warning creates the moment: you see `redefined count`, you
-    want it gone. Rejected shapes: surgical dictionary removal (unsafe in
-    STC — callers hold compiled `call` addresses); classic FORGET
-    retroactive-marker semantics (takes everything defined after — the
-    over-forget foot-gun is why Forth 2012 dropped it for `marker`).
-    Chosen shape is file-level, Brandon's idea: edit the truth. `delete
-    3beep` removes the definition's group from the module file and
-    reloads — the name matches classic BASIC's DELETE-a-program-line, and
-    `rm` stays reserved for files (shell words operate on files).
-    - Survivors replay fine; a word that DEPENDED on the deleted one fails
-      its replay line with an honest `? name` — dependency surfacing, not
-      dangling pointers. No over-forgetting possible.
-    - Nearly built: `:e` already locates a definition's file span
-      ((edit-span?)) and splices replacement text ((edit-splice)) then
-      reloads. `delete` is `:e` splicing EMPTY text.
-    - Decide: a name with several groups in the file (redefinitions
-      append) — remove only the newest group (reload RESURRECTS the
-      previous definition = "undo my redefinition", the wish that started
-      this) vs all groups (word fully gone). Maybe both: `delete` takes
-      newest, a flag or second word for all.
-    - Needs an active session/file; scratch sessions keep `marker`/`new`.
-    - Update Modules.md/Module_Architecture ("explicit delete" gap) and
-      the Manual's module section when built.
+  - [x] **`delete <name>` — remove a definition from the module file and
+    reload.** Done 2026-07-24 (branch delete-word), exactly as designed
+    2026-07-22 (design walk: undo-def → forget → this): file-level,
+    Brandon's idea — edit the truth. `delete 3beep` splices the word's
+    newest group OUT of the module file ((edit-span?) + (edit-splice)
+    with `(es-nu)=0`; a recorded span includes its trailing newline, so
+    no blank line is left) and reloads; prints `deleted 3beep`. Pure
+    core.fs — no assembly. Rejected shapes stand: surgical dictionary
+    removal (unsafe in STC — callers hold compiled `call` addresses);
+    FORGET retroactive-marker semantics (the over-forget foot-gun is why
+    Forth 2012 dropped it for `marker`). `rm` stays reserved for files.
+    - Newest-group-only shipped: deleting a redefinition RESURRECTS the
+      previous definition — "undo my redefinition", the wish that started
+      this. A depended-on word's deletion surfaces the dependent as an
+      honest `? name` on replay. Guards mirror `edit` (unknown/primitive/
+      not-in-module/no-file), with the same reload-to-converge retry;
+      a dirty session auto-saves first via (edit-sync).
+    - Deferred until use testing asks: delete ALL of a name's groups
+      (word fully gone) — maybe a flag or a second word.
+    - Test-fixture gotcha for the suite: don't name a fixture word `base`
+      (or any core word) — after the delete, the dependent silently
+      rebinds to the primitive and the `? name` never comes.
   - **DECIDED (2026-07-22): library-word entries stay lean; the topic
     header is the setup pointer.** `help beep` shows no require/snd-open
     info — that story lives in the page preamble, which a word lookup
@@ -879,8 +876,10 @@ docs/Graphics.md for the API.
   Brandon 2026-07-20, SHIPPED in v0.12.0 (branch `binary-sprites`); this box
   was left unchecked by mistake and closed 2026-07-23. `stamp`, `row,` and the
   Bitmaps lesson are all live; `glyph`/`text` in `font-terminus-8x16.fs` now build on it. The
-  design notes below are kept as record (and `stamp-scale` is still pending —
-  see the Font item above, its designated trigger). A sprite is a **monochrome
+  design notes below are kept as record (`stamp-scale` has since shipped
+  too — 2026-07-24, and fonts were indeed its designated trigger; it landed
+  as a word taking `n`, not a sticky value, so the two-composing-scales
+  worry below never materialized for sprites). A sprite is a **monochrome
   bitmap** and
   the colour is supplied at draw time: `stamp ( color src x y w h -- )`, with
   0-bits transparent. This is the TI-99/4A model — TMS9918 sprites are 1-bit
