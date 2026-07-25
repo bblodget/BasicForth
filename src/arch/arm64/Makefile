@@ -80,6 +80,10 @@ run-pty: $(BIN)
 	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
 	python3 $(TEST_DIR)/test_line_editor_pty.py $(QEMU) ./$(BIN)
 
+run-lessons: $(BIN)
+	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+	python3 $(TEST_DIR)/test_lessons.py $(QEMU) ./$(BIN)
+
 clean:
 	rm -f $(OBJS) $(BIN) $(TEST_BIN) version.inc core.fs
 
@@ -92,6 +96,8 @@ help:
 	@echo "  make run             Run basicforth (native or via QEMU)"
 	@echo "  make run-test        Run unit test (native or via QEMU)"
 	@echo "  make run-integration Run integration tests"
+	@echo "  make run-pty         Run line-editor PTY tests (scrolling)"
+	@echo "  make run-lessons     Replay the docs/Tutorial lessons and examples"
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make help            Show this help"
 	@echo ""

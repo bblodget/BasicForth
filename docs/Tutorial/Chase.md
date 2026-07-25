@@ -20,19 +20,20 @@ re-read one, `bye` to stop. Ready? Type `next` to begin.
 ## Top-down — sketch the shape first
 
 Before writing any code, decompose the game out loud. A game is three things in
-a row:
+a row — written as a comment, since none of them exist yet (`\` starts a
+comment; everything after it on the line is ignored, so it's safe to type):
 
-    setup   play   finish
+    \ setup   play   finish
 
 `setup` builds the starting board, `play` runs until you lose, `finish` shows
 your score. And `play` itself is a loop — every frame it does the same handful
-of jobs:
+of jobs — still just a sketch, so still comments:
 
-    input    \ read the keyboard
-    erase    \ blank the old player/monster cells
-    update   \ move everything, check for gold and crashes
-    render   \ draw everything at its new spot
-    wait     \ hold the frame to a steady speed
+    \ input     read the keyboard
+    \ erase     blank the old player/monster cells
+    \ update    move everything, check for gold and crashes
+    \ render    draw everything at its new spot
+    \ wait      hold the frame to a steady speed
 
 That list — a few named jobs — *is* the design. We haven't written one of them,
 but we already know the program's whole shape. The plan is to **write that shape

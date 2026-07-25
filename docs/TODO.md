@@ -643,6 +643,35 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [x] **Lesson replay suite — DONE 2026-07-25** (branch lesson-fixes):
+  `make run-lessons` (`tests/test_lessons.py`, both arches) replays every
+  lesson in one session with state carrying between steps, plus every
+  `examples/*.fs`. Skips print their reason; per-lesson `expect` lists the
+  errors a lesson teaches; SDL lessons SKIP under QEMU / without libSDL3 by
+  the integration suite's rule. First full run: no lesson had rotted after a
+  week of merges (fonts, stamp-scale, delete, ctrl-d, require-cycle,
+  list-log), and the prose-rot grep for retired messages was clean too. It
+  did surface two Chase sketch blocks that read as typeable (`erase` gave a
+  real `stack underflow`) and the Graphics `bounce.fs` pointer that only
+  resolves with `examples` on `BASICFORTH_PATH` — both fixed, and `help
+  files` now documents the search order. Maintenance cost: the skip table
+  needs an entry when a new lesson step blocks on a key.
+
+- **KNOWN BEHAVIOUR (recorded 2026-07-25, not a bug):** a multi-line
+  definition whose FIRST line aborts leaves the following lines to be
+  **interpreted**, not compiled — the abort ended compile state, so the body
+  runs as commands. Usually that just prints `stack underflow`; found during
+  the lesson sweep by pasting the FFI page's two-line example without
+  `require ffi.fs` first, where the orphaned second line reached `(ccall)`
+  with a garbage pointer and **segfaulted**. Inherent to line-at-a-time
+  interpretation (gforth behaves the same), and `(ccall)` is an unguarded
+  escape hatch by design — calling an arbitrary address is the feature. Worth
+  knowing rather than fixing: pasting a definition is not as safe as typing
+  one, because a typo on line 1 turns the rest of the paste into commands.
+  If it ever becomes worth guarding, the shape would be "an aborted `:` line
+  swallows the rest of the pasted input", which needs a way to tell a paste
+  from typed lines (bracketed paste on a PTY) — not obviously worth it.
+
 - [x] **Remove the stale `compact` references from the docs.** `compact` was
   **deleted** in `724edd3` ("Stage 4 cleanup: delete propagation, compact, and
   the mutation-tag save path") — `grep -rn compact src/` finds nothing, so the
