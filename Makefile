@@ -76,6 +76,15 @@ run-pty-arm64:
 run-pty:
 	$(MAKE) -C src/arch/$(NATIVE) run-pty
 
+run-lessons-x86:
+	$(MAKE) -C src/arch/x86 run-lessons
+
+run-lessons-arm64:
+	$(MAKE) -C src/arch/arm64 run-lessons
+
+run-lessons:
+	$(MAKE) -C src/arch/$(NATIVE) run-lessons
+
 clean:
 	@for dir in $(ARCH_DIRS); do $(MAKE) -C $$dir clean; done
 
@@ -102,6 +111,7 @@ help:
 	@echo "  make run-test-arm64  Run ARM64 unit test"
 	@echo "  make run-integration Run integration tests for native arch"
 	@echo "  make run-pty         Run line-editor PTY tests (scrolling) for native arch"
+	@echo "  make run-lessons     Replay the docs/Tutorial lessons and examples"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean           Remove build artifacts for all architectures"

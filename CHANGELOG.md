@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Lessons are tested now — `make run-lessons`
+- **`tests/test_lessons.py` replays every lesson** in `docs/Tutorial/` the way
+  a reader walks it: one session per lesson, steps in order, state carrying
+  from step to step, failing on any error the lesson did not set out to teach.
+  Executable documentation was previously unchecked — a shipped feature could
+  change under a lesson and leave it quietly wrong. It also runs every
+  `examples/*.fs` to completion, since a lesson that points at a demo is only
+  as good as the demo.
+- Steps that cannot finish on a pipe (four in Chase that launch the playable
+  game, one in Graphics that starts the bounce demo) are skipped **with a
+  printed reason**, so coverage can never shrink silently; errors a lesson
+  deliberately teaches (`greet: uninitialized deferred word`, `dis nosuchword`)
+  are listed per lesson rather than blanket-ignored. Lessons needing libSDL3
+  SKIP under QEMU or on a host without it, the same rule the integration
+  suite already applies — detected from the FFI's own failure message, so a
+  lesson that starts using SDL is covered without editing the harness.
+- Found by the first full run: two blocks in Chase that read as typeable but
+  are design sketches — typing the second gave `stack underflow` from `erase`,
+  a real core word. Both are now comments, the convention the lesson itself
+  adopts a few steps later. The Graphics lesson's closing pointer at
+  `bounce.fs` now says where the demo lives, and `help files` documents the
+  search order (current directory first, then `BASICFORTH_PATH` in order) —
+  previously no help topic said where a file is looked up.
+
 ### Fixed: the test suites depended on a file that isn't in the repo
 
 - **`make run-integration` and `make run-pty` now pass in a bare shell.**
