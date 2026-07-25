@@ -1871,6 +1871,18 @@ forth_source_path:
     STR XZR, [X19, #-CELL]!      // u = 0
     RET
 
+// (cur-src) ( -- id )  The source-id INCLUDED is reading right now, 0 at the
+// REPL. Saved and restored around every nested load, so it is the innermost
+// file of the loads currently in progress — which is how core.fs's require
+// cycle guard learns about a load that started here rather than through its
+// own wrapper (the startup file, core.fs). Pair it with (source-path).
+.global forth_cur_src
+forth_cur_src:
+    ADR X9, cur_source_id
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
 // (find-meta) ( c-addr u -- xt off len srcid flag )
 // Look up name (case-insensitive, skipping hidden words) and return its source
 // metadata. flag = -1 found / 0 not found (other cells 0 when not found).
@@ -5559,7 +5571,8 @@ DEFWORD dict_session_restore,"(session-restore)",forth_session_restore,dict_sess
 DEFWORD dict_included_ior,"(included?)",  forth_included_ior, dict_session_restore
 DEFWORD dict_hook_store,  "(hook!)",      forth_hook_store,  dict_included_ior
 DEFWORD dict_source_path, "(source-path)", forth_source_path, dict_hook_store
-DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_source_path
+DEFWORD dict_cur_src,     "(cur-src)",    forth_cur_src,     dict_source_path
+DEFWORD dict_find_meta,   "(find-meta)",  forth_find_meta,   dict_cur_src
 DEFWORD dict_version_str, "(version-str)", forth_version_str, dict_find_meta
 DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_is,          dict_defer,     F_IMMEDIATE

@@ -2959,10 +2959,86 @@ variable (bn-cut)
     0 (inc-n) !  s" : " (inc+)  (inc-sentinel+)  s"  ;" (inc+)
     (inc-buf) (inc-n) @ evaluate ;
 
+\ Cycle guard. The sentinel above marks a file loaded only AFTER it finishes —
+\ deliberately, so a load that fails stays retryable — which leaves a file that
+\ loads itself, directly or through a ring of libraries, matching nothing on the
+\ way back in: it recurses until the data stack hits its guard page. (This is
+\ not hypothetical; a user module named font.fs in the launch directory shadowed
+\ the library of the same name and required itself.) So keep a second, separate
+\ record: the files currently BEING loaded. A load already in progress is
+\ skipped — which is also what a circular dependency wants — and only becomes
+\ "loaded" on completion, so the retry-after-failure behaviour is untouched.
+\ The skip says so, because it is not a no-op from where you are standing: the
+\ words that file would have defined are missing, and without the line you meet
+\ that as an unexplained `? name` somewhere further down.
+\
+\ Basenames are packed into one buffer as counted strings. INCLUDED saves the
+\ buffer length on the return stack and restores it on the way out, so the pop
+\ costs nothing and nesting takes care of itself. An error *inside* the file
+\ does not skip that restore: the assembly INCLUDED recovers from a line error
+\ (or an ABORT) at its own recovery point and returns normally to us, so the
+\ only path out that misses the pop is our own cannot-open ABORT below, which
+\ pops first.
+\
+\ One load never comes through here: the startup file (and core.fs) is loaded by
+\ main.s calling the assembly INCLUDED directly, because those loads want the
+\ silent skip when the file is absent. Nothing would then be on the list when
+\ that file's first line runs, so `basicforth game.fs` where game.fs requires
+\ game.fs loaded the whole file a second time — the recursion stopped one level
+\ down, but every definition and every error in it happened twice. (ldg-seed)
+\ closes that: when a load starts with the list empty and the interpreter is
+\ already reading a file, that file is on the stack above us, so record it
+\ first. (CUR-SRC) is the source-id INCLUDED saves and restores around each
+\ nested load, so it names exactly that file.
+
+1024 constant (ldg-max)
+create (ldg-buf) (ldg-max) allot            \ counted basenames, one per active load
+variable (ldg-n)                            \ bytes used
+variable (ldg-p)  variable (ldg-len)        \ scan cursor / current entry length
+variable (ldg-a)  variable (ldg-u)          \ the name being looked for
+
+: (ldg-push) ( c-addr u -- )                \ note "this file is loading"
+    (inc-basename)
+    dup 1+ (ldg-n) @ +  (ldg-max) > if
+        0 (ldg-n) !                         \ the whole chain is about to unwind
+        true abort" require: loads nested too deep"
+    then
+    dup (ldg-buf) (ldg-n) @ + c!            \ count byte
+    1 (ldg-n) +!
+    dup >r
+    (ldg-buf) (ldg-n) @ +  swap cmove       \ then the name itself
+    r> (ldg-n) +! ;
+
+: (ldg-loading?) ( c-addr u -- flag )       \ is this file already being loaded?
+    (inc-basename)  (ldg-u) !  (ldg-a) !
+    (ldg-buf) (ldg-p) !
+    begin  (ldg-p) @  (ldg-buf) (ldg-n) @ +  u<  while
+        (ldg-p) @ c@ (ldg-len) !
+        (ldg-a) @ (ldg-u) @                 ( name )
+        (ldg-p) @ 1+ (ldg-len) @            ( name entry )
+        compare 0= if  true exit  then
+        (ldg-p) @ 1+ (ldg-len) @ + (ldg-p) !
+    repeat
+    false ;
+
+: (ldg-seed) ( -- )                         \ record an already-running outer load
+    (cur-src) dup 0= if  drop exit  then    \ the REPL: nothing above us
+    (source-path) dup if  (ldg-push)  else  2drop  then ;
+
 : included ( c-addr u -- )                  \ load + record; error if missing
+    (ldg-n) @ >r                            \ mark, to pop this file off below
+    (ldg-n) @ 0= if  (ldg-seed)  then       \ started by main.s, not by us
+    2dup (ldg-loading?) if                  \ a cycle: this file is mid-load
+        ." require: " type ."  is already loading — skipped" cr
+        r> (ldg-n) !  exit  then
+    2dup (ldg-push)
     2dup included                           \ the assembly INCLUDED does the work
-    (inc-opened?) 0= if  ." cannot open " type cr abort  then
-    (inc-mark) ;
+    (inc-opened?) 0= if
+        r> (ldg-n) !                        \ pop before leaving through the ABORT,
+        ." cannot open " type cr abort      \ else a missing file stays "loading"
+    then
+    (inc-mark)
+    r> (ldg-n) ! ;
 
 : include ( "name" -- )
     parse-word dup 0= if  2drop ." usage: include <file>" cr exit  then
