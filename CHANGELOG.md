@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed: a `require`/`include` cycle blew the data stack
+- **A file that loads itself now stops instead of recursing.** The load-once
+  sentinel is recorded only *after* a file finishes — deliberately, so a failed
+  load stays retryable — which left a file that requires itself matching
+  nothing on the way back in, recursing until the data stack hit its guard page
+  (`stack overflow`). `include`/`require` now also track what is *currently*
+  loading and skip a file already in progress, so a self-require and a ring of
+  mutually-requiring libraries both settle after one pass.
+- Easier to hit than it sounds: the search starts in the current directory, so
+  a user module named `font.fs` shadowed the library and required itself. The
+  skip reports itself — `require: font.fs is already loading — skipped` — since
+  the library's words are then missing, and silence would surface only as an
+  unexplained `? name` wherever the first one is used.
+- **A startup file that requires itself no longer runs twice.** `main.s` loads
+  the command-line file by calling the assembly `INCLUDED` directly, so that
+  load was invisible to the guard and the file's body — every definition, and
+  every error in it — executed a second time. A new internal primitive
+  `(cur-src)` exposes the source-id the interpreter is currently reading, which
+  is enough to put that load on the list too.
+- A load nested deeper than the tracking buffer holds now reports
+  `require: loads nested too deep` rather than overflowing, and neither a
+  cannot-open error nor an error inside the file leaves a file stuck marked as
+  loading.
+
 ### `list` shows your whole program, unsaved lines included
 - **`list` now pages the capture log instead of the module file.** The log is
   the file image — the text loaded from disk plus every line captured since —

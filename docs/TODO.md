@@ -7,7 +7,55 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
-- [ ] **A `require`/`include` cycle blows the stack instead of stopping.**
+- [x] **A `require`/`include` cycle blows the stack instead of stopping.**
+  FIXED 2026-07-24 (branch require-cycle), as designed below: a "currently
+  loading" list separate from the loaded sentinel, so a file already in progress
+  is skipped and only becomes "loaded" on completion — the retry-after-failure
+  behaviour is untouched. Almost entirely core.fs (one primitive, below).
+  **The skip prints `require: <name> is already loading — skipped`**, against
+  the original "clean no-op" plan: Brandon's live test showed why. The skip
+  leaves the library's words undefined, so silence surfaces as an unexplained
+  `? sdl-scale` three lines later, with the actual cause (his module shadowed
+  the library name) nowhere in sight. One line of noise for a legitimate ring
+  is the cheaper trade.
+  Basenames are packed as counted strings into one 1024-byte buffer;
+  `included` saves the buffer length on the return stack and restores it on the
+  way out, so the pop is free and nesting handles itself. Beyond the buffer it
+  aborts with `require: loads nested too deep` instead of overflowing.
+  - **The unwinding worry turned out not to exist**, which is what let the fix
+    stay this small. A first attempt cleared stale entries at an "outermost"
+    load, detected by `source-id 0=` — wrong twice over: `source-id` is 0
+    *inside* an included file too (files are mmap'd, there is no fileid), so it
+    cleared the list at every level and the guard never fired; and the REPL's
+    `(capture-reset)` hook, the other candidate, runs only in an interactive
+    session, so a piped script would have gone unprotected. Neither is needed:
+    the assembly `INCLUDED` recovers from a line error — or an explicit
+    `abort"` — at its own recovery point and **returns normally**, so the
+    restore always runs. Verified with `catch`, which sees 0 both times. The
+    one exit that skips it is our own cannot-open `abort`, which now pops first.
+  - **The startup file needed one piece of assembly.** `main.s` loads the
+    command-line file (and core.fs) by calling the assembly `INCLUDED`
+    *directly* — that path wants the silent skip when the file is absent — so
+    the Forth wrapper never runs for it and nothing was on the list when the
+    file's first line executed. `basicforth game.fs`, where game.fs requires
+    game.fs, therefore stopped recursing one level down but still ran the whole
+    body **twice**: every definition, and every error, doubled (Brandon's live
+    test showed `? sdl-scale` printed twice). Fix: a new primitive `(cur-src)
+    ( -- id )` exposing `cur_source_id` — which `INCLUDED` already saves and
+    restores around each nested load — so when a load starts with an empty
+    list, `(ldg-seed)` records the file the interpreter is already reading.
+    Ten lines of assembly per arch plus a DEFWORD; no platform symbol, so no
+    unit-test stub. `(source-path)` turns the id into the name.
+  - Integration tests (+8, both arches): self-require, self-include, the skip
+    message, a two-file ring, that the mark does not outlive the load (`include`
+    still force-reloads after), that a missing file stays reportable on a retry,
+    that a startup file requiring itself runs its body once, and the
+    too-deep abort. They fail
+    against the old core.fs (stack overflow), so they pin the bug, not just the
+    behaviour.
+
+  Original report:
+
   Found 2026-07-23 while a user's own module, saved as `font.fs`, sat in the
   launch directory: `require` searches the current directory first, so
   `require font.fs` matched *their* file, whose own `require font.fs` line then
