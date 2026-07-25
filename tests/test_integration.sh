@@ -3294,6 +3294,28 @@ mk_loop=$( cd "$mk_dir" && printf 'mk-loop .\nbye\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth loop.fs 2>/dev/null | grep '^55')
 rm -rf "$mk_dir"
 
+# --- booting?: is this load STARTING the program, or starting it OVER? ---
+# So a module can launch itself on a real start without relaunching on edits.
+mk_dir="$(mktemp -d)"
+cat > "$mk_dir/boot.fs" <<'MKEOF'
+: on-start  ." [b" booting? if ." 1" else ." 0" then ." ]" cr ;
+: mk-b  1 ;
+MKEOF
+# boot / reload / load — start, start-over, start
+mk_bootq=$( cd "$mk_dir" && printf 'reload\nload boot.fs\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth boot.fs 2>/dev/null \
+    | grep -oE '\[b[01]\]' | tr '\n' ' ')
+# meaningful only during the hook; false at the prompt
+mk_bootout=$( cd "$mk_dir" && printf '.( O=) booting? . cr\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth boot.fs 2>/dev/null \
+    | grep -oE 'O=-?[0-9]+')
+# a dirty :e reloads TWICE (auto-save, then splice) — both are restarts, so a
+# self-launching module must not run itself twice per edit
+mk_bootedit=$( cd "$mk_dir" && printf ': mk-extra 9 ;\nedit mk-b\nbye\n' \
+    | EDITOR='sed -i s/1/2/' BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth boot.fs 2>/dev/null \
+    | grep -oE '\[b[01]\]' | tr '\n' ' ')
+rm -rf "$mk_dir"
+
 if [[ "$mk_kept" == "1" && "$mk_dropped" == "0" && "$mk_replay" == 42* ]]; then
     printf "  ${GREEN}PASS${NC}  keep logs a non-defining line; an unkept one is still dropped\n"; ((passed++))
 else
@@ -3355,6 +3377,21 @@ if [[ "$mk_loop" == 55* ]]; then
     printf "  ${GREEN}PASS${NC}  a hook that reloads does not recurse\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  hook re-entrancy\n    Expected '55'\n    Got: %q\n" "$mk_loop"; ((failed++))
+fi
+if [[ "$mk_bootq" == "[b1] [b0] [b1] " ]]; then
+    printf "  ${GREEN}PASS${NC}  booting? true at startup and for load, false for reload\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  booting?\n    Expected '[b1] [b0] [b1] '\n    Got: %q\n" "$mk_bootq"; ((failed++))
+fi
+if [[ "$mk_bootout" == "O=0" ]]; then
+    printf "  ${GREEN}PASS${NC}  booting? is false outside the hook\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  booting? outside the hook\n    Expected 'O=0'\n    Got: %q\n" "$mk_bootout"; ((failed++))
+fi
+if [[ "$mk_bootedit" == "[b1] [b0] [b0] " ]]; then
+    printf "  ${GREEN}PASS${NC}  both reloads of a dirty :e are restarts, not boots\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  booting? across a dirty :e\n    Expected '[b1] [b0] [b0] '\n    Got: %q\n" "$mk_bootedit"; ((failed++))
 fi
 
 # =========================================================================
