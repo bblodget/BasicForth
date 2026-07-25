@@ -1623,7 +1623,45 @@ length.
   work* (counter-only 0.36 s vs accumulator 0.47 s — at `-O2` the loop is
   deleted and the benchmark reports 0.00 s), and the per-word tax is
   linear and easy to measure by growing the body with `1+ 1-` pairs.
+### DEFERRED — the optimizer path is closed for now (decided 2026-07-25)
+
+**Nothing in this section gets built yet.** Not because the work is wrong,
+but because the base underneath it is still moving. Eleven features landed
+in the week to 2026-07-25 — fonts, `stamp-scale`, `delete`, the `redefined`
+warning, `u.0r`, `list`-pages-the-log, `booting?`, Ctrl-D, `time`, the
+require-cycle guard, module lifecycle — and several of them *interact*
+(`delete` + `redefined` + `save`; `booting?` + `:e` + `reload`). Each is
+tested on its own; the combinations are unproven. Use testing and settling
+the interface come first.
+
+The specific hazard is not lost time, it is **ambiguous debugging**: an
+optimizer that miscompiles surfaces as "this new feature is broken", and
+the hunt starts in the feature, not the compiler. Optimizers want a stable,
+well-covered base underneath precisely so a regression tells you which
+layer moved. Building one now taxes the debugging of everything else.
+
+**Re-entry conditions** — reopen when *both* hold:
+
+1. The module/editing interface has stopped changing shape (the use-testing
+   round below has run and its interface complaints are addressed), and
+2. A profile of a **real program** — a game, a robotics loop, not a
+   microbenchmark — shows word dispatch among the top costs. `time` shipped
+   2026-07-24 precisely so this is cheap to measure. Today's evidence is an
+   *empty* 1e9 loop, which is the one case where dispatch dominates because
+   nothing else is happening; in a body that does real work the relative tax
+   falls, and in a 60 fps frame or a 1 kHz control loop it may not appear at
+   all.
+
+Condition 2 is the one to take seriously. If a real profile says dispatch
+is irrelevant, this whole section should be closed rather than built.
+
+When it does reopen, the first move is the **registerized `loop`**, not the
+inliner: it is local to one construct, copies no machine code, needs no
+candidate table, and leaves `dis`'s annotation untouched. Smaller win, far
+smaller risk surface.
+
 - [ ] **Peephole inliner: open-code short primitives at the call site.**
+  *(Deferred — see above.)*
   `call 1+` becomes `addq $1,(%r15)` — which is 4 bytes where the call is
   5, so the inline form is *smaller* as well as faster. Same for
   dup/drop/swap/over/@/!/lit/+/-/1+/1-/= and friends — a table of copyable
@@ -1635,7 +1673,36 @@ length.
   wrinkle to settle first: primitives carry `CodeLen = 0`, which is also
   `dis`'s primitive-vs-dictionary dispatch flag, so body lengths need
   either real CodeLen values (plus a new `dis` rule) or a curated table.
-- [ ] **Registerized `loop` for empty/rstack-free bodies.** The emitted
+  - **Where it would hook in (read 2026-07-25, good news).** Exactly *one*
+    site per arch compiles a normal word reference: `src/arch/x86/core.s`
+    ~2171 and `src/arch/arm64/core.s` ~2344, both `compile_call` with the
+    xt in hand. The other 15 `compile_call` uses are structural (`lit`,
+    `DOES>`, defer stubs, `compile,`) and stay calls. So the change is
+    `if inlinable(xt) then emit_body else compile_call` in two places —
+    structurally small, not a bolt-on. `see` is unaffected (source comes
+    from the capture log, not the code), and redefinition semantics don't
+    change, since STC already binds at compile time.
+  - **The risk is in the bytes, not the structure.** (a) A curated byte
+    table duplicates definitions that live in `core.s`, so editing a
+    primitive and forgetting the table yields *silently wrong compiled
+    code* — the worst failure class here. Mitigate with a startup (or
+    test-time) assertion that each entry matches the real bytes at that
+    xt, turning silent drift into a loud failure. (b) Bodies must be
+    position-independent: `1+` is fine, but **`lit` cannot be inlined
+    naively** — it reads its operand relative to its return address, which
+    is the whole trick — and anything with a rip/pc-relative operand or an
+    internal call/jmp is out. Per-candidate, per-arch audit, not an
+    assumption. (c) Scanning for the terminating `ret` is safe on ARM64
+    (fixed-width) but not on x86, where `0xC3` can occur *inside* another
+    instruction.
+  - **It costs `dis` its readability, and that is a teaching feature here.**
+    `call 0x401967  \ 1+` is what the Machine-Code tutorial, docs/
+    Disassembler.md and the planned video all rely on; inlining replaces
+    named calls with anonymous instructions. Recoverable by annotating
+    inlined spans (`\ 1+ (inlined)`), but that is more work inside `dis`'s
+    scanner, which already does idiom-splitting. Count it in the price.
+- [ ] **Registerized `loop` for empty/rstack-free bodies.** *(Deferred —
+  see above; this is the one to do FIRST when the path reopens.)* The emitted
   loop parks index+limit on the return stack every iteration
   (push/push/jmp → pop/pop) solely so `i` works inside the body. When the
   body is empty — or provably never touches the return stack or `i` — keep

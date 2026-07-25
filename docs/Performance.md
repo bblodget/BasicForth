@@ -194,8 +194,16 @@ costs.
   inc/cmp/jne — which *is* the C `-O0` loop. Worth roughly 0.41 → 0.38 s
   on the empty benchmark.
 
-Both are open items in docs/TODO.md ("Performance / Optimizer"). When they
-land, the numbers on this page change and it gets re-measured.
+Both are open items in docs/TODO.md ("Performance / Optimizer") — and both
+are **deliberately deferred** as of 2026-07-25. The base they would sit on
+is still moving, and an optimizer that miscompiles surfaces as "this new
+feature is broken", which sends you hunting in the wrong layer. They get
+reopened when the interface has settled *and* a profile of a real program —
+a game, a control loop, not a microbenchmark — shows word dispatch among
+the top costs. Everything on this page measures an empty loop, which is the
+one case where dispatch dominates because nothing else is happening.
+
+When they do land, the numbers here change and this page gets re-measured.
 
 ## Reproducing this
 
