@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `delete <name>` — remove a definition from the module file
+- **`delete <name>`** splices `<name>`'s newest definition out of the current
+  module file and reloads — `:e` with nothing as the replacement — and prints
+  `deleted name`. It completes the `redefined name` warning's story: deleting
+  the redefinition you regret **resurrects the previous definition** (the
+  reload replays what the file still holds).
+- No dictionary surgery: under subroutine-threaded code callers hold compiled
+  call addresses, so removal is file-level and the reload rebuilds the world.
+  A word that *called* the deleted one fails its replay line with an honest
+  `? name` — the dependency surfaces instead of dangling. The name follows
+  BASIC's `DELETE`; classic `FORGET`'s everything-after semantics (dropped by
+  Forth 2012) was considered and rejected.
+- Guards match the `edit` family: unknown word, primitives, a word not in the
+  module file, no current file. A dirty session auto-saves first, so `delete`
+  right after a redefinition does what you mean.
+
 ### Text on the framebuffer: `require font-terminus-8x16.fs`
 - **`text ( color c-addr u x y -- )`** draws a string on the graphics surface,
   and **`glyph ( color ch x y -- )`** one character. A glyph is a 1-bit sprite

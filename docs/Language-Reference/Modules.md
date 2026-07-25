@@ -17,6 +17,7 @@ At a glance:
     edit <name>   ( "name" | -- )  revise a word in your editor (bare: the file)
     define <name> ( "name" -- )    write a new word in your editor
     :e <name> ...;                 retype one definition at the prompt
+    delete <name> ( "name" -- )    remove a word from the module file
     redo <name>   ( "name" -- )    re-evaluate a word's source
     keep          ( -- )           save this line too, though it defined nothing
     on-start      ( -- )           you define it: runs after the module loads
@@ -97,6 +98,19 @@ as `edit`. Abandon a half-typed `:e` with `cancel;`
 (`help defining-words`).
 
     \ :e square  dup * ;      \ square replaced, callers rebuilt
+
+## delete ( "name" -- )
+Remove `<name>`'s definition from the module file and reload — `:e` with
+nothing as the replacement. Prints `deleted <name>`. Deleting a word you just
+redefined **resurrects the previous definition** (the newest group is removed;
+the reload replays the survivor) — the undo that the `redefined <name>` note
+invites. A word that *called* the deleted one fails its replay line with an
+honest `? name`, pointing at what to fix next. Only file-backed words qualify;
+in a scratch session use `marker` or `new` instead.
+
+    \ : greet ." hi" ;   save hello.fs
+    \ : greet ." yo" ;         \ redefined greet
+    \ delete greet             \ deleted greet — the ." hi" version is back
 
 ## redo ( "name" -- )
 Re-evaluate a word's source — the text you typed when you defined it — layering
