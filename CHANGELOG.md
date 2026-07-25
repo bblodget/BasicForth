@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Scalable sprites and text: `stamp-scale` and `font-scale`
+- **`stamp-scale ( color src x y w h n -- )`** draws a 1-bit sprite with each
+  set bit blown up to an `n`×`n` block, so a small sprite or a glyph can be
+  magnified without re-authoring the art. Each block is one `fill-rect` burst,
+  not `n`×`n` separate pixel plots, so large magnifications stay cheap; `n` of 1
+  (or less) is exactly `stamp`, so it is a drop-in that costs nothing at 1×.
+  Transparency, MSB-first bit order, `ceil(w/8)` stride and edge clipping all
+  behave as in `stamp`.
+- **Text magnification is a sticky `font-scale` value** (default 1, the
+  `sdl-scale` idiom), not a new word: `text` and `glyph` read it, so their
+  stack signatures are unchanged and existing code keeps working. The pen
+  advance scales too, so scaled text never overlaps. Integer scales only —
+  fractional-nearest is lumpy and fractional-smooth fights the crisp bitmap
+  look; whole-screen zoom belongs at `sdl-scale`, and the two compose (a 3×
+  font in a 2× window is 6× on screen).
+- **Fonts are now an engine plus data.** The drawing words —
+  `text`/`glyph`/`>glyph`/`font-scale`/`font-w`/`font-h` — moved into a shared
+  engine `fontcore.fs` that draws a *current font*, so a font file no longer
+  carries its own copy of them. A font data file (`font-terminus-8x16.fs`) is
+  now just its glyph table plus a selector word (`terminus-8x16`) that registers
+  itself with **`font! ( data w h -- )`** and is called on load. Several fonts
+  can be loaded at once and switched between with the selector word, and `font!`
+  derives the row stride from the width, so a font wider than 8 px works.
+  `tools/psf2font.py` emits this data-plus-selector form. `font-w`/`font-h`
+  became `value`s tracking the current font (same read behavior).
+
 ### Text on the framebuffer: `require font-terminus-8x16.fs`
 - **`text ( color c-addr u x y -- )`** draws a string on the graphics surface,
   and **`glyph ( color ch x y -- )`** one character. A glyph is a 1-bit sprite
