@@ -8,6 +8,7 @@ At a glance:
 
     see <name>     ( "name" -- )      show a word's source
     dis <name>     ( "name" -- )      show a word's machine code (require disasm.fs)
+    time <name>    ( "name" -- )      run a word, print the wall clock it took
     words          ( -- )             list every word in the dictionary
     marker <name>  ( "name" -- )      set a forget-point (help defining-words)
     version        ( -- )             print the build version line
@@ -54,6 +55,25 @@ docs/Disassembler.md.
     \   43aee4:  e8 fb 67 fc ff   call 0x4016e4  \ dup
     \   43aee9:  e8 df 68 fc ff   call 0x4017cd  \ *
     \   43aeee:  c3               ret
+
+## time ( "name" -- )
+The benchmarking front door: run `<name>` and print how long it took, as
+seconds with three decimals.
+It is a transparent wrapper: the stack going in is untouched, so a word
+that takes arguments still works, and whatever the word leaves is still
+there afterwards.
+
+    : bench 1000000000 0 do loop ;
+    time bench             \ 0.419 s
+    50000000 time spin     \ a word that takes an argument
+
+Resolution is the millisecond tick of `ms@`, so anything faster than that
+prints `0.000 s` — run it a few million times in a loop, which is what you
+need for a per-operation figure anyway. The duration always prints in
+decimal, whatever `BASE` you are working in, and `BASE` is left as it was.
+Inside a definition, time with `ms@` directly: `ms@ ... ms@ swap - .`. See
+docs/Performance.md for what the numbers mean and how to read the
+generated code behind them.
 
 ## words ( -- )
 List **every** word in the dictionary, newest first — the built-ins plus
@@ -150,6 +170,7 @@ Leave the tutorial: forgets which step `next` would show, nothing else —
 - `help modules` — `save` / `load` / `edit` and friends (moved from this page).
 - docs/See.md — how `see` reconstructs source.
 - docs/Disassembler.md — how `dis` decodes and annotates machine code.
+- docs/Performance.md — measured speed, and the compiled code that explains it.
 - docs/Help_System.md — `help`, `tutorials`, `apropos`, and sections.
 - docs/Tutorial_System.md — the tutorial system, including writing lessons.
 - docs/Shelling_Out.md — `sh` / `(system)`: running Linux programs.

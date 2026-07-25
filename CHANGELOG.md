@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### `time <word>` — benchmarking at the prompt
+
+- **`time <name>`** runs a word and prints the wall clock it took, as
+  seconds with three decimals (`time bench` → `0.419 s`). It is a
+  transparent wrapper: the data stack going in is untouched, so a word that
+  takes arguments works (`50000000 time spin`), and anything the word
+  leaves is still there afterwards — the start timestamp rides on the
+  return stack for exactly that reason. Resolution is `ms@`'s millisecond
+  tick, so sub-millisecond words read `0.000 s`; measuring one operation
+  means running it a few million times anyway, and then the tick is far
+  below the noise.
+- The duration prints in **decimal whatever `BASE` is** — `.r` and `u.0r`
+  both follow `BASE`, and 250 ms reading as `0.0FA s` in hex is a
+  misreading waiting to happen — and `BASE` is restored afterwards, so a
+  word that deliberately changes it still does.
+- Pure Forth in `core.fs` (`ms@` + `find` + `execute`), so both
+  architectures get it with no new primitive.
+
+### Docs: `docs/Performance.md` — measured speed, and the code behind it
+
+- The count-to-a-billion benchmark written up honestly: a cross-system
+  table (C++ `-O0`, gforth/gforth-fast, Python), the annotated `dis`
+  listings for all three loop shapes, and a body-word scaling series
+  measured against gforth-fast. Two things it establishes — **`do`/`loop`
+  compiles with zero calls per iteration**, which is why an empty counted
+  loop runs at unoptimized-C speed and 2.5× gforth-fast; and **each word in
+  a hot body costs 0.84 ns against gforth-fast's 0.45**, because our
+  dispatch is a plain `call` into a primitive that read-modify-writes a
+  memory stack. Those cross over between one and two body words, so the
+  page says plainly where we lose and links the planned inliner that would
+  fix it.
+- The `-O2` C++ comparison is called out rather than quietly used: the
+  optimizer proves the loop's result and deletes it, so the fair reference
+  is unoptimized C compiling the loop you actually wrote.
+- A Manual section ("How Fast Is It") and a `time` entry under `help
+  tools` make the whole story reachable from inside the system.
+
 ### Ctrl-D exits the REPL — through the save-first guard
 - **Ctrl-D on an empty line ends the session**, the exit every shell-trained
   hand expects. It submits `bye` (echoed, like bash's `exit`), so it gets

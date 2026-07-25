@@ -4545,6 +4545,41 @@ else
 fi
 
 # =========================================================================
+section "TIME (benchmarking at the prompt)"
+# =========================================================================
+# Elapsed time is not reproducible, so the assertions pin the format and the
+# stack contract, never an exact duration: "0.00" matches 0.000-0.009 s, so a
+# few ms of scheduler jitter can't make the fast case flaky, and the 100 ms
+# sleep would need a 100 ms overshoot to stop reading as "0.1".
+
+assert_output "time prints S.mmm s" \
+    ": q ;
+time q"                                                  "0.00"
+assert_output "time reports a real duration" \
+    ": nap 100 ms ;
+time nap"                                                "0.1"
+assert_output "time leaves the word's results on the stack" \
+    ": q 42 ;
+time q ."                                                "42"
+assert_output "time passes arguments through" \
+    ": sink drop 7 ;
+5 time sink ."                                           "7"
+assert_output "time works on a primitive" "1 time 1+ ."   "2"
+# a duration is always decimal: .r and u.0r follow BASE, so in hex the 100 ms
+# sleep would misprint as 0.064 s. BASE itself must survive unchanged.
+assert_output "time prints decimal whatever BASE is" \
+    ": nap 100 ms ;
+hex
+time nap"                                                "0.1"
+assert_output "time leaves BASE alone" \
+    ": q ;
+hex
+time q
+ff ."                                                    "FF"
+assert_error  "time unknown word" "time nosuchword"       "time: nosuchword not found"
+assert_output "time without a name" "time"                "time: needs a word name"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

@@ -723,6 +723,34 @@ spans as data instead of letting the decoder chew them into garbage:
 `docs/Disassembler.md`, or take the interactive lesson:
 `tutorial machine-code`.
 
+## How Fast Is It (time)
+
+`time <word>` runs a word and prints the wall clock it took, so the other
+half of "look under the hood" is one line away:
+
+```
+> : bench 1000000000 0 do loop ;
+ ok
+> time bench
+0.419 s
+ ok
+```
+
+A billion iterations in 0.42 s — `do`/`loop` compiles fully inline, with
+zero subroutine calls per iteration, so counted loops run at the speed of
+unoptimized C and about 2.5× gforth-fast. Put one word in the body and it
+costs 1.02 s: under subroutine-threaded code every word in a hot loop is a
+`call`/`ret`, and `dis` shows you exactly that. Loop *shape* is the biggest
+lever — the same count written `begin 1+ dup ... = until` takes 3.7 s,
+because four words per iteration become four calls.
+
+`time` leaves the stack as it found it, so words that take arguments work
+(`50000000 time spin`) and results come back normally. Its resolution is
+one millisecond; time fast things by running them in a loop.
+
+`docs/Performance.md` has the full cross-system table, the annotated
+disassembly behind each number, and the optimizer work that is planned.
+
 ## Built-in Help
 
 BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or

@@ -2894,6 +2894,46 @@ variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected
     state @ 0= if  ." cancel;: nothing to cancel" cr  exit  then
     ." canceled" cr  abort ; immediate
 
+\ ===== TIME <word> — run a word and report the wall clock it took =====
+\ The front door for benchmarking at the prompt: `time <name>` runs the word
+\ and prints the elapsed time. Two deliberate properties: the data stack is
+\ untouched going in, so a word that takes arguments still works
+\ (`1000000 time spin`), and anything the word leaves is still there
+\ afterwards — `time` is a transparent wrapper, not a sink. The start
+\ timestamp rides on the return stack for exactly that reason; keeping it on
+\ the data stack would put it underneath the word's own results.
+\
+\ Resolution is ms@'s millisecond tick, so a word that finishes in under a
+\ millisecond reads 0.000 s. That is not worth fixing: to learn what one
+\ operation costs you must run it a few million times anyway, and then the
+\ tick is far below the noise. For timing inside a definition, use ms@
+\ directly (`ms@ ... ms@ swap -`).
+
+\ A duration is always read in decimal, so print it that way whatever BASE
+\ the session is in — `.r` and `u.0r` both follow BASE, and 250 ms coming
+\ out as `0.0FA s` is a misreading waiting to happen. BASE is saved and
+\ restored around the printing only, so a word that deliberately changes it
+\ (`time hex-setup`) still leaves it changed.
+: (.secs) ( ms -- )                         \ print milliseconds as S.mmm s
+    base @ >r  decimal
+    1000 /mod                               ( ms-part s-part )
+    0 .r  [char] . emit  3 u.0r  ."  s" cr
+    r> base ! ;
+
+: time ( "name" -- )
+    s" time" (msg-u) ! (msg-a) !
+    parse-word dup 0= if
+        2drop (msg:) ." needs a word name" cr exit  then
+    2dup find if                            ( c-addr u xt )
+        >r 2drop                            \ name consumed; xt on the return stack
+        ms@ r>                              ( t0 xt )
+        swap >r                             ( xt   R: t0 )
+        execute                             ( ...  R: t0 )
+        ms@ r> -  (.secs)                   ( ... )
+    else                                    ( c-addr u c-addr u )  \ FIND kept the name
+        2drop  (msg:) type ."  not found" cr
+    then ;
+
 \ ===================== require — load a file only once =====================
 \ A successful include/included/require records a no-op sentinel word
 \ (inc:<basename>) in the dictionary; REQUIRE skips a file whose sentinel is
