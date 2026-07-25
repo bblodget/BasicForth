@@ -511,7 +511,7 @@ docs/Graphics.md for the API.
   working; `text` scales the pen advance too. Integer scales only (fractional
   nearest = lumpy, smooth = blurry + fights the crisp aesthetic; arbitrary whole-
   screen scaling belongs at the GPU present, not per-sprite software). Docs:
-  `help graphics` (`stamp-scale`), `help fonts` (`font-scale`); +6 integration
+  `help graphics` (`stamp-scale`), `help fonts` (`font-scale`); +8 integration
   tests both arches. The `text-scale` word was folded into `font-scale` (a value
   reads cleaner than a per-call arg and keeps `text`'s signature stable).
   Same branch, a font-architecture refactor: `text`/`glyph`/`font-scale`/
