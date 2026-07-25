@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Ctrl-D exits the REPL — through the save-first guard
+- **Ctrl-D on an empty line ends the session**, the exit every shell-trained
+  hand expects. It submits `bye` (echoed, like bash's `exit`), so it gets
+  identical semantics to typing it: with unsaved work the dirty guard asks
+  `save first? (y/n)` — `y` saves, `n` discards, any other key cancels back
+  to the prompt. Mid-line it is ignored, and while a definition is open
+  too: continuation text compiles, so a stuffed `bye` would not run. "Open"
+  is judged by the definition's hidden header, not STATE alone, so `[ ... ]`
+  inside a definition doesn't open an escape hatch. Terminal-only by
+  construction (pipes never reach the line editor; scripts keep the
+  never-block policy).
+
 ### `delete <name>` — remove a definition from the module file
 - **`delete <name>`** splices `<name>`'s newest definition out of the current
   module file and reloads — `:e` with nothing as the replacement — and prints

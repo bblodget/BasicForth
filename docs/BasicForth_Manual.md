@@ -889,6 +889,8 @@ At a terminal the prompt is a small line editor: move the cursor with the
 insert or delete (Backspace) anywhere in the line. The **up/down arrows** recall
 previous lines from the command history, which you can edit before pressing
 Enter. A line wider than the terminal **scrolls sideways** instead of wrapping.
+**Ctrl-D** on an empty line exits like a typed `bye` — including the save-first
+prompt when there's unsaved work.
 
 A `:` definition can span several lines; while one is open the prompt becomes
 `... ` until `;` closes it. **`edit <word>`** opens an existing definition in your

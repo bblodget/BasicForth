@@ -1378,8 +1378,21 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   `(popen)`/`(pclose)`, both arches. Unlocks `history | grep`-style words and
   fzf pickers for `edit`/`load` (still to build, module arc). See
   docs/Shelling_Out.md.
-- [ ] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
+- [x] Ctrl-D exits without the dirty-guard prompt (EOF exits inside
   `platform_key`), so unsaved work can be lost silently.
+
+  Done 2026-07-24 — with a corrected diagnosis: at the interactive REPL
+  Ctrl-D was never exiting at all (raw mode delivers byte 4, which the
+  editor's ignore-controls branch swallowed); the `platform_key` EOF exit
+  only fires for pipes (silent proceed is the documented guard policy) or
+  a vanished terminal (nothing to prompt). So nothing was being lost — the
+  Ctrl-D affordance was simply missing. Now: Ctrl-D on an empty line (no
+  definition open) submits `bye`, echo and all, so it flows through the
+  dirty guard exactly like a typed bye; mid-line and while a definition is
+  open it stays ignored (continuation text compiles, so a stuffed bye
+  would not run). Open-definition detection needs LATEST's F_HIDDEN bit,
+  not just STATE — `[` interprets inside an open definition (Codex catch).
+  `platform_key` untouched on both arches. PTY tests cover all five paths.
 - [x] ~~`man` doesn't map hyphens↔underscores~~ — obsolete: `man` was retired
   in v0.11.0 and its replacement `help <topic>` folds case AND `-`/`_`.
 

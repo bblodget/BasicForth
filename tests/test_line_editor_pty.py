@@ -186,6 +186,38 @@ gone = send(fd, b"gw4 .\r")
 report("n on new discards the module", "? gw4" in gone.decode(errors="replace"))
 send(fd, b"bye\r"); os.close(fd)
 
+# 8a) Ctrl-D on an empty line submits "bye", so it exits through the dirty
+#     guard like a typed bye. Mid-line and on a continuation line it is
+#     ignored (text there compiles into the open definition, so a stuffed
+#     bye would not run). Terminal-only: pipes never reach the line editor.
+fd = spawn()
+send(fd, b": gw5 5 ;\r")
+out = send(fd, b"\x04")
+report("ctrl-d when dirty prompts save-first",
+       "save first? (y/n)" in out.decode(errors="replace"))
+out = send(fd, b"n")
+report("ctrl-d guard n discards and exits", "Goodbye" in out.decode(errors="replace"))
+os.close(fd)
+fd = spawn()
+out = send(fd, b"\x04")
+report("ctrl-d on a clean session exits", "Goodbye" in out.decode(errors="replace"))
+os.close(fd)
+fd = spawn()
+send(fd, b"7 8 +"); send(fd, b"\x04")
+out = send(fd, b" .\r")
+report("ctrl-d mid-line is ignored", "15  ok" in out.decode(errors="replace"))
+send(fd, b": gw6\r"); send(fd, b"\x04"); send(fd, b"6 ;\r")
+out = send(fd, b"gw6 .\r")
+report("ctrl-d on a continuation line is ignored",
+       "6  ok" in out.decode(errors="replace"))
+# `[` interprets INSIDE an open definition (STATE=0, prompt "> "), so STATE
+# alone can't gate the exit — the open definition's hidden header must too.
+send(fd, b": gw7 [\r"); send(fd, b"\x04"); send(fd, b"] 7 ;\r")
+out = send(fd, b"gw7 .\r")
+report("ctrl-d inside [ ... ] is ignored",
+       "7  ok" in out.decode(errors="replace"))
+send(fd, b"bye\r"); send(fd, b"n"); os.close(fd)
+
 # 8b) Data laid down AFTER a `create` — rows of `l,` or `,` on their own lines —
 #     used to be dropped from `save` silently, because capture only recorded a
 #     line that moved LATEST. It now also records a line that moved HERE, so

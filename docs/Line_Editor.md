@@ -21,6 +21,7 @@ definition inline. Most of it is just how the prompt behaves — only `edit`,
 | Up arrow | Recall the previous line from history |
 | Down arrow | Move toward more recent lines; past the newest, restore what you were typing |
 | Enter | Submit the line |
+| Ctrl-D | On an empty line: exit, exactly as if you typed `bye` (the save-first guard still asks about unsaved work). Ignored mid-line and while a definition is open — including inside `[ ... ]`. |
 
 ## History
 
