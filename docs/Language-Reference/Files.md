@@ -116,6 +116,16 @@ a file mid-session, use `include` to force the reload (`require` will see it
 as already loaded). Loaded-ness follows the dictionary: if a `marker` forgets
 a library, `require` will happily load it again.
 
+A file that is already part-way through loading is skipped as well, so a ring
+of libraries that require each other settles instead of looping forever. The
+same guard stops a file that requires *itself* — which is easier to do than it
+sounds, since the search starts in the current directory: name your own module
+`font.fs` and `require font.fs` finds your file, not the library's. The skip
+prints a line, because the library's words are then missing and you would
+otherwise meet that as an unexplained `? name` further down:
+
+    require: font.fs is already loading — skipped
+
     \ require sdl3.fs
 
 ## required ( c-addr u -- )

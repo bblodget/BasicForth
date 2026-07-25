@@ -944,8 +944,9 @@ file and the module reloads (`deleted word`). Deleting a word you just
 redefined brings the previous definition back — the undo the `redefined`
 note invites; deleting a word something else calls surfaces the dependent
 as an honest `? name` on reload. Bare **`edit`** (no name) opens the
-whole module file and `reload`s it on change. **`list`** pages the current
-module file, BASIC-style — your whole program at once.
+whole module file and `reload`s it on change. **`list`** pages your whole
+program, BASIC-style — the file image, so words defined since the last
+`save` are in the listing too, and a scratch session lists before it saves.
 See `docs/Line_Editor.md` for the full key list and details.
 
 ## Numbers

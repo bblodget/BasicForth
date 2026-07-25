@@ -2667,21 +2667,47 @@ else
     printf "  ${RED}FAIL${NC}  delete refusals\n    Got: %q\n    NoFile: %q\n" "$dg_out" "$dg_nf"; ((failed++))
 fi
 
-# LIST pages the current module file (BASIC's LIST); a dirty session gets a
-# one-line reminder that unsaved bindings aren't in the file view yet, and
-# with no current file it explains itself.
+# LIST pages the CAPTURE LOG (BASIC's LIST). The log is the file image — the
+# loaded text plus every line captured since — so a word defined seconds ago
+# lists like one read from disk, and there is no "unsaved changes" caveat left
+# to print. With no file at all a scratch session still lists what you typed
+# (BASIC lists before you SAVE); only an empty log has nothing to show.
 ls_dir="$(mktemp -d)"
 printf ': leaf 1 ;\n: mid leaf 10 * ;\n' > "$ls_dir/mod.fs"
 ls_out=$( cd "$ls_dir" && printf 'list\n: extra 5 ;\nlist\nbye\nn\n' \
     | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
 rm -rf "$ls_dir"
-ls_nf=$( printf 'list\nreload\nbye\n' | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
-if [[ "$ls_out" == *": mid leaf 10 * ;"* && "$ls_out" == *"unsaved changes"* \
-      && "$ls_nf" == *"list: no current file — save <name> to start one, or load <name>"* \
+# once as the echoed input line, once in the second listing
+ls_extra=$(grep -c ': extra 5 ;' <<< "$ls_out")
+ls_nf=$( printf 'list\n: solo 7 ;\nlist\nreload\nbye\nn\n' \
+    | BASICFORTH_SESSION=1 timeout 5 $FORTH 2>&1 )
+ls_solo=$(grep -c ': solo 7 ;' <<< "$ls_nf")
+if [[ "$ls_out" == *": mid leaf 10 * ;"* && "$ls_extra" == 2 \
+      && "$ls_out" != *"unsaved changes"* \
+      && "$ls_nf" == *"nothing to list — define a word, or load <name>"* \
+      && "$ls_solo" == 2 \
       && "$ls_nf" == *"reload: no current file — save <name> to start one, or load <name>"* ]]; then
-    printf "  ${GREEN}PASS${NC}  list pages the module file (dirty note; list/reload no-file guidance)\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  list pages the log (unsaved word included, no caveat; scratch session; empty)\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  list\n    Got: %q\n    No-file: %q\n" "$ls_out" "$ls_nf"; ((failed++))
+    printf "  ${RED}FAIL${NC}  list\n    Got: %q (extra=%s)\n    No-file: %q (solo=%s)\n" \
+        "$ls_out" "$ls_extra" "$ls_nf" "$ls_solo"; ((failed++))
+fi
+
+# A module file whose last line has no trailing newline must not be run
+# together with the first line captured this session: the log is line-
+# structured, so seeding tops it up with the missing newline. Before the fix
+# SAVE wrote `: tail 2 ;: extra 5 ;` — one unparseable line, real data loss.
+nl_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: tail 2 ;' > "$nl_dir/nonl.fs"        # NO trailing newline
+nl_out=$( cd "$nl_dir" && printf ': extra 5 ;\nlist\nsave\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth nonl.fs 2>&1 )
+nl_file=$(cat "$nl_dir/nonl.fs")
+rm -rf "$nl_dir"
+if [[ "$nl_out" != *": tail 2 ;: extra"* && "$nl_file" != *": tail 2 ;: extra"* \
+      && "$nl_file" == *": tail 2 ;"* && "$nl_file" == *": extra 5 ;"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file with no trailing newline stays line-structured (list + save)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  no-trailing-newline seeding\n    Got: %q\n    File: %q\n" "$nl_out" "$nl_file"; ((failed++))
 fi
 
 # FAULT RECOVERY vs the module: a reload that hits a guard fault (here a
@@ -4405,6 +4431,61 @@ cnt @ ."  "2"
 assert_error  "require of a missing file errors"  "require zz-no-such-file.fs"  "cannot open"
 assert_error  "include of a missing file errors"  "include zz-no-such-file.fs"  "cannot open"
 assert_output "require alone shows usage"    "require"  "usage: require <file>"
+
+# Cycle guard: the sentinel marks a file loaded only after it finishes, so a
+# file that loads itself (directly, or around a ring) used to recurse until the
+# data stack hit its guard page. A load already in progress is skipped, so the
+# body still runs exactly once and the session survives.
+printf 'require %s/rself.fs\n1 cnt +!\n'  "$req_dir" > "$req_dir/rself.fs"
+printf 'require %s/rb.fs\n1 acnt +!\n'    "$req_dir" > "$req_dir/ra.fs"
+printf 'require %s/ra.fs\n1 bcnt +!\n'    "$req_dir" > "$req_dir/rb.fs"
+
+assert_output "self-require is a no-op, body loads once" "variable cnt 0 cnt !
+require $req_dir/rself.fs
+.( n=) cnt @ ."  "n=1"
+assert_output "self-include cannot recurse either" "variable cnt 0 cnt !
+include $req_dir/rself.fs
+.( n=) cnt @ ."  "n=1"
+# The skip says so: silence would surface only as an unexplained `? name`
+# wherever the missing library word is first used.
+assert_output "a skipped cycle is reported" "variable cnt 0 cnt !
+require $req_dir/rself.fs"  "is already loading — skipped"
+assert_output "a require ring loads each file once" "variable acnt 0 acnt !
+variable bcnt 0 bcnt !
+require $req_dir/ra.fs
+.( ring=) acnt @ 10 * bcnt @ + ."  "ring=11"
+# The guard is scoped to the load: once it finishes, the file is an ordinary
+# candidate again (include still force-reloads it).
+assert_output "the loading mark does not outlive the load" "variable cnt 0 cnt !
+require $req_dir/rself.fs
+include $req_dir/rself.fs
+.( n=) cnt @ ."  "n=2"
+# ...including when the load ends in the cannot-open ABORT, which leaves
+# through a different exit than the normal one.
+assert_error  "a missing file stays reportable"  "require zz-no-such-file.fs
+require zz-no-such-file.fs"  "cannot open"
+# A startup file is loaded by main.s calling the assembly INCLUDED directly,
+# so nothing is on the loading list when its first line runs. (ldg-seed) puts
+# it there from (cur-src); without that, `basicforth m.fs` where m.fs requires
+# m.fs ran the whole body twice (every definition, and every error, doubled).
+printf 'require %s/rboot.fs\n.( BODY) cr\n' "$req_dir" > "$req_dir/rboot.fs"
+rboot_out=$(printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH "$req_dir/rboot.fs" 2>&1)
+if [[ "$(grep -c BODY <<< "$rboot_out")" == "1" ]]; then
+    printf "  ${GREEN}PASS${NC}  a startup file that requires itself runs once\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  startup self-require\n    Got: %q\n" "$rboot_out"; ((failed++))
+fi
+
+# Deeper than the loading list can hold: a clear message beats a stack
+# overflow. Long basenames fill the 1024-byte list in 9 files, so 12 links
+# reach the limit before the ring closes.
+deep_pfx=$(printf 'd%.0s' $(seq 110))
+for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
+    printf 'require %s/%s%d.fs\n' "$req_dir" "$deep_pfx" "$(( (i+1) % 12 ))" \
+        > "$req_dir/$deep_pfx$i.fs"
+done
+assert_error  "a load chain too deep to track aborts cleanly" \
+              "require $req_dir/${deep_pfx}0.fs"  "nested too deep"
 rm -rf "$req_dir"
 
 # =========================================================================

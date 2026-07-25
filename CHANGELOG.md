@@ -39,6 +39,53 @@
 - A Manual section ("How Fast Is It") and a `time` entry under `help
   tools` make the whole story reachable from inside the system.
 
+### Fixed: a `require`/`include` cycle blew the data stack
+- **A file that loads itself now stops instead of recursing.** The load-once
+  sentinel is recorded only *after* a file finishes — deliberately, so a failed
+  load stays retryable — which left a file that requires itself matching
+  nothing on the way back in, recursing until the data stack hit its guard page
+  (`stack overflow`). `include`/`require` now also track what is *currently*
+  loading and skip a file already in progress, so a self-require and a ring of
+  mutually-requiring libraries both settle after one pass.
+- Easier to hit than it sounds: the search starts in the current directory, so
+  a user module named `font.fs` shadowed the library and required itself. The
+  skip reports itself — `require: font.fs is already loading — skipped` — since
+  the library's words are then missing, and silence would surface only as an
+  unexplained `? name` wherever the first one is used.
+- **A startup file that requires itself no longer runs twice.** `main.s` loads
+  the command-line file by calling the assembly `INCLUDED` directly, so that
+  load was invisible to the guard and the file's body — every definition, and
+  every error in it — executed a second time. A new internal primitive
+  `(cur-src)` exposes the source-id the interpreter is currently reading, which
+  is enough to put that load on the list too.
+- A load nested deeper than the tracking buffer holds now reports
+  `require: loads nested too deep` rather than overflowing, and neither a
+  cannot-open error nor an error inside the file leaves a file stuck marked as
+  loading.
+
+### `list` shows your whole program, unsaved lines included
+- **`list` now pages the capture log instead of the module file.** The log is
+  the file image — the text loaded from disk plus every line captured since —
+  so a word defined seconds ago lists like one read from the file. The
+  `(unsaved changes - save to include them)` caveat is gone: there is nothing
+  left for it to warn about. Found walking the Arrays lesson, where a word
+  defined at the prompt was simply missing from `list`.
+- **A scratch session can `list`.** With no current file the old `list`
+  refused; the log accumulates from boot (that is what a bare `save <name>`
+  writes), so now you can list a program before you have ever saved it — the
+  way BASIC lists before `SAVE`. Only an empty log has nothing to show:
+  `nothing to list — define a word, or load <name>`.
+- New pager entry point `(page-mem) ( c-addr u -- )` beside `page-file`: the
+  same screenful-at-a-time loop and `q`, over a block of memory. It types
+  slices in place, so listed lines are no longer capped at the 256-byte
+  `(pg-buf)` the file path copies through. The pause is terminal-only, so
+  the PTY suite covers it (pause, `q`, prompt still live).
+- **Fixed: a module file with no trailing newline lost a line.** Seeding ran
+  its last line together with the first line captured this session — visible
+  in `list`, and *written that way* by `save` (`: tail 2 ;: extra 5 ;`, one
+  unparseable line). `(seed-log)` now tops up the missing newline; the log is
+  line-structured by contract.
+
 ### Ctrl-D exits the REPL — through the save-first guard
 - **Ctrl-D on an empty line ends the session**, the exit every shell-trained
   hand expects. It submits `bye` (echoed, like bash's `exit`), so it gets

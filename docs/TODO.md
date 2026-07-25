@@ -21,7 +21,55 @@ completed. See Planning.md for high-level vision and design decisions.
   `setup.sh` — but it makes the suite quietly dependent on a file that is
   not in the repo.
 
-- [ ] **A `require`/`include` cycle blows the stack instead of stopping.**
+- [x] **A `require`/`include` cycle blows the stack instead of stopping.**
+  FIXED 2026-07-24 (branch require-cycle), as designed below: a "currently
+  loading" list separate from the loaded sentinel, so a file already in progress
+  is skipped and only becomes "loaded" on completion — the retry-after-failure
+  behaviour is untouched. Almost entirely core.fs (one primitive, below).
+  **The skip prints `require: <name> is already loading — skipped`**, against
+  the original "clean no-op" plan: Brandon's live test showed why. The skip
+  leaves the library's words undefined, so silence surfaces as an unexplained
+  `? sdl-scale` three lines later, with the actual cause (his module shadowed
+  the library name) nowhere in sight. One line of noise for a legitimate ring
+  is the cheaper trade.
+  Basenames are packed as counted strings into one 1024-byte buffer;
+  `included` saves the buffer length on the return stack and restores it on the
+  way out, so the pop is free and nesting handles itself. Beyond the buffer it
+  aborts with `require: loads nested too deep` instead of overflowing.
+  - **The unwinding worry turned out not to exist**, which is what let the fix
+    stay this small. A first attempt cleared stale entries at an "outermost"
+    load, detected by `source-id 0=` — wrong twice over: `source-id` is 0
+    *inside* an included file too (files are mmap'd, there is no fileid), so it
+    cleared the list at every level and the guard never fired; and the REPL's
+    `(capture-reset)` hook, the other candidate, runs only in an interactive
+    session, so a piped script would have gone unprotected. Neither is needed:
+    the assembly `INCLUDED` recovers from a line error — or an explicit
+    `abort"` — at its own recovery point and **returns normally**, so the
+    restore always runs. Verified with `catch`, which sees 0 both times. The
+    one exit that skips it is our own cannot-open `abort`, which now pops first.
+  - **The startup file needed one piece of assembly.** `main.s` loads the
+    command-line file (and core.fs) by calling the assembly `INCLUDED`
+    *directly* — that path wants the silent skip when the file is absent — so
+    the Forth wrapper never runs for it and nothing was on the list when the
+    file's first line executed. `basicforth game.fs`, where game.fs requires
+    game.fs, therefore stopped recursing one level down but still ran the whole
+    body **twice**: every definition, and every error, doubled (Brandon's live
+    test showed `? sdl-scale` printed twice). Fix: a new primitive `(cur-src)
+    ( -- id )` exposing `cur_source_id` — which `INCLUDED` already saves and
+    restores around each nested load — so when a load starts with an empty
+    list, `(ldg-seed)` records the file the interpreter is already reading.
+    Ten lines of assembly per arch plus a DEFWORD; no platform symbol, so no
+    unit-test stub. `(source-path)` turns the id into the name.
+  - Integration tests (+8, both arches): self-require, self-include, the skip
+    message, a two-file ring, that the mark does not outlive the load (`include`
+    still force-reloads after), that a missing file stays reportable on a retry,
+    that a startup file requiring itself runs its body once, and the
+    too-deep abort. They fail
+    against the old core.fs (stack overflow), so they pin the bug, not just the
+    behaviour.
+
+  Original report:
+
   Found 2026-07-23 while a user's own module, saved as `font.fs`, sat in the
   launch directory: `require` searches the current directory first, so
   `require font.fs` matched *their* file, whose own `require font.fs` line then
@@ -1345,7 +1393,7 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
     `(mk?)` (help/tutorial pages opt in; `more`/`list` page Forth source
     and stay plain). Piped output byte-identical, enforced by tests both
     ways (pipe suite: no ESC bytes; PTY suite: rendering present).
-- [ ] **`list` should page the capture log, not the file** (found 2026-07-19
+- [x] **`list` should page the capture log, not the file** (found 2026-07-19
   walking the Arrays lesson): `list` shows the module *file*, so a word
   defined since the last `save` is missing — surprising next to bare
   `edit`, whose dirty-guard save makes it look always-current. Since the
@@ -1356,6 +1404,24 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   `list` pages a fileid through `page-file` — either give the pager a
   page-from-memory entry point or list the log line-by-line through
   `(pg-line)` directly.
+
+  DONE 2026-07-24 (branch list-log), the page-from-memory option:
+  `(page-mem) ( c-addr u -- )` sits beside `page-file` with the same
+  screenful loop and `q`, driving `(pg-line)` over slices of the block in
+  place — so listed lines are no longer capped at the 256-byte `(pg-buf)`
+  the file path copies through. Loop bookkeeping in `(pm-a)`/`(pm-u)`,
+  mirroring `(rd-eval-lines)`. Two consequences beyond the filed one:
+  the dirty note is gone (nothing left to warn about), and a **scratch
+  session can `list`** — the log accumulates from boot whether or not a
+  file exists (that is what a bare `save <name>` writes), so you can list
+  before you have ever saved, the way BASIC does. Empty log →
+  `nothing to list — define a word, or load <name>`. Paging is
+  terminal-only, so the pause/`q` paths are PTY tests, not pipe tests.
+  Found and fixed en route: a module file with **no trailing newline** ran
+  its last line together with the first line captured this session —
+  `save` wrote `: tail 2 ;: extra 5 ;`, one unparseable line, real data
+  loss. `(seed-log)` now tops up the newline; the log is line-structured
+  by contract, and both suites assert it.
 - [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
   annoying): move the fix's later-defined dependencies up to just before
   the edited word; move-to-end when the word has no callers. Design in

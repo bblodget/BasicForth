@@ -17,7 +17,7 @@ There is no magic `session.fs`. Files are explicit and named.
 | `load <file>` | ( "name" -- ) | open `<file>` as the module — forget the old one, load the new one, make it current |
 | `new` | ( -- ) | clear the module — forget every definition, back to a clean slate (core only) |
 | `reload` | ( -- ) | re-read the **current file** from disk (the edit/compile/run loop) |
-| `list` | ( -- ) | page the current file — BASIC's `LIST` (a dirty session notes its unsaved bindings) |
+| `list` | ( -- ) | page your whole program — BASIC's `LIST` (the file image, so lines typed since the last save are included) |
 | `.module` | ( -- ) | list the module's words (see `help tools`) |
 | `-session` | ( -- ) | low-level "forget the module's words" (the helper `new`/`load`/`reload` build on) |
 

@@ -162,6 +162,12 @@ change. (`save`/`reload` are untouched either way.)
   already compute `align8(9+namelen)` from an entry — the capture code does.)*
 - `(source-path) ( id -- c-addr u )` — path string for a source-id (`0 0` if
   none).
+- `(cur-src) ( -- id )` — the source-id `INCLUDED` is reading *right now* (`0`
+  at the REPL), i.e. `cur_source_id`. Added later, for `require`'s cycle guard
+  rather than for `see`: `INCLUDED` saves and restores it around every nested
+  load, so with `(source-path)` it names the innermost file currently loading —
+  including the startup file, whose load `main.s` starts in assembly where the
+  Forth wrapper never sees it.
 
 Reading the file span reuses existing file words (`open-file`/`read-file`/
 `close-file`) — no new platform calls. The read buffer can be heap-allocated
