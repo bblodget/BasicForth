@@ -217,6 +217,30 @@ variable (st-h) variable (st-col) variable (st-stride)
         loop
     loop ;
 
+\ The same 1-bit sprite drawn at an integer magnification: each set bit
+\ becomes a `scale x scale` block instead of a single pixel, so a 16x16
+\ alien or an 8x16 glyph can be blown up without re-authoring the art. The
+\ block is one `fill-rect` (clip-once + fill32 burst), NOT scale*scale
+\ separate `pixel` calls -- big magnifications stay cheap and clip for free.
+\ `scale <= 1` is exactly `stamp` (the fast per-pixel path), so this is a
+\ drop-in that never costs anything at 1x. 0-bits stay transparent.
+variable (st-scale)
+: stamp-scale ( color src x y w h scale -- )
+    dup 2 < if  drop stamp exit  then       \ 1x (or nonsense): plain stamp
+    (st-scale) !
+    (st-h) !  (st-w) !  (st-y) !  (st-x) !  (st-src) !  (st-col) !
+    (st-w) @ 7 +  8 /  (st-stride) !
+    (st-h) @ 0 ?do
+        (st-w) @ 0 ?do
+            i j (st-bit?) if
+                (st-col) @
+                (st-x) @  i (st-scale) @ * +
+                (st-y) @  j (st-scale) @ * +
+                (st-scale) @ dup  fill-rect
+            then
+        loop
+    loop ;
+
 \ Compile one row of bitmap art from a string, so the source looks like the
 \ picture:  s" ..####.." row,  is the same two bytes as %00111100 c, would be
 \ for an 8-wide row. '.', space and '0' leave the pixel clear; anything else

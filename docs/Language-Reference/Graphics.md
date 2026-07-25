@@ -28,6 +28,7 @@ At a glance:
     blit-key    ( key src x y w h -- )     sprite copy with transparency
     grab        ( dst x y w h -- )         copy surface region to a buffer
     stamp       ( color src x y w h -- )   draw a 1-bit sprite in one color
+    stamp-scale ( color src x y w h n -- ) the same, magnified n times
     row,        ( c-addr u -- )            compile a row of bitmap art
     l,          ( color -- )               compile one pixel (sprite tables)
     pixel-addr  ( x y -- addr )            address of a pixel (no clip)
@@ -134,6 +135,19 @@ ignored.
 The art is built by a word rather than written straight after `create` so it
 survives `save`: the module log records definitions, and bare rows of `c,`
 define nothing (see `tutorial Bitmaps`).
+
+## stamp-scale ( color src x y w h n -- )
+Like `stamp`, but every set bit becomes an `n`-by-`n` block, so a small piece
+of art can be blown up without redrawing it — an 8×8 alien at `4` fills 32×32
+pixels. `n` is a whole number (integer scales only); `n` of 1 (or less) is
+exactly `stamp`, on the same fast path, so it is a drop-in that costs nothing
+at 1×. Transparency, bit order, stride, and clipping all work as in `stamp`.
+
+    \ cyan ship 100 50 8 8 3 stamp-scale    ( the ship above, 24x24 )
+
+Each block is one `fill-rect` burst, not `n*n` separate pixels, so large
+magnifications stay cheap. For text, prefer the sticky `font-scale`
+(`help fonts`), which drives `text`/`glyph` through this word.
 
 ## row, ( c-addr u -- )
 Compile one row of bitmap art from a string, so the source looks like the
