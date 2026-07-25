@@ -1237,6 +1237,17 @@ variable (el-hpos)                    \ browse cursor within one edit
     begin
         key
         dup 10 = if  drop  (el-end) 10 emit  (hist-add) (el-len) @ exit  then
+        \ Ctrl-D on an empty line (no definition open) submits "bye", so the
+        \ exit everyone's fingers expect goes through the dirty guard exactly
+        \ like a typed bye — y saves, n discards, anything else cancels back
+        \ to a fresh prompt. Mid-line it is ignored, and while a definition
+        \ is open too: continuation text COMPILES, so a stuffed bye would
+        \ not run. STATE alone can't tell (`[` interprets inside an open
+        \ definition), so also require LATEST not hidden — `:`/`:noname`
+        \ set F_HIDDEN ($40 at nt+8) and `;` clears it.
+        dup 4 =  (el-len) @ 0= and  state @ 0= and
+        (latest@) 8 + c@ 64 and 0= and if
+            drop  s" bye" (el-buf) @ swap move  ." bye" 10 emit  3 exit  then
         dup 8 = over 127 = or if  drop (el-back)  else
         dup 131 =             if  drop (el-right) else
         dup 132 =             if  drop (el-left)  else
