@@ -1331,7 +1331,7 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
     `(mk?)` (help/tutorial pages opt in; `more`/`list` page Forth source
     and stay plain). Piped output byte-identical, enforced by tests both
     ways (pipe suite: no ESC bytes; PTY suite: rendering present).
-- [ ] **`list` should page the capture log, not the file** (found 2026-07-19
+- [x] **`list` should page the capture log, not the file** (found 2026-07-19
   walking the Arrays lesson): `list` shows the module *file*, so a word
   defined since the last `save` is missing — surprising next to bare
   `edit`, whose dirty-guard save makes it look always-current. Since the
@@ -1342,6 +1342,24 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   `list` pages a fileid through `page-file` — either give the pager a
   page-from-memory entry point or list the log line-by-line through
   `(pg-line)` directly.
+
+  DONE 2026-07-24 (branch list-log), the page-from-memory option:
+  `(page-mem) ( c-addr u -- )` sits beside `page-file` with the same
+  screenful loop and `q`, driving `(pg-line)` over slices of the block in
+  place — so listed lines are no longer capped at the 256-byte `(pg-buf)`
+  the file path copies through. Loop bookkeeping in `(pm-a)`/`(pm-u)`,
+  mirroring `(rd-eval-lines)`. Two consequences beyond the filed one:
+  the dirty note is gone (nothing left to warn about), and a **scratch
+  session can `list`** — the log accumulates from boot whether or not a
+  file exists (that is what a bare `save <name>` writes), so you can list
+  before you have ever saved, the way BASIC does. Empty log →
+  `nothing to list — define a word, or load <name>`. Paging is
+  terminal-only, so the pause/`q` paths are PTY tests, not pipe tests.
+  Found and fixed en route: a module file with **no trailing newline** ran
+  its last line together with the first line captured this session —
+  `save` wrote `: tail 2 ;: extra 5 ;`, one unparseable line, real data
+  loss. `(seed-log)` now tops up the newline; the log is line-structured
+  by contract, and both suites assert it.
 - [ ] **`:e`/`edit` dependency re-ordering** (the warning is proving
   annoying): move the fix's later-defined dependencies up to just before
   the edited word; move-to-end when the word has no callers. Design in
