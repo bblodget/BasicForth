@@ -7,19 +7,46 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
-- [ ] **The font tests borrow `BASICFORTH_PATH` from the environment.**
-  Found 2026-07-24 while running the suite in a bare env. The Fonts section
-  drives the binary through `assert_output`, whose `run_forth` sets no
-  environment, so `font-terminus-8x16.fs`'s `require fontcore.fs` resolves
-  only because `testing/setup.sh` was sourced beforehand. Every other
-  library-dependent test in the file (graphics, sound, SDL) sets
-  `BASICFORTH_PATH="$FORTH_LIB"` on the command itself, so this is an
-  inconsistency, not a design choice. Ten tests fail without the ambient
-  value, and `testing/setup.sh` is untracked, so a fresh clone or a CI
-  runner has no equivalent. Fix: set the path for the Fonts section the way
-  the rest of the file does. Not urgent — the normal workflow sources
-  `setup.sh` — but it makes the suite quietly dependent on a file that is
-  not in the repo.
+- [x] **The font tests borrow `BASICFORTH_PATH` from the environment.**
+  FIXED 2026-07-24 (branch env-setup). Found while running the suite in a
+  bare env: the Fonts section drives the binary through `assert_output`,
+  whose `run_forth` set no environment, so `font-terminus-8x16.fs`'s
+  `require fontcore.fs` resolved only because `setup.sh` had been
+  sourced. `run_forth` now sets `BASICFORTH_PATH="$FORTH_LIB"` for every
+  test (a test needing a different path still sets its own on the command,
+  which wins), which also covers anything added later without the author
+  having to think about it.
+  - **It was not only the font tests.** Three `dis`/`shellutil` cases that
+    bypass `run_forth` to control `TMPDIR` had the same gap, and one of
+    them — "dis cleans up its temp file" — was a *false pass* in a bare
+    env: `disasm.fs` failed to load, so nothing ran, so no temp file was
+    left, so it passed. It now actually exercises `dis`.
+  - The PTY suite had it too: three of `list`'s new cases `require
+    graphics.fs`. `test_line_editor_pty.py` now derives `REPO_ROOT` from
+    its own path and exports `BASICFORTH_PATH` (matching how it already
+    handled `BASICFORTH_DOCS`).
+  - **A tracked `setup.sh` now sits at the top of the tree** (`. ./setup.sh`)
+    and derives `BASICFORTH_HOME` from its own location, so one file is
+    correct in every worktree instead of a hand-edited copy per tree that
+    can silently point at another checkout. It lives at the root rather than
+    in `testing/` so that directory can stay wholly ignored — a file inside
+    an ignored *directory* cannot be re-included, so keeping it there would
+    have meant `testing/*` plus a negation rule. Documented in the Manual
+    beside the env-var table, with the `./` spelled out (POSIX `.` searches
+    `$PATH` when the operand has no slash).
+    Sourcing is portable: `${BASH_SOURCE[0]}` is a bash-only construct that
+    makes dash exit with `Bad substitution`, so it uses the unsubscripted
+    `${BASH_SOURCE:-$0}` (element 0 in bash, merely unset in `sh`, and $0 is
+    the sourced file in zsh) and then *verifies* the result against
+    `src/forth/core.fs`, falling back to the working directory for a strict
+    POSIX `sh` — which cannot show a script its own path — and reporting
+    that rather than exporting a wrong root. It also picks the `PATH` entry
+    by `uname -m` (the Makefile's NATIVE test) instead of hardcoding
+    `src/arch/x86`, which on the ARM64 board would have put a nonexistent
+    directory on `PATH`. Both caught by the Codex stop gate.
+  - Verified with `env -u BASICFORTH_PATH -u BASICFORTH_DOCS -u
+    BASICFORTH_HOME`: 810 x86 / 802 arm64 integration and 34/34 PTY on both
+    arches, where the bare env previously failed 10 + 1 + 3.
 
 - [x] **A `require`/`include` cycle blows the stack instead of stopping.**
   FIXED 2026-07-24 (branch require-cycle), as designed below: a "currently

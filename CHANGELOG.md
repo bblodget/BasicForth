@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Fixed: the test suites depended on a file that isn't in the repo
+
+- **`make run-integration` and `make run-pty` now pass in a bare shell.**
+  Both harnesses drove the binary with whatever environment the caller had,
+  so tests whose fixtures `require` a library — the fonts, three of `list`'s
+  new cases, some `dis`/`shellutil` cases — resolved only because a sourced
+  `setup.sh` had exported `BASICFORTH_PATH`. That file is a local
+  convenience, so a fresh clone or a CI runner saw 14 failures with no
+  obvious cause. Each harness now sets the library path from **its own
+  location**, which is where the truth already lived: `run_forth` for every
+  pipe test, `REPO_ROOT` in the PTY harness (matching how it already handled
+  `BASICFORTH_DOCS`), and the three `TMPDIR` cases that bypass `run_forth`.
+  A test that wants a different path still sets its own, which wins.
+- One of them was a **false pass**: "dis cleans up its temp file" asserted an
+  empty temp dir, and in a bare environment `disasm.fs` never loaded, so
+  nothing ran, so nothing was left behind, so it passed. It now runs `dis`.
+- **A tracked `setup.sh` at the top of the tree** (`. ./setup.sh`) derives
+  `BASICFORTH_HOME` from its own path, so one file serves every clone and
+  every `git worktree` — no more hand-edited per-tree copies, and sourcing
+  the wrong one can't point the library search at a different checkout. It
+  stays a convenience for interactive work; nothing in the test path needs
+  it. Sourcing works in bash, zsh, and a plain POSIX `sh` — the last cannot
+  show a script its own path, so it falls back to the working directory and
+  says so plainly when that isn't a checkout, rather than exporting a wrong
+  root. The `basicforth` it puts on `PATH` is **this machine's build**,
+  chosen by the same `uname -m` test the Makefile uses, so the ARM64 board
+  gets `src/arch/arm64` instead of a nonexistent x86 directory.
+
 ### `time <word>` — benchmarking at the prompt
 
 - **`time <name>`** runs a word and prints the wall clock it took, as

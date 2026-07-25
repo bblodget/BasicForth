@@ -20,6 +20,13 @@ if len(sys.argv) < 2:
 CMD = sys.argv[1:]
 COLS = 16                      # narrow terminal: any line > ~13 chars scrolls
 
+# Point the library search at this checkout, so a `require` inside a test
+# resolves from the tree under test rather than from whatever the caller
+# happened to export. Without it these tests silently depended on a sourced
+# setup.sh — green in a set-up shell, three failures in a bare one.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["BASICFORTH_PATH"] = os.path.join(REPO_ROOT, "src", "forth")
+
 UP = b"\x1b[A"; DOWN = b"\x1b[B"; LEFT = b"\x1b[D"; RIGHT = b"\x1b[C"
 CTRL_A = b"\x01"; CTRL_E = b"\x05"; BS = b"\x7f"
 
@@ -289,7 +296,7 @@ except OSError:
 #    hashes stripped, the indented example cyan, attributes reset by line end.
 #    (The pipe suite asserts the complementary half: piped output stays plain.)
 os.environ["BASICFORTH_DOCS"] = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "Language-Reference")
+    REPO_ROOT, "docs", "Language-Reference")
 fd = spawn()
 out = send_until_done(fd, b"help allot\r")
 txt = out.decode(errors="replace")

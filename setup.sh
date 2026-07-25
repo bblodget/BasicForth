@@ -1,0 +1,67 @@
+# BasicForth development environment — source me, don't run me:
+#
+#     . ./setup.sh
+#
+# (The leading "./" matters: POSIX `.` searches $PATH when its operand has no
+# slash, so a bare `. setup.sh` is only found by shells that fall back to the
+# working directory.)
+#
+# The root is derived from this file's own location, so the same file works in
+# every worktree (~/Dev/BasicForth, -docs, -movefix, …) with no editing — and
+# a copy sourced from the wrong worktree can no longer point the library search
+# at another checkout's src/forth, which is a genuinely confusing way to lose
+# an afternoon.
+#
+# This is a convenience for interactive work. The test suites do NOT depend on
+# it: tests/test_integration.sh and tests/test_line_editor_pty.py set
+# BASICFORTH_PATH from their own location, so `make run-integration` and
+# `make run-pty` pass in a bare shell.
+
+# Locating this file has to work in whatever shell you use. bash exposes
+# BASH_SOURCE — spelled without a subscript, which yields element 0 in bash and
+# is ordinary POSIX syntax elsewhere, so a plain `sh` just sees it unset (the
+# subscripted `${BASH_SOURCE[0]}` is a bash-only construct that makes dash exit
+# with "Bad substitution"). zsh sets $0 to the sourced file. A strict POSIX
+# shell offers nothing at all — `.` leaves $0 as the shell's own name — so fall
+# back to the working directory, and verify the answer either way. Under a
+# strict POSIX sh it is therefore the working directory that decides, so source
+# it from the tree you actually mean.
+_bf_src="${BASH_SOURCE:-$0}"
+case "$_bf_src" in
+    */*) _bf_home="$(cd "${_bf_src%/*}" 2>/dev/null && pwd)" ;;
+    *)   _bf_home="$(pwd)" ;;
+esac
+[ -f "$_bf_home/src/forth/core.fs" ] || _bf_home="$(pwd)"
+if [ ! -f "$_bf_home/src/forth/core.fs" ]; then
+    echo "setup.sh: no BasicForth checkout here (looked for src/forth/core.fs)." >&2
+    echo "  In a POSIX sh the script cannot find itself — source it from the" >&2
+    echo "  top of the checkout:  cd /path/to/BasicForth && . ./setup.sh" >&2
+    unset _bf_src _bf_home
+    return 1 2>/dev/null || exit 1
+fi
+BASICFORTH_HOME="$_bf_home"
+unset _bf_src _bf_home
+export BASICFORTH_HOME
+
+# basicforth on PATH — the build directory for THIS machine, chosen the same
+# way the top-level Makefile picks NATIVE (uname -m, aarch64 => arm64, else
+# x86). Hardcoding x86 would leave an ARM64 host — the Genio 510 board, or an
+# ARM64 laptop — with a nonexistent directory on PATH and no basicforth to run.
+if [ "$(uname -m)" = "aarch64" ]; then
+    _bf_arch=arm64
+else
+    _bf_arch=x86
+fi
+export PATH="$BASICFORTH_HOME/src/arch/$_bf_arch:$PATH"
+unset _bf_arch
+
+# Library search for INCLUDE / REQUIRE: core.fs and friends, then the examples
+export BASICFORTH_PATH="$BASICFORTH_HOME/src/forth:$BASICFORTH_HOME/examples"
+
+# Topics for help / tutorials / apropos
+export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial"
+
+# Skip the X input method (XIM) handshake: a wedged ibus-x11 silently freezes
+# SDL_Init (see docs/Graphics.md "Troubleshooting"). Costs nothing for
+# BasicForth — SDL key events don't use XIM.
+export XMODIFIERS=@im=none

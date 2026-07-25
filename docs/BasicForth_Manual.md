@@ -138,6 +138,31 @@ a file in the current directory, BasicForth searches each directory in
 segments (e.g. from a leading, trailing, or doubled `:`) are skipped.
 If the variable is not set, only CWD is searched.
 
+Rather than setting these by hand, source the script that ships with the
+source tree:
+
+```
+. ./setup.sh
+```
+
+(The leading `./` matters: POSIX `.` searches `$PATH` when its operand has
+no slash.)
+
+It puts this machine's `basicforth` on your `PATH` — `src/arch/arm64` on an
+ARM64 host, `src/arch/x86` otherwise, the same `uname -m` test the top-level
+Makefile uses to pick its native target — and sets `BASICFORTH_PATH` and
+`BASICFORTH_DOCS` to this checkout's `src/forth`, `examples`, and `docs`
+directories. The root is derived from the script's own location, so the
+same file is correct in every clone and every `git worktree` with no
+editing — sourcing the copy from the wrong checkout can't silently point
+the library search at another tree. Works in bash, zsh, and a plain POSIX
+`sh`; under a strict `sh` the script cannot see its own path, so it falls
+back to the working directory and tells you if that isn't a checkout.
+
+It is a convenience for interactive work only. The test suites do not
+depend on it: they set `BASICFORTH_PATH` from their own location, so
+`make run-integration` and `make run-pty` pass in a bare shell.
+
 ### Startup Sequence
 
 At startup, BasicForth:
