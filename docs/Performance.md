@@ -1,0 +1,224 @@
+# Performance — what BasicForth costs, and why
+
+BasicForth compiles to native code, so "how fast is it" has an answer you
+can measure at the prompt and then *read*: `time` gives you the number,
+`dis` gives you the machine code behind it. This page does both for one
+benchmark — counting to a billion — and draws out the two lessons hiding
+in the numbers.
+
+Everything here is a measurement, not an aspiration. Where we lose, it
+says so.
+
+## The measurements
+
+Laptop: AMD Ryzen 9 8945HS, Linux, 2026-07-24. Every row runs the same
+work — a loop of 10^9 iterations — timed as wall clock including process
+startup (BasicForth's startup is below `time(1)`'s resolution, so wall
+clock is loop time), best of five runs. Compared against g++ 11.4 at
+`-O0`, gforth 0.7.3, and CPython 3.10.
+
+    C++ -O0, counter only                       0.36 s
+    BasicForth   do loop (empty)                0.41 s
+    C++ -O0, accumulator (two increments)       0.47 s
+    gforth-fast  do loop                        0.99 s
+    BasicForth   do 1+ loop                     1.02 s
+    gforth       do loop                        1.24 s
+    gforth-fast  do 1+ loop                     1.28 s
+    gforth       do 1+ loop                     1.58 s
+    BasicForth   begin 1+ dup <n> = until       3.66 s
+    Python       while n += 1                  45.3  s
+
+Two honesty notes on the C++ rows. First, they are `-O0` on purpose: at
+`-O2` the optimizer proves the loop's result and deletes it, and the
+benchmark reports `0.00 s`. Unoptimized C is the fair reference because it
+compiles the loop you actually wrote, which is what BasicForth does too.
+Second, the two C++ rows exist because the loops differ in real work: our
+empty `do loop` increments one counter, so it belongs next to C's
+counter-only loop; `do 1+ loop` increments two, so it belongs next to C's
+accumulator version.
+
+Read that way: **an empty counted loop runs at unoptimized-C speed** (0.41
+vs 0.36 s), and adding one word to the body costs us more than it should
+(1.02 vs 0.47 s). Both facts come straight out of the compiled code.
+
+## Why counted loops are fast
+
+`do`/`loop` compiles fully inline — no calls at all:
+
+    require disasm.fs
+    : b1 1000000000 0 do loop ;
+    dis b1
+
+    b1: 66 bytes at 0043E7AC (dictionary)
+      43e7ac:  e8 33 38 fc ff        call   0x401fe4  \ lit
+      43e7b1:  00 ca 9a 3b 00 00 00 00    \ literal: 0x3b9aca00
+      43e7b9:  e8 26 38 fc ff        call   0x401fe4  \ lit
+      43e7be:  00 00 00 00 00 00 00 00    \ literal: 0
+      43e7c6:  49 8b 07              mov    (%r15),%rax      \ DO: pop limit
+      43e7c9:  49 8b 57 08           mov    0x8(%r15),%rdx   \     and index
+      43e7cd:  49 83 c7 10           add    $0x10,%r15
+      43e7d1:  48 39 c2              cmp    %rax,%rdx        \ zero-trip check
+      43e7d4:  0f 84 13 00 00 00     je     0x43e7ed
+      43e7da:  52                    push   %rdx             \ park them on the
+      43e7db:  50                    push   %rax             \  return stack
+      43e7dc:  58                    pop    %rax             \ LOOP: take them back
+      43e7dd:  5a                    pop    %rdx
+      43e7de:  48 ff c0              inc    %rax             \ index+1
+      43e7e1:  48 39 c2              cmp    %rax,%rdx        \ reached the limit?
+      43e7e4:  74 07                 je     0x43e7ed
+      43e7e6:  52                    push   %rdx
+      43e7e7:  50                    push   %rax
+      43e7e8:  e9 ef ff ff ff        jmp    0x43e7dc
+      43e7ed:  c3                    ret
+
+The two `call lit`s run once, at entry. The loop itself is the eight
+instructions from `43e7dc` to `43e7e8`: index and limit live on the
+hardware return stack (`push`/`pop`, which is what makes `i` work inside
+the body), the compare and branch are inline machine instructions, and
+**nothing in the loop is a subroutine call**. That is the whole
+explanation for 0.41 s.
+
+It is also why we beat gforth here by 2.5×: a threaded-code system pays an
+indirect dispatch per loop iteration, and we pay none.
+
+## What a body word costs
+
+Now put one word in the body:
+
+    : b2 0 1000000000 0 do 1+ loop . ;
+    dis b2
+
+      ...
+      43e84f:  52                    push   %rdx
+      43e850:  50                    push   %rax
+      43e851:  e8 11 31 fc ff        call   0x401967  \ 1+     <-- new
+      43e856:  58                    pop    %rax
+      43e857:  5a                    pop    %rdx
+      43e858:  48 ff c0              inc    %rax
+      ...
+
+One instruction was added — a `call`. And here is what it reaches:
+
+    dis 1+
+
+    1+: primitive at 00401967 (in the binary)
+    0000000000401967 <forth_one_plus>:
+      401967:  49 83 07 01           addq   $0x1,(%r15)
+      40196b:  c3                    ret
+
+**A four-byte body behind a five-byte call.** The work `1+` does is one
+instruction; the call and return that wrap it are pure overhead, and the
+overhead is bigger than the payload. Under subroutine-threaded code every
+word in a hot loop pays this.
+
+How much? Grow the body with `1+ 1-` pairs and measure the slope, against
+gforth-fast doing the same:
+
+    body words     BasicForth    gforth-fast
+        0            0.40 s        1.03 s
+        1            1.01 s        1.32 s
+        2            1.82 s        1.57 s
+        4            3.53 s        2.85 s
+        8            6.90 s        4.49 s
+
+Per added word: **0.84 ns for us, 0.45 ns for gforth-fast.** Our loop
+overhead is far lower, but our per-word cost is nearly double, so the two
+lines cross between one and two body words: empty loops and one-word
+bodies are ours, and from two words on gforth-fast pulls ahead with the
+gap widening as the body grows.
+
+The reason is the flip side of the design. gforth-fast's dispatch is
+dearer, but it keeps the top of stack in a register, so `1+` is a register
+increment. We dispatch with a plain `call` — cheap, and it is why the loop
+itself is fast — but our data stack is pure memory, so `1+` is a
+read-modify-write at `(%r15)`, and it cannot be folded into the caller.
+
+## Why `begin`/`until` is 9× the cost
+
+Same count, different loop structure:
+
+    : b3 0 begin 1+ dup 1000000000 = until . ;
+    dis b3
+
+      43e7b9:  e8 a9 31 fc ff        call   0x401967  \ 1+
+      43e7be:  e8 34 2f fc ff        call   0x4016f7  \ dup
+      43e7c3:  e8 1c 38 fc ff        call   0x401fe4  \ lit
+      43e7c8:  00 ca 9a 3b 00 00 00 00    \ literal: 0x3b9aca00
+      43e7d0:  e8 cb 31 fc ff        call   0x4019a0  \ =
+      43e7d5:  49 8b 07              mov    (%r15),%rax     \ UNTIL: pop flag
+      43e7d8:  49 83 c7 08           add    $0x8,%r15
+      43e7dc:  48 85 c0              test   %rax,%rax
+      43e7df:  0f 84 d4 ff ff ff     je     0x43e7b9
+
+Four calls per iteration instead of zero — the counter bump, the copy, the
+limit literal, and the comparison are all words here, while `do`/`loop`
+does the equivalent compare inline and keeps the counter off the data
+stack entirely. 3.66 s versus 0.41 s.
+
+**This is the biggest lever in the language.** Same algorithm, same
+machine, same compiler: choosing the right loop structure is worth 9×. No
+amount of cleverness inside the body recovers what the wrong loop shape
+costs.
+
+## Practical guidance
+
+- **Use `do`/`loop` for hot counted loops.** It is the one construct that
+  compiles with zero calls per iteration.
+- **In a hot body, prefer fewer, fatter words.** Each word in the inner
+  loop is a call/return you pay 10^9 times. A body that would be five
+  words is often better as one definition doing the same work with locals
+  on the return stack — or, honestly, as one more primitive.
+- **Measure before you tune.** `time` is built in:
+
+        : bench 1000000000 0 do loop ;
+        time bench           \ 0.419 s
+
+  It leaves the stack as it found it, so a word that takes arguments works
+  (`50000000 time spin`) and results still come back. Resolution is one
+  millisecond, so run fast things in a loop.
+- **Then read the code.** `require disasm.fs` and `dis <name>` shows what
+  the compiler actually emitted, with every call annotated by name. Timing
+  tells you *that* something is slow; `dis` tells you *why*, and it is the
+  same two-step you just watched on this page.
+
+## Known limits, and what is planned
+
+- **The per-word call/return tax is the big one.** A **peephole inliner**
+  would open-code short primitives at the call site — `call 1+` becoming
+  `incq (%r15)`, which as shown above is *smaller* than the call it
+  replaces. That drives the 0.84 ns/word slope toward zero and would put
+  us ahead at every body length, not just the first word or two.
+- **`loop` parks index and limit on the return stack every iteration**
+  solely so `i` works in the body. When the body never touches `i` or the
+  return stack, they could stay in registers and the loop becomes
+  inc/cmp/jne — which *is* the C `-O0` loop. Worth roughly 0.41 → 0.38 s
+  on the empty benchmark.
+
+Both are open items in docs/TODO.md ("Performance / Optimizer"). When they
+land, the numbers on this page change and it gets re-measured.
+
+## Reproducing this
+
+The benchmark is five lines. With the binary built:
+
+    \ bench.fs
+    : b1 1000000000 0 do loop ;                    \ empty counted loop
+    : b2 0 1000000000 0 do 1+ loop drop ;          \ one body word
+    : b3 0 begin 1+ dup 1000000000 = until drop ;  \ the other loop shape
+    time b1  time b2  time b3
+    bye
+
+For the body-word scaling table, add `1+ 1-` pairs to `b2`'s body. For the
+disassembly, `require disasm.fs` first, then `dis b1` and friends.
+
+Numbers are **x86-64 only**. ARM64 figures wait on real hardware: the
+cross-build runs under qemu user-mode emulation on this laptop, which
+measures qemu's translation cost, not the board's.
+
+## See Also
+
+- docs/Disassembler.md — how `dis` decodes and annotates machine code.
+- docs/Core_Primitives.md — the pure-memory data stack these costs come from.
+- docs/Conditionals.md — how `do`/`loop` and `begin`/`until` are compiled.
+- `help tools` — the reference entries for `time`, `dis`, and `see`.
+- docs/TODO.md, "Performance / Optimizer" — the open optimizer work.

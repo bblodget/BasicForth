@@ -7,6 +7,20 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **The font tests borrow `BASICFORTH_PATH` from the environment.**
+  Found 2026-07-24 while running the suite in a bare env. The Fonts section
+  drives the binary through `assert_output`, whose `run_forth` sets no
+  environment, so `font-terminus-8x16.fs`'s `require fontcore.fs` resolves
+  only because `testing/setup.sh` was sourced beforehand. Every other
+  library-dependent test in the file (graphics, sound, SDL) sets
+  `BASICFORTH_PATH="$FORTH_LIB"` on the command itself, so this is an
+  inconsistency, not a design choice. Ten tests fail without the ambient
+  value, and `testing/setup.sh` is untracked, so a fresh clone or a CI
+  runner has no equivalent. Fix: set the path for the Fonts section the way
+  the rest of the file does. Not urgent — the normal workflow sources
+  `setup.sh` — but it makes the suite quietly dependent on a file that is
+  not in the repo.
+
 - [x] **A `require`/`include` cycle blows the stack instead of stopping.**
   FIXED 2026-07-24 (branch require-cycle), as designed below: a "currently
   loading" list separate from the loaded sentinel, so a file already in progress
@@ -1530,46 +1544,46 @@ command-line file loading already work; these tiers fill the gaps.
 
 ## Performance / Optimizer
 
-Fallout from the 2026-07-22 count-to-a-billion play session (x86 laptop,
-1e9 iterations, wall clock incl. startup; g++ -O0, gforth 0.7.3,
-Python 3.10). Same-file cross-system runs:
+Fallout from the 2026-07-22 count-to-a-billion play session. **The numbers
+now live in docs/Performance.md** — re-measured 2026-07-24, best-of-five,
+and that page is the one to update when the items below land. Headline for
+planning purposes: our `loop` compiles fully inline (pop/pop, inc, cmp, je,
+push/push, jmp — index+limit on the hardware return stack), so an empty
+counted loop runs at unoptimized-C speed and 2.5× gforth-fast. The per-word
+tax is where we lose: **0.84 ns per body word for us** (call/ret +
+read-modify-write at `(%r15)`) **vs gforth-fast's 0.45 ns** (dearer
+dispatch, but TOS in a register). The lines cross between one and two body
+words, so gforth-fast wins from a two-word body on and the gap widens with
+length.
 
-    C++ -O0                          0.38 s   counter in memory, 3 instrs/iter
-    BasicForth  do loop (empty)      0.42 s   inline loop, ZERO calls/iter
-    BasicForth  do 1+ loop           1.03 s   real accumulator, 1 call/iter
-    gforth-fast do loop / do 1+ loop 1.02 s / 1.27 s
-    gforth      do loop / do 1+ loop 1.26 s / 1.52 s
-    BasicForth  begin 1+ dup lit =   3.3 s    4 calls/iter
-    Python      while +=1            30.9 s
-
-Headline: our `loop` compiles fully inline (pop/pop, inc, cmp, je,
-push/push, jmp — index+limit on the hardware return stack), so counted
-loops run at ~C -O0 speed and beat gforth-fast outright. The per-word tax
-is where we lose: adding `1+` to the body costs us +0.62 ns/iter
-(call/ret + load/store at `(%r15)`) vs gforth-fast's +0.26 ns (dispatch
-with TOS in register) — a several-word body would flip the ranking.
-
-- [ ] **Docs: a performance note.** `docs/Performance.md` (or a Manual
-  aside): the benchmark story above with the `dis` walkthrough — "prefer
-  `do`/`loop` for hot counted loops, and here is the machine code that
-  explains why"; the honest-accumulator variant; loop-structure choice as
-  an 8× lever within one language. Also the best video segment we have:
-  time it, then `dis` it — no other system in the table can disassemble
-  its own benchmark at the prompt.
+- [x] **Docs: a performance note.** DONE 2026-07-24 (branch perf-docs) —
+  `docs/Performance.md`: the cross-system table, the `dis` walkthrough of
+  all three loop shapes, the body-word scaling series against gforth-fast,
+  practical guidance, and the planned optimizer work. Plus a Manual
+  section ("How Fast Is It"), and `time <word>` shipped as a built-in so
+  the "time it, then `dis` it" demo is two words at the prompt. Two
+  findings worth keeping: the honest C++ baseline is `-O0` *matched for
+  work* (counter-only 0.36 s vs accumulator 0.47 s — at `-O2` the loop is
+  deleted and the benchmark reports 0.00 s), and the per-word tax is
+  linear and easy to measure by growing the body with `1+ 1-` pairs.
 - [ ] **Peephole inliner: open-code short primitives at the call site.**
-  `call 1+` becomes `incq (%r15)`; same for dup/drop/swap/over/@/!/
-  lit/+/-/1+/1-/= and friends — a table of copyable bodies, or "inline if
-  the primitive is under N bytes and ends in ret". Measured payoff: the
-  0.62 ns/iter per-word tax drops toward zero, putting loop bodies below
-  gforth-fast at every size (and closing most of the 9× begin/until gap
-  to C). Interacts with `dis` (annotator would show fewer names) and
-  `see` metadata — keep the capture log source-faithful.
+  `call 1+` becomes `addq $1,(%r15)` — which is 4 bytes where the call is
+  5, so the inline form is *smaller* as well as faster. Same for
+  dup/drop/swap/over/@/!/lit/+/-/1+/1-/= and friends — a table of copyable
+  bodies, or "inline if the primitive is under N bytes and ends in ret".
+  Measured payoff: the 0.84 ns/word tax drops toward zero, putting loop
+  bodies below gforth-fast at every size (and closing most of the 9×
+  begin/until gap to C). Interacts with `dis` (annotator would show fewer
+  names) and `see` metadata — keep the capture log source-faithful. Design
+  wrinkle to settle first: primitives carry `CodeLen = 0`, which is also
+  `dis`'s primitive-vs-dictionary dispatch flag, so body lengths need
+  either real CodeLen values (plus a new `dis` rule) or a curated table.
 - [ ] **Registerized `loop` for empty/rstack-free bodies.** The emitted
   loop parks index+limit on the return stack every iteration
   (push/push/jmp → pop/pop) solely so `i` works inside the body. When the
   body is empty — or provably never touches the return stack or `i` — keep
   the pair in registers: the loop becomes inc/cmp/jne, which IS the C -O0
-  loop. Smaller win than the inliner (0.42 s → ~0.38 s on the empty
+  loop. Smaller win than the inliner (0.41 s → ~0.36 s on the empty
   benchmark) but a cute, self-contained peephole.
 
 ## Future / Hardening
