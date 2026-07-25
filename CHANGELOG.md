@@ -30,6 +30,28 @@
   chosen by the same `uname -m` test the Makefile uses, so the ARM64 board
   gets `src/arch/arm64` instead of a nonexistent x86 directory.
 
+### `booting?` — a module can launch itself once and still be edited
+- **`booting? ( -- flag )`**, asked inside `on-start`, says whether this load is
+  *starting* the program or starting it *over*. So a module can launch itself on
+  a real start without relaunching every time you edit it:
+
+      : on-start
+          booting? if  play  then       \ launch, but only on a real start
+          320 180 sdl-open ;            \ reopen the window every time
+
+  Before this there was no way to tell: `basicforth invaders.fs` starting the
+  game meant every `:e` re-ran it — twice, since a `:e` on an unsaved module
+  reloads once to save and once to splice. Quit the game, edit a word, try
+  again with `play`; the rebuild no longer drags you into a fresh game, and the
+  window survives it.
+- True at startup and for `load`, false for `reload`, `edit`, `:e` and
+  `delete`. `load` counts as a start because it is the same act as
+  `basicforth <file>`, one session later — which also makes `load game.fs` the
+  way to test the boot path without leaving the REPL.
+- `on-start` stays `( -- )`: the hook *asks* rather than being handed an
+  argument, so a module that does not care is unaffected and nothing is left on
+  the stack for it to trip over.
+
 ### `time <word>` — benchmarking at the prompt
 
 - **`time <name>`** runs a word and prints the wall clock it took, as

@@ -150,7 +150,8 @@ then calls at the right moment:
 
 `on-start` runs when the module is opened — at startup (`basicforth game.fs`),
 after `load`, and after every `reload`, including the reloads that `edit` and
-`:e` perform. Use it to (re)acquire whatever the module needs to run.
+`:e` perform. Use it to (re)acquire whatever the module needs to run. To do
+something on a real start only, ask `booting?` (below).
 
 `on-stop` runs just before the module's words are thrown away, by `reload`,
 `load`, `new` or `-session`. This is where you release things the *system* is
@@ -162,6 +163,31 @@ the valid handle, so it can close it properly.
 Both are optional; a module that defines neither behaves exactly as before. If
 a hook fails it reports (`error in on-start hook: -4`) and the load continues —
 a broken hook can't leave you with no module at all.
+
+Careful with an `on-start` that never returns: it runs *during* the load, so a
+bare `begin … again` never gives you a prompt back. A game loop with an exit
+key is fine — the prompt returns when the loop does.
+
+## booting? ( -- flag )
+Ask, inside `on-start`, whether this load is **starting** the program or
+starting it **over**. True at startup (`basicforth game.fs`) and for `load`,
+which both take you from not running the program to running it; false for
+`reload`, `edit`, `:e` and `delete`, which rebuild a module you already had.
+
+    : on-start
+        booting? if  play  then           \ launch, but only on a real start
+        320 180 sdl-open ;                \ reopen the window every time
+
+Without the guard the same line replays the game on every edit — twice per
+edit, in fact, since a `:e` on an unsaved module reloads once to save and once
+to splice. With it, `basicforth invaders.fs` starts the game once; you quit it
+with its exit key, land at the prompt, and from there `:e` a word and try again
+with `play` — the rebuild no longer drags you back into a fresh game. The
+window survives the edit, since `on-start` reopens it every time, so the shape
+you just changed is on screen the moment you redraw it.
+
+`load game.fs` counts as a start, so it is also how you test the boot path
+without leaving the session. Outside `on-start` the answer is always false.
 
 ## -session ( -- )
 Low-level "forget the module's words" back to the end of `core.fs` — the helper

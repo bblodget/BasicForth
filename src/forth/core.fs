@@ -521,6 +521,10 @@ variable (session-on)                   \ true only after (session-init) ran —
 variable (hook-busy)                    \ an ON-START/ON-STOP hook is running; declared
                                         \ here because (capture-reset) clears it (see
                                         \ (mod-hook), below, for what it guards)
+variable (boot?)                        \ this load STARTS the program (boot or LOAD)
+                                        \ rather than re-running it; read by BOOTING?
+                                        \ and cleared once ON-START has had it —
+                                        \ (capture-reset) clears a stuck one too
 create (nl) 10 c,                       \ a single newline byte
 
 \ SEE directory: an index over (log) so SEE can show a word's source. Each
@@ -634,6 +638,7 @@ variable (dg-off)  variable (dg-len)  variable (dg-stop)
     (assign?) drop                      \ clear a stale assign flag from an errored line
     false (cap-keep) !                  \ ...and a KEEP that never reached (capture-line)
     false (hook-busy) !                 \ ...and a hook that faulted past its CATCH
+    false (boot?) !                     \ ...and a boot flag a faulted load never retired
     state @ if  drop exit  then         \ mid-definition: keep pending AND a :e arm
     false (ce-armed) !                  \ a :e whose definition errored is disarmed
     (pend) cell+ @ if  (pend) (buf-reset)  then
@@ -754,6 +759,28 @@ variable (mh-a)  variable (mh-u)        \ the hook name, kept for the error repo
         ." error in " (mh-a) @ (mh-u) @ type ."  hook: " . cr
     then ;
 
+\ BOOTING? ( -- flag ): inside ON-START, is this load STARTING the program, or
+\ starting it OVER? True for `basicforth game.fs` and for LOAD — both take you
+\ from not running the program to running it. False for RELOAD, EDIT, :e and
+\ DELETE, which rebuild a module you already had. So a module can start itself
+\ on a real start without restarting on every edit:
+\
+\     : on-start  booting? if  play  then  320 180 sdl-open ;
+\
+\ PLAY runs until its exit key returns you to the prompt; editing from there
+\ rebuilds the module without dropping you into a fresh game.
+\ Without it that line re-ran the game on every edit — twice, in fact, since a
+\ :e on an unsaved module reloads once to save and once to splice. Asking,
+\ rather than being handed an argument, keeps ON-START ( -- ): a module that
+\ ignores the question is unaffected, and nothing is left on the stack for it
+\ to trip over. Meaningful only during the hook; false everywhere else.
+: booting? ( -- flag )  (boot?) @ ;
+
+\ (start-hook): run ON-START and retire the boot flag, so BOOTING? answers only
+\ for the hook it was set for — a later RELOAD must never inherit it.
+: (start-hook) ( -- )
+    s" on-start" (mod-hook)  false (boot?) ! ;
+
 \ (session-init): boot hook, run once when entering the interactive REPL, with
 \ the startup file path ( c-addr u ) or ( 0 0 ) if none. Records the -session
 \ restore point, marks the session active, sets the current file, seeds the log.
@@ -761,7 +788,8 @@ variable (mh-a)  variable (mh-u)        \ the hook name, kept for the error repo
     true (session-on) !                 \ mark this run as an interactive session
     dup if  (set-cur-file)  else  2drop  0 (cur-file-len) !  then
     (seed-log)
-    s" on-start" (mod-hook) ;           \ the startup file has already loaded (see
+    true (boot?) !                      \ the session starts here: BOOTING? is true
+    (start-hook) ;                      \ the startup file has already loaded (see
                                         \ the NOTE below), so a fresh
                                         \ `basicforth mymodule.fs` starts the
                                         \ module exactly the way a RELOAD does
@@ -872,8 +900,9 @@ variable (mh-a)  variable (mh-u)        \ the hook name, kept for the error repo
                                         \ SAVE rewrites the file it read, never
                                         \ a stale image of the previous module
     (cur-file@) (included?)             ( ior )
-    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr  exit  then
-    s" on-start" (mod-hook) ;           \ the file has defined it by now, if at all
+    if  ." load error in " (cur-file@) type ."  — module may be incomplete" cr
+        false (boot?) !  exit  then     \ no ON-START runs, so retire it here
+    (start-hook) ;                      \ the file has defined it by now, if at all
 
 \ LOAD <file>: open <file> as the current module — a clean swap, like
 \ `basicforth <file>` mid-session. Verified readable BEFORE anything is forgotten,
@@ -884,7 +913,8 @@ variable (mh-a)  variable (mh-u)        \ the hook name, kept for the error repo
     close-file drop                     ( c-addr u )
     (dirty-guard) 0= if  2drop exit  then    \ unsaved work: ask before discarding
     (set-cur-file)                       \ absolutize + adopt as the current file
-    (open-module) ;
+    true (boot?) !                       \ LOAD starts a program you weren't running,
+    (open-module) ;                      \ so it boots it — same as `basicforth <file>`
 
 \ NEW: clear the module — forget every definition, empty the log, drop the current
 \ file. A clean slate (core vocabulary only). Discards unsaved changes.

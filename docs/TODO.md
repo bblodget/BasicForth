@@ -790,7 +790,37 @@ docs/Graphics.md for the API.
   - Decide what happens when data rows are separated from their `create` by an
     unrelated captured line; probably stop extending at the first such line.
 
-- [ ] **`on-start` should be able to tell a boot from a reload.** Today
+- [x] **`on-start` should be able to tell a boot from a reload.** DONE
+  2026-07-25 (branch booting) as **`booting? ( -- flag )`**, the readable-flag
+  shape rather than either option sketched below.
+  - **Asking beats being handed an argument.** `on-start ( boot? -- )` would
+    make hooks mandatory-arity: a module that ignores the flag silently leaves
+    a cell on the stack. `booting?` keeps `on-start ( -- )`, so a module that
+    does not care is untouched — the "keep the no-hook case free" requirement
+    below, extended to the hooks that exist but do not ask. `on-stop` can take
+    the same treatment later (teardown-for-an-edit vs for `bye`) without
+    inventing a second convention.
+  - **The line is start vs re-start, not boot vs everything.** True at startup
+    *and for `load`*; false for `reload`/`edit`/`:e`/`delete`. `load <file>` is
+    already documented as "a clean swap, like `basicforth <file>` mid-session",
+    so having the two disagree would be a wart — and this way `load game.fs` is
+    the interactive way to test the boot path. That answered Brandon's question
+    about adding a separate `boot <file>` verb: not needed, and the module-verb
+    family is already at eight words.
+  - Implementation: `(boot?)` set by `(session-init)` and `load`, read by
+    `booting?`, retired by `(start-hook)` right after `on-start` returns so a
+    later `reload` cannot inherit it. `(open-module)`'s load-error path clears
+    it too (no hook runs there), and `(capture-reset)` clears one left by a
+    faulted load, the same safety net `(hook-busy)` has.
+  - The double-reload case is covered by construction: a dirty `:e` reloads
+    twice (auto-save, then splice) and both are restarts, so a self-launching
+    module runs itself once per session, not twice per edit. Pinned by a test.
+  - +3 integration tests; `help booting?`; the hazard below (a hook that never
+    returns never gives you a prompt) is now written down in `help modules`.
+
+  Original write-up — the reasoning that led here:
+
+- [~] **`on-start` should be able to tell a boot from a reload.** Today
   `(mod-hook)` calls `on-start` identically at startup, after `load`, and after
   every `reload` — including the ones `:e`/`edit` perform — so a module cannot
   say "launch the game when I'm started, but only reopen the window when I'm
