@@ -102,6 +102,16 @@ exist, BasicForth says so rather than failing silently.
   Split a long idea across two `## ` steps.
 - **Make examples runnable and short**, with the expected result in a trailing
   `\ comment`, exactly as in the Language Reference pages.
+- **Every indented block is executed** by `make run-lessons`
+  (`tests/test_lessons.py`), which replays each lesson the way a reader walks
+  it — one session, steps in order, state carrying between them — and fails on
+  any error the lesson did not set out to teach. Two consequences for authors:
+  a block that is a *sketch* rather than something to type must be commented
+  (`\ setup play finish`), so a reader who types it anyway gets ` ok` instead
+  of a confusing error; and a step that cannot finish on a pipe (it launches
+  a game, waits on a key) needs an entry in that file's skip table **with a
+  reason**, which the run prints — coverage never shrinks silently. Errors the
+  lesson deliberately demonstrates go in the same table's `expect` list.
 - **Give the file a descriptive, prefix-free name** (`Arrays`, `Snake` — not
   `01-arrays`) and open it with a `# <Name> — <what you'll learn>` title:
   that line *is* the description shown by `tutorials` (which sorts names

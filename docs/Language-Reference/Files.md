@@ -99,6 +99,16 @@ to load a program. Always loads, even if the file was loaded before — that's
 the edit-and-reload workflow (`require` is the load-only-once variant). A
 missing file is an error (`cannot open <name>`).
 
+**Where it looks:** the current directory first, then each directory in
+`BASICFORTH_PATH` in order, loading the first match — so a file of your own
+shadows a library of the same name. That path is where the shipped libraries
+(`sdl3.fs`, `graphics.fs`, …) are found, and it's colon-separated, so adding
+the examples directory makes the demos loadable by bare name:
+
+    \ BASICFORTH_PATH=src/forth:examples basicforth
+
+Every loading word below searches the same way.
+
     \ include game.fs
 
 ## included ( c-addr u -- )

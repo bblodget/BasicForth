@@ -147,9 +147,11 @@ clip, and the frame loop. `tutorial Sprites` is the natural sequel — pixel
 art you stamp, animate, and move around. In the reference, `help graphics`
 covers every drawing word and `help sdl3` the window, events, and keys. The
 bouncing-ball demo is a good read too — a complete game loop with keyboard
-and sound in ~60 lines:
+and sound in ~60 lines. It ships in the `examples/` directory, so `include`
+finds it when that directory is on your `BASICFORTH_PATH` (see `help files`);
+otherwise give it the path it lives at:
 
-    include bounce.fs
+    include bounce.fs           \ or: include examples/bounce.fs
     bounce             \ ESC quits
     tutorial Sprites   \ the next lesson
     tutorials          \ or pick another
