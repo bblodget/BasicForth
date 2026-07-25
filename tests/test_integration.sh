@@ -34,8 +34,14 @@ slowest_ms=0
 # Threshold in ms — tests slower than this show timing inline
 SLOW_THRESHOLD_MS=100
 
+# Every test runs with BASICFORTH_PATH pointing at this checkout's library, so
+# a `require` inside a test resolves from the tree under test and never from
+# the caller's environment. Without it the suite silently borrowed whatever a
+# sourced setup.sh had exported — green here, ten font failures in a
+# bare shell or on a CI runner. Tests that need a different path (or none)
+# still set their own on the command line, which wins over this default.
 run_forth() {
-    printf '%s\n' "$1" | timeout 2 $FORTH 2>&1
+    printf '%s\n' "$1" | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1
 }
 
 # elapsed_ms: compute milliseconds between two %s.%N timestamps
@@ -4590,7 +4596,7 @@ rm -rf "$shu_ovf"
 # mktemp round-trip: file exists after (sh-mktemp), gone after (sh-rm)
 shu_tmp="$(mktemp -d)"
 shu_out=$(printf '%s\n: t s" shtest" (sh-mktemp) if (cmd-ln) swap 2dup type cr (sh-rm) then ; t\n' "$shu_pre" \
-    | TMPDIR="$shu_tmp" timeout 5 $FORTH 2>&1)
+    | TMPDIR="$shu_tmp" BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
 if printf '%s' "$shu_out" | grep -q "shtest-" \
    && [ -z "$(ls -A "$shu_tmp" 2>/dev/null)" ]; then
     printf "  ${GREEN}PASS${NC}  shellutil mktemp + rm round-trip\n"; ((passed++))
@@ -4638,7 +4644,7 @@ else
     # TMPDIR keeps this assertion blind to other sessions' files in /tmp
     dis_tmp="$(mktemp -d)"
     printf '%s\n: sq dup * ;\ndis sq\n' "$dis_pre" \
-        | TMPDIR="$dis_tmp" timeout 5 $FORTH >/dev/null 2>&1
+        | TMPDIR="$dis_tmp" BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH >/dev/null 2>&1
     if [ -n "$(ls -A "$dis_tmp" 2>/dev/null)" ]; then
         printf "  ${RED}FAIL${NC}  dis cleans up its temp file\n    Left: %s\n" \
             "$(ls "$dis_tmp")"; ((failed++))
@@ -4652,7 +4658,7 @@ else
     dis_deep="$(mktemp -d)"; dis_c="$(printf 'x%.0s' {1..150})"
     mkdir -p "$dis_deep/$dis_c/$dis_c"
     dis_lo=$(printf '%s\n: sq dup * ;\ndis sq\n' "$dis_pre" \
-        | TMPDIR="$dis_deep/$dis_c/$dis_c" timeout 5 $FORTH 2>&1)
+        | TMPDIR="$dis_deep/$dis_c/$dis_c" BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
     if printf '%s' "$dis_lo" | grep -q "cannot create a temp file" \
        && [ -z "$(find "$dis_deep" -type f 2>/dev/null)" ]; then
         printf "  ${GREEN}PASS${NC}  dis overlong TMPDIR: clean failure, no leak\n"; ((passed++))
