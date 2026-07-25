@@ -500,7 +500,32 @@ docs/Graphics.md for the API.
   chosen size was **8×16, not the 10×18** BareMetalForth used: PSF1 is always
   8-wide (1 byte/row = native `stamp` stride), and a thresholded TTF was the
   reason 10×18 was needed there — Terminus is a purpose-drawn bitmap, crisp at
-  8-wide. `stamp-scale`/`text-scale` deliberately deferred to the next batch.
+  8-wide. ~~`stamp-scale`/`text-scale` deliberately deferred to the next batch.~~
+- [x] Integer sprite/text magnification — done 2026-07-24 (branch `stamp-scale`).
+  `stamp-scale ( color src x y w h n -- )` in `graphics.fs` draws each set bit of
+  a 1-bit sprite as an `n×n` **`fill-rect` block** (not `n²` `pixel` calls — the
+  per-sub-pixel path the perf notes warned against); `n<2` delegates straight to
+  `stamp`, so 1× is a zero-cost drop-in. Text scaling is a **sticky `font-scale`
+  value** (default 1, `sdl-scale` idiom) that `glyph`/`text` read — so their
+  stack signatures are unchanged and every existing lesson/test/example keeps
+  working; `text` scales the pen advance too. Integer scales only (fractional
+  nearest = lumpy, smooth = blurry + fights the crisp aesthetic; arbitrary whole-
+  screen scaling belongs at the GPU present, not per-sprite software). Docs:
+  `help graphics` (`stamp-scale`), `help fonts` (`font-scale`); +8 integration
+  tests both arches. The `text-scale` word was folded into `font-scale` (a value
+  reads cleaner than a per-call arg and keeps `text`'s signature stable).
+  Same branch, a font-architecture refactor: `text`/`glyph`/`font-scale`/
+  `>glyph`/`font-w`/`font-h` moved into a shared engine **`fontcore.fs`** that
+  draws a *current font* (values set via `font! ( data w h -- )`), so a font
+  data file is now just its glyph table + a selector word named after it
+  (`terminus-8x16`), which registers itself and is called on load. Multiple
+  fonts can coexist and you switch with the selector word; `font!` derives the
+  row stride from the width, so fonts wider than 8px work. `psf2font.py` emits
+  the data+selector form (names derived from the output filename). Prompted by
+  Brandon: the old single-file design would have duplicated the engine per font
+  and the words would redefine each other. Engine file named `fontcore.fs`
+  (not `font-*` — that pattern reads as a font family; not the collision-prone
+  `font.fs`).
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
@@ -772,31 +797,28 @@ docs/Graphics.md for the API.
   printed `redefined count` three times during the count-to-a-billion
   session while BasicForth silently shadowed the standard word `count`.
   Two follow-ups filed the day it shipped (Brandon's live testing):
-  - [ ] **`delete <name>` — remove a definition from the module file and
-    reload** (DECIDED 2026-07-22 after a design walk: undo-def → forget →
-    this). The warning creates the moment: you see `redefined count`, you
-    want it gone. Rejected shapes: surgical dictionary removal (unsafe in
-    STC — callers hold compiled `call` addresses); classic FORGET
-    retroactive-marker semantics (takes everything defined after — the
-    over-forget foot-gun is why Forth 2012 dropped it for `marker`).
-    Chosen shape is file-level, Brandon's idea: edit the truth. `delete
-    3beep` removes the definition's group from the module file and
-    reloads — the name matches classic BASIC's DELETE-a-program-line, and
-    `rm` stays reserved for files (shell words operate on files).
-    - Survivors replay fine; a word that DEPENDED on the deleted one fails
-      its replay line with an honest `? name` — dependency surfacing, not
-      dangling pointers. No over-forgetting possible.
-    - Nearly built: `:e` already locates a definition's file span
-      ((edit-span?)) and splices replacement text ((edit-splice)) then
-      reloads. `delete` is `:e` splicing EMPTY text.
-    - Decide: a name with several groups in the file (redefinitions
-      append) — remove only the newest group (reload RESURRECTS the
-      previous definition = "undo my redefinition", the wish that started
-      this) vs all groups (word fully gone). Maybe both: `delete` takes
-      newest, a flag or second word for all.
-    - Needs an active session/file; scratch sessions keep `marker`/`new`.
-    - Update Modules.md/Module_Architecture ("explicit delete" gap) and
-      the Manual's module section when built.
+  - [x] **`delete <name>` — remove a definition from the module file and
+    reload.** Done 2026-07-24 (branch delete-word), exactly as designed
+    2026-07-22 (design walk: undo-def → forget → this): file-level,
+    Brandon's idea — edit the truth. `delete 3beep` splices the word's
+    newest group OUT of the module file ((edit-span?) + (edit-splice)
+    with `(es-nu)=0`; a recorded span includes its trailing newline, so
+    no blank line is left) and reloads; prints `deleted 3beep`. Pure
+    core.fs — no assembly. Rejected shapes stand: surgical dictionary
+    removal (unsafe in STC — callers hold compiled `call` addresses);
+    FORGET retroactive-marker semantics (the over-forget foot-gun is why
+    Forth 2012 dropped it for `marker`). `rm` stays reserved for files.
+    - Newest-group-only shipped: deleting a redefinition RESURRECTS the
+      previous definition — "undo my redefinition", the wish that started
+      this. A depended-on word's deletion surfaces the dependent as an
+      honest `? name` on replay. Guards mirror `edit` (unknown/primitive/
+      not-in-module/no-file), with the same reload-to-converge retry;
+      a dirty session auto-saves first via (edit-sync).
+    - Deferred until use testing asks: delete ALL of a name's groups
+      (word fully gone) — maybe a flag or a second word.
+    - Test-fixture gotcha for the suite: don't name a fixture word `base`
+      (or any core word) — after the delete, the dependent silently
+      rebinds to the primitive and the `? name` never comes.
   - **DECIDED (2026-07-22): library-word entries stay lean; the topic
     header is the setup pointer.** `help beep` shows no require/snd-open
     info — that story lives in the page preamble, which a word lookup
@@ -854,8 +876,10 @@ docs/Graphics.md for the API.
   Brandon 2026-07-20, SHIPPED in v0.12.0 (branch `binary-sprites`); this box
   was left unchecked by mistake and closed 2026-07-23. `stamp`, `row,` and the
   Bitmaps lesson are all live; `glyph`/`text` in `font-terminus-8x16.fs` now build on it. The
-  design notes below are kept as record (and `stamp-scale` is still pending —
-  see the Font item above, its designated trigger). A sprite is a **monochrome
+  design notes below are kept as record (`stamp-scale` has since shipped
+  too — 2026-07-24, and fonts were indeed its designated trigger; it landed
+  as a word taking `n`, not a sticky value, so the two-composing-scales
+  worry below never materialized for sprites). A sprite is a **monochrome
   bitmap** and
   the colour is supplied at draw time: `stamp ( color src x y w h -- )`, with
   0-bits transparent. This is the TI-99/4A model — TMS9918 sprites are 1-bit

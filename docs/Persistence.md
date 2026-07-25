@@ -178,10 +178,13 @@ lines, every binding in order — and everything you typed appends in the order
 it happened, so the file **replays to exactly the live session's state**: a
 plain `: thrust 25 ;` appends, and words defined before it still get the old
 `thrust`, live and after reload alike. The exception is a **mutation** —
-`edit <word>` (and the future `:e`) means "that text was wrong" — which
+`edit <word>` and `:e <word>` mean "that text was wrong" — which
 replaces the word's definition where it stands instead of appending, so
 mutation history never accumulates: saving after ten edits of the same word
-leaves one definition, in place. Saving is **idempotent** (saving twice
+leaves one definition, in place. `delete <word>` is the mutation taken to
+zero: the word's newest definition is spliced out of the file entirely and
+the module reloads (which resurrects the previous definition of a
+redefined name). Saving is **idempotent** (saving twice
 writes a byte-identical file). A bare `save` with nothing captured prints
 `nothing to save`; with no current file it prints
 `save: no current file (use: save <name>)`.
