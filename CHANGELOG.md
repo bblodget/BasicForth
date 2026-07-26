@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### No ` ok` while a definition is open
+- **A multi-line definition no longer prints ` ok` after every line.** The
+  `... ` continuation prompt already says "still compiling", so the ok was
+  noise — and expensive noise: a four-line definition took nine lines of
+  screen, five of them just ` ok`. Now one ok, when the definition closes.
+  gforth solves the same problem by printing `compiled` instead, which costs
+  it nothing because its marker sits on the input line.
+- "Open" can't be judged from `STATE` alone (`[` interprets *inside* a
+  definition), so the REPL also reads LATEST's hidden bit — the same test the
+  Ctrl-D guard uses.
+
+### Fixed: an aborted definition disabled Ctrl-D for the rest of the session
+- **A typo inside a multi-line `:` left a half-built header as LATEST** with
+  its hidden bit set. The per-line error-recovery snapshot points *at* that
+  header rather than before it, so restoring it preserved the bit, and
+  everything that asks "is a definition open?" answered yes forever after.
+  Ctrl-D — which must not exit mid-definition — therefore did nothing for the
+  rest of the session, silently. `cancel;` had the same effect.
+- Every abort path now unlinks the abandoned header and reclaims its space:
+  the undefined-word path, the unresolved-control-flow path, the compile
+  abort, and an uncaught `throw` (which is where `abort` and `cancel;` land).
+  Shared as `drop_partial_header` in core.s, a macro on ARM64 where the sites
+  are reached mid-unwind and the link register isn't ours to clobber.
+- Found by the ok-suppression above, which asks the same question and so
+  inherited the same wrong answer — a second symptom of a bug that had been
+  shipping silently.
+
+### Docs: why BasicForth prompts, and why `cr` goes last
+- `docs/Outer_Interpreter.md` now records the REPL-format decision: what the
+  classic convention is (no prompt, ` ok` appended — a convention, not
+  anything the standard requires), why we depart, the cost we accept, and the
+  experiment where we tried the classic format and reverted it (multi-line
+  displays began on the command line, bare Enter piled prompts sideways,
+  errors landed where the lesson harness doesn't look).
+- It also explains the coupling nobody writes down: **leading `cr` exists to
+  escape the input line**, so it belongs to systems whose `ok` is inline. In
+  code, trailing `cr` is normal everywhere — gforth's own library uses it
+  ~290 times against 47. `help terminal`'s `cr` entry says so where someone
+  typing `cr` will see it.
+
 ### `tutorial Printing` — make numbers look right
 - **A lesson for output**, in two halves: placement (`.` and its trailing
   space, `cr`, `space`, `spaces`, `emit`, `.r` for columns, `u.0r` for a

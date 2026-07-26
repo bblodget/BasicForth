@@ -170,6 +170,17 @@ At startup, BasicForth:
 2. If a filename argument was given, loads it via INCLUDED
 3. Enters the interactive REPL
 
+### The prompt
+
+BasicForth prompts with `> ` and answers ` ok` on the next line. Most Forths
+print no prompt at all and append ` ok` to the line you typed; we depart from
+that deliberately, for the BASIC feel and because it keeps input and output
+separable (which copy-paste, the docs, and the test harnesses all rely on).
+Two consequences worth knowing: write `cr` **after** your text, not before,
+and no ` ok` appears while a definition is still open — the `... `
+continuation prompt says that already. The reasoning, and the experiment
+where we tried it the other way, are in `docs/Outer_Interpreter.md`.
+
 ### Loading Files from the REPL
 
 ```
