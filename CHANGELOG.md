@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `tutorial Modules` — the save/edit/reload loop, hands on
+- **A lesson for the module workflow**, the part of BasicForth that had the
+  most surface and no teaching material: `save`, `list`, `:e`, `delete`,
+  `reload`, `uses`, `keep`, `on-start`/`booting?`, `new`. Fifteen short steps
+  built around one score keeper the reader grows and saves as `score.fs`.
+- It teaches the two ideas the reference pages state but never show: editing
+  **mutates the file in place** (which is why callers rebuild, and why a plain
+  `:` prints `redefined` instead), and a reload rebuilds your program from the
+  file — so the program survives but what it was *holding* does not, which is
+  what `keep` is for.
+- Covered by `make run-lessons` from the moment it landed.
+
 ### `variable` starts at zero
 - **A new variable now reads 0**, guaranteed every time its definition runs.
   `: VARIABLE create 1 cells allot ;` became `: VARIABLE create 0 , ;` — same
