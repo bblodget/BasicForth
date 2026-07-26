@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `variable` starts at zero
+- **A new variable now reads 0**, guaranteed every time its definition runs.
+  `: VARIABLE create 1 cells allot ;` became `: VARIABLE create 0 , ;` — same
+  one cell, same layout, but the cell is written rather than merely reserved.
+- The bug this fixes is invisible in a fresh session and routine in the module
+  workflow: `allot` hands back whatever the dictionary last held at that
+  address, which is zeros on first use but **stale bytes after any
+  rollback-and-replay** — `reload`, `:e`, `delete`, a `marker`. So a variable
+  that read 0 before an edit could read `-116649486398485164` after one. Found
+  while writing the Modules lesson, where a step printed exactly that.
+- The standard leaves a new variable's contents undefined, so this is a
+  promise BasicForth can make for free, and the one a reader coming from BASIC
+  expects. gforth prints `0` for the same program.
+- Regression test uses a `marker` rollback over dirtied space, since a fresh
+  dictionary is zeros anyway and would pass either way.
+
 ### `+to` — add to a value
 - **`+to ( n "name" -- )`** does what `count 1 + to count` did, without naming
   the value twice: `1 +to count`. Works identically at the prompt and compiled
