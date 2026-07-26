@@ -64,6 +64,10 @@ CONFIG = {
         # `dis nosuchword` is the lesson showing what a typo looks like.
         "expect": ["? nosuchword"],
     },
+    "Modules": {
+        # The lesson deletes a word and then runs it, so the `?` IS the point.
+        "expect": ["? hello"],
+    },
     "Sprites": {"env": DUMMY},
     "Bitmaps": {"env": DUMMY},
     "Fonts":   {"env": DUMMY},

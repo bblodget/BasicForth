@@ -1571,6 +1571,15 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   Tutorial dirs now win a `tutorial <name>` clash with a same-named
   reference page). More lessons as needed: files, defer/is, modules,
   FFI/graphics (`require sdl3.fs` makes the setup one line now).
+  **`tutorial Modules` DONE 2026-07-25** (branch modules-lesson): 15 steps
+  over save → `list` → `:e` → `delete` → `reload` → `uses` → `keep` →
+  `on-start`/`booting?` → `new`, built around one score-keeper saved as
+  `score.fs`. Writing it paid for itself twice: reading the replay
+  transcript (not the pass/fail) caught a step that defined `on-start` and
+  reloaded WITHOUT saving — the hook vanished, so the lesson would have
+  taught behaviour BasicForth does not have — and a step printing a
+  reloaded variable exposed the uninitialised-`variable` bug, fixed on its
+  own branch (merge `3fe7970`). Remaining: files, defer/is, FFI/graphics.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows

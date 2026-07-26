@@ -32,6 +32,33 @@
   that loads the second font and switches back. That lesson's closing pointer
   at 2× headings said `stamp-scale` was "coming" — it shipped in the previous
   release, and now says so.
+### `tutorial Modules` — the save/edit/reload loop, hands on
+- **A lesson for the module workflow**, the part of BasicForth that had the
+  most surface and no teaching material: `save`, `list`, `:e`, `delete`,
+  `reload`, `uses`, `keep`, `on-start`/`booting?`, `new`. Fifteen short steps
+  built around one score keeper the reader grows and saves as `score.fs`.
+- It teaches the two ideas the reference pages state but never show: editing
+  **mutates the file in place** (which is why callers rebuild, and why a plain
+  `:` prints `redefined` instead), and a reload rebuilds your program from the
+  file — so the program survives but what it was *holding* does not, which is
+  what `keep` is for.
+- Covered by `make run-lessons` from the moment it landed.
+
+### `variable` starts at zero
+- **A new variable now reads 0**, guaranteed every time its definition runs.
+  `: VARIABLE create 1 cells allot ;` became `: VARIABLE create 0 , ;` — same
+  one cell, same layout, but the cell is written rather than merely reserved.
+- The bug this fixes is invisible in a fresh session and routine in the module
+  workflow: `allot` hands back whatever the dictionary last held at that
+  address, which is zeros on first use but **stale bytes after any
+  rollback-and-replay** — `reload`, `:e`, `delete`, a `marker`. So a variable
+  that read 0 before an edit could read `-116649486398485164` after one. Found
+  while writing the Modules lesson, where a step printed exactly that.
+- The standard leaves a new variable's contents undefined, so this is a
+  promise BasicForth can make for free, and the one a reader coming from BASIC
+  expects. gforth prints `0` for the same program.
+- Regression test uses a `marker` rollback over dirtied space, since a fresh
+  dictionary is zeros anyway and would pass either way.
 
 ### `+to` — add to a value
 - **`+to ( n "name" -- )`** does what `count 1 + to count` did, without naming

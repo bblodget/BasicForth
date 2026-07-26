@@ -207,7 +207,13 @@
             [char] ) parse type ; immediate
 
 \ Defining words
-: VARIABLE  create 1 cells allot ;
+\ The cell is COMMA'd, not ALLOTed, so a new variable reads 0. `allot` hands
+\ back whatever the dictionary last held there — zeros in a fresh session, but
+\ stale bytes after any rollback-and-replay (`reload`, `:e`, `delete`, a
+\ marker), which is most of the module workflow. The standard leaves the
+\ initial value undefined, so zero is a free promise to keep, and the one a
+\ reader coming from BASIC expects.
+: VARIABLE  create 0 , ;
 
 \ Standard alias for PARSE-WORD
 : PARSE-NAME  parse-word ;

@@ -61,10 +61,13 @@ word shows its `:noname` action in full, and `save` replays it.
     5 swap execute .      \ 25
 
 ## variable ( "name" -- )   →   name: ( -- a-addr )
-Create a named one-cell variable. Running the name pushes its address; use `@`
-and `!` (see `help memory`).
+Create a named one-cell variable, **starting at 0**. Running the name pushes
+its address; use `@` and `!` (see `help memory`). The zero is guaranteed every
+time the definition runs, including after a `reload` replays it — the standard
+leaves a new variable's contents undefined, BasicForth doesn't.
 
-    variable v   7 v !   v @ .    \ 7
+    variable v   v @ .            \ 0
+    7 v !        v @ .            \ 7
 
 ## constant ( x "name" -- )   →   name: ( -- x )
 Create a named constant. Running the name pushes the value.
