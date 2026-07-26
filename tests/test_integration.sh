@@ -800,6 +800,47 @@ create wide 64 allot
 : g wide 12 16 font!  font-w . font-h . font-stride .
   terminus-8x16  font-w . font-h . font-stride . ; g"  "12 16 2 8 16 1"
 
+# >xy converts a character cell to its pixel corner, using the same advance
+# `text` does -- so it tracks font-scale, not just the cell size.
+assert_output "font >xy is col*font-w, row*font-h" "$FNT
+: g 3 2 >xy . . ; g"                                   "32 24"
+assert_output "font >xy follows font-scale" "$FNT
+: g 2 to font-scale  3 2 >xy . . ; g"                  "64 48"
+# and it agrees with where text actually lands: a block at row 1 column 1 is
+# lit at its own corner and dark one pixel above-left of it
+assert_output "font >xy matches where text draws" "$FNT
+create one1 \$DB c,
+: g s red one1 1  1 1 >xy  text  1 1 >xy p  8 15 p ; g"  "16711680 0"
+
+# A second data file, font-vga-8x8.fs (the IBM 8x8 VGA face), on the same
+# engine: every word below is the one used above, only the cell is 8 tall.
+VGA="include $FORTH_LIB/font-vga-8x8.fs
+32 32 * 4 * allocate drop value fb
+: p pixel-addr l@ . ;
+: s fb 32 32  32 4 *  set-surface  0 clear ;"
+
+assert_output "vga font cell is 8x8"  "$VGA
+: g font-w . font-h . font-stride . ; g"               "8 8 1"
+# the full block fills all 8 rows and stops -- row 8 belongs to the next line
+assert_output "vga glyph fills an 8x8 cell" "$VGA
+: g s red \$DB 0 0 glyph  0 0 p  7 7 p  0 8 p ; g"     "16711680 16711680 0"
+# glyphs are font-h bytes apart, so 8 here where terminus is 16
+assert_output "vga >glyph stride is 8" "$VGA
+: g [char] B >glyph  [char] A >glyph  - . ; g"         "8"
+# newline drops font-h, which is now 8
+assert_output "vga text newline drops 8" "$VGA
+create nl8 \$DB c, 10 c, \$DB c,
+: g s red nl8 3 0 0 text  0 8 p  0 16 p ; g"           "16711680 0"
+# Both fonts loaded at once: a selector switches the metrics AND the glyph
+# data. The probe is row 8 of a full block -- inside terminus's 16-row cell,
+# past the end of vga's 8-row one. The file selects itself, so vga is current
+# straight after the include.
+assert_output "two fonts coexist, selectors switch" "$FNT
+include $FORTH_LIB/font-vga-8x8.fs
+: g s font-h .  terminus-8x16 font-h .
+  red \$DB 0 0 glyph  0 8 p
+  vga-8x8 font-h .  s red \$DB 0 0 glyph  0 8 p ; g"   "8 16 16711680 8 0"
+
 # =========================================================================
 section "FFI (dlopen / dlsym / ccall)"
 # =========================================================================

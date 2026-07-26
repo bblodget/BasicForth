@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### A second font: `font-vga-8x8.fs`
+- **`require font-vga-8x8.fs`** gives a half-height alternative to Terminus:
+  the IBM PC's 8×8 character-ROM face, the one 1980s machines put 24 lines of
+  text on a screen with. Same `text`/`glyph`/`font-scale`; only `font-h`
+  changes. It is public domain (Debian's console-setup copyright: "All console
+  fonts are public domain by nature"), so unlike Terminus it carries no license
+  obligation — the generated file says so in its header.
+- **Both fonts load together and switch with a word** — `terminus-8x16` and
+  `vga-8x8`. That is what the `fontcore.fs` engine split was for, now with a
+  second font to prove it: a tall title and a short status line in one frame.
+  Layout written as `row font-h *` follows the switch by itself.
+- **`tools/psf2font.py` takes the cell height from the PSF header** instead of
+  assuming 16, so any 8-pixel-wide console font converts, and it checks the
+  height against the output filename (`font-vga-8x8.fs` from an 8×8 PSF, or it
+  refuses). Licensing is no longer hard-coded to Terminus: each family has an
+  entry giving its provenance, and a font with no entry is refused rather than
+  shipped under the wrong header. Regenerating Terminus produces the identical
+  file, byte for byte.
+- **`>xy ( col row -- x y )`** in `fontcore.fs` turns a character cell into its
+  pixel corner, so a panel is laid out as `0 19 >xy text` rather than in
+  pixels. It multiplies by the cell `text` itself advances by — `font-scale`
+  included, which is the part that is easy to get wrong by hand — so a layout
+  written this way survives both a font switch and a scale change. It returns
+  coordinates rather than moving anything, so it positions `fill-rect` and
+  sprites on the text grid too. (The terminal's `at-xy`, which really does move
+  a cursor, is unrelated and unchanged.)
+- `help fonts` covers picking between the two; `tutorial Fonts` gains a step
+  that loads the second font and switches back. That lesson's closing pointer
+  at 2× headings said `stamp-scale` was "coming" — it shipped in the previous
+  release, and now says so.
+
 ### `+to` — add to a value
 - **`+to ( n "name" -- )`** does what `count 1 + to count` did, without naming
   the value twice: `1 +to count`. Works identically at the prompt and compiled
