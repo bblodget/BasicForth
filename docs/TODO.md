@@ -39,6 +39,20 @@ completed. See Planning.md for high-level vision and design decisions.
   that opens its own definition`); that guard is a patch over this hole at one
   entry point, not a fix for it.
 
+- [x] **A stray `;` at the prompt was accepted in silence.**
+  FIXED 2026-07-26 (branch semicolon-guard). Spotted in a user transcript
+  during the Dark Star port: `f DrawTimeBar s ;` printed ` ok`. Every other
+  compile-only word (`if`, `then`, `begin`, `loop`, `does>`, `recurse`,
+  `exit`) reports `compile only` when typed outside a definition — `;` was
+  the one exception, because `forth_semicolon`'s state guard fell through to
+  a bare `ret` commented "silently ignore". Harmless in effect (verified: no
+  `ret` compiled, `here` unmoved, prior definition intact), but it hid a typo.
+  The fix is the `F_COMPILE_ONLY` flag its siblings already carry: the outer
+  interpreter executes an immediate+compile-only word while compiling and
+  rejects it while interpreting, and `postpone` already handles that flag
+  combination (`find` returns 2), so no new mechanism was needed. The
+  assembly guard stays as the backstop for `' ; execute`, which bypasses the
+  interpreter's check. +5 integration tests both arches.
 - [x] **The font tests borrow `BASICFORTH_PATH` from the environment.**
   FIXED 2026-07-24 (branch env-setup). Found while running the suite in a
   bare env: the Fonts section drives the binary through `assert_output`,
@@ -421,6 +435,27 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Batch 3: >BODY, >IN, SOURCE, ABORT, QUIT, ABORT", >NUMBER, >DIGIT?, WORD, ENVIRONMENT?
 - [x] Batch 4: CASE/OF/ENDOF/ENDCASE, UNUSED, 0>, U>, WITHIN, ERASE, U.R, HOLDS, .(
 - [x] Batch 5: ?DO, VALUE/TO, :NONAME, PARSE, PARSE-NAME, SOURCE-ID, WORDS
+- [x] `+to ( n "name" -- )` — add to a value (2026-07-25, branch plus-to).
+  A gforth-style extension, not Forth 2012; wanted while porting Dark Star,
+  whose TurboForth source uses `+TO` throughout. Implemented by *deferring to*
+  `to` rather than reimplementing it: parse the name to fetch the current
+  contents, rewind `>in` to where the name began, then let `to` re-parse and
+  store. Consequences worth keeping: `immediate` (it parses, so it must run
+  while the enclosing definition compiles) and `state`-driven (the fetch and
+  the `+` are performed when interpreting, compiled when compiling), which is
+  what makes one word serve both. Every error path is `to`'s verbatim — a
+  variable, an unknown name, and a missing name all produce exactly what a bare
+  `to` produces, so there is no second message to maintain.
+  - Two implementation notes for anyone revisiting it: `parse-word`, not
+    `PARSE-NAME`, because `+to` sits above the point in core.fs where that
+    alias is defined; and the empty-name case must be guarded before `find`,
+    which misbehaves on a zero-length name (it produced a bare `stack
+    underflow` instead of `to`'s message).
+  - A test gotcha, since it bit while writing them: a line error rolls the
+    dictionary back to the start of **that line**, so a fixture written as
+    `0 value x 1 +to zz` loses `x` as well. Put the fixture on its own line.
+  - Deliberately no `-to`: gforth has none, `-5 +to x` reads fine, and one word
+    is easier to teach than two.
 - [x] String words: /STRING, COMPARE, CMOVE, CMOVE>, -TRAILING, BLANK
 - [x] Programming-Tools: ?, DUMP, H.2, H.ADDR
 - [x] Facility: KEY?, MS, PAGE, AT-XY, SCREEN-WIDTH, SCREEN-HEIGHT (platform layer)
@@ -647,6 +682,31 @@ docs/Graphics.md for the API.
   and the words would redefine each other. Engine file named `fontcore.fs`
   (not `font-*` — that pattern reads as a font family; not the collision-prone
   `font.fs`).
+- [x] A second font — done 2026-07-26 (branch `font-vga-8x8`).
+  `require font-vga-8x8.fs` → the IBM PC 8×8 character-ROM face, selector
+  `vga-8x8`, generated from `/usr/share/consolefonts/Uni2-VGA8.psf.gz` (218 of
+  256 CP437 codes present — block and box drawing all there, so nothing had to
+  be synthesized; the gaps are the control range plus five symbols). Public
+  domain, so no
+  OFL-style obligation: Debian's console-setup copyright states "All console
+  fonts are public domain by nature". Prompted by the Dark Star port, whose
+  TI-99 info panel is laid out for 8-pixel text and came out double height on
+  Terminus. `psf2font.py` now reads the cell height from the PSF header
+  (PSF1 charsize / PSF2 h) rather than assuming 16, cross-checks it against
+  the size in the output filename, and keeps per-family license text in a
+  `FONT_INFO` table — an unknown family is an error, so no font can ship under
+  a header describing a different one. Regenerating Terminus through the new
+  script gives a byte-identical file (the check that the refactor was clean).
+  +8 integration tests both arches, a `tutorial Fonts` step on switching, and
+  `help fonts` on choosing. The multi-font design above needed no change to
+  carry a second font. The one engine addition came out of the port too:
+  **`>xy ( col row -- x y )`** in `fontcore.fs`, a character-cell-to-pixel
+  converter, because hand-written pixel layout is what makes a font switch
+  break. It scales by `font-scale` as well as the cell size — `text` advances
+  by `font-w font-scale *`, so a hand-rolled `col font-w *` silently overlaps
+  at any scale above 1 (the first draft of the docs example had exactly that
+  bug). Named for what it returns, not `gotoxy`: `at-xy` already moves the
+  terminal cursor, and this moves nothing.
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
@@ -1557,6 +1617,15 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   Tutorial dirs now win a `tutorial <name>` clash with a same-named
   reference page). More lessons as needed: files, defer/is, modules,
   FFI/graphics (`require sdl3.fs` makes the setup one line now).
+  **`tutorial Modules` DONE 2026-07-25** (branch modules-lesson): 15 steps
+  over save → `list` → `:e` → `delete` → `reload` → `uses` → `keep` →
+  `on-start`/`booting?` → `new`, built around one score-keeper saved as
+  `score.fs`. Writing it paid for itself twice: reading the replay
+  transcript (not the pass/fail) caught a step that defined `on-start` and
+  reloaded WITHOUT saving — the hook vanished, so the lesson would have
+  taught behaviour BasicForth does not have — and a step printing a
+  reloaded variable exposed the uninitialised-`variable` bug, fixed on its
+  own branch (merge `3fe7970`). Remaining: files, defer/is, FFI/graphics.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows

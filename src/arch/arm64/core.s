@@ -2230,7 +2230,10 @@ forth_semicolon:
     RET
 
 .Lsemi_err:
-    // ; outside compile mode — silently ignore
+    // ; reached in interpret mode. The outer interpreter rejects it before
+    // here (F_COMPILE_ONLY on dict_semicolon, "compile only"); this is the
+    // backstop for the paths that bypass that check, notably ' ; EXECUTE.
+    // Do nothing: compiling a RET at HERE would corrupt whatever is there.
     RET
 
 // ---------- IMMEDIATE (Forth-level) ----------
@@ -5437,7 +5440,7 @@ DEFWORD dict_dot_s,      ".s",         forth_dot_s,      dict_dot
 DEFWORD dict_bye,        "bye",        forth_bye,        dict_dot_s
 DEFWORD dict_lit,        "lit",        forth_lit,        dict_bye, F_HIDDEN
 DEFWORD dict_colon,      ":",          forth_colon,      dict_lit
-DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE
+DEFWORD dict_semicolon,  ";",          forth_semicolon,  dict_colon, F_IMMEDIATE+F_COMPILE_ONLY
 DEFWORD dict_immediate,  "immediate",  forth_immediate,  dict_semicolon
 DEFWORD dict_mul,        "*",          forth_mul,         dict_immediate
 DEFWORD dict_divmod,     "/mod",       forth_divmod,      dict_mul

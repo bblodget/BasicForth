@@ -402,6 +402,17 @@ assert_error  "if until mismatch"  ": test if until ;"                      "? m
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
 assert_error  "begin outside def" "begin"                                   "compile only"
+# `;` is compile-only like its siblings above -- a stray one used to be
+# accepted in silence, which swallowed a typo at the end of a REPL line.
+assert_error  "semicolon outside def" ";"                                   "compile only"
+# it is reported, not fatal: the rest of the line still runs and the stack is
+# untouched (the message goes to stdout, so it lands in the captured output)
+assert_output "stray ; keeps the line going" "1 2 ; + ."                    "3"
+# and it is still perfectly good at the end of a definition
+assert_output "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
+assert_output "; still ends a :noname"       ":noname 9 ; execute ."        "9"
+# the same rejection inside EVALUATE, which runs the same outer interpreter
+assert_error  "stray ; inside evaluate" ": t s\" ;\" evaluate ; t"          "compile only"
 
 # =========================================================================
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"
@@ -457,6 +468,12 @@ assert_output "here"               "here 0 <> ."                             "-1
 assert_output "comma"              "here 42 , here swap - ."                 "8"
 assert_output "variable"           "variable x 99 x ! x @ ."                "99"
 assert_output "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
+assert_output "variable starts 0"  "variable z0 z0 @ ."                      "0"
+# A fresh dictionary is zeros anyway, so the case that bites is a rollback:
+# marker/reload replay the definition over space something else has since
+# used. `create 1 cells allot` handed back those stale bytes.
+assert_output "variable 0 after rollback" \
+    "marker -m variable zr 7 zr ! : pad7 here 64 allot 64 7 fill ; pad7 -m variable zr zr @ ." "0"
 
 # =========================================================================
 section "DOES>"
@@ -799,6 +816,47 @@ assert_output "font! sets metrics, selector switches" "$FNT
 create wide 64 allot
 : g wide 12 16 font!  font-w . font-h . font-stride .
   terminus-8x16  font-w . font-h . font-stride . ; g"  "12 16 2 8 16 1"
+
+# >xy converts a character cell to its pixel corner, using the same advance
+# `text` does -- so it tracks font-scale, not just the cell size.
+assert_output "font >xy is col*font-w, row*font-h" "$FNT
+: g 3 2 >xy . . ; g"                                   "32 24"
+assert_output "font >xy follows font-scale" "$FNT
+: g 2 to font-scale  3 2 >xy . . ; g"                  "64 48"
+# and it agrees with where text actually lands: a block at row 1 column 1 is
+# lit at its own corner and dark one pixel above-left of it
+assert_output "font >xy matches where text draws" "$FNT
+create one1 \$DB c,
+: g s red one1 1  1 1 >xy  text  1 1 >xy p  8 15 p ; g"  "16711680 0"
+
+# A second data file, font-vga-8x8.fs (the IBM 8x8 VGA face), on the same
+# engine: every word below is the one used above, only the cell is 8 tall.
+VGA="include $FORTH_LIB/font-vga-8x8.fs
+32 32 * 4 * allocate drop value fb
+: p pixel-addr l@ . ;
+: s fb 32 32  32 4 *  set-surface  0 clear ;"
+
+assert_output "vga font cell is 8x8"  "$VGA
+: g font-w . font-h . font-stride . ; g"               "8 8 1"
+# the full block fills all 8 rows and stops -- row 8 belongs to the next line
+assert_output "vga glyph fills an 8x8 cell" "$VGA
+: g s red \$DB 0 0 glyph  0 0 p  7 7 p  0 8 p ; g"     "16711680 16711680 0"
+# glyphs are font-h bytes apart, so 8 here where terminus is 16
+assert_output "vga >glyph stride is 8" "$VGA
+: g [char] B >glyph  [char] A >glyph  - . ; g"         "8"
+# newline drops font-h, which is now 8
+assert_output "vga text newline drops 8" "$VGA
+create nl8 \$DB c, 10 c, \$DB c,
+: g s red nl8 3 0 0 text  0 8 p  0 16 p ; g"           "16711680 0"
+# Both fonts loaded at once: a selector switches the metrics AND the glyph
+# data. The probe is row 8 of a full block -- inside terminus's 16-row cell,
+# past the end of vga's 8-row one. The file selects itself, so vga is current
+# straight after the include.
+assert_output "two fonts coexist, selectors switch" "$FNT
+include $FORTH_LIB/font-vga-8x8.fs
+: g s font-h .  terminus-8x16 font-h .
+  red \$DB 0 0 glyph  0 8 p
+  vga-8x8 font-h .  s red \$DB 0 0 glyph  0 8 p ; g"   "8 16 16711680 8 0"
 
 # =========================================================================
 section "FFI (dlopen / dlsym / ccall)"
@@ -1170,6 +1228,26 @@ assert_output "value"                '10 value x x .'                     "10"
 assert_output "to interpret"         '10 value x 20 to x x .'            "20"
 assert_output "to compile"           '10 value x : t 20 to x ; t x .'   "20"
 assert_output "value unchanged"      '10 value x x . x .'                "10 10"
+
+# +TO: add to a value. It parses the name only to fetch the current contents,
+# rewinds >IN, and lets TO do the store — so it has to work in both states, and
+# every failure has to come out of TO looking exactly like a bare TO's.
+assert_output "+to interpret"        '10 value x 5 +to x x .'                       "15"
+assert_output "+to compile"          '10 value x : t 5 +to x ; t t x .'             "20"
+assert_output "+to in a do loop"     '0 value x : t 4 0 do 10 +to x loop ; t x .'   "40"
+assert_output "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y ; t x . y .'  "1 2"
+assert_output "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
+assert_output "+to negative"         '10 value x -4 +to x x .'                      "6"
+assert_output "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
+# The error paths are TO's, verbatim — nothing is caught and re-reported here.
+assert_error  "+to refuses a variable"     'variable v 1 +to v'   "v: not a value or deferred word"
+assert_error  "+to on an unknown name"     '1 +to no-such-value'  "? no-such-value"
+assert_error  "+to with no name at all"    '0 value x 1 +to'      "not a value or deferred word"
+# The value goes on its own line: a line error rolls the dictionary back to
+# where that LINE started, so a same-line `value x` would be forgotten too.
+assert_output "session survives a bad +to" '0 value x
+1 +to zz
+5 +to x x . depth .'  "5 0"
 
 # :NONAME
 assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"

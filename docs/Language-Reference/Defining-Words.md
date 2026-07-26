@@ -13,6 +13,7 @@ At a glance:
     constant        ( x "name" -- )    name pushes x, fixed
     value           ( x "name" -- )    name pushes x, changeable with to
     to              ( x "name" -- )    store into a value (or deferred word)
+    +to             ( n "name" -- )    add n to a value
     defer           ( "name" -- )      a word whose action comes later
     is              ( xt "name" -- )   install a deferred word's action
     defer@          ( xt1 -- xt2 )     fetch a deferred action (raw)
@@ -31,6 +32,10 @@ than run.
 
     : square  dup * ;
     5 square .        \ 25
+
+`;` is **compile-only** — there is nothing for it to finish at the prompt, so a
+stray one (a typo at the end of a line, usually) reports `compile only` and is
+ignored. The rest of the line still runs, and the stack is untouched.
 
 If the name already exists, the new definition shadows the old one and a
 `redefined square` note is printed — it catches accidental name collisions
@@ -60,10 +65,13 @@ word shows its `:noname` action in full, and `save` replays it.
     5 swap execute .      \ 25
 
 ## variable ( "name" -- )   →   name: ( -- a-addr )
-Create a named one-cell variable. Running the name pushes its address; use `@`
-and `!` (see `help memory`).
+Create a named one-cell variable, **starting at 0**. Running the name pushes
+its address; use `@` and `!` (see `help memory`). The zero is guaranteed every
+time the definition runs, including after a `reload` replays it — the standard
+leaves a new variable's contents undefined, BasicForth doesn't.
 
-    variable v   7 v !   v @ .    \ 7
+    variable v   v @ .            \ 0
+    7 v !        v @ .            \ 7
 
 ## constant ( x "name" -- )   →   name: ( -- x )
 Create a named constant. Running the name pushes the value.
@@ -85,6 +93,18 @@ refused — `x: not a value or deferred word` — since the store would corrupt 
 ordinary word's compiled code.
 
     5 value count   9 to count   count .   \ 9
+
+## +to ( n "name" -- )
+Add `n` to a `value` — `1 +to count` is `count 1 + to count`, said once instead
+of naming the value twice. Works the same at the prompt and inside a definition,
+including in a loop, and takes a negative `n` to subtract.
+
+    5 value count   3 +to count   count .   \ 8
+    : tick  1 +to count ;
+
+The target must be a `value`: anything else is refused by `to` itself, with the
+same message a bare `to` would give. An extension, not Forth 2012 — spelled as
+gforth spells it.
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it

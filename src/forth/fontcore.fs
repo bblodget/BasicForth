@@ -63,3 +63,11 @@ variable (t-x)    variable (t-y)  variable (t-x0)   \ pen x/y, and line start x
             font-w font-scale * (t-x) +!
         then then
     loop ;
+
+\ Character cell -> pixel corner, for laying text out on a grid instead of
+\ counting pixels: `0 19 >xy text` puts a string at column 0 of row 19. The
+\ cell is the same one `text` advances by, `font-scale` included, so a layout
+\ written this way survives both a font switch and a scale change.
+: >xy ( col row -- x y )
+    font-h font-scale * *  swap
+    font-w font-scale * *  swap ;

@@ -315,6 +315,9 @@ registered with the internal `(hook!)` primitive:
 - `(capture-reset)` — at the top of the REPL loop; discards a pending partial
   definition left by a line error.
 
+For the hands-on version of everything above, `tutorial Modules` walks the
+whole loop at the prompt in about ten minutes.
+
 `save` writes the log to a temporary `<name>.new` and then `rename-file`s it over
 `<name>` — an atomic replace, so a write failure (e.g. a full disk) leaves the
 existing file untouched rather than truncating it. The `-session` restore point

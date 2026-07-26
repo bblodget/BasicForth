@@ -36,6 +36,91 @@
   matched by a stop. Save first for a single cycle, and keep the hooks
   idempotent — acquire and release, not "reset the score".
 
+### Fixed: a stray `;` at the prompt was accepted in silence
+- **`;` is now compile-only**, like the six words it belongs with. `if`, `then`,
+  `begin`, `loop`, `does>`, `recurse` and `exit` all report `compile only` when
+  typed outside a definition; `;` alone returned quietly, so a typo at the end
+  of a REPL line — `f DrawTimeBar s ;` — looked like it had worked.
+- Reported, not fatal: the rest of the line still runs and the stack is
+  untouched, the same as its siblings. Nothing was ever corrupted by the old
+  behavior (the silent path deliberately did nothing, so no `ret` was compiled
+  and `here` did not move) — the cost was only the missing message.
+- It needed no new mechanism, just the `F_COMPILE_ONLY` flag the others carry:
+  the outer interpreter already executes an immediate+compile-only word while
+  compiling and rejects it while interpreting, and `postpone` already reads
+  that flag combination. The assembly guard inside `;` stays as the backstop
+  for `' ; execute`, which bypasses the interpreter's check.
+
+### A second font: `font-vga-8x8.fs`
+- **`require font-vga-8x8.fs`** gives a half-height alternative to Terminus:
+  the IBM PC's 8×8 character-ROM face, the one 1980s machines put 24 lines of
+  text on a screen with. Same `text`/`glyph`/`font-scale`; only `font-h`
+  changes. It is public domain (Debian's console-setup copyright: "All console
+  fonts are public domain by nature"), so unlike Terminus it carries no license
+  obligation — the generated file says so in its header.
+- **Both fonts load together and switch with a word** — `terminus-8x16` and
+  `vga-8x8`. That is what the `fontcore.fs` engine split was for, now with a
+  second font to prove it: a tall title and a short status line in one frame.
+  Layout written as `row font-h *` follows the switch by itself.
+- **`tools/psf2font.py` takes the cell height from the PSF header** instead of
+  assuming 16, so any 8-pixel-wide console font converts, and it checks the
+  height against the output filename (`font-vga-8x8.fs` from an 8×8 PSF, or it
+  refuses). Licensing is no longer hard-coded to Terminus: each family has an
+  entry giving its provenance, and a font with no entry is refused rather than
+  shipped under the wrong header. Regenerating Terminus produces the identical
+  file, byte for byte.
+- **`>xy ( col row -- x y )`** in `fontcore.fs` turns a character cell into its
+  pixel corner, so a panel is laid out as `0 19 >xy text` rather than in
+  pixels. It multiplies by the cell `text` itself advances by — `font-scale`
+  included, which is the part that is easy to get wrong by hand — so a layout
+  written this way survives both a font switch and a scale change. It returns
+  coordinates rather than moving anything, so it positions `fill-rect` and
+  sprites on the text grid too. (The terminal's `at-xy`, which really does move
+  a cursor, is unrelated and unchanged.)
+- `help fonts` covers picking between the two; `tutorial Fonts` gains a step
+  that loads the second font and switches back. That lesson's closing pointer
+  at 2× headings said `stamp-scale` was "coming" — it shipped in the previous
+  release, and now says so.
+### `tutorial Modules` — the save/edit/reload loop, hands on
+- **A lesson for the module workflow**, the part of BasicForth that had the
+  most surface and no teaching material: `save`, `list`, `:e`, `delete`,
+  `reload`, `uses`, `keep`, `on-start`/`booting?`, `new`. Fifteen short steps
+  built around one score keeper the reader grows and saves as `score.fs`.
+- It teaches the two ideas the reference pages state but never show: editing
+  **mutates the file in place** (which is why callers rebuild, and why a plain
+  `:` prints `redefined` instead), and a reload rebuilds your program from the
+  file — so the program survives but what it was *holding* does not, which is
+  what `keep` is for.
+- Covered by `make run-lessons` from the moment it landed.
+
+### `variable` starts at zero
+- **A new variable now reads 0**, guaranteed every time its definition runs.
+  `: VARIABLE create 1 cells allot ;` became `: VARIABLE create 0 , ;` — same
+  one cell, same layout, but the cell is written rather than merely reserved.
+- The bug this fixes is invisible in a fresh session and routine in the module
+  workflow: `allot` hands back whatever the dictionary last held at that
+  address, which is zeros on first use but **stale bytes after any
+  rollback-and-replay** — `reload`, `:e`, `delete`, a `marker`. So a variable
+  that read 0 before an edit could read `-116649486398485164` after one. Found
+  while writing the Modules lesson, where a step printed exactly that.
+- The standard leaves a new variable's contents undefined, so this is a
+  promise BasicForth can make for free, and the one a reader coming from BASIC
+  expects. gforth prints `0` for the same program.
+- Regression test uses a `marker` rollback over dirtied space, since a fresh
+  dictionary is zeros anyway and would pass either way.
+
+### `+to` — add to a value
+- **`+to ( n "name" -- )`** does what `count 1 + to count` did, without naming
+  the value twice: `1 +to count`. Works identically at the prompt and compiled
+  into a definition, loops included, and takes a negative `n` to subtract.
+  An extension rather than Forth 2012, spelled as gforth spells it.
+- It leans on `to` rather than duplicating it. `+to` parses the name only to
+  *fetch* the current contents, rewinds `>in` to where the name began, and
+  hands the store to `to` untouched — so every rejection is `to`'s own, word
+  for word: a `variable` gives `v: not a value or deferred word`, an unknown
+  name gives `? name`, and no name at all behaves like a bare `to`. Nothing is
+  caught and re-reported, so there is no second message to keep in step.
+
 ### Lessons are tested now — `make run-lessons`
 - **`tests/test_lessons.py` replays every lesson** in `docs/Tutorial/` the way
   a reader walks it: one session per lesson, steps in order, state carrying

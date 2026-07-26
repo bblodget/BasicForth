@@ -212,6 +212,8 @@ of those verbs releases the module's resources.
 
 ## See Also
 
+- `tutorial Modules` — the ten-minute walk through this page: save, `list`,
+  `:e`, `delete`, `reload`, `keep`, `on-start`.
 - `help defining-words` — `:`, `cancel;`, `marker`.
 - `help tools` — `see` / `words` / `sh`, and browsing these docs.
 - docs/Persistence.md — the full module story: capture, the dirty-guard, limits.
