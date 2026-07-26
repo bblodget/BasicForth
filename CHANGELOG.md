@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `tutorial Printing` — make numbers look right
+- **A lesson for output**, in two halves: placement (`.` and its trailing
+  space, `cr`, `space`, `spaces`, `emit`, `.r` for columns, `u.0r` for a
+  zero-padded clock) and format — pictured numeric output introduced one word
+  at a time, `<# … #>` then `#s`, `hold`, `#`, `sign`, `holds`, building up to
+  a `money` word that prints `$12.34` and `-$0.50`.
+- Pictured output is the strangest thing a newcomer meets in Forth — a number
+  assembled **right to left** — and it had only a reference page and a design
+  doc, both written for someone who already knew what they were for. Thirteen
+  short steps, no setup, every line typed at the prompt.
+- Scoped against its neighbours rather than repeating them: text (`."`,
+  `type`) stays in `tutorial Strings`, bases stay in `help numbers`, and this
+  lesson spends one step on the base gotcha (`255 hex .` prints `FF`, and
+  after `hex` the digits you *type* change meaning too).
+- `help printing` and docs/Pictured_Numeric_Output.md now point at it.
+
 ### A second font: `font-vga-8x8.fs`
 - **`require font-vga-8x8.fs`** gives a half-height alternative to Terminus:
   the IBM PC's 8×8 character-ROM face, the one 1980s machines put 24 lines of
