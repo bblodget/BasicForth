@@ -2542,6 +2542,42 @@ if [[ "$cf_out" == *"not defined"* && "$cf_out" == *"is deferred"* \
 else
     printf "  ${RED}FAIL${NC}  :e refusal/auto-save\n    Got: %q\n" "$cf_out"; ((failed++))
 fi
+# A body that opens its OWN definition is refused before the splice. `: leaf
+# 2 ;` is the muscle memory for defining a word, so it is what hands reach
+# for after `:e leaf` — but :e already supplied the `:`, and the resulting
+# file (": leaf" then ": leaf 2 ;") compiles at the prompt (the old leaf is
+# still findable) yet cannot be replayed from a clean file, where the name is
+# hidden inside its own unfinished definition. That used to write the broken
+# file, lose the word, and leave neither :e nor delete able to reach it.
+co_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n' > "$co_dir/mod.fs"
+co_out=$( cd "$co_dir" && printf ':e leaf\n: leaf 2 ;\nleaf .\n:e leaf 3 ;\nleaf .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1;
+    echo "FILE:"; cat mod.fs )
+rm -rf "$co_dir"
+if [[ "$co_out" == *"cannot open a definition"* && "$co_out" == *"1  ok"* \
+      && "$co_out" == *"3  ok"* && "$co_out" == *"FILE:"*": leaf 3 ;"* \
+      && "$co_out" != *"module may be incomplete"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e body opening a definition is refused, file intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  :e body-opens-definition guard\n    Got: %q\n" "$co_out"; ((failed++))
+fi
+# ...and only the FIRST body token is judged, because a bare ":" token turns
+# up inside perfectly ordinary bodies — quoted ([char] :), inside a string
+# (s" : "), or in a comment (\ a : b). Scanning the whole body rejected all
+# three; a guard that blocks a valid edit is worse than the corruption it
+# prevents, so each of these must pass.
+cq_dir="$(mktemp -d)"
+printf ': leaf 1 ;\n: p 2 ;\n: q 3 ;\n' > "$cq_dir/mod.fs"
+cq_out=$( cd "$cq_dir" && printf ':e leaf [char] : emit 7 ;\nleaf .\n:e p s" : " type 9 ;\np .\n:e q\n \\ ratio here : two\n 4 ;\nq .\nbye\n' \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth mod.fs 2>&1 )
+rm -rf "$cq_dir"
+if [[ "$cq_out" == *":7"* && "$cq_out" == *": 9"* && "$cq_out" == *"4  ok"* \
+      && "$cq_out" != *"cannot open a definition"* ]]; then
+    printf "  ${GREEN}PASS${NC}  :e allows a colon quoted, in a string, or in a comment\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  :e colon false positive\n    Got: %q\n" "$cq_out"; ((failed++))
+fi
 
 # Forward-reference warning: a mutation whose new text calls a word defined
 # LATER in the file (here: helper, auto-saved to the end moments before) is

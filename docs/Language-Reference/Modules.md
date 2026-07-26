@@ -102,6 +102,13 @@ as `edit`. Abandon a half-typed `:e` with `cancel;`
 
     \ :e square  dup * ;      \ square replaced, callers rebuilt
 
+**Type only the body — `:e` supplies the `:` and the name.** Reaching for the
+familiar `: square dup * ;` after `:e square` would define a word inside a
+word; a body that *starts* with `:` (or `:noname`) is refused, with the file
+left untouched. Only that leading position is judged, so a colon anywhere else
+in the body is ordinary text and passes — quoted (`[char] :`), inside a string
+(`s" : " type`), or in a comment.
+
 ## delete ( "name" -- )
 Remove `<name>`'s definition from the module file and reload — `:e` with
 nothing as the replacement. Prints `deleted <name>`. Deleting a word you just
@@ -163,6 +170,15 @@ the valid handle, so it can close it properly.
 Both are optional; a module that defines neither behaves exactly as before. If
 a hook fails it reports (`error in on-start hook: -4`) and the load continues —
 a broken hook can't leave you with no module at all.
+
+**A `:e` in an unsaved session runs the pair twice, and that is expected.** An
+unsaved session is saved before it is mutated, and the save reloads; then the
+splice reloads again. So `on-stop`/`on-start` run once per reload — two full
+cycles — and a window is closed and reopened twice, which is the blink you see
+on the first edit after typing something new. Nothing leaks: each `on-start`
+is matched by an `on-stop`. Save first (or edit a clean session) and it is one
+cycle. Keep the hooks **idempotent** for the same reason — acquire and release,
+not "reset the score" or "start the music", since those would happen twice.
 
 Careful with an `on-start` that never returns: it runs *during* the load, so a
 bare `begin … again` never gives you a prompt back. A game loop with an exit
