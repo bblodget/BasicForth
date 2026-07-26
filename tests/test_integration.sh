@@ -1171,6 +1171,26 @@ assert_output "to interpret"         '10 value x 20 to x x .'            "20"
 assert_output "to compile"           '10 value x : t 20 to x ; t x .'   "20"
 assert_output "value unchanged"      '10 value x x . x .'                "10 10"
 
+# +TO: add to a value. It parses the name only to fetch the current contents,
+# rewinds >IN, and lets TO do the store — so it has to work in both states, and
+# every failure has to come out of TO looking exactly like a bare TO's.
+assert_output "+to interpret"        '10 value x 5 +to x x .'                       "15"
+assert_output "+to compile"          '10 value x : t 5 +to x ; t t x .'             "20"
+assert_output "+to in a do loop"     '0 value x : t 4 0 do 10 +to x loop ; t x .'   "40"
+assert_output "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y ; t x . y .'  "1 2"
+assert_output "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
+assert_output "+to negative"         '10 value x -4 +to x x .'                      "6"
+assert_output "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
+# The error paths are TO's, verbatim — nothing is caught and re-reported here.
+assert_error  "+to refuses a variable"     'variable v 1 +to v'   "v: not a value or deferred word"
+assert_error  "+to on an unknown name"     '1 +to no-such-value'  "? no-such-value"
+assert_error  "+to with no name at all"    '0 value x 1 +to'      "not a value or deferred word"
+# The value goes on its own line: a line error rolls the dictionary back to
+# where that LINE started, so a same-line `value x` would be forgotten too.
+assert_output "session survives a bad +to" '0 value x
+1 +to zz
+5 +to x x . depth .'  "5 0"
+
 # :NONAME
 assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"
 assert_output "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
