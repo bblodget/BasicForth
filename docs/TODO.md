@@ -7,6 +7,20 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [x] **A stray `;` at the prompt was accepted in silence.**
+  FIXED 2026-07-26 (branch semicolon-guard). Spotted in a user transcript
+  during the Dark Star port: `f DrawTimeBar s ;` printed ` ok`. Every other
+  compile-only word (`if`, `then`, `begin`, `loop`, `does>`, `recurse`,
+  `exit`) reports `compile only` when typed outside a definition — `;` was
+  the one exception, because `forth_semicolon`'s state guard fell through to
+  a bare `ret` commented "silently ignore". Harmless in effect (verified: no
+  `ret` compiled, `here` unmoved, prior definition intact), but it hid a typo.
+  The fix is the `F_COMPILE_ONLY` flag its siblings already carry: the outer
+  interpreter executes an immediate+compile-only word while compiling and
+  rejects it while interpreting, and `postpone` already handles that flag
+  combination (`find` returns 2), so no new mechanism was needed. The
+  assembly guard stays as the backstop for `' ; execute`, which bypasses the
+  interpreter's check. +5 integration tests both arches.
 - [x] **The font tests borrow `BASICFORTH_PATH` from the environment.**
   FIXED 2026-07-24 (branch env-setup). Found while running the suite in a
   bare env: the Fonts section drives the binary through `assert_output`,
