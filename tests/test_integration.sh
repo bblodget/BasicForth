@@ -457,6 +457,12 @@ assert_output "here"               "here 0 <> ."                             "-1
 assert_output "comma"              "here 42 , here swap - ."                 "8"
 assert_output "variable"           "variable x 99 x ! x @ ."                "99"
 assert_output "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
+assert_output "variable starts 0"  "variable z0 z0 @ ."                      "0"
+# A fresh dictionary is zeros anyway, so the case that bites is a rollback:
+# marker/reload replay the definition over space something else has since
+# used. `create 1 cells allot` handed back those stale bytes.
+assert_output "variable 0 after rollback" \
+    "marker -m variable zr 7 zr ! : pad7 here 64 allot 64 7 fill ; pad7 -m variable zr zr @ ." "0"
 
 # =========================================================================
 section "DOES>"
