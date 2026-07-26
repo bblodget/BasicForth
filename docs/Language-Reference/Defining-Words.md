@@ -33,6 +33,10 @@ than run.
     : square  dup * ;
     5 square .        \ 25
 
+`;` is **compile-only** — there is nothing for it to finish at the prompt, so a
+stray one (a typo at the end of a line, usually) reports `compile only` and is
+ignored. The rest of the line still runs, and the stack is untouched.
+
 If the name already exists, the new definition shadows the old one and a
 `redefined square` note is printed — it catches accidental name collisions
 and confirms intentional ones. Every defining word does this (`create`,

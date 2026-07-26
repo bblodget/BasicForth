@@ -402,6 +402,17 @@ assert_error  "if until mismatch"  ": test if until ;"                      "? m
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
 assert_error  "begin outside def" "begin"                                   "compile only"
+# `;` is compile-only like its siblings above -- a stray one used to be
+# accepted in silence, which swallowed a typo at the end of a REPL line.
+assert_error  "semicolon outside def" ";"                                   "compile only"
+# it is reported, not fatal: the rest of the line still runs and the stack is
+# untouched (the message goes to stdout, so it lands in the captured output)
+assert_output "stray ; keeps the line going" "1 2 ; + ."                    "3"
+# and it is still perfectly good at the end of a definition
+assert_output "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
+assert_output "; still ends a :noname"       ":noname 9 ; execute ."        "9"
+# the same rejection inside EVALUATE, which runs the same outer interpreter
+assert_error  "stray ; inside evaluate" ": t s\" ;\" evaluate ; t"          "compile only"
 
 # =========================================================================
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"

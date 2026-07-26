@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed: a stray `;` at the prompt was accepted in silence
+- **`;` is now compile-only**, like the six words it belongs with. `if`, `then`,
+  `begin`, `loop`, `does>`, `recurse` and `exit` all report `compile only` when
+  typed outside a definition; `;` alone returned quietly, so a typo at the end
+  of a REPL line — `f DrawTimeBar s ;` — looked like it had worked.
+- Reported, not fatal: the rest of the line still runs and the stack is
+  untouched, the same as its siblings. Nothing was ever corrupted by the old
+  behavior (the silent path deliberately did nothing, so no `ret` was compiled
+  and `here` did not move) — the cost was only the missing message.
+- It needed no new mechanism, just the `F_COMPILE_ONLY` flag the others carry:
+  the outer interpreter already executes an immediate+compile-only word while
+  compiling and rejects it while interpreting, and `postpone` already reads
+  that flag combination. The assembly guard inside `;` stays as the backstop
+  for `' ; execute`, which bypasses the interpreter's check.
+
 ### A second font: `font-vga-8x8.fs`
 - **`require font-vga-8x8.fs`** gives a half-height alternative to Terminus:
   the IBM PC's 8×8 character-ROM face, the one 1980s machines put 24 lines of
