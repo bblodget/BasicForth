@@ -2910,8 +2910,48 @@ create (ce-out) 3 cells allot  (ce-out) 3 cells erase   \ the rewritten group te
     (ct-a) @ (ct-p) @ +  (ct-u) @ (ct-p) @ -  (ce-out) (buf-append)
     (ce-out) @  (ce-out) cell+ @ ;
 variable (ce-exp)  variable (ce-eu)         \ copy of the target span's expected text
+
+\ A `:e` body must not open a definition of its own. `:e` already supplies
+\ the `: <name>`, so a body typed as `: name ... ;` — the muscle memory for
+\ defining a word, and the first thing most hands reach for — produces file
+\ text like ": val" followed by ": val 42 ;". That compiles at the prompt,
+\ where the OLD val is still findable, but it cannot be replayed from a clean
+\ file: there the name is hidden inside its own unfinished definition, so the
+\ reload fails with `? val`, the word is gone, and neither `:e` nor `delete`
+\ can reach it any more — the only way out is to leave the session and edit
+\ the file by hand. Catching it before the splice keeps the file untouched.
+\ Only the FIRST token of the body is checked. That is where the mistake
+\ lands — `: name ... ;` is typed as one unit — and it is the single position
+\ where a `:` can never be legitimate. Looking deeper would reject real work:
+\ a bare `:` token appears inside ordinary bodies all the time, in comments
+\ (`\ ratio here : two`) and in strings (`s" : " type`), and telling those
+\ apart needs a full comment/string lexer. A guard that blocks a valid edit
+\ is worse than the corruption it prevents, so it stays where it is certain.
+variable (cb-a)  variable (cb-u)  variable (cb-p)
+: (cb-tok) ( -- a u )                       \ next blank-delimited token (u=0 at end)
+    begin  (cb-p) @ (cb-u) @ <
+           dup if  drop  (cb-a) @ (cb-p) @ + c@ 33 <  then
+    while  1 (cb-p) +!  repeat              \ skip blanks
+    (cb-a) @ (cb-p) @ +  (cb-p) @           ( a start )
+    begin  (cb-p) @ (cb-u) @ <
+           dup if  drop  (cb-a) @ (cb-p) @ + c@ 32 >  then
+    while  1 (cb-p) +!  repeat
+    (cb-p) @ swap - ;                       ( a u )
+: (ce-body-opens?) ( a u -- f )             \ does the body START with an opener?
+    (cb-u) !  (cb-a) !  0 (cb-p) !
+    (cb-tok) 2drop                          \ the ":" (ce-text) prepended
+    (cb-tok) 2drop                          \ the target's name
+    (cb-tok) dup 0= if  2drop  false exit  then      ( a u )   \ empty body
+    2dup s" :" (ci=) if  2drop  true exit  then
+    s" :noname" (ci=) ;
+
 : (ce-run) ( -- )                           \ the completion hook: splice + reload
     (ce-text)                                ( a u )
+    2dup (ce-body-opens?) if                 \ would splice unreplayable text
+        2drop  (ce-exp) @ free drop
+        (msg:) ." the body cannot open a definition — :e supplies the `:`" cr
+        (msg:) ." type only the body:  :e <name> <body> ;" cr
+        reload  exit  then                   \ file untouched; put the session back
     2dup (log-group)                         \ fallback first: if the splice fails, the
     (es-nu) !  (es-na) !                     \ definition lives on as an unsaved binding
     (ce-exp) @ (es-src) !  (ce-eu) @ (es-su) !

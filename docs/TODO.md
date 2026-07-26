@@ -7,6 +7,38 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **`:noname` inside a colon definition wedges a file load.** Found
+  2026-07-25 during the interaction sweep, while checking a Codex review
+  claim. `:noname` nested in an open definition is not supported — fair
+  enough — but it fails badly rather than cleanly:
+
+      > : v :noname 42 ; drop 5 ;
+      stack underflow
+
+  At the **prompt** that is survivable: the abort returns to interpret and
+  the session carries on (`cancel;` then reports "nothing to cancel", which
+  is itself a small lie — there *was* nothing left open by then). Loading the
+  same line **from a file** is not: the definition is left open, STATE stays
+  compiling, and every subsequent REPL line is swallowed by the continuation
+  prompt, with no abort to recover it — the session is done.
+
+      $ cat n3.fs
+      : val :noname drop ; 8 ;
+      > val .
+       ok
+      ... depth .          <- continuation prompt; val was never defined
+      ...
+
+  Two things to settle: `:noname` in compile state should be a clean error
+  (`:noname: already compiling` or similar) rather than an underflow; and a
+  load that ends with a definition still open should close/abandon it and
+  report, the way a line error already recovers. The second is the more
+  valuable half — it is a general guard, not a `:noname` special case, and it
+  would catch any file that ends mid-definition. Related: the `:e` body guard
+  refuses `:noname` for exactly this reason (see CHANGELOG, `:e refuses a body
+  that opens its own definition`); that guard is a patch over this hole at one
+  entry point, not a fix for it.
+
 - [x] **A stray `;` at the prompt was accepted in silence.**
   FIXED 2026-07-26 (branch semicolon-guard). Spotted in a user transcript
   during the Dark Star port: `f DrawTimeBar s ;` printed ` ok`. Every other

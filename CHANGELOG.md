@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### `:e` refuses a body that opens its own definition
+
+- **`:e <name>` followed by `: <name> ... ;` no longer corrupts the module
+  file.** `:e` already supplies the `:` and the name, but `: name ... ;` is
+  the muscle memory for defining a word and is what hands reach for — and it
+  used to be accepted, because at the prompt the *old* definition is still
+  findable so the group compiles. The spliced file (`: val` then
+  `: val 42 ;`) then could not be replayed: from a clean file the name is
+  hidden inside its own unfinished definition, so the reload failed with
+  `? val`, the word was gone, and neither `:e` nor `delete` could reach it —
+  the only way out was to leave the session and hand-edit the file.
+- The body's **first token** is now checked before the splice. The file is
+  never written, the session is put back on the version still on disk, and the
+  message says what to type instead. Only that leading position is judged, and
+  deliberately so: a bare `:` token appears in plenty of valid bodies — quoted
+  (`[char] :`), inside a string (`s" : " type`), or in a comment — and telling
+  those apart would need a full comment/string lexer. A guard that blocks a
+  legitimate edit would be worse than the corruption it prevents, so it only
+  fires where a `:` can never be correct.
+- Found by an interaction sweep, by making the mistake: the failing input was
+  the first thing typed before reading the contract. Note the contrast with an
+  ordinary typo (`:e beta alpha nosuchword + ;`), which was already caught
+  before the splice with the file untouched — this was one specific hole where
+  validation against the live session disagreed with what a replay would do.
+
+### Docs: a dirty `:e` runs the module hooks twice, by design
+
+- `help modules` now states it plainly: an unsaved session is saved before it
+  is mutated (one reload) and then spliced (a second), so `on-stop`/`on-start`
+  run two full cycles and a window is closed and reopened twice — the blink on
+  the first edit after typing something new. Nothing leaks; each start is
+  matched by a stop. Save first for a single cycle, and keep the hooks
+  idempotent — acquire and release, not "reset the score".
+
 ### Fixed: a stray `;` at the prompt was accepted in silence
 - **`;` is now compile-only**, like the six words it belongs with. `if`, `then`,
   `begin`, `loop`, `does>`, `recurse` and `exit` all report `compile only` when
