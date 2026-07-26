@@ -36,10 +36,18 @@ Print one character by its code.
     65 emit           \ A
 
 ## cr ( -- )
-Start a new line.
+Start a new line. Put it **after** what you print — `." Hello" cr` — so a word
+ends its own line:
 
-    : two  ." line1" cr ." line2" ;
+    : two  ." line1" cr ." line2" cr ;
     two               \ line1 / line2
+
+Books and interactive examples from other Forths often put `cr` first
+(`cr ." Hello"`). That is for systems whose ` ok` sits on the line you typed,
+where output needs a newline to escape it; BasicForth's `> ` prompt already
+leaves you on a fresh line, so a leading `cr` prints a blank one. In *code*
+the trailing form is standard everywhere — gforth's own library uses it about
+six times as often. See docs/Outer_Interpreter.md for the full story.
 
 ## space ( -- )
 Print one space.

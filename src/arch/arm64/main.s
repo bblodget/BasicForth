@@ -17,6 +17,7 @@
 .equ CELL, 8
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          // buffer for the absolute startup directory
+.equ F_HIDDEN, 0x40                 // header flags2 bit; must match core.s
 
 _start:
     // Save argc and argv[1] before stack is used for anything else
@@ -564,7 +565,18 @@ repl_loop:
     BLR X10                        // (capture-line) ( c-addr u latest -- )
 .Lno_cap_line:
 
-    // Success — print " ok\n"
+    // Success — print " ok\n", unless a definition is still open. The "... "
+    // continuation prompt already says "still compiling", so an ok after every
+    // line is noise: a four-line definition printed four of them, doubling its
+    // height on screen. STATE alone can't decide — `[` interprets inside an
+    // open definition — so also check LATEST's hidden bit, which `:` sets and
+    // `;` clears (the same pair the Ctrl-D guard uses).
+    ADR X9, state
+    LDR X9, [X9]
+    CBNZ X9, repl_loop             // compiling → say nothing
+    LDRB W9, [X22, #8]             // LATEST flags2
+    TST W9, #F_HIDDEN              // definition open but interpreting?
+    B.NE repl_loop
     ADR X0, ok_msg
     MOV X1, #ok_len
     BL platform_write

@@ -225,6 +225,24 @@ report("ctrl-d inside [ ... ] is ignored",
        "7  ok" in out.decode(errors="replace"))
 send(fd, b"bye\r"); send(fd, b"n"); os.close(fd)
 
+# 7c) Regression: an ABORTED definition used to leave its half-built header as
+#     LATEST with F_HIDDEN set, so the guard believed a definition was open for
+#     the rest of the session and Ctrl-D silently did nothing — the feature was
+#     dead after any typo inside a `:`. Both abort routes.
+for label, setup in (("after an aborted definition", [b": gw8\r", b"nosuchword\r"]),
+                     ("after cancel;",               [b": gw9\r", b"cancel;\r"])):
+    fd = spawn()
+    for line in setup:
+        send(fd, line)
+    out = send(fd, b"\x04", 0.6).decode(errors="replace")   # should submit bye
+    if "save first? (y/n)" in out:          # abandoned work may or may not dirty
+        out += send(fd, b"n", 0.6).decode(errors="replace")
+    report("ctrl-d works %s" % label, "Goodbye" in out)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
 # 8b) Data laid down AFTER a `create` — rows of `l,` or `,` on their own lines —
 #     used to be dropped from `save` silently, because capture only recorded a
 #     line that moved LATEST. It now also records a line that moved HERE, so

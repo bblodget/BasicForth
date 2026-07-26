@@ -30,9 +30,81 @@ _start
         ├── DROP the count
         │
         ├── call forth_interpret_line
-        │   ├── returns 0? → print " ok\n", goto repl_loop
+        │   ├── returns 0? → print " ok\n" unless a definition is open,
+        │   │                goto repl_loop
         │   └── returns 1? → print "? " + err_token + "\n", goto repl_loop
 ```
+
+## The prompt, and what follows from it
+
+Classic Forth prints **no readiness prompt**. It appends ` ok` to the line you
+typed, so your input and its result share one line:
+
+    : hello ." Hello World" cr ;  ok
+    hello Hello World
+     ok
+
+That is a convention, not a rule — neither ANS Forth nor Forth 2012 specifies
+a prompt or the `ok` — but it is near-universal, and gforth, SwiftForth and
+VFX all follow it. The reasoning behind it is sound: in a Forth you are
+*always* at the interpreter, so a readiness marker carries no information.
+`ok` is a **completion** marker, and completion is the only news.
+
+BasicForth departs from it on purpose, printing `> ` and putting output and
+` ok` on the following lines. Four reasons:
+
+1. **The pitch.** BasicForth is "boot up and start coding" like 1980s BASIC,
+   and BASIC gave you a cursor as well as its `Ok`. Silence-until-you-type is
+   the most common "is it hung?" reaction newcomers have to Forth.
+2. **Input and output can never be confused.** That matters for the lessons
+   and the reference pages, and concretely for `tests/test_lessons.py`, which
+   locates a failing line by the echoed `> ` with no marker injection.
+3. **Copy-paste safety.** With output on the input line, copying a session
+   transcript back into the REPL re-feeds the output as input — paste
+   `1 2 3 + + . 6` and the trailing `6` (which was *output*) gets pushed.
+4. It is consistent across the pipe path, the PTY path, the `... `
+   continuation prompt, and error reporting.
+
+The cost we accept is one extra line per interaction. We tried the classic
+format (2026-07-26) and reverted it: with no newline after the input, every
+multi-line display — `list`, `see`, `help`, `.module` — began on the command
+line (`> list : row ( n -- ) 8 .r cr ;`), bare Enter piled prompts sideways
+(`>  >  > `), and errors landed on the echoed line where the lesson harness
+does not look for them.
+
+### Why `cr` goes *after* your text here
+
+The two conventions are coupled. gforth's `cr ." Hello"` exists to escape the
+input line; we already start on a fresh one, so a leading `cr` just prints a
+blank line. Ours is `." Hello" cr`.
+
+This is not the deviation it first looks like: gforth's own library uses
+`." …" cr` about 290 times against 47 for the leading form. Trailing `cr` is
+the normal way to write Forth *code*; the leading form belongs to interactive
+one-liners and the books that teach at the prompt. A word that ends its own
+line composes the same everywhere.
+
+The one place a leading `cr` earns its keep here is deliberate vertical space
+— the tutorial footer does it to separate the bar from the step text.
+
+### No `ok` while a definition is open
+
+The `... ` continuation prompt already says "still compiling", so an `ok`
+after every line just doubled the height of every multi-line definition. The
+REPL suppresses it while a definition is open; errors still report normally.
+gforth solves the same problem by printing `compiled` instead of `ok`, which
+costs it nothing because its marker is inline.
+
+"Open" cannot be judged from `STATE` alone — `[` interprets *inside* a
+definition — so the test also reads LATEST's `F_HIDDEN` bit, which `:` sets
+and `;` clears. The Ctrl-D guard asks the same question the same way.
+
+That shared test is why an abandoned definition must not linger: the
+per-line recovery snapshot points **at** the half-built header for a
+definition spanning lines, so restoring it left `F_HIDDEN` set forever, and
+everything that asked "is a definition open?" answered yes for the rest of
+the session. Every abort path (`drop_partial_header` in core.s, a macro on
+ARM64) now unlinks that header and gives its space back.
 
 ## forth_interpret_line
 
