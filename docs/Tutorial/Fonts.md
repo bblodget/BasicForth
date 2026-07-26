@@ -56,9 +56,16 @@ The font is **fixed-width**: every glyph is `font-w` wide and `font-h` tall.
        white s" ABCDEFGH" 0 16 text  s
 
 The second row sits at y = 16 = `font-h`, directly under the first, and the
-digits line up with the letters because each cell is `font-w` = 8 wide. Column
-`c`, row `r` is always at `c font-w *  r font-h *` — layout is arithmetic, no
-measuring.
+digits line up with the letters because each cell is `font-w` = 8 wide. So
+layout is arithmetic, no measuring — and `>xy` does that arithmetic for you,
+turning a column and a row into the pixel corner:
+
+    f  white s" 12345678" 0 0 >xy text
+       white s" ABCDEFGH" 0 1 >xy text  s
+
+Same picture, but now you say *row 1* instead of *y = 16*. Worth the habit:
+the rest of this lesson changes the font and the text size, and every `>xy`
+layout follows along by itself.
 
 ## One string, any color
 
@@ -122,6 +129,26 @@ text comes from a file or is built up in a buffer:
 drops to the second. (A carriage return, 13, is skipped, so text pasted with
 `\r\n` endings still lines up.)
 
+## A second font
+
+The font isn't baked in. Load another one and it takes over:
+
+    require font-vga-8x8.fs
+    f  white s" HELLO" 12 5 >xy text  s
+
+Same string, same call, half the height — this is the IBM PC's 8×8 face, how
+1980s machines fit 24 lines of text on a screen. Each font file defines a word
+named after itself, so switching back is just that word:
+
+    terminus-8x16
+    f  white s" HELLO" 12 5 >xy text  s
+
+Watch where it lands: still column 12, row 5, but the taller font puts row 5
+further down the screen. That's `>xy` earning its keep — you said *row 5*, not
+*y = 40*, so the layout followed the font instead of breaking against it. Both
+fonts stay in memory, so a title can be tall and a status line short in the
+same frame.
+
 ## Where to go next
 
 A glyph is a 1-bit sprite; `text` is a loop over `stamp`; layout is
@@ -131,9 +158,9 @@ else is arranging characters.
 - **A framed panel**: a word that draws a box of any width and height from the
   CP437 corners and bars, then `text` inside it.
 - **A typewriter**: reveal a string one glyph per frame for dialogue.
-- **Bigger headings**: `stamp-scale` (coming) will draw the same glyphs at 2×
-  or 3× without a second font.
+- **Bigger headings**: `3 to font-scale` draws the same glyphs at 3× — try it
+  on a title, then set it back to `1`.
 
-`help fonts` is the reference for `text`, `glyph`, and the cell size. The font
-itself is Terminus (`fonts/OFL.txt`), turned into BasicForth source by
-`tools/psf2font.py`.
+`help fonts` is the reference for `text`, `glyph`, and the cell size. The fonts
+themselves are Terminus (`fonts/OFL.txt`) and the public-domain IBM VGA 8×8,
+turned into BasicForth source by `tools/psf2font.py`.

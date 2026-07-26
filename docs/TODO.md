@@ -636,6 +636,31 @@ docs/Graphics.md for the API.
   and the words would redefine each other. Engine file named `fontcore.fs`
   (not `font-*` — that pattern reads as a font family; not the collision-prone
   `font.fs`).
+- [x] A second font — done 2026-07-26 (branch `font-vga-8x8`).
+  `require font-vga-8x8.fs` → the IBM PC 8×8 character-ROM face, selector
+  `vga-8x8`, generated from `/usr/share/consolefonts/Uni2-VGA8.psf.gz` (218 of
+  256 CP437 codes present — block and box drawing all there, so nothing had to
+  be synthesized; the gaps are the control range plus five symbols). Public
+  domain, so no
+  OFL-style obligation: Debian's console-setup copyright states "All console
+  fonts are public domain by nature". Prompted by the Dark Star port, whose
+  TI-99 info panel is laid out for 8-pixel text and came out double height on
+  Terminus. `psf2font.py` now reads the cell height from the PSF header
+  (PSF1 charsize / PSF2 h) rather than assuming 16, cross-checks it against
+  the size in the output filename, and keeps per-family license text in a
+  `FONT_INFO` table — an unknown family is an error, so no font can ship under
+  a header describing a different one. Regenerating Terminus through the new
+  script gives a byte-identical file (the check that the refactor was clean).
+  +8 integration tests both arches, a `tutorial Fonts` step on switching, and
+  `help fonts` on choosing. The multi-font design above needed no change to
+  carry a second font. The one engine addition came out of the port too:
+  **`>xy ( col row -- x y )`** in `fontcore.fs`, a character-cell-to-pixel
+  converter, because hand-written pixel layout is what makes a font switch
+  break. It scales by `font-scale` as well as the cell size — `text` advances
+  by `font-w font-scale *`, so a hand-rolled `col font-w *` silently overlaps
+  at any scale above 1 (the first draft of the docs example had exactly that
+  bug). Named for what it returns, not `gotoxy`: `at-xy` already moves the
+  terminal cursor, and this moves nothing.
 - [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
   `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to

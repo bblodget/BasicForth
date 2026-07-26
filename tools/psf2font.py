@@ -1,34 +1,81 @@
 #!/usr/bin/env python3
-# psf2font.py - Convert a PSF bitmap console font to src/forth/font-terminus-8x16.fs
+# psf2font.py - Convert a PSF bitmap console font to a src/forth/font-*.fs
 # Copyright (C) 2026 Brandon Blodget
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # Reads an 8-wide PSF font (PSF1 or PSF2) and emits a font *data* file: a
-# 256-entry CP437 glyph table, 8x16, one byte per row -- exactly the format
-# `stamp` reads -- plus a require of fontcore.fs (the shared text/glyph engine)
-# and a selector word. The default input is Terminus Font
-# (Uni2-Terminus16.psf.gz), SIL OFL 1.1; see fonts/OFL.txt.
+# 256-entry CP437 glyph table, one byte per row -- exactly the format `stamp`
+# reads -- plus a require of fontcore.fs (the shared text/glyph engine) and a
+# selector word. The cell HEIGHT comes from the PSF header, so one script
+# handles 8x8, 8x16, and anything else 8 pixels wide; the output filename must
+# agree with it (font-vga-8x8.fs from an 8x8 PSF).
 #
-# The font-terminus-8x16.fs it writes is the shipped artifact -- BasicForth needs no
+# Every font needs an entry in FONT_INFO below giving its provenance and
+# license -- glyph data usually does not travel under the GPL, so a font with
+# no entry is refused rather than shipped with a wrong header.
+#
+# The font-*.fs files it writes are the shipped artifacts -- BasicForth needs no
 # Python to build or run. Re-run this only to regenerate from a new PSF.
 #
 # Usage:  python3 psf2font.py [font.psf.gz] [output.fs]
+#   Terminus 8x16:  python3 psf2font.py
+#   IBM VGA 8x8:    python3 psf2font.py /usr/share/consolefonts/Uni2-VGA8.psf.gz \
+#                       ../src/forth/font-vga-8x8.fs
 
+import re
 import sys
 import os
 import gzip
 import struct
 
 CELL_WIDTH = 8               # PSF1 is always 8 wide; we require 8 for PSF2 too
-CELL_HEIGHT = 16
 NUM_CHARS = 256
-BYTES_PER_GLYPH = CELL_HEIGHT  # 1 byte/row at width 8
 
 PSF1_MAGIC = (0x36, 0x04)
 PSF1_MODE_512 = 0x01
 PSF1_MODE_HASTAB = 0x02
 PSF2_MAGIC = 0x864AB572
 PSF2_HAS_UNICODE = 0x01
+
+# Provenance and license header per font family (the part of the output name
+# before the size: font-vga-8x8.fs -> "vga"). These lines go into the .fs after
+# a leading "\ ", and {tbl} is substituted with the glyph-table name. Bitmap
+# glyphs are rarely ours to relicense, so adding a font means adding its terms
+# here first -- a family with no entry is an error, not a default.
+FONT_INFO = {
+    "terminus": [
+        "This file is dual-licensed by content:",
+        "",
+        "  The Forth code (the require line and the selector word) is",
+        "    Copyright (C) 2026 Brandon Blodget",
+        "    SPDX-License-Identifier: GPL-2.0-only",
+        "",
+        "  The {tbl} bitmap table is derived from Terminus Font, and is",
+        "  NOT under the GPL -- the SIL Open Font License forbids relicensing",
+        "  font data:",
+        "    Copyright (C) 2010 Dimitar Toshkov Zhekov",
+        "    SPDX-License-Identifier: OFL-1.1",
+        "  This is a MODIFIED version per the OFL (format changed to a Forth",
+        "  array; a few block-shading glyphs synthesized where the PSF lacked",
+        "  them), so it is not the official \"Terminus Font\" -- that is a",
+        "  Reserved Font Name.  Full license and reserved-name note in",
+        "  fonts/OFL.txt.",
+    ],
+    "vga": [
+        "This file is GPL code plus public-domain data:",
+        "",
+        "  The Forth code (the require line and the selector word) is",
+        "    Copyright (C) 2026 Brandon Blodget",
+        "    SPDX-License-Identifier: GPL-2.0-only",
+        "",
+        "  The {tbl} bitmap table is the IBM PC VGA 8x8 character-ROM font,",
+        "  by way of the Linux console font collection.  Debian's",
+        "  console-setup copyright states: \"All console fonts are public",
+        "  domain by nature.\"  The shapes date to the original IBM character",
+        "  ROMs; no one claims them here.",
+        "    SPDX-License-Identifier: LicenseRef-PublicDomain",
+    ],
+}
 
 # CP437 (codes 128-255) -> Unicode. Codes 0-127 map to themselves.
 CP437_MAP = [
@@ -55,33 +102,33 @@ def char_to_unicode(code):
     return code if code < 128 else CP437_MAP[code - 128]
 
 
-def generate_block_glyph(cp):
-    """Synthesize a block-element glyph the PSF may lack. 16 bytes, or None."""
-    g = bytearray(BYTES_PER_GLYPH)
-    half = CELL_HEIGHT // 2
+def generate_block_glyph(cp, h):
+    """Synthesize a block-element glyph the PSF may lack. h bytes, or None."""
+    g = bytearray(h)
+    half = h // 2
     if cp == 0x2580:                       # upper half
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0xFF if r < half else 0x00
     elif cp == 0x2584:                     # lower half
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0xFF if r >= half else 0x00
     elif cp == 0x258C:                     # left half
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0xF0
     elif cp == 0x2590:                     # right half
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0x0F
     elif cp == 0x2588:                     # full block
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0xFF
     elif cp == 0x2591:                     # light shade (25%)
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0x88 if r % 2 == 0 else 0x22
     elif cp == 0x2592:                     # medium shade (50% checker)
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0xAA if r % 2 == 0 else 0x55
     elif cp == 0x2593:                     # dark shade (75%)
-        for r in range(CELL_HEIGHT):
+        for r in range(h):
             g[r] = 0x77 if r % 2 == 0 else 0xDD
     else:
         return None
@@ -89,10 +136,11 @@ def generate_block_glyph(cp):
 
 
 def parse_psf1(data):
+    # PSF1 is always 8 pixels wide, so charsize (bytes per glyph) IS the height.
     mode, charsize = data[2], data[3]
     nglyph = 512 if (mode & PSF1_MODE_512) else 256
-    if charsize != BYTES_PER_GLYPH:
-        raise ValueError(f"PSF1 charsize {charsize}, expected {BYTES_PER_GLYPH} (8x16)")
+    if not 1 <= charsize <= 32:
+        raise ValueError(f"PSF1 charsize {charsize} is out of range (1-32)")
     glyphs = [data[4 + i * charsize: 4 + (i + 1) * charsize] for i in range(nglyph)]
     uni = {}
     if mode & PSF1_MODE_HASTAB:            # UCS-2 table: 2-byte LE entries
@@ -112,13 +160,13 @@ def parse_psf1(data):
                             break
                     continue
                 uni.setdefault(val, gi)
-    return glyphs, uni
+    return glyphs, uni, charsize
 
 
 def parse_psf2(data):
     (hsz, flags, nglyph, bpg, h, w) = struct.unpack_from('<IIIIIIII', data, 0)[2:]
-    if w != CELL_WIDTH or h != CELL_HEIGHT:
-        raise ValueError(f"PSF2 is {w}x{h}, expected {CELL_WIDTH}x{CELL_HEIGHT}")
+    if w != CELL_WIDTH:
+        raise ValueError(f"PSF2 is {w}x{h}; only {CELL_WIDTH}-wide fonts are supported")
     stride = (w + 7) // 8
     glyphs = []
     for i in range(nglyph):
@@ -150,7 +198,7 @@ def parse_psf2(data):
                 else:
                     cp = ((b & 0x07) << 18) | ((data[pos + 1] & 0x3F) << 12) | ((data[pos + 2] & 0x3F) << 6) | (data[pos + 3] & 0x3F); pos += 4
                 uni.setdefault(cp, gi)
-    return glyphs, uni
+    return glyphs, uni, h
 
 
 def load(psf_path):
@@ -163,14 +211,14 @@ def load(psf_path):
     raise ValueError("not a PSF1 or PSF2 file")
 
 
-def build_table(glyphs, uni):
+def build_table(glyphs, uni, h):
     table, found, gen, blank = [], 0, 0, 0
-    empty = bytes(BYTES_PER_GLYPH)
+    empty = bytes(h)
     for code in range(NUM_CHARS):
         cp = char_to_unicode(code)
         if cp in uni:
             table.append(glyphs[uni[cp]]); found += 1
-        elif (g := generate_block_glyph(cp)) is not None:
+        elif (g := generate_block_glyph(cp, h)) is not None:
             table.append(g); gen += 1
         else:
             table.append(empty); blank += 1
@@ -181,41 +229,44 @@ def ascii_art(glyph):
     return ["".join("#" if (b & (0x80 >> x)) else "." for x in range(8)) for b in glyph]
 
 
-def emit_fs(table, out_path, src_name):
-    # Names derive from the output filename: font-terminus-8x16.fs -> the
-    # selector word `terminus-8x16` and the table `(terminus-8x16)`. The engine
-    # (fontcore.fs) owns text/glyph/font-scale; this file is data + a selector.
+def font_names(out_path, h):
+    """Selector and table names, from the output filename. Checks the size."""
     base = os.path.basename(out_path)               # font-terminus-8x16.fs
     stem = os.path.splitext(base)[0]                 # font-terminus-8x16
     sel = stem[5:] if stem.startswith("font-") else stem   # terminus-8x16
     tbl = f"({sel})"                                 # (terminus-8x16)
+    family = sel.split("-")[0]                       # terminus
+    # The name carries the cell size, and `text` positions by it -- so a name
+    # that disagrees with the PSF would mislead every caller. Catch it here.
+    if m := re.search(r"-(\d+)x(\d+)$", sel):
+        named = (int(m.group(1)), int(m.group(2)))
+        if named != (CELL_WIDTH, h):
+            raise ValueError(f"{base} says {named[0]}x{named[1]}, "
+                             f"but the PSF is {CELL_WIDTH}x{h}")
+    return base, sel, tbl, family
+
+
+def emit_fs(table, out_path, src_name, h):
+    # Names derive from the output filename: font-terminus-8x16.fs -> the
+    # selector word `terminus-8x16` and the table `(terminus-8x16)`. The engine
+    # (fontcore.fs) owns text/glyph/font-scale; this file is data + a selector.
+    base, sel, tbl, family = font_names(out_path, h)
+    if family not in FONT_INFO:
+        raise ValueError(f"no FONT_INFO entry for '{family}' -- add its "
+                         f"provenance and license terms to psf2font.py first")
     lines = []
     w = lines.append
-    w(f"\\ {base} -- {CELL_WIDTH}x{CELL_HEIGHT} bitmap font data for BasicForth.")
+    w(f"\\ {base} -- {CELL_WIDTH}x{h} bitmap font data for BasicForth.")
     w("\\ require it for `text`; it pulls in fontcore.fs (the engine) and selects")
     w("\\ itself.  GENERATED by tools/psf2font.py -- do not edit.")
     w("\\")
-    w("\\ This file is dual-licensed by content:")
-    w("\\")
-    w("\\   The Forth code (the require line and the selector word) is")
-    w("\\     Copyright (C) 2026 Brandon Blodget")
-    w("\\     SPDX-License-Identifier: GPL-2.0-only")
-    w("\\")
-    w(f"\\   The {tbl} bitmap table is derived from Terminus Font, and is")
-    w("\\   NOT under the GPL -- the SIL Open Font License forbids relicensing")
-    w("\\   font data:")
-    w("\\     Copyright (C) 2010 Dimitar Toshkov Zhekov")
-    w("\\     SPDX-License-Identifier: OFL-1.1")
-    w("\\   This is a MODIFIED version per the OFL (format changed to a Forth")
-    w("\\   array; a few block-shading glyphs synthesized where the PSF lacked")
-    w("\\   them), so it is not the official \"Terminus Font\" -- that is a")
-    w("\\   Reserved Font Name.  Full license and reserved-name note in")
-    w("\\   fonts/OFL.txt.")
+    for line in FONT_INFO[family]:
+        w(("\\ " + line.format(tbl=tbl)).rstrip())
     w(f"\\   Generated from {src_name}.")
     w("")
     w("require fontcore.fs                          \\ the text/glyph engine")
     w("")
-    w(f"\\ {NUM_CHARS} glyphs in CP437 order, {BYTES_PER_GLYPH} bytes each (MSB = leftmost")
+    w(f"\\ {NUM_CHARS} glyphs in CP437 order, {h} bytes each (MSB = leftmost")
     w("\\ pixel) -- exactly what `stamp` reads.")
     w(f"create {tbl}")
     for code in range(NUM_CHARS):
@@ -224,10 +275,10 @@ def emit_fs(table, out_path, src_name):
         body = " ".join(f"${b:02x} c," for b in g)
         w(f"  {body}   \\ {code:3d} {ch}")
     w("")
-    w(f"\\ Select this font: hand its table and {CELL_WIDTH}x{CELL_HEIGHT} cell size to the")
+    w(f"\\ Select this font: hand its table and {CELL_WIDTH}x{h} cell size to the")
     w(f"\\ engine, which works out the row stride. Call `{sel}` again any time to")
     w("\\ switch back to it after another font has been loaded.")
-    w(f": {sel} ( -- )  {tbl} {CELL_WIDTH} {CELL_HEIGHT} font! ;")
+    w(f": {sel} ( -- )  {tbl} {CELL_WIDTH} {h} font! ;")
     w(f"{sel}          \\ make it the current font as soon as this file loads")
     w("")
     with open(out_path, "w") as f:
@@ -244,11 +295,15 @@ if __name__ == "__main__":
         print(f"Error: font not found: {psf_path}")
         sys.exit(1)
 
-    glyphs, uni = load(psf_path)
-    print(f"{len(glyphs)} glyphs, {len(uni)} unicode mappings")
-    table, found, gen, blank = build_table(glyphs, uni)
-    print(f"Found: {found}, Generated: {gen}, Blank: {blank}")
-    emit_fs(table, out_path, os.path.basename(psf_path))
+    try:
+        glyphs, uni, height = load(psf_path)
+        print(f"{CELL_WIDTH}x{height}, {len(glyphs)} glyphs, {len(uni)} unicode mappings")
+        table, found, gen, blank = build_table(glyphs, uni, height)
+        print(f"Found: {found}, Generated: {gen}, Blank: {blank}")
+        emit_fs(table, out_path, os.path.basename(psf_path), height)
+    except ValueError as e:                # a wrong size, width, or family
+        print(f"Error: {e}")
+        sys.exit(1)
     print(f"Wrote {out_path}")
 
     print("\nSample glyphs:")
