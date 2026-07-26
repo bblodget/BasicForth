@@ -5,6 +5,10 @@ converting numbers to strings. It builds strings **right to left**
 in a scratch buffer (PAD), extracting digits by repeated division
 by BASE.
 
+This page is the implementation view. For the working-up-to-it version —
+`<#`, `#`, `#s`, `hold`, `sign` introduced one at a time, ending in a `money`
+word — run `tutorial Printing`.
+
 ## Double-Cell Arithmetic Foundation
 
 Pictured output operates on double-cell (128-bit) unsigned numbers.

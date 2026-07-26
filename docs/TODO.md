@@ -1625,7 +1625,17 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   reloaded WITHOUT saving — the hook vanished, so the lesson would have
   taught behaviour BasicForth does not have — and a step printing a
   reloaded variable exposed the uninitialised-`variable` bug, fixed on its
-  own branch (merge `3fe7970`). Remaining: files, defer/is, FFI/graphics.
+  own branch (merge `3fe7970`).
+  **`tutorial Printing` DONE 2026-07-26** (branch printing-lesson): 13 steps
+  — `.`/`cr`/`space`/`spaces`/`emit`, `.r` columns, `u.0r` as a clock, the
+  base gotcha, then pictured output introduced one word at a time (`<# #>`,
+  `#s`, `hold`, `#`, `sign`, `holds`) building up to a `money` word printing
+  `$12.34`. Scoped against two neighbours: text (`."`, `type`) belongs to
+  `tutorial Strings`, bases to `help numbers`. Caught while replaying:
+  **`[char]` is compile-only**, so the prompt-level examples need plain
+  `char` — which turned into a teaching point, since the lesson already
+  contrasts the two inside a definition. Remaining: files, defer/is,
+  FFI/graphics.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows

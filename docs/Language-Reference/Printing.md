@@ -128,6 +128,8 @@ End the conversion, dropping `ud` and leaving the finished string to `type`.
 
 ## See Also
 
+- `tutorial Printing` — the hands-on version: columns, a zero-padded clock,
+  and building `$12.34` a piece at a time with `<# … #>`.
 - `help numbers` — bases, the `$`/`%`/`#` prefixes, and `>number`.
 - `help arithmetic` — the double-precision words (`s>d`, etc.) behind pictured output.
 - docs/Pictured_Numeric_Output.md — the fuller treatment.
