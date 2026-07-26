@@ -389,6 +389,27 @@ completed. See Planning.md for high-level vision and design decisions.
 - [x] Batch 3: >BODY, >IN, SOURCE, ABORT, QUIT, ABORT", >NUMBER, >DIGIT?, WORD, ENVIRONMENT?
 - [x] Batch 4: CASE/OF/ENDOF/ENDCASE, UNUSED, 0>, U>, WITHIN, ERASE, U.R, HOLDS, .(
 - [x] Batch 5: ?DO, VALUE/TO, :NONAME, PARSE, PARSE-NAME, SOURCE-ID, WORDS
+- [x] `+to ( n "name" -- )` — add to a value (2026-07-25, branch plus-to).
+  A gforth-style extension, not Forth 2012; wanted while porting Dark Star,
+  whose TurboForth source uses `+TO` throughout. Implemented by *deferring to*
+  `to` rather than reimplementing it: parse the name to fetch the current
+  contents, rewind `>in` to where the name began, then let `to` re-parse and
+  store. Consequences worth keeping: `immediate` (it parses, so it must run
+  while the enclosing definition compiles) and `state`-driven (the fetch and
+  the `+` are performed when interpreting, compiled when compiling), which is
+  what makes one word serve both. Every error path is `to`'s verbatim — a
+  variable, an unknown name, and a missing name all produce exactly what a bare
+  `to` produces, so there is no second message to maintain.
+  - Two implementation notes for anyone revisiting it: `parse-word`, not
+    `PARSE-NAME`, because `+to` sits above the point in core.fs where that
+    alias is defined; and the empty-name case must be guarded before `find`,
+    which misbehaves on a zero-length name (it produced a bare `stack
+    underflow` instead of `to`'s message).
+  - A test gotcha, since it bit while writing them: a line error rolls the
+    dictionary back to the start of **that line**, so a fixture written as
+    `0 value x 1 +to zz` loses `x` as well. Put the fixture on its own line.
+  - Deliberately no `-to`: gforth has none, `-5 +to x` reads fine, and one word
+    is easier to teach than two.
 - [x] String words: /STRING, COMPARE, CMOVE, CMOVE>, -TRAILING, BLANK
 - [x] Programming-Tools: ?, DUMP, H.2, H.ADDR
 - [x] Facility: KEY?, MS, PAGE, AT-XY, SCREEN-WIDTH, SCREEN-HEIGHT (platform layer)

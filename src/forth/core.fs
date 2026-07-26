@@ -115,6 +115,30 @@
 \ CHAR parses at run time — inside a definition use [CHAR] to bake in a literal.
 : CHAR      parse-word if c@ else drop 0 then ;
 
+\ +TO ( n "name" -- ) — add to a VALUE: `1 +to Count` is `Count 1 + to Count`.
+\ Not in Forth 2012; an extension, spelled as gforth spells it.
+\
+\ TO already knows how to resolve the name, store into a VALUE, compile the
+\ store when compiling, and report a name it cannot find — so +TO does none of
+\ that itself. It parses the name only to FETCH the current contents, rewinds
+\ >IN to where the name began, and hands the store to TO untouched. Two things
+\ fall out of that: the unknown-name case needs no message of its own (TO
+\ reports `? name` and aborts, exactly as a bare TO would), and a VARIABLE is
+\ refused rather than quietly corrupted, because TO refuses it.
+\
+\ IMMEDIATE because it parses: it has to run while the enclosing definition is
+\ being compiled, not when that definition later runs. STATE then decides
+\ whether the fetch and the + are performed now or compiled — which is why the
+\ same word serves at the prompt and inside a colon definition.
+: +to ( n "name" -- )
+    >in @ >r
+    parse-word dup if  find  else  false  then   ( xt true | c-addr u false )
+    if                                  ( xt )   \ fetch now, or compile the fetch
+        state @ if  compile, postpone +  else  execute +  then
+    else  2drop  then                            \ no name, or unknown: TO reports it
+    r> >in !                                     \ rewind — TO re-parses the name
+    postpone to ; immediate
+
 \ System words
 : ENVIRONMENT?  ( c-addr u -- false ) 2drop false ;
 

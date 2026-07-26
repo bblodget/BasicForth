@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `+to` — add to a value
+- **`+to ( n "name" -- )`** does what `count 1 + to count` did, without naming
+  the value twice: `1 +to count`. Works identically at the prompt and compiled
+  into a definition, loops included, and takes a negative `n` to subtract.
+  An extension rather than Forth 2012, spelled as gforth spells it.
+- It leans on `to` rather than duplicating it. `+to` parses the name only to
+  *fetch* the current contents, rewinds `>in` to where the name began, and
+  hands the store to `to` untouched — so every rejection is `to`'s own, word
+  for word: a `variable` gives `v: not a value or deferred word`, an unknown
+  name gives `? name`, and no name at all behaves like a bare `to`. Nothing is
+  caught and re-reported, so there is no second message to keep in step.
+
 ### Lessons are tested now — `make run-lessons`
 - **`tests/test_lessons.py` replays every lesson** in `docs/Tutorial/` the way
   a reader walks it: one session per lesson, steps in order, state carrying
