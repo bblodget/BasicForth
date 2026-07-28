@@ -2968,7 +2968,18 @@ forth_included:
     LDR X21, [X9]                   // restore HERE
     ADR X9, saved_latest
     LDR X22, [X9]                   // restore LATEST
-    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
+    // A definition spanning lines leaves a half-built header, and the snapshot
+    // points AT it, so the restore above keeps its HIDDEN bit — drop it, or
+    // every later "is a definition open?" test answers yes. But only when it is
+    // OURS: saved_latest can BE the caller's still-open definition, because our
+    // own `:` is what recorded it, and unlinking that deletes work in progress
+    // and leaves `;` staring at a broken chain (verified: segfault).
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.EQ .Lincl_unc_kept
+    DROP_PARTIAL_HEADER
+.Lincl_unc_kept:
     ADR X9, do_depth
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count

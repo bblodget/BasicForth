@@ -4945,6 +4945,24 @@ if [[ "$unm_out" == *"definition not closed: bad"* && "$unm_out" == *"0  ok"* \
 else
     printf "  ${RED}FAIL${NC}  multi-line unclosed partial header\n    Got: %q\n" "$unm_out"; ((failed++))
 fi
+# ...and dropping that header must not reach an INHERITED one. saved_latest
+# can BE the caller's still-open definition, since the included file's own `:`
+# is what recorded it — unlinking that deletes work in progress and leaves `;`
+# with a broken chain (it segfaulted). The file is included twice on purpose:
+# the second load adds no require sentinel, so LATEST is not shifted and
+# saved_latest lands squarely on the caller's open definition.
+unh_dir="$(mktemp -d)"
+printf ': cbad 1\n' > "$unh_dir/inner.fs"
+printf 'include %s/inner.fs\n: keeper 7 ;\n: foo [ include %s/inner.fs ] 42 ;\nkeeper .\n' \
+    "$unh_dir" "$unh_dir" > "$unh_dir/outer.fs"
+unh_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unh_dir/outer.fs" 2>&1)
+rm -rf "$unh_dir"
+if [[ "$unh_out" == *"7"* && "$unh_out" == *"Goodbye"* && "$unh_out" != *"dumped core"* ]]; then
+    printf "  ${GREEN}PASS${NC}  dropping a partial header never unlinks an inherited one\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  inherited header unlinked\n    Got: %q\n" "$unh_out"; ((failed++))
+fi
 # False-positive guard: a well-formed file says nothing and returns success.
 unf_out=$(printf 'fine .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
     timeout 5 $sv_forth "$unc_dir/fine.fs" 2>&1)

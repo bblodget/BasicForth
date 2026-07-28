@@ -2667,7 +2667,17 @@ forth_included:
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
-    call drop_partial_header        # a definition spanning lines leaves one
+    # A definition spanning lines leaves a half-built header, and the snapshot
+    # points AT it, so the restore above keeps its HIDDEN bit — drop it, or
+    # every later "is a definition open?" test answers yes. But only when it is
+    # OURS: saved_latest can BE the caller's still-open definition, because our
+    # own `:` is what recorded it, and unlinking that deletes work in progress
+    # and leaves `;` staring at a broken chain (verified: segfault).
+    mov incl_entry_latest(%rip), %rax
+    cmp %rax, %r12
+    je .Lincl_unc_kept
+    call drop_partial_header
+.Lincl_unc_kept:
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
     jmp .Lincl_err_tail
