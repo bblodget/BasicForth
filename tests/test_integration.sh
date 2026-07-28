@@ -4818,6 +4818,99 @@ assert_error  "time unknown word" "time nosuchword"       "time: nosuchword not 
 assert_output "time without a name" "time"                "time: needs a word name"
 
 # =========================================================================
+section "UNCLOSED DEFINITION AT END OF FILE"
+# =========================================================================
+# A file that stops mid-definition — a missing ';', nearly always — used to
+# load "successfully" and leave the caller compiling: every line typed after
+# it was swallowed into the unterminated word, `bye` included, so the session
+# could only be escaped with Ctrl-D. It is now a load error, recovered exactly
+# the way a line error inside a definition already was.
+unc_dir="$(mktemp -d)"
+printf ': good 1 ;\n: bad 2 3 +\n' > "$unc_dir/unc.fs"
+printf ': ok1 1 ;\n]\n'            > "$unc_dir/brk.fs"
+printf ': fine 4 ;\n'              > "$unc_dir/fine.fs"
+printf '\\ defines nothing\n1 drop\n' > "$unc_dir/nodef.fs"
+printf 'include %s/unc.fs\n: outer 5 ;\n' "$unc_dir" > "$unc_dir/nest.fs"
+
+# The report names the unfinished word — in a long file that is the question
+# you actually have. (A line number would point one line past the end.)
+unc_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unc_dir/unc.fs" 2>&1)
+if [[ "$unc_out" == *"definition not closed: bad (missing ;)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition is reported, and names the word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition report\n    Got: %q\n" "$unc_out"; ((failed++))
+fi
+# Interactive: the session is usable — STATE back to interpret, definitions
+# completed before the bad one intact, the partial one discarded.
+unr_out=$(printf 'state @ .\ngood .\nbad .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/unc.fs" 2>&1)
+if [[ "$unr_out" == *"0  ok"* && "$unr_out" == *"1  ok"* && "$unr_out" == *"? bad"* \
+      && "$unr_out" == *"Goodbye"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition recovers: interpret mode, partial word gone\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition recovery\n    Got: %q\n" "$unr_out"; ((failed++))
+fi
+# A script (not a terminal, session off) exits non-zero, like any load error.
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/unc.fs" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition exits non-zero as a script\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition should exit non-zero\n"; ((failed++))
+fi
+# Same from an interactive include, and the session stays usable afterwards.
+uni_out=$(printf 'include %s/unc.fs\nstate @ .\ngood .\nbye\n' "$unc_dir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1)
+if [[ "$uni_out" == *"definition not closed"* && "$uni_out" == *"0  ok"* \
+      && "$uni_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  include of an unclosed file reports and stays usable\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  include of an unclosed file\n    Got: %q\n" "$uni_out"; ((failed++))
+fi
+# A file that merely leaves STATE set (a stray `]`) has no definition to name
+# and nothing to roll back — it must still report, and must not restore the
+# dictionary from a stale colon_dsp/saved_here.
+unb_out=$(printf 'state @ .\nok1 .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/brk.fs" 2>&1)
+if [[ "$unb_out" == *"definition not closed (missing ;)"* && "$unb_out" == *"0  ok"* \
+      && "$unb_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a stray ] at end of file reports, with no name and no rollback\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stray ] at end of file\n    Got: %q\n" "$unb_out"; ((failed++))
+fi
+# Nested: the inner file reports, and the outer load carries on — same as a
+# line error in a nested file.
+unn_out=$(printf 'outer .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/nest.fs" 2>&1)
+if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"5  ok"* \
+      && "$unn_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load continues\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed nested include\n    Got: %q\n" "$unn_out"; ((failed++))
+fi
+# A load can BEGIN inside an open definition (`: foo [ include lib.fs ] ;`).
+# That definition belongs to the caller, not to the file, so the file must not
+# be blamed for it — and must certainly not roll it back, which would destroy
+# work in progress. Checked with a file that defines nothing, so the only
+# thing open at its EOF is the caller's.
+unp_out=$(printf ': pfoo [ include %s/nodef.fs ] 42 ;\nbye\n' "$unc_dir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1)
+if [[ "$unp_out" != *"not closed"* && "$unp_out" != *"underflow"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a load inside an open definition is not blamed for it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  inherited-definition false positive\n    Got: %q\n" "$unp_out"; ((failed++))
+fi
+# False-positive guard: a well-formed file says nothing and returns success.
+unf_out=$(printf 'fine .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unc_dir/fine.fs" 2>&1)
+if [[ "$unf_out" == *"4  ok"* && "$unf_out" != *"not closed"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a well-formed file loads silently\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  well-formed file false positive\n    Got: %q\n" "$unf_out"; ((failed++))
+fi
+rm -rf "$unc_dir"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

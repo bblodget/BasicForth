@@ -2559,6 +2559,19 @@ forth_included:
     ADR X9, cur_line_off
     LDR X11, [X9]
     STP X10, X11, [SP, #-16]!
+    // And what was already open before this load began, for the
+    // unclosed-definition check at EOF (same nesting discipline).
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    LDR X11, [X9]
+    STP X10, X11, [SP, #-16]!
+    ADR X9, incl_entry_latest
+    STR X22, [X9]
+    ADR X9, state
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    STR X10, [X9]
 
     // Pop c-addr and u from data stack
     LDR X1, [X19]                   // X1 = u (filename length)
@@ -2750,6 +2763,34 @@ forth_included:
     B .Lincl_line_loop
 
 .Lincl_done:
+    // Reached EOF. If a definition is still open — a missing ';' at the end of
+    // the file, nearly always — this is a load error, not a success. Returning
+    // success left the caller compiling: every line typed afterwards was
+    // swallowed into the unterminated word, `bye` included, so the session
+    // could only be escaped with Ctrl-D. A line error *inside* a definition
+    // already recovers cleanly; this makes the quiet EOF take the same path.
+    // Only what THIS file left behind counts. A load can begin inside an open
+    // definition (`: foo [ include lib.fs ] ... ;`), and that one is not ours
+    // to close — blaming the file for it, and rolling it back, would destroy
+    // the caller's work. So compare against what was open on entry: a hidden
+    // LATEST that is not the one we inherited means this file opened it, and a
+    // STATE that differs from the caller's means this file left it that way (a
+    // stray `]`). STATE alone would not do even for our own file, since `[`
+    // interprets inside an open definition.
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_chk_state
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.NE .Lincl_unclosed            // a definition this file opened
+.Lincl_chk_state:
+    ADR X9, state
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    LDR X11, [X9]
+    CMP X10, X11
+    B.NE .Lincl_unclosed            // compile state left changed
     // Unmap file
     MOV X0, X25
     MOV X1, X24
@@ -2771,6 +2812,11 @@ forth_included:
 // Shared register epilogue (no source restore — for paths that never ran the
 // line loop, so never saved the source pointers).
 .Lincl_pop_regs:
+    LDP X10, X11, [SP], #16         // (reverse order of the entry pushes)
+    ADR X9, incl_entry_latest
+    STR X10, [X9]
+    ADR X9, incl_entry_state
+    STR X11, [X9]
     LDP X10, X11, [SP], #16         // restore source context saved at entry
     ADR X9, cur_source_id
     STR X10, [X9]
@@ -2818,6 +2864,7 @@ forth_included:
     MOV X0, #'\n'
     BL platform_emit
 
+.Lincl_err_tail:
     // Unmap file
     MOV X0, X25
     MOV X1, X24
@@ -2835,6 +2882,72 @@ forth_included:
     ADD SP, SP, #32
     MOV X0, #1                      // return 1 = error
     B .Lincl_pop_regs
+
+// The file ended mid-definition. Report it like any other load error, abandon
+// the partial definition, and return 1 so the caller applies its usual policy —
+// drop to an interactive REPL, exit non-zero for a script.
+.Lincl_unclosed:
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+    BL platform_write
+    ADR X0, incl_unclosed_msg
+    MOV X1, #incl_unclosed_msg_len
+    BL platform_write
+    // Name the word, which is what you actually want to know in a long file —
+    // more use than a line number, which at EOF points one line past the end.
+    // LATEST still holds the unfinished entry (nothing has been rolled back
+    // yet). Name it only if it is OURS (hidden, and not the definition we were
+    // called inside); a zero length means :NONAME, so there is no name either.
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_unclosed_noname
+    ADR X9, incl_entry_latest
+    LDR X11, [X9]
+    CMP X11, X22
+    B.EQ .Lincl_unclosed_noname
+    AND W26, W10, #F_LENMASK
+    CBZ W26, .Lincl_unclosed_noname
+    ADR X0, incl_unclosed_sep
+    MOV X1, #incl_unclosed_sep_len
+    BL platform_write
+    ADD X0, X22, #10                // Name field: after Link(8)+Flags(1)+Flags2(1)
+    MOV X1, X26
+    BL platform_write
+.Lincl_unclosed_noname:
+    ADR X0, incl_unclosed_tail
+    MOV X1, #incl_unclosed_tail_len
+    BL platform_write
+    // Abandon the definition, exactly as the line-error path does. STATE goes
+    // back to what the caller had, not blindly to 0 — a load that began inside
+    // a definition must be handed back still compiling. The dictionary rollback
+    // applies only to a definition THIS file opened: a file that merely left
+    // STATE set (a stray `]`) has nothing to roll back, colon_dsp/saved_here
+    // would be stale from an earlier `:`, and an inherited definition belongs
+    // to the caller.
+    ADR X9, incl_entry_state
+    LDR X10, [X9]
+    ADR X9, state
+    STR X10, [X9]
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_err_tail
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.EQ .Lincl_err_tail
+    ADR X9, colon_dsp
+    LDR X19, [X9]                   // restore DSP (drop compile-time stack)
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    ADR X9, do_depth
+    STR XZR, [X9]                   // reset DO nesting
+    ADR X9, leave_count
+    STR XZR, [X9]                   // reset leave chain
+    B .Lincl_err_tail
 
 .Lincl_open_err:
     // Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
@@ -2978,6 +3091,12 @@ forth_included:
 .section .rodata
 incl_err_sep:    .ascii ": ? "
 .equ incl_err_sep_len, . - incl_err_sep
+incl_unclosed_msg: .ascii ": definition not closed"
+.equ incl_unclosed_msg_len, . - incl_unclosed_msg
+incl_unclosed_sep: .ascii ": "
+.equ incl_unclosed_sep_len, . - incl_unclosed_sep
+incl_unclosed_tail: .ascii " (missing ;)\n"
+.equ incl_unclosed_tail_len, . - incl_unclosed_tail
 incl_err_open:   .ascii "Error: cannot open "
 .equ incl_err_open_len, . - incl_err_open
 .text
@@ -5770,6 +5889,14 @@ cur_source_id:                      // source-id being compiled from (0 = REPL/n
     .quad 0
 .global cur_line_off
 cur_line_off:                       // byte offset of the current line within cur source file
+    .quad 0
+// What was already open when the current include started, so its EOF check can
+// tell a definition THIS file left open from one it merely inherited (a load
+// can begin inside a definition: `: foo [ include lib.fs ] ... ;`). Saved and
+// restored around nested includes, like the two above.
+incl_entry_latest:                  // LATEST on entry to forth_included
+    .quad 0
+incl_entry_state:                   // STATE on entry to forth_included
     .quad 0
 .global incl_resolved_addr
 incl_resolved_addr:                 // resolved path that actually opened the current file

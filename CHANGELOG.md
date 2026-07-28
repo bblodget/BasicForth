@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Fixed: a missing `;` at the end of a file wedged the session
+
+- **A file that stops mid-definition is now a load error.** It used to load
+  *successfully* — `forth_included` only reported errors raised per line, and
+  "the file just stopped" is not one — so the caller was left compiling.
+  Everything typed afterwards was swallowed into the unterminated word,
+  **`bye` included**, which meant a session could only be escaped with Ctrl-D.
+  The trigger is a missing `;` at the end of a file, about as ordinary a
+  mistake as exists.
+- The recovery already existed and already worked: a line error *inside* a
+  definition resets STATE, drops the compile-time stack and rolls HERE and
+  LATEST back. The quiet EOF simply never checked. It does now, and takes
+  that same path — so an interactive session drops to a REPL that works, and
+  a script exits non-zero like any other failing Unix utility.
+- **The report names the unfinished word** — `game.fs: definition not closed:
+  draw-ship (missing ;)` — rather than a line number, which at EOF points one
+  line past the end of the file. In a long file the name is the question you
+  actually have.
+- **Only what the file itself left open counts.** A load can *begin* inside an
+  open definition — `: foo [ include lib.fs ] 42 ;` — and that definition
+  belongs to the caller. So the check compares against what was open when the
+  load started (saved and restored around nested includes, like the source
+  context already is): a hidden LATEST that differs from the inherited one
+  means this file opened it, and a STATE that differs from the caller's means
+  this file left it changed. STATE alone would not do even for the file's own
+  definition, since `[` interprets inside an open one.
+- Recovery is scoped the same way: STATE is restored to **what the caller
+  had**, not blindly to zero, and the dictionary is rolled back only for a
+  definition this file opened — a stray `]` has nothing to roll back and the
+  saved rollback registers would be stale from an earlier `:`. An unclosed
+  *nested* include reports and lets the outer load continue, matching how a
+  line error in a nested file already behaves.
+- What it deliberately does **not** touch: `saved_latest`/`saved_here`/
+  `colon_dsp`, the rollback anchor. A nested file's `:` does overwrite it, so
+  an outer file's rollback can restore the wrong point — but those are not
+  per-definition snapshots, they are the *global fault-recovery anchor*, moved
+  forward by every completed `;` on purpose ("a completed definition is a
+  consistent recovery point"). Saving and restoring them per load rewinds that
+  anchor past everything the load defined; with `colon_dsp` included it also
+  rewinds across the `core.fs` load itself, so the next `abort` sets the data
+  stack pointer to zero and the process dies. Tried, measured, reverted — the
+  real defect is recorded in docs/TODO.md instead.
+
 ### `tutorial Printing` — make numbers look right
 - **A lesson for output**, in two halves: placement (`.` and its trailing
   space, `cr`, `space`, `spaces`, `emit`, `.r` for columns, `u.0r` for a

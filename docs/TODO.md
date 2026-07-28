@@ -39,6 +39,77 @@ completed. See Planning.md for high-level vision and design decisions.
   that opens its own definition`); that guard is a patch over this hole at one
   entry point, not a fix for it.
 
+  **The second half is FIXED 2026-07-26 (branch load-unclosed)** — and it
+  turned out the `:noname` route was the exotic way in. The everyday one is a
+  **missing `;` at the end of a file**, which loaded "successfully" and left
+  the caller compiling: every line typed afterwards was swallowed into the
+  unterminated word, `bye` included, so the session could only be escaped with
+  Ctrl-D. `forth_included` only ever reported errors raised *per line*, and
+  "the file just stopped" is not one.
+  - `.Lincl_done` now checks before returning success, in both arches. The
+    test is `state ≠ 0` **or** LATEST still hidden — STATE alone would miss a
+    file ending `: foo [`, since `[` interprets inside an open definition (see
+    the Ctrl-D work). On a hit it reports, abandons the definition with the
+    same six-store recovery the line-error path already uses, and returns 1,
+    so main.s's existing policy applies unchanged: drop to a now-usable REPL
+    when interactive, exit non-zero for a script.
+  - The report **names the unfinished word** (`unc.fs: definition not closed:
+    bad (missing ;)`) rather than giving a line number, which at EOF points
+    one line past the end. In a long file the name is the question you have.
+  - **A load can begin inside an open definition** (`: foo [ include lib.fs ]
+    42 ;`), and that one belongs to the caller. The first version blamed the
+    file for it *and rolled it back*, destroying work in progress — worse than
+    the bug being fixed (caught by the Codex stop gate). So `forth_included`
+    now saves LATEST and STATE on entry, with the same nesting discipline as
+    the source context, and fires only when the file itself left something
+    open. Recovery is scoped to match: STATE is restored to the caller's
+    value, not zeroed, and the dictionary rolls back only for a definition
+    this file opened — a stray `]` has nothing to roll back, and
+    `colon_dsp`/`saved_here` would be stale from some earlier `:`.
+  - +8 integration tests both arches: the report, interactive recovery,
+    non-zero script exit, an interactive `include`, the stray `]`, an unclosed
+    *nested* include (inner reports, outer load continues), a load begun inside
+    an open definition, and a well-formed file as the false-positive guard.
+
+  - **Not** fixed here, and worth knowing why: a nested file's `:` overwrites
+    `saved_latest`/`saved_here`/`colon_dsp`, so an outer file's rollback can
+    restore the wrong point and leave its unfinished definition behind,
+    hidden. The obvious fix — save and restore them per load, like the source
+    context — is **wrong**, and was tried and reverted. Those three are not a
+    per-definition snapshot; they are the global fault-recovery anchor, which
+    `;` deliberately moves *forward* after every completed definition ("a
+    completed definition is a consistent recovery point", forth_semicolon).
+    Rewinding it per load would roll a later guard fault back past everything
+    the load defined. Including `colon_dsp` is worse still: the rewind spans
+    the `core.fs` load itself, so the next `abort` restores a data stack
+    pointer of 0 and the process segfaults — 7 integration tests caught it.
+    A real fix has to distinguish "anchor" from "current definition's
+    rollback point", which today are the same three variables.
+
+- [ ] **`include` inside `[ ... ]` mid-definition leaves the outer word
+  undefined**, and can strand a hidden entry. Pre-existing (verified against a
+  build without the unclosed-definition work): the require sentinel
+  `(inc:<name>)` is defined by the Forth `included` wrapper *after* the load
+  returns — so inside `: foo [ include lib.fs ] 42 ;` it lands between `foo`
+  and the chain end, LATEST becomes the sentinel, and `;` unhides *that*
+  instead of `foo`. `foo` stays hidden and unreachable, and its `:` also
+  re-clobbers `saved_latest`, so a later rollback restores the wrong point.
+  Reproduce with a *well-formed* library, which shows it has nothing to do
+  with unclosed definitions:
+
+      \ out3.fs
+      : keeper 7 ;
+      : foo [ include fine.fs ] 42 ;
+      \ keeper . -> 7    fine . -> 4    foo . -> ? foo
+
+  Fix directions: define the sentinel before the load rather than after (it
+  would need un-defining on failure), or record the load some way that does
+  not touch the dictionary while a definition is open. Worth settling before
+  anything else leans on `saved_latest` surviving a nested load.
+
+  Still open, the first half: `:noname` in compile state should say so rather
+  than underflow.
+
 - [x] **A stray `;` at the prompt was accepted in silence.**
   FIXED 2026-07-26 (branch semicolon-guard). Spotted in a user transcript
   during the Dark Star port: `f DrawTimeBar s ;` printed ` ok`. Every other
