@@ -902,9 +902,10 @@ forth_accept:
     jmp .Laccept_loop
 
 .Laccept_done:
-    # Echo the newline
-    mov $10, %rdi
-    call platform_emit
+    # Do NOT echo the newline — record that one is owed, so the next thing
+    # written pays it. A line that prints nothing then keeps its ` ok` on the
+    # command line. (platform_linux.s has the full rule.)
+    movq $1, pending_nl(%rip)
 
     # Push result: count
     sub $CELL, %r15
@@ -2061,6 +2062,7 @@ forth_semicolon:
     mov colon_dsp(%rip), %r15
     mov saved_latest(%rip), %r12
     mov saved_here(%rip), %r13
+    call drop_partial_header        # a definition spanning lines leaves one
     movq $0, state(%rip)
     movq $0, do_depth(%rip)
     movq $0, leave_count(%rip)
@@ -2229,6 +2231,7 @@ forth_interpret_line:
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
+    call drop_partial_header        # a definition spanning lines leaves one
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
 
@@ -2664,6 +2667,7 @@ forth_included:
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
+    call drop_partial_header        # a definition spanning lines leaves one
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
     jmp .Lincl_err_tail
@@ -2820,6 +2824,7 @@ cf_check_tag:
     mov colon_dsp(%rip), %r15       # restore DSP
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
+    call drop_partial_header        # a definition spanning lines leaves one
     movq $0, state(%rip)            # interpret mode
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
@@ -4438,6 +4443,7 @@ forth_throw:
 .Lthrow_reset:
     mov sp0(%rip), %r15             # reset data stack
     mov rp0(%rip), %rsp             # reset return stack
+    call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
     movq $0, handler(%rip)          # no live frames on a reset stack
     jmp repl_loop
@@ -4450,10 +4456,29 @@ forth_abort:
     movq $-1, (%r15)
     jmp forth_throw
 
+# ---------- drop_partial_header ----------
+# After an abort, LATEST can be a HALF-BUILT definition: `:` built the header
+# on an earlier input line, so the per-line recovery snapshot points AT it
+# rather than before it. Nothing can ever complete it and FIND can never see
+# it (F_HIDDEN is set), but leaving it as LATEST makes every "is a definition
+# open?" test answer yes forever — the REPL's ok suppression and the Ctrl-D
+# guard both read that bit. Unlink it and give the space back.
+# Safe because only `:`/`:noname` set F_HIDDEN and only `;` clears it, so
+# hidden ⇒ incomplete. Call this ONLY on abort paths: during a live `[ ... ]`
+# inside a definition, STATE is 0 and the header is legitimately still hidden.
+drop_partial_header:
+    testb $F_HIDDEN, 8(%r12)
+    jz .Ldph_done
+    mov %r12, %r13                  # HERE = the abandoned header, space back
+    mov (%r12), %r12                # LATEST = its link
+.Ldph_done:
+    ret
+
 # QUIT ( -- ) ( R: i*x -- )  Reset return stack, enter interpreter loop.
 .global forth_quit
 forth_quit:
     mov rp0(%rip), %rsp             # reset return stack
+    call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
     movq $0, handler(%rip)          # frames died with the return stack
     jmp repl_loop

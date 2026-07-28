@@ -833,6 +833,101 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [x] **REPL "option B": emit the newline lazily, before the first byte of
+  output — DONE 2026-07-28** (branch lazy-newline). The one untried idea from
+  the 2026-07-26 format review; Brandon chose to build it the same day rather
+  than park it. Today the line editor emits a newline the moment you press
+  Enter, so a line that prints nothing still costs two screen lines: the
+  command, then ` ok` alone. Instead, set a *pending newline* on Enter and
+  let the first output byte flush it:
+
+      > : hello ." Hello World" ;  ok    <- silent line: one line, not two
+      > hello
+      Hello World ok
+      > list
+      : row ( n -- ) 8 .r cr ;           <- listing NOT jammed onto the command
+      …
+       ok
+
+  Why it is the interesting one: it buys gforth's compactness **without**
+  the jamming that killed the straight-inline experiment, because the
+  newline comes from the system rather than from every display word having
+  to start with `cr`. Nothing changes about how anyone writes Forth here —
+  no leading-`cr` sweep, no change to the `cr`-goes-last convention.
+
+  **It changes exactly one case.** ` ok` still appends wherever the cursor
+  is; all that moves is *when* the newline after your input is emitted:
+
+  | line | today | option B |
+  |------|-------|----------|
+  | silent (`: foo 1 ;`) | `> : foo 1 ;` + ` ok` on its own line | `> : foo 1 ;  ok` |
+  | output ending in `cr` (`hello`) | output line, then ` ok` | identical |
+  | output not ending in `cr` (`6 `) | `6  ok` | identical |
+
+  "Silent" is broader than one-line definitions, which is why it earns its
+  keep: `variable`/`constant`/`create`/`value`, `to`/`+to`, a successful
+  `include`/`require`, lines that only push — **and the closing line of a
+  multi-line definition**, which is the one line quiet-compile still spends
+  an ` ok` on. A four-line definition goes 5 screen lines → 4, on top of the
+  9 → 5 quiet-compile already bought.
+
+  - **Mechanism**: one flag. The REPL arms it after reading a line, and the
+    first thing written afterwards flushes it. The invariant to hold onto:
+    **` ok` is the only message allowed to append — everything else flushes
+    first.** Output flushes, errors flush, *and prompts flush*. That last
+    one is what prevents the `>  >  > ` sideways pile-up the straight-inline
+    experiment produced: press Enter on an empty line and the next prompt
+    does the flushing, so it still lands on a fresh line.
+  - **The risk is completeness, not design.** There are at least three write
+    paths (`platform_emit`, `platform_write`, `platform_write_fd`) and both
+    the interactive and piped input paths; any one that skips the check
+    yields `Hello World> ` jamming. Enumerate every caller before patching —
+    the same shape as the four-abort-path bug of 2026-07-27, where fixing
+    them one at a time kept half-working. Note `platform_write_fd` must
+    flush only for stdout: a write to a *file* must not emit a stray
+    newline to the terminal.
+  - **Errors: let them flush** (so `? name` keeps its own line, exactly as
+    today). Then `tests/test_lessons.py` needs no change — its
+    `unexpected()` skips lines starting with `> `, and with errors flushing
+    they never land there. The compact alternative
+    (`> nosuchword ? nosuchword`) reads well but *would* require fixing that
+    attribution first, or lesson rot goes undetected.
+  - Integration expectations are mostly unaffected: the ~75 `assert_output`
+    cases ending in `"N  ok"` all produce output, so they behave as before.
+    Silent-line cases move from a bare ` ok` line to `<command>  ok`.
+
+  **As built.** The prediction held: exactly one test in 843 changed — the
+  quiet-compile case that counted bare ` ok` lines, which now asserts the ok
+  lands on the definition's closing line (`loop ; ok`) and on neither
+  continuation line. Errors flush, so `test_lessons.py` needed no change.
+  Implementation is a single `pending_nl` flag in platform_linux.s, paid by
+  `platform_emit` (always) and `platform_write_fd` (**fd 1 only** — a write to
+  a file must not push a byte to the terminal), plus `platform_exit` so the
+  shell prompt never lands on a half-finished line. The flag is cleared before
+  the flushing write so paying it cannot recurse. Set by `forth_accept` (which
+  covers direct `ACCEPT` callers) and by the REPL after the line-editor hook;
+  `(edit-line)` and the Ctrl-D `bye` path stopped emitting their own newline.
+  Gotcha that cost a red run: core.s now references a symbol owned by
+  platform_linux.s, so the C unit-test harness fails to LINK until
+  `pending_nl` is stubbed in **both** `tests/test_helper_*.s` — the standing
+  rule for any core.s reference to a platform symbol.
+
+- **DECIDED 2026-07-28: keep ` ok`.** Removing it entirely was considered —
+  the symmetry argument is real (gforth reasoned that an `ok` makes a prompt
+  redundant; the reverse holds too, and printing *both* is the one redundant
+  combination). Rejected because `ok` is the most recognizable trait of a
+  Forth REPL: a `> ` prompt reads as house style, no `ok` at all reads as
+  "not a Forth". Recorded so it is not re-litigated. Two notes if it ever
+  comes back: (1) it needs option B's flag anyway, or output without a
+  trailing newline jams into the next prompt (`Hello World> `); (2) the
+  version that would pay for itself is dropping `ok` *and* showing stack
+  depth in the prompt — `> ` when clean, `<2> ` when two items are stranded
+  — which is Forth-literate rather than Forth-ignorant, cheap in asm
+  (`(sp0 - dsp)/8`), and surfaces the leftover-stack bug that bites
+  beginners. Also worth knowing for the record: classic BASIC printed `Ok`
+  with **no** prompt character, so dropping `ok` is shell/Python-like, not
+  BASIC-like.
+
 - [x] **Lesson replay suite — DONE 2026-07-25** (branch lesson-fixes):
   `make run-lessons` (`tests/test_lessons.py`, both arches) replays every
   lesson in one session with state carrying between steps, plus every

@@ -2689,6 +2689,37 @@ else
     printf "  ${RED}FAIL${NC}  errored :e disarm\n    Got: %q\n" "$cx_out"; ((failed++))
 fi
 
+# ` ok` is suppressed while a definition is open: the "... " continuation
+# prompt already says "still compiling", so one ok per line doubled the height
+# of every multi-line definition. Exactly one ok for the whole definition.
+qo_out=$(printf ': my-count\n5 0 do\ni .\nloop ;\nmy-count\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+# exactly one ok for the definition, on its CLOSING line (a silent line keeps
+# its ok on the command line — see the owed-newline rule in platform_linux.s),
+# and none on the continuation lines.
+qo_oks=$(grep -c ' ok' <<< "$qo_out")
+if [[ "$qo_out" == *"loop ; ok"* && "$qo_out" != *"5 0 do ok"* \
+      && "$qo_out" != *"i . ok"* && "$qo_oks" == 2 \
+      && "$qo_out" == *"0 1 2 3 4  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  no ok per line while a definition is open\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  ok while compiling (ok lines=%s)\n    Got: %q\n" "$qo_oks" "$qo_out"; ((failed++))
+fi
+
+# An aborted definition must not leave its half-built header as LATEST. The
+# per-line recovery snapshot points AT that header for a definition spanning
+# lines, so restoring it left F_HIDDEN set forever — and everything that asks
+# "is a definition open?" (the ok suppression above, the Ctrl-D guard) then
+# answered yes for the rest of the session. Both abort routes: a failed word
+# and cancel;.
+ap_out=$(printf ': bad\nnosuchword\n1 2 + .\n: foo\ncancel;\n3 4 + .\n(latest@) 8 + c@ 64 and .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if [[ "$ap_out" == *"3  ok"* && "$ap_out" == *"7  ok"* && "$ap_out" == *"0  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an aborted definition leaves no hidden LATEST\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  aborted definition leaves hidden LATEST\n    Got: %q\n" "$ap_out"; ((failed++))
+fi
+
 # cancel; abandons the definition being typed — nothing defined, the rest of
 # the line discarded, a pending :e disarmed (nothing spliced, file untouched);
 # a later :e still works, and at the prompt cancel; is a friendly no-op.
@@ -4830,6 +4861,7 @@ printf ': good 1 ;\n: bad 2 3 +\n' > "$unc_dir/unc.fs"
 printf ': ok1 1 ;\n]\n'            > "$unc_dir/brk.fs"
 printf ': fine 4 ;\n'              > "$unc_dir/fine.fs"
 printf '\\ defines nothing\n1 drop\n' > "$unc_dir/nodef.fs"
+printf ': good 1 ;\n: bad\n  2 3 +\n'  > "$unc_dir/multi.fs"
 printf 'include %s/unc.fs\n: outer 5 ;\n' "$unc_dir" > "$unc_dir/nest.fs"
 
 # The report names the unfinished word — in a long file that is the question
@@ -4899,6 +4931,19 @@ if [[ "$unp_out" != *"not closed"* && "$unp_out" != *"underflow"* ]]; then
     printf "  ${GREEN}PASS${NC}  a load inside an open definition is not blamed for it\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  inherited-definition false positive\n    Got: %q\n" "$unp_out"; ((failed++))
+fi
+# A definition spanning LINES leaves a half-built header that the recovery
+# snapshot points AT rather than before, so the rollback alone preserves its
+# HIDDEN bit — and every "is a definition open?" test then answers yes for the
+# rest of the session (ok suppression stuck, Ctrl-D silently dead). The `ok`
+# after recovery is the observable proof the header was dropped.
+unm_out=$(printf 'state @ .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/multi.fs" 2>&1)
+if [[ "$unm_out" == *"definition not closed: bad"* && "$unm_out" == *"0  ok"* \
+      && "$unm_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a multi-line unclosed definition drops its partial header\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  multi-line unclosed partial header\n    Got: %q\n" "$unm_out"; ((failed++))
 fi
 # False-positive guard: a well-formed file says nothing and returns success.
 unf_out=$(printf 'fine .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \

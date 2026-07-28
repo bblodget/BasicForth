@@ -17,6 +17,7 @@
 .equ CELL, 8
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          # buffer for the absolute startup directory
+.equ F_HIDDEN, 0x40                 # header flags2 bit; must match core.s
 
 _start:
     # Save argc and argv[1] before stack is used for anything else
@@ -487,6 +488,12 @@ repl_loop:
 .Lrepl_accept:
     call forth_accept               # ( c-addr max -- count )
 .Lrepl_have_line:
+    # Enter printed no newline; one is owed. The next write to stdout pays it
+    # (platform_linux.s), so output and errors still start on a fresh line
+    # while a silent line keeps its ` ok` up here on the command line.
+    # forth_accept sets this itself for direct ACCEPT callers; setting it here
+    # covers the line-editor path too, and setting it twice is harmless.
+    movq $1, pending_nl(%rip)
 
     # Empty line → re-prompt (count == 0)
     mov (%r15), %rax
@@ -526,7 +533,20 @@ repl_loop:
     call *%rax                          # (capture-line) ( c-addr u latest -- )
 .Lno_cap_line:
 
-    # Success — print " ok\n"
+    # Success — print " ok\n", unless a definition is still open. The "... "
+    # continuation prompt already says "still compiling", so an ok after every
+    # line is noise: a four-line definition printed four of them, doubling its
+    # height on screen. STATE alone can't decide — `[` interprets inside an
+    # open definition — so also check LATEST's hidden bit, which `:` sets and
+    # `;` clears (the same pair the Ctrl-D guard uses).
+    cmpq $0, state(%rip)
+    jne repl_loop                       # compiling → say nothing
+    testb $F_HIDDEN, 8(%r12)            # definition open but interpreting?
+    jnz repl_loop
+    # ` ok` is the ONE message that appends rather than flushing: drop the owed
+    # newline so a silent line reads `> : foo 1 ;  ok` on one line. Its own
+    # trailing \n ends the line. Anything the line printed already paid.
+    movq $0, pending_nl(%rip)
     lea ok_msg(%rip), %rsi
     mov $ok_len, %rdx
     call platform_write

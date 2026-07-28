@@ -45,6 +45,26 @@
 .equ T_VALUE,       2
 .equ T_NONAME,      3
 
+// DROP_PARTIAL_HEADER — after an abort, LATEST can be a HALF-BUILT definition:
+// `:` built the header on an earlier input line, so the per-line recovery
+// snapshot points AT it rather than before it. Nothing can ever complete it
+// and FIND can never see it (F_HIDDEN is set), but leaving it as LATEST makes
+// every "is a definition open?" test answer yes forever — the REPL's ok
+// suppression and the Ctrl-D guard both read that bit. Unlink it, space back.
+// Safe because only `:`/`:noname` set F_HIDDEN and only `;` clears it, so
+// hidden => incomplete. Use ONLY on abort paths: during a live `[ ... ]`
+// inside a definition, STATE is 0 and the header is legitimately still hidden.
+// A macro, not a subroutine: these sites are reached mid-unwind, where X30 is
+// not ours to clobber.
+.macro DROP_PARTIAL_HEADER
+    LDRB W9, [X22, #8]              // LATEST flags
+    TST W9, #F_HIDDEN
+    B.EQ 9f
+    MOV X21, X22                    // HERE = the abandoned header
+    LDR X22, [X22]                  // LATEST = its link
+9:
+.endm
+
 // Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 // SrcId sentinel for assembly primitives.
 .equ SRC_META_BYTES, 8
@@ -988,9 +1008,12 @@ forth_accept:
     B .Laccept_loop
 
 .Laccept_done:
-    // Echo the newline
-    MOV X0, #10
-    BL platform_emit
+    // Do NOT echo the newline — record that one is owed, so the next thing
+    // written pays it. A line that prints nothing then keeps its ` ok` on the
+    // command line. (platform_linux.s has the full rule.)
+    ADR X9, pending_nl
+    MOV X10, #1
+    STR X10, [X9]
 
     // Push result: count
     STR X25, [X19, #-CELL]!
@@ -2220,6 +2243,7 @@ forth_semicolon:
     LDR X22, [X9]
     ADR X9, saved_here
     LDR X21, [X9]
+    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
     ADR X9, state
     STR XZR, [X9]
     ADR X9, do_depth
@@ -2408,6 +2432,7 @@ forth_interpret_line:
     LDR X22, [X9]                   // restore LATEST
     ADR X9, saved_here
     LDR X21, [X9]                   // restore HERE
+    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
     ADR X9, do_depth
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count
@@ -2943,6 +2968,7 @@ forth_included:
     LDR X21, [X9]                   // restore HERE
     ADR X9, saved_latest
     LDR X22, [X9]                   // restore LATEST
+    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
     ADR X9, do_depth
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count
@@ -3133,6 +3159,7 @@ cf_check_tag:
     LDR X22, [X9]                   // restore LATEST
     ADR X9, saved_here
     LDR X21, [X9]                   // restore HERE
+    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
     ADR X9, state
     STR XZR, [X9]                   // interpret mode
     ADR X9, do_depth
@@ -4908,6 +4935,7 @@ forth_throw:
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9                      // reset return stack
+    DROP_PARTIAL_HEADER             // uncaught throw abandons any open def
     ADR X9, state
     STR XZR, [X9]                   // reset compile state
     ADR X9, handler
