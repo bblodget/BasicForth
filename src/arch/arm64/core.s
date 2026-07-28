@@ -1008,9 +1008,12 @@ forth_accept:
     B .Laccept_loop
 
 .Laccept_done:
-    // Echo the newline
-    MOV X0, #10
-    BL platform_emit
+    // Do NOT echo the newline — record that one is owed, so the next thing
+    // written pays it. A line that prints nothing then keeps its ` ok` on the
+    // command line. (platform_linux.s has the full rule.)
+    ADR X9, pending_nl
+    MOV X10, #1
+    STR X10, [X9]
 
     // Push result: count
     STR X25, [X19, #-CELL]!

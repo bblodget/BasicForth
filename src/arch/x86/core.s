@@ -902,9 +902,10 @@ forth_accept:
     jmp .Laccept_loop
 
 .Laccept_done:
-    # Echo the newline
-    mov $10, %rdi
-    call platform_emit
+    # Do NOT echo the newline — record that one is owed, so the next thing
+    # written pays it. A line that prints nothing then keeps its ` ok` on the
+    # command line. (platform_linux.s has the full rule.)
+    movq $1, pending_nl(%rip)
 
     # Push result: count
     sub $CELL, %r15

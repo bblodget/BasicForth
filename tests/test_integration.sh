@@ -2694,11 +2694,16 @@ fi
 # of every multi-line definition. Exactly one ok for the whole definition.
 qo_out=$(printf ': my-count\n5 0 do\ni .\nloop ;\nmy-count\nbye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
-qo_oks=$(grep -c '^ ok$' <<< "$qo_out")
-if [[ "$qo_oks" == 1 && "$qo_out" == *"0 1 2 3 4  ok"* ]]; then
+# exactly one ok for the definition, on its CLOSING line (a silent line keeps
+# its ok on the command line — see the owed-newline rule in platform_linux.s),
+# and none on the continuation lines.
+qo_oks=$(grep -c ' ok' <<< "$qo_out")
+if [[ "$qo_out" == *"loop ; ok"* && "$qo_out" != *"5 0 do ok"* \
+      && "$qo_out" != *"i . ok"* && "$qo_oks" == 2 \
+      && "$qo_out" == *"0 1 2 3 4  ok"* ]]; then
     printf "  ${GREEN}PASS${NC}  no ok per line while a definition is open\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  ok while compiling (bare oks=%s)\n    Got: %q\n" "$qo_oks" "$qo_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  ok while compiling (ok lines=%s)\n    Got: %q\n" "$qo_oks" "$qo_out"; ((failed++))
 fi
 
 # An aborted definition must not leave its half-built header as LATEST. The

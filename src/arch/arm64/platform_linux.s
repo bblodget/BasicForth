@@ -276,6 +276,9 @@ platform_key:
 // Called by forth_emit in core.s, which handles the data stack.
 .global platform_emit
 platform_emit:
+    STP X0, X30, [SP, #-16]!
+    BL pay_pending_nl
+    LDP X0, X30, [SP], #16
     STR X30, [SP, #-16]!
     STRB W0, [SP, #8]          // store char byte in stack padding area
     ADD X1, SP, #8             // X1 = pointer to the char
@@ -286,12 +289,52 @@ platform_emit:
     LDR X30, [SP], #16
     RET
 
+// ---------- The owed newline ----------
+// Pressing Enter does not print a newline. Instead the input paths record that
+// one is OWED, and the next thing written to stdout pays it — so a line that
+// prints nothing keeps its ` ok` on the command line, while a line that prints
+// anything still gets its output on a fresh line. See docs/Outer_Interpreter.md.
+//
+// The invariant: ` ok` is the only message allowed to append. Everything else
+// flushes first — output, errors, and prompts. Prompts matter: an empty Enter
+// would otherwise let prompts pile up sideways (`>  >  > `).
+.global pending_nl
+.data
+pending_nl: .quad 0            // non-zero: a newline is owed to stdout
+nl_byte:    .byte 10
+.text
+
+pay_pending_nl:
+    ADR X9, pending_nl
+    LDR X10, [X9]
+    CBZ X10, .Lpay_done
+    STR XZR, [X9]              // clear FIRST: the write below must not recurse
+    STP X0, X1, [SP, #-32]!
+    STP X2, X30, [SP, #16]
+    ADR X1, nl_byte
+    MOV X2, #1
+    MOV X0, #STDOUT
+    MOV X8, #SYS_write
+    SVC #0
+    LDP X2, X30, [SP, #16]
+    LDP X0, X1, [SP], #32
+.Lpay_done:
+    RET
+
 // ---------- WRITE ----------
 // platform_write_fd ( X0=fd, X1=buffer, X2=length -- X0=bytes written or -errno )
 // Generic write to any file descriptor. Returns the raw syscall result so
 // callers (e.g. WRITE-FILE) can derive an ior.
 .global platform_write_fd
 platform_write_fd:
+    CMP X0, #STDOUT            // only stdout owes a newline; a write to a FILE
+    B.NE .Lwfd_go              //   must not push a stray byte to the terminal
+    STP X0, X1, [SP, #-32]!
+    STP X2, X30, [SP, #16]
+    BL pay_pending_nl
+    LDP X2, X30, [SP, #16]
+    LDP X0, X1, [SP], #32
+.Lwfd_go:
     MOV X8, #SYS_write
     SVC #0
     RET
@@ -346,6 +389,7 @@ platform_flush_icache:
 .global platform_exit
 platform_exit:
     STP X0, X30, [SP, #-16]!        // preserve status + LR across the calls
+    BL pay_pending_nl               // don't hand the shell a half-finished line
     MOV X0, #18                     // reset text attributes (tty only; no
     BL platform_text_attr           // escape bytes reach a piped stdout)
     BL platform_restore_term

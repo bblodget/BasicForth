@@ -525,6 +525,14 @@ repl_loop:
 .Lrepl_accept:
     BL forth_accept                 // ( c-addr max -- count )
 .Lrepl_have_line:
+    // Enter printed no newline; one is owed. The next write to stdout pays it
+    // (platform_linux.s), so output and errors still start on a fresh line
+    // while a silent line keeps its ` ok` up here on the command line.
+    // forth_accept sets this itself for direct ACCEPT callers; setting it here
+    // covers the line-editor path too, and setting it twice is harmless.
+    ADR X9, pending_nl
+    MOV X10, #1
+    STR X10, [X9]
 
     // Empty line → re-prompt (count == 0)
     LDR X9, [X19]
@@ -577,6 +585,11 @@ repl_loop:
     LDRB W9, [X22, #8]             // LATEST flags2
     TST W9, #F_HIDDEN              // definition open but interpreting?
     B.NE repl_loop
+    // ` ok` is the ONE message that appends rather than flushing: drop the owed
+    // newline so a silent line reads `> : foo 1 ;  ok` on one line. Its own
+    // trailing \n ends the line. Anything the line printed already paid.
+    ADR X9, pending_nl
+    STR XZR, [X9]
     ADR X0, ok_msg
     MOV X1, #ok_len
     BL platform_write

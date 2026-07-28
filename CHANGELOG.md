@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### A line that prints nothing keeps its ` ok` on the command line
+- **Enter no longer prints a newline — one is *owed*, and the next write to
+  stdout pays it.** So a silent line closes on the line you typed:
+
+      > : foo 1 ;  ok
+      > variable v  ok
+      > 1 2 3 + + .
+      6  ok
+
+  Anything that prints still starts on a fresh line, because its first byte
+  pays the debt. This changes exactly one case, the silent line — every line
+  that produces output behaves precisely as before.
+- "Silent" is broader than one-line definitions: `variable`/`constant`/
+  `create`/`value`, `to`/`+to`, a successful `include`/`require`, lines that
+  only push — **and the closing line of a multi-line definition**. A
+  four-line definition now takes 4 screen lines; before yesterday's
+  quiet-compile it took 9.
+- The rule that keeps it safe: **` ok` is the only message allowed to append.
+  Output, errors, and prompts all flush first.** Prompts matter — Enter on an
+  empty line leaves a newline owed and the next prompt pays it, so prompts
+  can't pile up sideways (`>  >  > `), which is what sank the inline-format
+  experiment two days ago. Errors keep their own line, so nothing about error
+  reporting or the lesson harness changes.
+- Implementation is one flag in the platform layer, paid by `platform_emit`
+  and by `platform_write_fd` **for stdout only** (a write to a *file* must not
+  push a stray byte to the terminal), plus `platform_exit` so the shell prompt
+  never lands on a half-finished line. Nothing changes about how you write
+  Forth: no leading-`cr` convention, no display word needing special care.
+
 ### No ` ok` while a definition is open
 - **A multi-line definition no longer prints ` ok` after every line.** The
   `... ` continuation prompt already says "still compiling", so the ok was
