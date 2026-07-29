@@ -7,8 +7,9 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
-- [ ] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
-  `IF`/`DO`/`BEGIN` segfaults.** Found 2026-07-29 during the Dark Star port:
+- [x] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
+  `IF`/`DO`/`BEGIN` segfaults.** FIXED 2026-07-29 (branch staging-debug).
+  Found 2026-07-29 during the Dark Star port:
   a stray `ENDOF` in a `DecodeLevel` dispatch loaded without complaint and
   surfaced as a `stack underflow` at run time, several steps from the cause.
   **Pre-existing on `main` (`2b68ee6`) — verified in a scratch worktree, so
@@ -51,6 +52,59 @@ completed. See Planning.md for high-level vision and design decisions.
   mis-resolution and the segfault together. Worth checking whether the
   `mismatched-control-flow` machinery can simply be extended to cover the
   `CASE` words rather than adding a parallel one.
+
+  **The diagnosis held, with one correction: it needs THREE tags, not one.**
+  The whole family was untagged — `CASE` pushed a bare `0` sentinel and
+  `OF`/`ENDOF` pushed raw addresses — while every other control-flow word
+  pushes an `(address, tag)` pair. So:
+  - `CF_CASE` (sentinel), `CF_OF` (consumed only by `ENDOF`), `CF_ENDOF`
+    (consumed only by `ENDCASE`). One `CASE`-marker tag would NOT have caught
+    the extra-`ENDOF` case, because that bug is `ENDOF` failing to tell its own
+    pending `OF` branch from a previous arm's exit branch — a distinction only
+    two separate arm tags can make.
+  - The segfaults were exactly `patch_forward` receiving a TAG as an address
+    (`if 1 endcase` → writes to address 1, `do … endcase` → address 3). With
+    everything tagged they are checked, never patched.
+  - `ENDCASE`'s scan is now bounded by `colon_dsp`, so a missing `CASE` cannot
+    walk off the compile-time stack. That upgrades `: bad endcase ;` from
+    "the underflow guard happens to catch it" to a proper mismatch error.
+  - Reuses the existing `cf_check_tag` / `mismatched-control-flow` machinery as
+    hoped; no parallel checker.
+
+  Also found while reviewing, beyond the original report: `: bad case 1 of if 2
+  endof then endcase ;` — an `IF` opened inside an arm and closed out of order
+  — was a fifth segfault shape, and the likeliest of them to be typed for
+  real. The *unpaired* forms (`endcase` alone, `of … endof` with no `CASE`)
+  were never silent: they hit the stack-underflow guard and the session
+  survived. 12 tests added; well-formed nesting both ways (`CASE` in `IF`,
+  `IF` in an arm) is asserted alongside, since the first ARM64 attempt broke
+  *correct* code rather than letting broken code through — `STP` pushed the
+  pair with the tag below the value. Both arches now use the identical
+  two-`STR` push idiom `IF` uses.
+
+- [ ] **A control-flow closer with nothing open reports `stack underflow`, not
+  `mismatched-control-flow`.** Noticed 2026-07-29 while fixing the `CASE` bug
+  above, and deliberately left alone there because it is not a `CASE` problem —
+  it is uniform across the family:
+
+      : q1 then ;      stack underflow
+      : q2 until ;     stack underflow
+      : q3 repeat ;    stack underflow
+      : q4 loop ;      stack underflow
+      : q5 endof ;     stack underflow
+
+  `cf_check_tag` reads the top of the compile-time stack before checking
+  anything, so with nothing pushed it touches the guard page and the fault
+  handler reports first. Survivable and honest — the session recovers, no
+  wrong code is emitted — but it names the wrong cause, and a beginner who
+  types `then` with no `if` gets a message about the data stack.
+
+  Fix: bound `cf_check_tag` by `colon_dsp` the way `ENDCASE` now is, and
+  report `mismatched-control-flow` when the definition has no open construct.
+  One place, both arches; the reason it wasn't folded into the `CASE` fix is
+  that it changes the message for five existing words and their tests. Worth
+  checking `: q1 then ;` at the prompt *and* mid-file, since the file path is
+  where a wrong diagnosis costs the most.
 
 - [ ] **`:noname` inside a colon definition wedges a file load.** Found
   2026-07-25 during the interaction sweep, while checking a Codex review
