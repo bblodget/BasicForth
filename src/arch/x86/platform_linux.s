@@ -507,7 +507,12 @@ sigsegv_handler:
     ret
 
 .Lsig_underflow:
-    # Print "stack underflow\n"
+    # Print "stack underflow\n". These two messages write with a raw syscall
+    # rather than platform_write, so they must pay the owed newline themselves
+    # or they land on the command line (`> dropstack underflow`). Safe from a
+    # signal handler: pay_pending_nl only touches a global and write(2), and
+    # leaves RBX (the ucontext pointer) alone.
+    call pay_pending_nl
     mov $SYS_write, %rax
     mov $STDOUT, %rdi
     lea msg_underflow(%rip), %rsi
@@ -516,7 +521,8 @@ sigsegv_handler:
     jmp .Lsig_recover
 
 .Lsig_overflow:
-    # Print "stack overflow\n"
+    # Print "stack overflow\n" (see the note above about the owed newline)
+    call pay_pending_nl
     mov $SYS_write, %rax
     mov $STDOUT, %rdi
     lea msg_overflow(%rip), %rsi
