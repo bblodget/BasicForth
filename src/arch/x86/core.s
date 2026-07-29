@@ -2813,6 +2813,14 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ CF_ORIG, 1                     # forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     # backward target (BEGIN)
 .equ CF_LEAVE, 3                    # saved leave count (DO)
+# The CASE family needs three of its own. ENDOF has to tell ITS OWN pending
+# OF-branch from a previous arm's exit branch — without that distinction an
+# extra ENDOF silently patched the wrong one and arms ran each other's bodies.
+# And with everything tagged, ENDOF/ENDCASE can no longer mistake IF's or DO's
+# tag for an address and hand it to patch_forward (which segfaulted).
+.equ CF_CASE, 4                     # CASE sentinel: the bottom of this CASE
+.equ CF_OF, 5                       # OF's pending 0branch, consumed by ENDOF
+.equ CF_ENDOF, 6                    # ENDOF's arm-exit branch, consumed by ENDCASE
 .equ MAX_LEAVES, 8                  # max LEAVE per nesting
 
 # cf_check_tag — verify top of stack matches expected tag.
@@ -2995,8 +3003,9 @@ forth_recurse:
 # CASE ( -- 0 )  Push sentinel on compile-time stack.
 .global forth_case
 forth_case:
-    sub $CELL, %r15
-    movq $0, (%r15)
+    sub $2*CELL, %r15
+    movq $0, CELL(%r15)             # sentinel value (unused — keeps the pair shape)
+    movq $CF_CASE, (%r15)           # tag: ENDCASE stops here
     ret
 
 # OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
@@ -3017,16 +3026,21 @@ forth_of:
     lea forth_drop(%rip), %rax
     call compile_call
     # Push patch address for ENDOF
-    sub $CELL, %r15
-    mov %rbx, (%r15)
+    sub $2*CELL, %r15
+    mov %rbx, CELL(%r15)
+    movq $CF_OF, (%r15)             # tag: only ENDOF may consume this
     pop %rbx
     ret
 
 # ENDOF ( -- )  Compile unconditional branch, patch OF's 0branch.
 .global forth_endof
 forth_endof:
+    mov $CF_OF, %rax
+    call cf_check_tag               # must be OUR arm's OF, not a previous
+                                    #   arm's exit branch and not IF/DO/BEGIN
     push %rbx
     # Pop OF's patch address
+    add $CELL, %r15                 # drop tag
     mov (%r15), %rbx                # save of-patch
     add $CELL, %r15
     # Compile branch (unconditional forward jump)
@@ -3037,8 +3051,9 @@ forth_endof:
     call patch_forward
     # Push branch's patch address for ENDCASE
     pop %rax
-    sub $CELL, %r15
-    mov %rax, (%r15)
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)
+    movq $CF_ENDOF, (%r15)          # tag: only ENDCASE may consume this
     pop %rbx
     ret
 
@@ -3049,15 +3064,28 @@ forth_endcase:
     push %rbx
     lea forth_drop(%rip), %rax
     call compile_call
-    # Patch all ENDOF branches until 0 sentinel
+    # Patch each arm's exit branch, stopping at this CASE's sentinel.
 .Lendcase_loop:
-    mov (%r15), %rax                # pop address
+    # Bound the scan by the definition's control-flow base: with no CASE to
+    # close, walk off the compile-time stack and we'd patch whatever follows.
+    mov colon_dsp(%rip), %rax
+    cmp %rax, %r15
+    jae .Lendcase_bad               # nothing left in this definition
+    mov (%r15), %rax                # tag
+    cmp $CF_CASE, %rax
+    je .Lendcase_done
+    cmp $CF_ENDOF, %rax
+    jne .Lendcase_bad               # IF/DO/BEGIN left this — not ours to close
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # arm-exit branch address
     add $CELL, %r15
-    test %rax, %rax
-    jz .Lendcase_done
     call patch_forward
     jmp .Lendcase_loop
+.Lendcase_bad:
+    pop %rbx                        # unwind our frame before the longjmp
+    jmp .Lcf_mismatch
 .Lendcase_done:
+    add $2*CELL, %r15               # drop tag + sentinel
     pop %rbx
     ret
 

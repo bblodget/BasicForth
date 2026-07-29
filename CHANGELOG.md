@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Fixed: unbalanced `CASE` arms compiled silently, and mixing `CASE` with `IF`/`DO`/`BEGIN` segfaulted
+- **An extra `ENDOF` emitted wrong code without a word of complaint.** Branch
+  targets were mis-resolved, so an arm ran another arm's body and the case
+  value was never consumed — a `stack underflow` surfaced later, several steps
+  from the cause. Found during the Dark Star port; pre-existing, not from the
+  recent branches.
+- **Closing a non-`CASE` construct with a `CASE` word crashed the process** —
+  `: bad if 1 endcase ;` and friends segfaulted rather than aborting, so a file
+  load took the session with it. Same for an `IF` opened inside an arm and
+  closed out of order (`case 1 of if 2 endof then endcase`), which is the
+  likeliest of these to be typed by accident.
+- Cause: the `CASE` family pushed **untagged** values — a bare `0` sentinel and
+  raw patch addresses — while every other control-flow word pushes an
+  `(address, tag)` pair. `ENDOF` therefore couldn't tell its own pending branch
+  from a previous arm's, and both `ENDOF` and `ENDCASE` could hand a *tag* to
+  the patcher as an address (`if 1 endcase` wrote to address 1).
+- Now tagged with three of its own — sentinel, pending-`OF`, pending-`ENDOF` —
+  checked through the existing `mismatched-control-flow` machinery, with
+  `ENDCASE`'s scan bounded so a missing `CASE` can't walk off the compile-time
+  stack. Every malformed shape aborts cleanly on both architectures; correct
+  code, including nesting either way, is unaffected. 12 tests.
+
 ### Fixed: a missing `;` at the end of a file wedged the session
 
 - **A file that stops mid-definition is now a load error.** It used to load

@@ -3142,6 +3142,14 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ CF_ORIG, 1                     // forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     // backward target (BEGIN)
 .equ CF_LEAVE, 3                    // saved leave count (DO)
+// The CASE family needs three of its own. ENDOF has to tell ITS OWN pending
+// OF-branch from a previous arm's exit branch — without that distinction an
+// extra ENDOF silently patched the wrong one and arms ran each other's bodies.
+// And with everything tagged, ENDOF/ENDCASE can no longer mistake IF's or DO's
+// tag for an address and hand it to patch_forward (which segfaulted).
+.equ CF_CASE, 4                     // CASE sentinel: the bottom of this CASE
+.equ CF_OF, 5                       // OF's pending 0branch, consumed by ENDOF
+.equ CF_ENDOF, 6                    // ENDOF's arm-exit branch, consumed by ENDCASE
 .equ MAX_LEAVES, 8                  // max LEAVE per nesting
 
 // cf_check_tag — verify top of stack matches expected tag.
@@ -3342,7 +3350,9 @@ forth_recurse:
 // CASE ( -- 0 )  Push sentinel on compile-time stack.
 .global forth_case
 forth_case:
-    STR XZR, [X19, #-CELL]!
+    STR XZR, [X19, #-CELL]!         // sentinel value (unused — keeps the shape)
+    MOV X9, #CF_CASE
+    STR X9, [X19, #-CELL]!          // push tag: ENDCASE stops here
     RET
 
 // OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
@@ -3362,8 +3372,10 @@ forth_of:
     // Compile DROP
     ADR X0, forth_drop
     BL compile_call
-    // Push patch address
-    STR X23, [X19, #-CELL]!
+    // Push patch address + tag: only ENDOF may consume this
+    STR X23, [X19, #-CELL]!        // push patch address
+    MOV X9, #CF_OF
+    STR X9, [X19, #-CELL]!         // push tag: only ENDOF may consume this
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -3371,9 +3383,15 @@ forth_of:
 // ENDOF ( -- )  Compile branch, patch OF's 0branch.
 .global forth_endof
 forth_endof:
+    MOV X0, #CF_OF
+    STP X29, X30, [SP, #-16]!
+    BL cf_check_tag                // must be OUR arm's OF, not a previous
+                                   //   arm's exit branch and not IF/DO/BEGIN
+    LDP X29, X30, [SP], #16
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
-    // Pop OF's patch address
+    // Pop OF's patch address (tag first)
+    ADD X19, X19, #CELL            // drop tag
     LDR X23, [X19], #CELL
     // Compile unconditional branch
     BL compile_branch              // X0 = branch patch address
@@ -3381,8 +3399,10 @@ forth_endof:
     // Patch OF's 0branch to HERE
     MOV X0, X23
     BL patch_forward
-    // Push branch's patch address for ENDCASE
-    STR X24, [X19, #-CELL]!
+    // Push branch's patch address + tag for ENDCASE
+    STR X24, [X19, #-CELL]!        // push branch patch address
+    MOV X9, #CF_ENDOF
+    STR X9, [X19, #-CELL]!         // push tag: only ENDCASE may consume this
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -3395,11 +3415,26 @@ forth_endcase:
     ADR X0, forth_drop
     BL compile_call
 .Lendcase_loop:
-    LDR X0, [X19], #CELL          // pop address
-    CBZ X0, .Lendcase_done
+    // Bound the scan by the definition's control-flow base: with no CASE to
+    // close, walk off the compile-time stack and we'd patch whatever follows.
+    ADR X9, colon_dsp
+    LDR X9, [X9]
+    CMP X19, X9
+    B.HS .Lendcase_bad             // nothing left in this definition
+    LDR X9, [X19]                  // tag
+    CMP X9, #CF_CASE
+    B.EQ .Lendcase_done
+    CMP X9, #CF_ENDOF
+    B.NE .Lendcase_bad             // IF/DO/BEGIN left this — not ours to close
+    ADD X19, X19, #CELL            // drop tag
+    LDR X0, [X19], #CELL           // arm-exit branch address
     BL patch_forward
     B .Lendcase_loop
+.Lendcase_bad:
+    LDP X29, X30, [SP], #16        // unwind our frame before the longjmp
+    B .Lcf_mismatch
 .Lendcase_done:
+    ADD X19, X19, #2*CELL          // drop tag + sentinel
     LDP X29, X30, [SP], #16
     RET
 

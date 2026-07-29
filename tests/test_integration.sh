@@ -399,6 +399,27 @@ assert_error  "if without then"  ": test if ;"                               "un
 assert_error  "begin without until" ": test begin ;"                         "unresolved control flow"
 assert_error  "begin then mismatch" ": test begin then ;"                   "? mismatched-control-flow"
 assert_error  "if until mismatch"  ": test if until ;"                      "? mismatched-control-flow"
+# CASE arm bookkeeping. Before 2026-07-29 the CASE family pushed UNTAGGED
+# values, so ENDOF could not tell its own pending OF-branch from a previous
+# arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
+# other's bodies), and closing a non-CASE construct with a CASE word handed
+# patch_forward a tag value as an address and SEGFAULTED the process — fatal
+# during a file load. Found in the Dark Star port.
+assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "? mismatched-control-flow"
+assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "? mismatched-control-flow"
+assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "? mismatched-control-flow"
+assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "? mismatched-control-flow"
+assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "? mismatched-control-flow"
+assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "? mismatched-control-flow"
+assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "? mismatched-control-flow"
+# an IF opened inside an arm and closed out of order — the likeliest typo
+assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "? mismatched-control-flow"
+assert_error  "endcase without case"  ": bad endcase ;"                    "? mismatched-control-flow"
+assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "? mismatched-control-flow"
+# and the well-formed cases still compile and run, including nested both ways
+assert_output "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
+assert_output "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
 assert_error  "begin outside def" "begin"                                   "compile only"
