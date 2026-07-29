@@ -548,7 +548,12 @@ sigsegv_handler:
     RET
 
 .Lsig_underflow:
-    // Print "stack underflow\n"
+    // Print "stack underflow\n". These two messages write with a raw syscall
+    // rather than platform_write, so they must pay the owed newline themselves
+    // or they land on the command line (`> dropstack underflow`). Safe from a
+    // signal handler: pay_pending_nl only touches a global and write(2), and
+    // leaves X23 (the ucontext pointer) alone; X30 is restored on the way out.
+    BL pay_pending_nl
     MOV X0, #STDOUT
     ADR X1, msg_underflow
     MOV X2, #msg_underflow_len
@@ -557,7 +562,8 @@ sigsegv_handler:
     B .Lsig_recover
 
 .Lsig_overflow:
-    // Print "stack overflow\n"
+    // Print "stack overflow\n" (see the note above about the owed newline)
+    BL pay_pending_nl
     MOV X0, #STDOUT
     ADR X1, msg_overflow
     MOV X2, #msg_overflow_len

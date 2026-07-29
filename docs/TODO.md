@@ -7,6 +7,51 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [ ] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
+  `IF`/`DO`/`BEGIN` segfaults.** Found 2026-07-29 during the Dark Star port:
+  a stray `ENDOF` in a `DecodeLevel` dispatch loaded without complaint and
+  surfaced as a `stack underflow` at run time, several steps from the cause.
+  **Pre-existing on `main` (`2b68ee6`) — verified in a scratch worktree, so
+  this is not from the staging branches.**
+
+  Two separate faults. First, an unbalanced arm compiles quietly and emits
+  **wrong code** — not merely a leak. The branch targets are mis-resolved, so
+  an arm runs another arm's body and the case value is never consumed:
+
+      : bad  case 0 of 11 endof 1 of 22 endof endof endcase ;   \ extra ENDOF
+       ok
+      9 9 0 bad .s     <3> 9 9 11          <- correct by luck
+      9 9 1 bad .s     <5> 9 9 11 9 9      <- ran arm ONE, and leaked
+      9 9 5 bad .s     <8> 9 9 11 9 9 9 9 5
+
+  An `OF` with no `ENDOF` is equally quiet (`: bad2 case 0 of 11 endof of
+  endcase ;`, and `: bad3 case 0 of 11 endcase ;`).
+
+  Second, closing a non-`CASE` construct with a `CASE` word **segfaults the
+  process** — not an abort, a core dump, so a file load takes the session
+  with it:
+
+      : a6  if 1 endcase ;       Segmentation fault
+      : a7  if 1 endof ;         Segmentation fault
+      : a8  do 1 endcase ;       Segmentation fault
+      : a9  begin 1 endcase ;    Segmentation fault
+
+  The checker already exists and covers everything else, which is what makes
+  this look like an oversight rather than a design gap — `: t if ;` and
+  `: t begin ;` give `unresolved control flow`, `: t if until ;` gives
+  `? mismatched-control-flow`, and even a `CASE` missing its `ENDCASE`
+  (`: t case 0 of 11 endof ;`) is caught. It is only the arm-level bookkeeping
+  *inside* `CASE` that goes unchecked.
+
+  Likely root cause and fix: `ENDOF`/`ENDCASE` cannot tell an arm's pending
+  branch address from the `CASE` marker itself, so they resolve whatever is on
+  the control-flow stack and walk off it when the type is wrong. Making the
+  `CASE` marker a distinguishable tagged value — the way the `IF`/`BEGIN`
+  mismatch check already distinguishes its own — should fix the silent
+  mis-resolution and the segfault together. Worth checking whether the
+  `mismatched-control-flow` machinery can simply be extended to cover the
+  `CASE` words rather than adding a parallel one.
+
 - [ ] **`:noname` inside a colon definition wedges a file load.** Found
   2026-07-25 during the interaction sweep, while checking a Codex review
   claim. `:noname` nested in an open definition is not supported — fair
@@ -2017,6 +2062,46 @@ smaller risk surface.
   benchmark) but a cute, self-contained peephole.
 
 ## Future / Hardening
+
+- [ ] **A stale binary against a new `core.fs` now produces WRONG OUTPUT, not
+  an obvious failure — make the mismatch loud.** Found the hard way
+  2026-07-29: Brandon's Dark Star session on `staging` printed everything
+  appended to the command line —
+
+      > helloHello World ok
+      > 1 2 + .3  ok
+      > stackclear? stackclear
+
+  Reproduced exactly by pairing **main's binary with staging's core.fs**, so
+  the diagnosis is certain. Cause: the owed-newline change (2026-07-28) split
+  one behaviour across both halves — `core.fs`'s line editor stopped emitting
+  the newline on Enter, and the binary took over paying it in `platform_emit`
+  / `platform_write_fd`. Neither half is wrong alone; mixed versions mean
+  *nobody* emits it.
+
+  Two properties make this nastier than the old "stale binary lacks a
+  feature" case:
+  - **It only shows interactively.** A pipe uses `forth_accept` inside the
+    binary, and the old one still echoes the newline — so every suite passes
+    while the terminal is visibly broken. Our tests structurally cannot catch
+    it.
+  - **Three worktrees make it easy to hit.** Merging into `staging` updates
+    `src/forth/core.fs` in that tree, but the binary there is whatever `make`
+    last produced; `PATH` and `BASICFORTH_PATH` can even come from different
+    checkouts.
+
+  Diagnosis today is manual: `basicforth -v` reports `git describe` **at
+  build time**, so compare it with `git describe` in the tree
+  `BASICFORTH_PATH` points at.
+
+  Fix worth building: **a protocol number, not a version string.** The binary
+  exposes a small integer (bump it only when the core.fs↔binary contract
+  changes — the owed newline would have been bump #1); `core.fs` asserts it
+  is at least what this core.fs expects and otherwise prints one clear line
+  ("basicforth: binary is older than core.fs — run make"). One comparison,
+  one message, no build-system cleverness, and it stays quiet forever when
+  the two match. Comparing full version strings is the wrong shape: they
+  differ harmlessly all the time (dirty trees, different tags).
 
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup
   - Currently we use OMAGIC (`ld -N`) to make all segments RWX so compiled

@@ -2881,6 +2881,18 @@ else
     printf "  ${RED}FAIL${NC}  faulted reload recovery\n    Got: %q  file-same: %q\n" "$fr_out" "$fr_same"; ((failed++))
 fi
 
+# The guard-fault messages write with a RAW syscall from the signal handler,
+# not through platform_write, so they must pay the owed newline themselves —
+# otherwise they land on the command line (`> dropstack underflow`). Reported
+# from a live session 2026-07-29, the day after the owed newline shipped: the
+# two flush points cover every ordinary write, and these two are the exception.
+gm_out=$(printf 'drop\n1 2 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if [[ "$gm_out" == *$'> drop\nstack underflow'* && "$gm_out" != *"dropstack"* ]]; then
+    printf "  ${GREEN}PASS${NC}  guard message starts on its own line (pays the owed newline)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  guard message appended to the command line\n    Got: %q\n" "$gm_out"; ((failed++))
+fi
+
 # A guard fault on the SAME LINE as a forget must not resurrect the forgotten
 # words: (restore-dict) re-anchors the recovery snapshot.
 fm_out=$( printf 'marker m\n: x 1 ;\nm +\nx .\n: y 2 ;\ny .\nbye\n' \
