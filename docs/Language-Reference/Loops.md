@@ -15,8 +15,8 @@ At a glance:
     do ... n +loop           ( n -- at +loop )   step by n (can be negative)
     i                        ( -- n )            innermost loop index
     j                        ( -- n )            next outer loop index
-    leave                    ( -- )              exit the loop now
-    unloop                   ( -- )              drop loop bookkeeping (before exit)
+    leave                    ( -- )              exit the innermost counted loop
+    unloop                   ( -- )              before exit, counted loops only
     recurse                  ( -- )              call the current word itself
 
 ## begin … until ( -- ) ( flag consumed at until )
@@ -79,17 +79,33 @@ The index of the *next outer* counted loop, when loops are nested.
     grid              \ 0 1 1 2
 
 ## leave ( -- )
-Exit the innermost counted loop immediately.
+Exit the innermost enclosing *counted* loop immediately and carry on after it.
+`leave` cleans up after itself — never write `unloop` before it.
 
     : upto3  10 0 do i . i 3 = if leave then loop ;
     upto3             \ 0 1 2 3
 
+It is counted-loop-only: inside a plain `begin` loop it is a compile error
+(`mismatched-control-flow`). Inside a `begin` loop that sits within a `do`
+loop it compiles and ends the **`do`** loop, abandoning the rest of the
+`begin` body — to leave just the inner loop, use its own exit test.
+
 ## unloop ( -- )
-Discard the loop's control parameters so you can `exit` the whole word from
-inside a counted loop. Always pair `unloop` with `exit`.
+Counted loops only, and only before `exit`. `do`/`?do` park their control
+parameters on the return stack. `loop` and `leave` clear those themselves, but
+`exit` returns from the whole word and bypasses them — so it must discard them
+first, one `unloop` per enclosing counted loop.
 
     : find3  10 0 do i 3 = if unloop exit then i . loop ;
     find3             \ 0 1 2
+
+So `leave` never takes an `unloop`, and neither does an `exit` from a `begin`
+loop — those keep nothing on the return stack. What counts is the *enclosing*
+counted loops, not the loop you stand in: an `exit` from a `begin` loop nested
+inside a `do` loop still needs one.
+
+A missing `unloop` — or one that is not needed — corrupts the return stack and
+usually crashes.
 
 ## recurse ( -- )
 Call the current definition from within itself — the iterative alternative for
