@@ -2162,6 +2162,16 @@ smaller risk surface.
     code in dict_space can execute.  The proper approach is to keep normal
     segment permissions and call `SYS_mprotect` on just the dict_space pages
     to add PROT_EXEC.  See BareMetalForth Lesson 37 for background.
+  - **There is now a performance argument too, not just a hygiene one**
+    (measured 2026-07-29, written up in docs/Performance.md): storing into
+    a `variable` in a tight loop costs ~28 ns against ~2 ns for `to` on a
+    `value`, despite compiling to the same three calls. The store lands in
+    a cell adjacent to the stub being executed, in a region that is both
+    writable and executable — the pattern a CPU treats as self-modifying
+    code, paid for with pipeline machine clears. Moving the store target to
+    the heap recovered most of the gap, which supports the mechanism.
+    Separating code from data pages is exactly what would remove it, so
+    this item may be worth more than its "proper approach" framing suggests.
 - [ ] Guard page after dict_space for dictionary overflow detection
   - Currently dict_space uses a software CHECK_DICT macro.  A guard page
     would provide zero-cost hardware detection, consistent with the data
