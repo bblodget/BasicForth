@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.13.0 — 2026-07-30
 
 ### Fixed: unbalanced `CASE` arms compiled silently, and mixing `CASE` with `IF`/`DO`/`BEGIN` segfaulted
 - **An extra `ENDOF` emitted wrong code without a word of complaint.** Branch
@@ -109,6 +109,31 @@
 - A test pins all nine against `SDL_keycode.h`, plus `key-q = char q`. A wrong
   keycode fails silently at run time — a key that simply never matches — so
   it is worth one assertion.
+
+### Docs: storing into a `value` costs 2 ns, into a `variable` 28 ns
+
+- **Measured, because it is expensive to rediscover and impossible to guess
+  from first principles.** In a tight loop `1 +to n` beats `1 v !` by 12×,
+  reproducibly. Reads are within a few percent of each other; only the write
+  differs. `docs/Performance.md` has the table and the reasoning.
+- The counterintuitive part is that the *fast* one is the bigger code. Both
+  compile to three calls, and `to` emits 32 bytes against `v !`'s 24, because
+  `to` inlines the address as a literal where a `variable` is a call.
+- What differs is **where the store lands relative to code being executed**.
+  `v !` calls `v`'s push-the-address stub and then writes the cell sitting
+  immediately next to that stub — in a dictionary that is RWX with code and
+  data interleaved, which is the pattern a CPU treats as self-modifying code
+  and pays for with pipeline machine clears. Pointing the same store at a
+  heap cell took 0.56 s to 0.21 s, most of the gap; it does not account for
+  the remaining 4×, so the page says "well-supported" rather than settled.
+- **This is now a performance argument for a TODO item that was filed as
+  hygiene**: replacing `ld -N` (OMAGIC, every segment RWX) with `mprotect` on
+  just the dictionary. Separating code from data pages is exactly what would
+  remove the effect.
+- The practical takeaway is narrow and stated as such. A hot per-frame scalar
+  wants `value` + `to`, which is also the shape that cannot print an address
+  by forgetting `@`; anything needing an address still wants a `variable`; and
+  below a tight loop, 28 ns is nothing against a frame.
 
 ### No ` ok` while a definition is open
 - **A multi-line definition no longer prints ` ok` after every line.** The
@@ -284,6 +309,41 @@
   for word: a `variable` gives `v: not a value or deferred word`, an unknown
   name gives `? name`, and no name at all behaves like a bare `to`. Nothing is
   caught and re-reported, so there is no second message to keep in step.
+
+### The optimizer path is deferred, with the conditions that would reopen it
+
+- **The peephole inliner and the registerized loop are worth doing, and are
+  not being done yet.** Both were open items under "Performance / Optimizer";
+  the section is now closed deliberately rather than left to drift, because
+  the base underneath them is still moving — eleven features landed in the
+  week to 2026-07-25 and several interact (`delete` + `redefined` + `save`;
+  `booting?` + `:e` + `reload`), each tested alone, the combinations unproven.
+- The hazard is not lost time, it is **ambiguous debugging**: an optimizer
+  that miscompiles surfaces as "this new feature is broken", and the hunt
+  starts in the feature instead of the compiler. Optimizers want a stable,
+  well-covered base underneath precisely so a regression says which layer
+  moved.
+- **Two conditions reopen it, and both must hold**: the interface has stopped
+  changing shape, *and* a profile of a real program — a game, a control loop,
+  not a microbenchmark — puts word dispatch among the top costs. `time`
+  shipped for exactly that measurement. Every number in `docs/Performance.md`
+  measures an empty loop, the one case where dispatch dominates because
+  nothing else is happening; in a 60 fps frame it may not show up at all. If
+  a real profile says dispatch is irrelevant the section should be *closed*,
+  not built — a deferral that can only resolve toward "do it" is just a delay.
+- **What reading the compiler turned up is preserved** so it need not be
+  re-derived: the hook is exactly one site per architecture, the other 15
+  `compile_call` uses are structural, and `see`/redefinition semantics are
+  untouched — so the change is structurally small and the risk is all in the
+  bytes. A curated candidate table duplicates definitions and drifts silently
+  into miscompilation; `lit` cannot be inlined at all, since it reads its
+  operand relative to its return address; scanning for the terminating `ret`
+  is safe on ARM64 but not on x86, where `0xC3` occurs inside other
+  instructions. It also costs `dis` its named call annotation, which the
+  Machine-Code lesson teaches from — a real price, not a cosmetic one.
+- The registerized loop is marked as the one to do first when the path
+  reopens: local to one construct, no machine-code copying, no candidate
+  table, `dis` annotation untouched.
 
 ### Lessons are tested now — `make run-lessons`
 - **`tests/test_lessons.py` replays every lesson** in `docs/Tutorial/` the way

@@ -36,26 +36,27 @@ and project phases.
 
 ## Status
 
-**v0.12.0** — **Graphics, and the tools to see what you built.** SDL3 gets
-2D primitives (lines, rects, circles), full-color sprites you can `grab` off
-the live frame and `blit` back, and **1-bit sprites** — `stamp` draws a bit
-pattern in a color chosen at draw time, so one shape serves any color and
-art typed as `%00111100 c,` *is* the row it draws; `row,` takes the same art
-as a picture-shaped string. **`dis`** disassembles any word — your colon
-definitions from the dictionary, primitives from the binary — with call
-targets named and inline literals and strings shown as data rather than
-mis-decoded. **`catch`/`throw`** bring the Forth 2012 exception wordset, with
-`abort` and `abort"` now catchable. Modules learned to survive their own
-reload: **`on-start`/`on-stop`** hand a held resource (an SDL window, an
-audio stream) across the rebuild instead of stranding it, and **`keep`**
-records a setup line that defined nothing. `save` no longer drops the data
-rows laid down after a `create` — art you typed now comes back. Plus seven
-new interactive lessons (Arrays, Strings, Graphics, Sprites, Bitmaps,
-Exceptions, Machine-Code), help rendered on the terminal and **2,500x fewer
-syscalls** per lookup, `require` for load-once includes, a `redefined foo`
-warning at the prompt, and `u.0r` for zero-padded output. Builds on
-v0.11.0's reference manual.
-123 unit tests + 766 integration tests + 22 PTY tests.
+**v0.13.0** — **Text on the framebuffer, and a prompt that stays out of your
+way.** Graphics gained words but no way to *label* anything; now `require
+font-terminus-8x16.fs` or `font-vga-8x8.fs` gives `text` and `glyph` on the
+framebuffer, two CP437 faces that load together and switch by name, both
+magnified by `font-scale` (as sprites are by `stamp-scale`) and positioned on
+the text grid by **`>xy`**, which converts a character cell to its pixel
+corner with the scale folded in. The prompt got quiet in the other
+direction: a line that prints nothing now keeps its ` ok` **on the line you
+typed**, nothing is echoed at all while a definition is open, and four ways
+to wedge a session are closed — a stray `;`, an aborted definition that used
+to disable Ctrl-D for good, a `require` cycle that blew the data stack, and a
+file ending mid-definition, which used to load *successfully* and swallow
+everything typed afterward, `bye` included. **Unbalanced `CASE` arms no
+longer compile silently**, and `if … endcase` and its family abort instead of
+segfaulting. Modules learned **`delete <name>`** and **`list`**, `variable`
+now starts at zero, **`+to`** adds to a value, and **`booting?`** lets a
+module launch itself once and still be edited. Plus two interactive lessons
+(Modules, Printing), `time <word>` and a measured `docs/Performance.md`, and
+the lessons themselves are now replayed by the test suite. Builds on
+v0.12.0's graphics.
+123 unit tests + 867 integration tests + 36 PTY tests + 26 lesson replays.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -86,7 +87,8 @@ What works today:
 - Modules: `SAVE <name>` / `LOAD <name>` / `NEW` / `RELOAD` / `USES`
   (named source-replay files) and `MARKER` dictionary restore points;
   `ON-START`/`ON-STOP` hand a held resource across a reload, `KEEP` records
-  a setup line that defined nothing
+  a setup line that defined nothing, `BOOTING?` tells a start from a restart,
+  `LIST` pages the whole program, and `DELETE <name>` removes a definition
 - Editing: `EDIT <word>` / `:E <word>` / `DEFINE <word>` / bare `EDIT` —
   fix a definition in `$EDITOR` or at the prompt, draft a new one, or open
   the whole module; mutations splice the module file and reload it
@@ -101,9 +103,13 @@ What works today:
   desktop window via the SDL3 backend (`sdl3.fs`): timer-paced frames
   (`SDL-FPS`), `SDL-SCALE` chunky pixels, `SDL-TITLE`, keyboard/quit events;
   try `examples/bounce.fs`
-- Text: `TEXT`/`GLYPH` draw strings and characters on the surface (`font-terminus-8x16.fs`) —
-  a bundled Terminus 8×16 CP437 bitmap font (SIL OFL 1.1), rendered through
-  `STAMP` so text is any color and clips like a sprite
+- Text: `TEXT`/`GLYPH` draw strings and characters on the surface, rendered
+  through `STAMP` so text is any color and clips like a sprite. Two bundled
+  CP437 faces — Terminus 8×16 (SIL OFL 1.1) and the IBM PC 8×8 (public
+  domain) — load together and switch by name; `FONT-SCALE` magnifies them as
+  `STAMP-SCALE` does sprites, and `>XY` turns a character cell into its pixel
+  corner with the scale folded in, so a layout survives both a font switch
+  and a scale change
 - Sound: square-wave tones through SDL3's default playback device
   (`sound.fs`): `SND-OPEN`, `TONE`, `BEEP`, `SND-WAIT` — queued, so game
   loops keep running while a sound plays
@@ -123,9 +129,8 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: scaled text and sprites (`stamp-scale`), a GPU backend (SDL_GPU)
-behind the surface API, sockets and threading — plus a package registry, the locals word
-set, and more games.
+What's next: a GPU backend (SDL_GPU) behind the surface API, sockets and
+threading — plus a package registry, the locals word set, and more games.
 
 ## Building
 
