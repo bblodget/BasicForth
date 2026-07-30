@@ -116,6 +116,11 @@ Status: ( ) = not yet implemented, (x) = implemented
 | MIN    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 | MAX    | ( n1 n2 -- n3 )                               | asm   | (x)    |                         |
 
+The standard set has no `<=`, `>=`, `u<=` or `u>=`, and no `NOT`. We add the
+four comparisons as primitives (see *BasicForth-Specific Words*); `NOT` stays
+out, because the standard removed it on purpose — `INVERT` and `0=` name the
+two things it used to mean. See `docs/Language-Reference/Comparison.md`.
+
 ### Memory
 
 | Word    | Stack effect                                  | Layer | Status | Notes                   |
@@ -356,6 +361,10 @@ Words not in the standard, specific to BasicForth's goals:
 | KEY_LEFT    | ( -- 132 )        | forth | (x)    | Arrow key constant                     |
 | random      | ( -- n )          | forth | (x)    | LCG random number                      |
 | rnd         | ( n -- 0..n-1 )   | forth | (x)    | Random in range                        |
+| <=          | ( n1 n2 -- flag ) | asm   | (x)    | Signed less-or-equal; `<` with one condition changed |
+| >=          | ( n1 n2 -- flag ) | asm   | (x)    | Signed greater-or-equal                |
+| u<=         | ( u1 u2 -- flag ) | asm   | (x)    | Unsigned less-or-equal                 |
+| u>=         | ( u1 u2 -- flag ) | asm   | (x)    | Unsigned greater-or-equal              |
 
 *This section will grow as we add game, graphics, and robotics words.*
 
