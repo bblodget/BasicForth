@@ -636,6 +636,30 @@ forth_greater:
     STR X10, [X19]
     RET
 
+// <= ( a b -- flag )
+// Not in Forth 2012 CORE; provided because `> 0=` costs two extra calls to
+// recompute a condition the CPU already has in its flags.
+.global forth_le
+forth_le:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSETM X10, LE              // -1 if a <= b, 0 otherwise
+    STR X10, [X19]
+    RET
+
+// >= ( a b -- flag )
+.global forth_ge
+forth_ge:
+
+    LDR X9, [X19], #CELL       // pop b
+    LDR X10, [X19]              // a
+    CMP X10, X9
+    CSETM X10, GE              // -1 if a >= b, 0 otherwise
+    STR X10, [X19]
+    RET
+
 // 0= ( a -- flag )
 .global forth_zero_equal
 forth_zero_equal:
@@ -735,6 +759,30 @@ forth_u_less:
     LDR X10, [X19]              // u1
     CMP X10, X9
     CSETM X10, LO              // -1 if u1 < u2 (unsigned), 0 otherwise
+    STR X10, [X19]
+    RET
+
+// U<= ( u1 u2 -- flag )
+// Unsigned less-or-equal
+.global forth_u_le
+forth_u_le:
+
+    LDR X9, [X19], #CELL       // pop u2
+    LDR X10, [X19]              // u1
+    CMP X10, X9
+    CSETM X10, LS              // -1 if u1 <= u2 (unsigned), 0 otherwise
+    STR X10, [X19]
+    RET
+
+// U>= ( u1 u2 -- flag )
+// Unsigned greater-or-equal
+.global forth_u_ge
+forth_u_ge:
+
+    LDR X9, [X19], #CELL       // pop u2
+    LDR X10, [X19]              // u1
+    CMP X10, X9
+    CSETM X10, HS              // -1 if u1 >= u2 (unsigned), 0 otherwise
     STR X10, [X19]
     RET
 
@@ -5645,7 +5693,9 @@ DEFWORD dict_max,        "max",        forth_max,         dict_min
 DEFWORD dict_equal,      "=",          forth_equal,       dict_max
 DEFWORD dict_less,       "<",          forth_less,        dict_equal
 DEFWORD dict_greater,    ">",          forth_greater,     dict_less
-DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_greater
+DEFWORD dict_le,         "<=",         forth_le,          dict_greater
+DEFWORD dict_ge,         ">=",         forth_ge,          dict_le
+DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_ge
 DEFWORD dict_zero_less,  "0<",         forth_zero_less,   dict_zero_equal
 DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
@@ -5706,7 +5756,9 @@ DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
 DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
 DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
-DEFWORD dict_state,      "state",      forth_state,       dict_u_less
+DEFWORD dict_u_le,       "u<=",        forth_u_le,        dict_u_less
+DEFWORD dict_u_ge,       "u>=",        forth_u_ge,        dict_u_le
+DEFWORD dict_state,      "state",      forth_state,       dict_u_ge
 DEFWORD dict_redef_quiet, "(redef-quiet)", forth_redef_quiet, dict_state
 DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_redef_quiet, F_IMMEDIATE
 DEFWORD dict_rbracket,   "]",          forth_right_bracket, dict_lbracket

@@ -201,6 +201,40 @@ separating code from data pages is exactly what would remove the effect.
 
 Below a tight loop this is noise. 28 ns is nothing against a frame.
 
+## `<=` as a primitive, versus spelling it `> 0=`
+
+The standard comparison set stops at `<` and `>`, so a Forth without `<=`
+makes you write `> 0=`. That is correct, and it is also two words where the
+processor already had the answer: the compare sets the flags, and `> 0=`
+throws away the one it wanted, materialises a flag in memory, then loads it
+back to invert it.
+
+Measured 2026-07-30, same laptop, 20×10^6 iterations, three runs each
+(spread under 5%). Each body is `5 6 <op> drop`; `base` is the same loop
+with `2drop` in place of the comparison, so the last column is the
+comparison alone:
+
+    base    ( 5 6 2drop )                   0.074 s      --
+    <=      ( 5 6 <= drop )                 0.105 s    ~1.6 ns
+    > 0=    ( 5 6 > 0= drop )               0.133 s    ~3.0 ns
+    : le3 > 0= ;                            0.142 s    ~3.4 ns
+
+**The primitive is about half the cost of the sequence it replaces**, and
+the difference is exactly what the call structure predicts: one call
+instead of two, three if you wrap it in a colon definition. It tracks the
+0.84 ns-per-word slope measured above.
+
+The primitive itself is free to provide. `forth_le` is `forth_less` with
+one condition code changed — `jg` for `jge` on x86, `CSETM LE` for `LT` on
+ARM64 — so `<=` costs exactly what `<` costs. Same for `>=`, `u<=`, `u>=`.
+
+The tempting shortcut is worth naming so nobody re-derives it: `: <= 1+ < ;`
+is **wrong**, because `1+` wraps when `n2` is the largest cell value. If you
+are on a Forth without these words, `> 0=` is the correct slow spelling.
+
+As always, scale matters: 1.4 ns is nothing outside a hot loop. This is a
+free win, not a reason to rewrite working code.
+
 ## Practical guidance
 
 - **Use `do`/`loop` for hot counted loops.** It is the one construct that

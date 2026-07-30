@@ -2117,6 +2117,26 @@ smaller risk surface.
 
 ## Future / Hardening
 
+- [ ] **Audit the integration suite for assertions that cannot fail.**
+  `assert_output` matches by substring, and `run_forth` captures the **echoed
+  input** along with the output (`> 5 5 <= .` then `-1  ok`). So any assertion
+  whose expected text also occurs in its input passes unconditionally —
+  `assert_output "x" '-1 1 <= .' "-1"` is green against a completely broken
+  `<=`. Multi-line inputs are worse: their `... ` continuation echoes drag in
+  whatever the source text contains, which is how a differential test expecting
+  `"0"` passed while reporting 7 mismatches (its echo contained `0=`).
+  Found 2026-07-30 while negative-testing the new comparison words — the tests
+  looked thorough and several were vacuous.
+  `assert_result` (strips the echo, then matches) now exists and is used by the
+  comparison block; the rest of the suite has **not** been swept. The sweep is
+  mechanical: for each `assert_output`, check whether `$expected` is a substring
+  of `$input`, and convert the hits. Worth doing as one pass, because a green
+  test that cannot fail is worse than a missing one — it is a standing claim
+  that something is covered.
+  A stricter follow-up worth considering: make `assert_result` compare the
+  result line **exactly** rather than by substring, so a test cannot pass on a
+  coincidental match either.
+
 - [ ] **A stale binary against a new `core.fs` now produces WRONG OUTPUT, not
   an obvious failure — make the mismatch loud.** Found the hard way
   2026-07-29: Brandon's Dark Star session on `staging` printed everything
