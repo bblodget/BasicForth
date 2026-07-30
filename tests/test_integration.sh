@@ -942,6 +942,20 @@ else
         printf "  ${RED}FAIL${NC}  sdl-title\n    Got: %q\n" "$sdl_ti"; ((failed++))
     fi
 
+    # Keycode constants must equal the SDLK_* values in SDL_keycode.h -- a
+    # wrong one fails silently at run time (a key that simply never matches).
+    # The named ones are the keys with no character; a printable key is its
+    # own ASCII code, which is what the [char] w comparison checks.
+    sdl_kc=$(printf 'include sdl3.fs\nkey-backspace . key-tab . key-enter . key-esc . key-space .\nkey-left . key-right . key-up . key-down .\nkey-q char q = .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_kc" | grep -q '8 9 13 27 32' \
+       && printf '%s' "$sdl_kc" | grep -q '1073741904 1073741903 1073741906 1073741905' \
+       && printf '%s' "$sdl_kc" | grep -q '^\-1  ok'; then
+        printf "  ${GREEN}PASS${NC}  SDL keycode constants match SDLK_* (and ASCII for printables)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  SDL keycode constants\n    Got: %q\n" "$sdl_kc"; ((failed++))
+    fi
+
     # Cold start: one include of bounce.fs loads the whole stack via require.
     sdl_cb=$(printf 'include bounce.fs\n3 bounce-frames depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB:$REPO_ROOT/examples" timeout 10 $FORTH 2>&1)
