@@ -537,6 +537,34 @@ forth_greater:
 1:  mov %rcx, (%r15)
     ret
 
+# <= ( a b -- flag )
+# Not in Forth 2012 CORE; provided because `> 0=` costs two extra calls to
+# recompute a condition the CPU already has in its flags.
+.global forth_le
+forth_le:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmp %rax, (%r15)            # compare a with b
+    jg 1f                       # a > b, leave false
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
+# >= ( a b -- flag )
+.global forth_ge
+forth_ge:
+
+    mov (%r15), %rax            # rax = b
+    add $CELL, %r15             # pop b
+    xor %ecx, %ecx              # rcx = 0 (false)
+    cmp %rax, (%r15)            # compare a with b
+    jl 1f                       # a < b, leave false
+    dec %rcx                    # rcx = -1 (true)
+1:  mov %rcx, (%r15)
+    ret
+
 # 0= ( a -- flag )
 .global forth_zero_equal
 forth_zero_equal:
@@ -631,6 +659,36 @@ forth_u_less:
     jnb .Lu_less_done
     mov $-1, %rax
 .Lu_less_done:
+    mov %rax, (%r15)
+    ret
+
+# U<= ( u1 u2 -- flag )
+# Unsigned less-or-equal
+.global forth_u_le
+forth_u_le:
+
+    mov (%r15), %rax            # rax = u2
+    add $CELL, %r15             # pop u2
+    cmp %rax, (%r15)            # compare u1 - u2 (unsigned)
+    mov $0, %rax
+    ja .Lu_le_done              # u1 > u2, leave false
+    mov $-1, %rax
+.Lu_le_done:
+    mov %rax, (%r15)
+    ret
+
+# U>= ( u1 u2 -- flag )
+# Unsigned greater-or-equal
+.global forth_u_ge
+forth_u_ge:
+
+    mov (%r15), %rax            # rax = u2
+    add $CELL, %r15             # pop u2
+    cmp %rax, (%r15)            # compare u1 - u2 (unsigned)
+    mov $0, %rax
+    jb .Lu_ge_done              # u1 < u2, leave false
+    mov $-1, %rax
+.Lu_ge_done:
     mov %rax, (%r15)
     ret
 
@@ -5106,7 +5164,9 @@ DEFWORD dict_max,        "max",        forth_max,         dict_min
 DEFWORD dict_equal,      "=",          forth_equal,       dict_max
 DEFWORD dict_less,       "<",          forth_less,        dict_equal
 DEFWORD dict_greater,    ">",          forth_greater,     dict_less
-DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_greater
+DEFWORD dict_le,         "<=",         forth_le,          dict_greater
+DEFWORD dict_ge,         ">=",         forth_ge,          dict_le
+DEFWORD dict_zero_equal, "0=",         forth_zero_equal,  dict_ge
 DEFWORD dict_zero_less,  "0<",         forth_zero_less,   dict_zero_equal
 DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
@@ -5167,7 +5227,9 @@ DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
 DEFWORD dict_two_div,    "2/",         forth_two_div,     dict_rshift
 DEFWORD dict_u_less,     "u<",         forth_u_less,      dict_two_div
-DEFWORD dict_state,      "state",      forth_state,       dict_u_less
+DEFWORD dict_u_le,       "u<=",        forth_u_le,        dict_u_less
+DEFWORD dict_u_ge,       "u>=",        forth_u_ge,        dict_u_le
+DEFWORD dict_state,      "state",      forth_state,       dict_u_ge
 DEFWORD dict_redef_quiet, "(redef-quiet)", forth_redef_quiet, dict_state
 DEFWORD dict_lbracket,   "[",          forth_left_bracket, dict_redef_quiet, F_IMMEDIATE
 DEFWORD dict_rbracket,   "]",          forth_right_bracket, dict_lbracket
