@@ -1302,7 +1302,10 @@ variable (el-hpos)                    \ browse cursor within one edit
     then
     begin
         key
-        dup 10 = if  drop  (el-end) 10 emit  (hist-add) (el-len) @ exit  then
+        \ No newline on Enter: the REPL records that one is OWED and the next
+        \ thing written pays it, so a line that prints nothing keeps its ` ok`
+        \ on the command line (docs/Outer_Interpreter.md).
+        dup 10 = if  drop  (el-end)  (hist-add) (el-len) @ exit  then
         \ Ctrl-D on an empty line (no definition open) submits "bye", so the
         \ exit everyone's fingers expect goes through the dirty guard exactly
         \ like a typed bye — y saves, n discards, anything else cancels back
@@ -1313,7 +1316,7 @@ variable (el-hpos)                    \ browse cursor within one edit
         \ set F_HIDDEN ($40 at nt+8) and `;` clears it.
         dup 4 =  (el-len) @ 0= and  state @ 0= and
         (latest@) 8 + c@ 64 and 0= and if
-            drop  s" bye" (el-buf) @ swap move  ." bye" 10 emit  3 exit  then
+            drop  s" bye" (el-buf) @ swap move  ." bye"  3 exit  then
         dup 8 = over 127 = or if  drop (el-back)  else
         dup 131 =             if  drop (el-right) else
         dup 132 =             if  drop (el-left)  else

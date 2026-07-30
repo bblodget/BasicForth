@@ -240,6 +240,11 @@ Notes:
   like any other Unix program. (Errors while loading `core.fs` still drop to
   the REPL, since a broken bootstrap is a development problem, not a script
   failure.)
+- **A file that ends in the middle of a definition** — a missing `;` — counts
+  as one of those errors. It reports the unfinished word
+  (`game.fs: definition not closed: draw-ship (missing ;)`) and abandons it,
+  so an interactive session comes back at a working prompt rather than
+  silently compiling everything you type next.
 - `core.fs` is still loaded from the current directory or `BASICFORTH_PATH`,
   so set `BASICFORTH_PATH` if the script is run from an arbitrary directory.
 - With `#!/usr/bin/env basicforth`, `basicforth` must be on your `PATH`;

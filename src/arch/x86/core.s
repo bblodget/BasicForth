@@ -902,9 +902,10 @@ forth_accept:
     jmp .Laccept_loop
 
 .Laccept_done:
-    # Echo the newline
-    mov $10, %rdi
-    call platform_emit
+    # Do NOT echo the newline — record that one is owed, so the next thing
+    # written pays it. A line that prints nothing then keeps its ` ok` on the
+    # command line. (platform_linux.s has the full rule.)
+    movq $1, pending_nl(%rip)
 
     # Push result: count
     sub $CELL, %r15
@@ -2355,6 +2356,11 @@ forth_included:
     push %r8                        # for line_start scratch
     pushq cur_source_id(%rip)       # save source context (restored in .Lincl_pop_regs)
     pushq cur_line_off(%rip)        #   so nested includes don't clobber the parent's
+    pushq incl_entry_latest(%rip)   # and what was open before this load began,
+    pushq incl_entry_state(%rip)    #   for the unclosed-definition check at EOF
+    mov %r12, incl_entry_latest(%rip)
+    mov state(%rip), %rax
+    mov %rax, incl_entry_state(%rip)
 
     # Pop c-addr and u from data stack
     mov (%r15), %rdx                # RDX = u (filename length)
@@ -2517,6 +2523,29 @@ forth_included:
     jmp .Lincl_line_loop
 
 .Lincl_done:
+    # Reached EOF. If a definition is still open — a missing ';' at the end of
+    # the file, nearly always — this is a load error, not a success. Returning
+    # success left the caller compiling: every line typed afterwards was
+    # swallowed into the unterminated word, `bye` included, so the session
+    # could only be escaped with Ctrl-D. A line error *inside* a definition
+    # already recovers cleanly; this makes the quiet EOF take the same path.
+    # Only what THIS file left behind counts. A load can begin inside an open
+    # definition (`: foo [ include lib.fs ] ... ;`), and that one is not ours
+    # to close — blaming the file for it, and rolling it back, would destroy
+    # the caller's work. So compare against what was open on entry: a hidden
+    # LATEST that is not the one we inherited means this file opened it, and a
+    # STATE that differs from the caller's means this file left it that way (a
+    # stray `]`). STATE alone would not do even for our own file, since `[`
+    # interprets inside an open definition.
+    testb $F_HIDDEN, 8(%r12)
+    jz .Lincl_chk_state
+    mov incl_entry_latest(%rip), %rax
+    cmp %rax, %r12
+    jne .Lincl_unclosed             # a definition this file opened
+.Lincl_chk_state:
+    mov state(%rip), %rax
+    cmp incl_entry_state(%rip), %rax
+    jne .Lincl_unclosed             # compile state left changed
     # Unmap file
     mov %rbx, %rdi
     mov %rbp, %rsi
@@ -2532,6 +2561,8 @@ forth_included:
 # Shared register epilogue (no source restore — for paths that never ran the
 # line loop, so never saved the source pointers).
 .Lincl_pop_regs:
+    popq incl_entry_state(%rip)     # (reverse order of the entry pushes)
+    popq incl_entry_latest(%rip)
     popq cur_line_off(%rip)         # restore source context saved at entry
     popq cur_source_id(%rip)
     pop %r8
@@ -2571,6 +2602,7 @@ forth_included:
     mov $'\n', %rdi
     call platform_emit
 
+.Lincl_err_tail:
     # Unmap file
     mov %rbx, %rdi
     mov %rbp, %rsi
@@ -2582,6 +2614,73 @@ forth_included:
     popq source_addr(%rip)
     mov $1, %eax                    # return 1 = error
     jmp .Lincl_pop_regs
+
+# The file ended mid-definition. Report it like any other load error
+# ("filename:line: definition not closed (missing ;)"), abandon the partial
+# definition, and return 1 so the caller applies its usual policy — drop to an
+# interactive REPL, exit non-zero for a script.
+.Lincl_unclosed:
+    mov file_name_addr(%rip), %rsi
+    mov file_name_len(%rip), %rdx
+    call platform_write
+    lea incl_unclosed_msg(%rip), %rsi
+    mov $incl_unclosed_msg_len, %rdx
+    call platform_write
+    # Name the word, which is what you actually want to know in a long file —
+    # more use than a line number, which at EOF points one line past the end.
+    # LATEST still holds the unfinished entry (nothing has been rolled back
+    # yet). Name it only if it is OURS (hidden, and not the definition we were
+    # called inside); a zero length means :NONAME, so there is no name either.
+    testb $F_HIDDEN, 8(%r12)
+    jz .Lincl_unclosed_noname
+    mov incl_entry_latest(%rip), %rax
+    cmp %rax, %r12
+    je .Lincl_unclosed_noname
+    movzbl 8(%r12), %edx
+    and $F_LENMASK, %edx
+    jz .Lincl_unclosed_noname
+    push %rdx
+    lea incl_unclosed_sep(%rip), %rsi
+    mov $incl_unclosed_sep_len, %rdx
+    call platform_write
+    pop %rdx
+    lea 10(%r12), %rsi              # Name field: after Link(8)+Flags(1)+Flags2(1)
+    call platform_write
+.Lincl_unclosed_noname:
+    lea incl_unclosed_tail(%rip), %rsi
+    mov $incl_unclosed_tail_len, %rdx
+    call platform_write
+    # Abandon the definition, exactly as the line-error path does. STATE goes
+    # back to what the caller had, not blindly to 0 — a load that began inside
+    # a definition must be handed back still compiling. The dictionary rollback
+    # applies only to a definition THIS file opened: a file that merely left
+    # STATE set (a stray `]`) has nothing to roll back, colon_dsp/saved_here
+    # would be stale from an earlier `:`, and an inherited definition belongs
+    # to the caller.
+    mov incl_entry_state(%rip), %rax
+    mov %rax, state(%rip)
+    testb $F_HIDDEN, 8(%r12)
+    jz .Lincl_err_tail
+    mov incl_entry_latest(%rip), %rax
+    cmp %rax, %r12
+    je .Lincl_err_tail
+    mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
+    mov saved_latest(%rip), %r12    # restore LATEST
+    mov saved_here(%rip), %r13      # restore HERE
+    # A definition spanning lines leaves a half-built header, and the snapshot
+    # points AT it, so the restore above keeps its HIDDEN bit — drop it, or
+    # every later "is a definition open?" test answers yes. But only when it is
+    # OURS: saved_latest can BE the caller's still-open definition, because our
+    # own `:` is what recorded it, and unlinking that deletes work in progress
+    # and leaves `;` staring at a broken chain (verified: segfault).
+    mov incl_entry_latest(%rip), %rax
+    cmp %rax, %r12
+    je .Lincl_unc_kept
+    call drop_partial_header
+.Lincl_unc_kept:
+    movq $0, do_depth(%rip)         # reset DO nesting
+    movq $0, leave_count(%rip)      # reset leave chain
+    jmp .Lincl_err_tail
 
 .Lincl_open_err:
     # Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
@@ -2698,6 +2797,12 @@ forth_included:
 .section .rodata
 incl_err_sep:    .ascii ": ? "
 .equ incl_err_sep_len, . - incl_err_sep
+incl_unclosed_msg: .ascii ": definition not closed"
+.equ incl_unclosed_msg_len, . - incl_unclosed_msg
+incl_unclosed_sep: .ascii ": "
+.equ incl_unclosed_sep_len, . - incl_unclosed_sep
+incl_unclosed_tail: .ascii " (missing ;)\n"
+.equ incl_unclosed_tail_len, . - incl_unclosed_tail
 incl_err_open:   .ascii "Error: cannot open "
 .equ incl_err_open_len, . - incl_err_open
 .text
@@ -2708,6 +2813,14 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ CF_ORIG, 1                     # forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     # backward target (BEGIN)
 .equ CF_LEAVE, 3                    # saved leave count (DO)
+# The CASE family needs three of its own. ENDOF has to tell ITS OWN pending
+# OF-branch from a previous arm's exit branch — without that distinction an
+# extra ENDOF silently patched the wrong one and arms ran each other's bodies.
+# And with everything tagged, ENDOF/ENDCASE can no longer mistake IF's or DO's
+# tag for an address and hand it to patch_forward (which segfaulted).
+.equ CF_CASE, 4                     # CASE sentinel: the bottom of this CASE
+.equ CF_OF, 5                       # OF's pending 0branch, consumed by ENDOF
+.equ CF_ENDOF, 6                    # ENDOF's arm-exit branch, consumed by ENDCASE
 .equ MAX_LEAVES, 8                  # max LEAVE per nesting
 
 # cf_check_tag — verify top of stack matches expected tag.
@@ -2890,8 +3003,9 @@ forth_recurse:
 # CASE ( -- 0 )  Push sentinel on compile-time stack.
 .global forth_case
 forth_case:
-    sub $CELL, %r15
-    movq $0, (%r15)
+    sub $2*CELL, %r15
+    movq $0, CELL(%r15)             # sentinel value (unused — keeps the pair shape)
+    movq $CF_CASE, (%r15)           # tag: ENDCASE stops here
     ret
 
 # OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
@@ -2912,16 +3026,21 @@ forth_of:
     lea forth_drop(%rip), %rax
     call compile_call
     # Push patch address for ENDOF
-    sub $CELL, %r15
-    mov %rbx, (%r15)
+    sub $2*CELL, %r15
+    mov %rbx, CELL(%r15)
+    movq $CF_OF, (%r15)             # tag: only ENDOF may consume this
     pop %rbx
     ret
 
 # ENDOF ( -- )  Compile unconditional branch, patch OF's 0branch.
 .global forth_endof
 forth_endof:
+    mov $CF_OF, %rax
+    call cf_check_tag               # must be OUR arm's OF, not a previous
+                                    #   arm's exit branch and not IF/DO/BEGIN
     push %rbx
     # Pop OF's patch address
+    add $CELL, %r15                 # drop tag
     mov (%r15), %rbx                # save of-patch
     add $CELL, %r15
     # Compile branch (unconditional forward jump)
@@ -2932,8 +3051,9 @@ forth_endof:
     call patch_forward
     # Push branch's patch address for ENDCASE
     pop %rax
-    sub $CELL, %r15
-    mov %rax, (%r15)
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)
+    movq $CF_ENDOF, (%r15)          # tag: only ENDCASE may consume this
     pop %rbx
     ret
 
@@ -2944,15 +3064,28 @@ forth_endcase:
     push %rbx
     lea forth_drop(%rip), %rax
     call compile_call
-    # Patch all ENDOF branches until 0 sentinel
+    # Patch each arm's exit branch, stopping at this CASE's sentinel.
 .Lendcase_loop:
-    mov (%r15), %rax                # pop address
+    # Bound the scan by the definition's control-flow base: with no CASE to
+    # close, walk off the compile-time stack and we'd patch whatever follows.
+    mov colon_dsp(%rip), %rax
+    cmp %rax, %r15
+    jae .Lendcase_bad               # nothing left in this definition
+    mov (%r15), %rax                # tag
+    cmp $CF_CASE, %rax
+    je .Lendcase_done
+    cmp $CF_ENDOF, %rax
+    jne .Lendcase_bad               # IF/DO/BEGIN left this — not ours to close
+    add $CELL, %r15                 # drop tag
+    mov (%r15), %rax                # arm-exit branch address
     add $CELL, %r15
-    test %rax, %rax
-    jz .Lendcase_done
     call patch_forward
     jmp .Lendcase_loop
+.Lendcase_bad:
+    pop %rbx                        # unwind our frame before the longjmp
+    jmp .Lcf_mismatch
 .Lendcase_done:
+    add $2*CELL, %r15               # drop tag + sentinel
     pop %rbx
     ret
 
@@ -5294,6 +5427,14 @@ cur_source_id:                      # source-id being compiled from (0 = REPL/no
     .quad 0
 .global cur_line_off
 cur_line_off:                       # byte offset of the current line within cur source file
+    .quad 0
+# What was already open when the current include started, so its EOF check can
+# tell a definition THIS file left open from one it merely inherited (a load
+# can begin inside a definition: `: foo [ include lib.fs ] ... ;`). Saved and
+# restored around nested includes, like the two above.
+incl_entry_latest:                  # LATEST on entry to forth_included
+    .quad 0
+incl_entry_state:                   # STATE on entry to forth_included
     .quad 0
 .global incl_resolved_addr
 incl_resolved_addr:                 # resolved path that actually opened the current file

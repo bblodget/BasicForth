@@ -399,6 +399,27 @@ assert_error  "if without then"  ": test if ;"                               "un
 assert_error  "begin without until" ": test begin ;"                         "unresolved control flow"
 assert_error  "begin then mismatch" ": test begin then ;"                   "? mismatched-control-flow"
 assert_error  "if until mismatch"  ": test if until ;"                      "? mismatched-control-flow"
+# CASE arm bookkeeping. Before 2026-07-29 the CASE family pushed UNTAGGED
+# values, so ENDOF could not tell its own pending OF-branch from a previous
+# arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
+# other's bodies), and closing a non-CASE construct with a CASE word handed
+# patch_forward a tag value as an address and SEGFAULTED the process — fatal
+# during a file load. Found in the Dark Star port.
+assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "? mismatched-control-flow"
+assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "? mismatched-control-flow"
+assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "? mismatched-control-flow"
+assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "? mismatched-control-flow"
+assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "? mismatched-control-flow"
+assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "? mismatched-control-flow"
+assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "? mismatched-control-flow"
+# an IF opened inside an arm and closed out of order — the likeliest typo
+assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "? mismatched-control-flow"
+assert_error  "endcase without case"  ": bad endcase ;"                    "? mismatched-control-flow"
+assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "? mismatched-control-flow"
+# and the well-formed cases still compile and run, including nested both ways
+assert_output "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
+assert_output "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
 assert_error  "begin outside def" "begin"                                   "compile only"
@@ -919,6 +940,20 @@ else
         printf "  ${GREEN}PASS${NC}  sdl-title: default, pre/post-open, sticky, truncated at 127\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  sdl-title\n    Got: %q\n" "$sdl_ti"; ((failed++))
+    fi
+
+    # Keycode constants must equal the SDLK_* values in SDL_keycode.h -- a
+    # wrong one fails silently at run time (a key that simply never matches).
+    # The named ones are the keys with no character; a printable key is its
+    # own ASCII code, which is what the [char] w comparison checks.
+    sdl_kc=$(printf 'include sdl3.fs\nkey-backspace . key-tab . key-enter . key-esc . key-space .\nkey-left . key-right . key-up . key-down .\nkey-q char q = .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$sdl_kc" | grep -q '8 9 13 27 32' \
+       && printf '%s' "$sdl_kc" | grep -q '1073741904 1073741903 1073741906 1073741905' \
+       && printf '%s' "$sdl_kc" | grep -q '^\-1  ok'; then
+        printf "  ${GREEN}PASS${NC}  SDL keycode constants match SDLK_* (and ASCII for printables)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  SDL keycode constants\n    Got: %q\n" "$sdl_kc"; ((failed++))
     fi
 
     # Cold start: one include of bounce.fs loads the whole stack via require.
@@ -2694,11 +2729,16 @@ fi
 # of every multi-line definition. Exactly one ok for the whole definition.
 qo_out=$(printf ': my-count\n5 0 do\ni .\nloop ;\nmy-count\nbye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
-qo_oks=$(grep -c '^ ok$' <<< "$qo_out")
-if [[ "$qo_oks" == 1 && "$qo_out" == *"0 1 2 3 4  ok"* ]]; then
+# exactly one ok for the definition, on its CLOSING line (a silent line keeps
+# its ok on the command line — see the owed-newline rule in platform_linux.s),
+# and none on the continuation lines.
+qo_oks=$(grep -c ' ok' <<< "$qo_out")
+if [[ "$qo_out" == *"loop ; ok"* && "$qo_out" != *"5 0 do ok"* \
+      && "$qo_out" != *"i . ok"* && "$qo_oks" == 2 \
+      && "$qo_out" == *"0 1 2 3 4  ok"* ]]; then
     printf "  ${GREEN}PASS${NC}  no ok per line while a definition is open\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  ok while compiling (bare oks=%s)\n    Got: %q\n" "$qo_oks" "$qo_out"; ((failed++))
+    printf "  ${RED}FAIL${NC}  ok while compiling (ok lines=%s)\n    Got: %q\n" "$qo_oks" "$qo_out"; ((failed++))
 fi
 
 # An aborted definition must not leave its half-built header as LATEST. The
@@ -2874,6 +2914,18 @@ if [[ "$fr_out" == *"stack underflow"* && "$fr_out" == *"1  ok"* && "$fr_out" ==
     printf "  ${GREEN}PASS${NC}  faulted reload: words before the fault survive, save is file-faithful\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  faulted reload recovery\n    Got: %q  file-same: %q\n" "$fr_out" "$fr_same"; ((failed++))
+fi
+
+# The guard-fault messages write with a RAW syscall from the signal handler,
+# not through platform_write, so they must pay the owed newline themselves —
+# otherwise they land on the command line (`> dropstack underflow`). Reported
+# from a live session 2026-07-29, the day after the owed newline shipped: the
+# two flush points cover every ordinary write, and these two are the exception.
+gm_out=$(printf 'drop\n1 2 + .\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if [[ "$gm_out" == *$'> drop\nstack underflow'* && "$gm_out" != *"dropstack"* ]]; then
+    printf "  ${GREEN}PASS${NC}  guard message starts on its own line (pays the owed newline)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  guard message appended to the command line\n    Got: %q\n" "$gm_out"; ((failed++))
 fi
 
 # A guard fault on the SAME LINE as a forget must not resurrect the forgotten
@@ -4842,6 +4894,131 @@ time q
 ff ."                                                    "FF"
 assert_error  "time unknown word" "time nosuchword"       "time: nosuchword not found"
 assert_output "time without a name" "time"                "time: needs a word name"
+
+# =========================================================================
+section "UNCLOSED DEFINITION AT END OF FILE"
+# =========================================================================
+# A file that stops mid-definition — a missing ';', nearly always — used to
+# load "successfully" and leave the caller compiling: every line typed after
+# it was swallowed into the unterminated word, `bye` included, so the session
+# could only be escaped with Ctrl-D. It is now a load error, recovered exactly
+# the way a line error inside a definition already was.
+unc_dir="$(mktemp -d)"
+printf ': good 1 ;\n: bad 2 3 +\n' > "$unc_dir/unc.fs"
+printf ': ok1 1 ;\n]\n'            > "$unc_dir/brk.fs"
+printf ': fine 4 ;\n'              > "$unc_dir/fine.fs"
+printf '\\ defines nothing\n1 drop\n' > "$unc_dir/nodef.fs"
+printf ': good 1 ;\n: bad\n  2 3 +\n'  > "$unc_dir/multi.fs"
+printf 'include %s/unc.fs\n: outer 5 ;\n' "$unc_dir" > "$unc_dir/nest.fs"
+
+# The report names the unfinished word — in a long file that is the question
+# you actually have. (A line number would point one line past the end.)
+unc_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unc_dir/unc.fs" 2>&1)
+if [[ "$unc_out" == *"definition not closed: bad (missing ;)"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition is reported, and names the word\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition report\n    Got: %q\n" "$unc_out"; ((failed++))
+fi
+# Interactive: the session is usable — STATE back to interpret, definitions
+# completed before the bad one intact, the partial one discarded.
+unr_out=$(printf 'state @ .\ngood .\nbad .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/unc.fs" 2>&1)
+if [[ "$unr_out" == *"0  ok"* && "$unr_out" == *"1  ok"* && "$unr_out" == *"? bad"* \
+      && "$unr_out" == *"Goodbye"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition recovers: interpret mode, partial word gone\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition recovery\n    Got: %q\n" "$unr_out"; ((failed++))
+fi
+# A script (not a terminal, session off) exits non-zero, like any load error.
+printf '' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/unc.fs" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    printf "  ${GREEN}PASS${NC}  unclosed definition exits non-zero as a script\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed definition should exit non-zero\n"; ((failed++))
+fi
+# Same from an interactive include, and the session stays usable afterwards.
+uni_out=$(printf 'include %s/unc.fs\nstate @ .\ngood .\nbye\n' "$unc_dir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1)
+if [[ "$uni_out" == *"definition not closed"* && "$uni_out" == *"0  ok"* \
+      && "$uni_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  include of an unclosed file reports and stays usable\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  include of an unclosed file\n    Got: %q\n" "$uni_out"; ((failed++))
+fi
+# A file that merely leaves STATE set (a stray `]`) has no definition to name
+# and nothing to roll back — it must still report, and must not restore the
+# dictionary from a stale colon_dsp/saved_here.
+unb_out=$(printf 'state @ .\nok1 .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/brk.fs" 2>&1)
+if [[ "$unb_out" == *"definition not closed (missing ;)"* && "$unb_out" == *"0  ok"* \
+      && "$unb_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a stray ] at end of file reports, with no name and no rollback\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stray ] at end of file\n    Got: %q\n" "$unb_out"; ((failed++))
+fi
+# Nested: the inner file reports, and the outer load carries on — same as a
+# line error in a nested file.
+unn_out=$(printf 'outer .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/nest.fs" 2>&1)
+if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"5  ok"* \
+      && "$unn_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load continues\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unclosed nested include\n    Got: %q\n" "$unn_out"; ((failed++))
+fi
+# A load can BEGIN inside an open definition (`: foo [ include lib.fs ] ;`).
+# That definition belongs to the caller, not to the file, so the file must not
+# be blamed for it — and must certainly not roll it back, which would destroy
+# work in progress. Checked with a file that defines nothing, so the only
+# thing open at its EOF is the caller's.
+unp_out=$(printf ': pfoo [ include %s/nodef.fs ] 42 ;\nbye\n' "$unc_dir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth 2>&1)
+if [[ "$unp_out" != *"not closed"* && "$unp_out" != *"underflow"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a load inside an open definition is not blamed for it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  inherited-definition false positive\n    Got: %q\n" "$unp_out"; ((failed++))
+fi
+# A definition spanning LINES leaves a half-built header that the recovery
+# snapshot points AT rather than before, so the rollback alone preserves its
+# HIDDEN bit — and every "is a definition open?" test then answers yes for the
+# rest of the session (ok suppression stuck, Ctrl-D silently dead). The `ok`
+# after recovery is the observable proof the header was dropped.
+unm_out=$(printf 'state @ .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
+    BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/multi.fs" 2>&1)
+if [[ "$unm_out" == *"definition not closed: bad"* && "$unm_out" == *"0  ok"* \
+      && "$unm_out" == *"1  ok"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a multi-line unclosed definition drops its partial header\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  multi-line unclosed partial header\n    Got: %q\n" "$unm_out"; ((failed++))
+fi
+# ...and dropping that header must not reach an INHERITED one. saved_latest
+# can BE the caller's still-open definition, since the included file's own `:`
+# is what recorded it — unlinking that deletes work in progress and leaves `;`
+# with a broken chain (it segfaulted). The file is included twice on purpose:
+# the second load adds no require sentinel, so LATEST is not shifted and
+# saved_latest lands squarely on the caller's open definition.
+unh_dir="$(mktemp -d)"
+printf ': cbad 1\n' > "$unh_dir/inner.fs"
+printf 'include %s/inner.fs\n: keeper 7 ;\n: foo [ include %s/inner.fs ] 42 ;\nkeeper .\n' \
+    "$unh_dir" "$unh_dir" > "$unh_dir/outer.fs"
+unh_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unh_dir/outer.fs" 2>&1)
+rm -rf "$unh_dir"
+if [[ "$unh_out" == *"7"* && "$unh_out" == *"Goodbye"* && "$unh_out" != *"dumped core"* ]]; then
+    printf "  ${GREEN}PASS${NC}  dropping a partial header never unlinks an inherited one\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  inherited header unlinked\n    Got: %q\n" "$unh_out"; ((failed++))
+fi
+# False-positive guard: a well-formed file says nothing and returns success.
+unf_out=$(printf 'fine .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+    timeout 5 $sv_forth "$unc_dir/fine.fs" 2>&1)
+if [[ "$unf_out" == *"4  ok"* && "$unf_out" != *"not closed"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a well-formed file loads silently\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  well-formed file false positive\n    Got: %q\n" "$unf_out"; ((failed++))
+fi
+rm -rf "$unc_dir"
 
 # =========================================================================
 section "BYE"

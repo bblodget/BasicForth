@@ -262,11 +262,49 @@ platform_key:
     jmp platform_bye            # silent exit on EOF
 
 # ---------- EMIT ----------
+# ---------- The owed newline ----------
+# Pressing Enter does not print a newline. Instead the input paths record that
+# one is OWED, and the next thing written to stdout pays it — so a line that
+# prints nothing keeps its ` ok` on the command line, while a line that prints
+# anything still gets its output on a fresh line. See docs/Outer_Interpreter.md.
+#
+# The invariant: ` ok` is the only message allowed to append. Everything else
+# flushes first — output, errors, and prompts. Prompts matter: an empty Enter
+# would otherwise let prompts pile up sideways (`>  >  > `).
+.global pending_nl
+.data
+pending_nl: .quad 0             # non-zero: a newline is owed to stdout
+nl_byte:    .byte 10
+.text
+
+# Pay the owed newline if there is one. Clobbers RAX/RCX/R11 (syscall) only —
+# callers below save whatever else they need.
+pay_pending_nl:
+    cmpq $0, pending_nl(%rip)
+    je .Lpay_done
+    movq $0, pending_nl(%rip)   # clear FIRST: the write below must not recurse
+    push %rdi
+    push %rsi
+    push %rdx
+    mov $STDOUT, %rdi
+    lea nl_byte(%rip), %rsi
+    mov $1, %rdx
+    mov $SYS_write, %rax
+    syscall
+    pop %rdx
+    pop %rsi
+    pop %rdi
+.Lpay_done:
+    ret
+
 # Write one character to stdout.
 # Input: RDI = character to write
 # Called by forth_emit in core.s, which handles the data stack.
 .global platform_emit
 platform_emit:
+    push %rdi
+    call pay_pending_nl
+    pop %rdi
     sub $16, %rsp               # allocate buffer on stack
     movb %dil, 8(%rsp)         # store char byte
     mov $SYS_write, %rax
@@ -283,6 +321,10 @@ platform_emit:
 # callers (e.g. WRITE-FILE) can derive an ior.
 .global platform_write_fd
 platform_write_fd:
+    cmp $STDOUT, %rdi           # only stdout owes a newline; a write to a FILE
+    jne .Lwfd_go                #   must not push a stray byte to the terminal
+    call pay_pending_nl
+.Lwfd_go:
     mov $SYS_write, %rax
     syscall
     ret
@@ -300,6 +342,7 @@ platform_write:
 .global platform_exit
 platform_exit:
     push %rdi                   # preserve status across the calls below
+    call pay_pending_nl         # don't hand the shell a half-finished line
     mov $18, %rdi               # reset text attributes (tty only; no escape
     call platform_text_attr     # bytes reach a piped/redirected stdout)
     call platform_restore_term
@@ -464,7 +507,12 @@ sigsegv_handler:
     ret
 
 .Lsig_underflow:
-    # Print "stack underflow\n"
+    # Print "stack underflow\n". These two messages write with a raw syscall
+    # rather than platform_write, so they must pay the owed newline themselves
+    # or they land on the command line (`> dropstack underflow`). Safe from a
+    # signal handler: pay_pending_nl only touches a global and write(2), and
+    # leaves RBX (the ucontext pointer) alone.
+    call pay_pending_nl
     mov $SYS_write, %rax
     mov $STDOUT, %rdi
     lea msg_underflow(%rip), %rsi
@@ -473,7 +521,8 @@ sigsegv_handler:
     jmp .Lsig_recover
 
 .Lsig_overflow:
-    # Print "stack overflow\n"
+    # Print "stack overflow\n" (see the note above about the owed newline)
+    call pay_pending_nl
     mov $SYS_write, %rax
     mov $STDOUT, %rdi
     lea msg_overflow(%rip), %rsi

@@ -84,6 +84,29 @@ Write one character to stdout.
 
 Implementation: stores the character byte on the stack (in the padding area
 of the saved frame), passes a pointer to that byte to the write syscall.
+Pays any owed newline first (see below).
+
+### The owed newline (`pending_nl`)
+
+Pressing Enter prints no newline. The input paths — `forth_accept` and the
+line editor — instead set `pending_nl`, and **the next write to stdout pays
+it**, emitting the newline before its own bytes.
+
+That is what lets a line which prints nothing keep its ` ok` on the command
+line (`> : foo 1 ;  ok`) while a line that prints anything still gets its
+output on a fresh line. The rule to preserve:
+
+> ` ok` is the only message allowed to append. Everything else flushes
+> first — output, errors, **and prompts**.
+
+Prompts matter: pressing Enter on an empty line leaves a newline owed, and the
+next prompt pays it, so prompts can't pile up sideways (`>  >  > `).
+
+Both write paths honour it — `platform_emit` always (it is stdout by
+definition) and `platform_write_fd` **only when fd = 1**, since a write to a
+file must not push a stray byte to the terminal. `platform_exit` pays a final
+owed newline so the shell prompt never lands on a half-finished line. The flag
+is cleared *before* the flushing write, so paying it cannot recurse.
 
 Called by `forth_emit` in core.s, which pops the character from the data
 stack and passes it in the appropriate register.

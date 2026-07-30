@@ -1008,9 +1008,12 @@ forth_accept:
     B .Laccept_loop
 
 .Laccept_done:
-    // Echo the newline
-    MOV X0, #10
-    BL platform_emit
+    // Do NOT echo the newline — record that one is owed, so the next thing
+    // written pays it. A line that prints nothing then keeps its ` ok` on the
+    // command line. (platform_linux.s has the full rule.)
+    ADR X9, pending_nl
+    MOV X10, #1
+    STR X10, [X9]
 
     // Push result: count
     STR X25, [X19, #-CELL]!
@@ -2581,6 +2584,19 @@ forth_included:
     ADR X9, cur_line_off
     LDR X11, [X9]
     STP X10, X11, [SP, #-16]!
+    // And what was already open before this load began, for the
+    // unclosed-definition check at EOF (same nesting discipline).
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    LDR X11, [X9]
+    STP X10, X11, [SP, #-16]!
+    ADR X9, incl_entry_latest
+    STR X22, [X9]
+    ADR X9, state
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    STR X10, [X9]
 
     // Pop c-addr and u from data stack
     LDR X1, [X19]                   // X1 = u (filename length)
@@ -2772,6 +2788,34 @@ forth_included:
     B .Lincl_line_loop
 
 .Lincl_done:
+    // Reached EOF. If a definition is still open — a missing ';' at the end of
+    // the file, nearly always — this is a load error, not a success. Returning
+    // success left the caller compiling: every line typed afterwards was
+    // swallowed into the unterminated word, `bye` included, so the session
+    // could only be escaped with Ctrl-D. A line error *inside* a definition
+    // already recovers cleanly; this makes the quiet EOF take the same path.
+    // Only what THIS file left behind counts. A load can begin inside an open
+    // definition (`: foo [ include lib.fs ] ... ;`), and that one is not ours
+    // to close — blaming the file for it, and rolling it back, would destroy
+    // the caller's work. So compare against what was open on entry: a hidden
+    // LATEST that is not the one we inherited means this file opened it, and a
+    // STATE that differs from the caller's means this file left it that way (a
+    // stray `]`). STATE alone would not do even for our own file, since `[`
+    // interprets inside an open definition.
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_chk_state
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.NE .Lincl_unclosed            // a definition this file opened
+.Lincl_chk_state:
+    ADR X9, state
+    LDR X10, [X9]
+    ADR X9, incl_entry_state
+    LDR X11, [X9]
+    CMP X10, X11
+    B.NE .Lincl_unclosed            // compile state left changed
     // Unmap file
     MOV X0, X25
     MOV X1, X24
@@ -2793,6 +2837,11 @@ forth_included:
 // Shared register epilogue (no source restore — for paths that never ran the
 // line loop, so never saved the source pointers).
 .Lincl_pop_regs:
+    LDP X10, X11, [SP], #16         // (reverse order of the entry pushes)
+    ADR X9, incl_entry_latest
+    STR X10, [X9]
+    ADR X9, incl_entry_state
+    STR X11, [X9]
     LDP X10, X11, [SP], #16         // restore source context saved at entry
     ADR X9, cur_source_id
     STR X10, [X9]
@@ -2840,6 +2889,7 @@ forth_included:
     MOV X0, #'\n'
     BL platform_emit
 
+.Lincl_err_tail:
     // Unmap file
     MOV X0, X25
     MOV X1, X24
@@ -2857,6 +2907,84 @@ forth_included:
     ADD SP, SP, #32
     MOV X0, #1                      // return 1 = error
     B .Lincl_pop_regs
+
+// The file ended mid-definition. Report it like any other load error, abandon
+// the partial definition, and return 1 so the caller applies its usual policy —
+// drop to an interactive REPL, exit non-zero for a script.
+.Lincl_unclosed:
+    ADR X9, file_name_addr
+    LDR X0, [X9]
+    ADR X9, file_name_len
+    LDR X1, [X9]
+    BL platform_write
+    ADR X0, incl_unclosed_msg
+    MOV X1, #incl_unclosed_msg_len
+    BL platform_write
+    // Name the word, which is what you actually want to know in a long file —
+    // more use than a line number, which at EOF points one line past the end.
+    // LATEST still holds the unfinished entry (nothing has been rolled back
+    // yet). Name it only if it is OURS (hidden, and not the definition we were
+    // called inside); a zero length means :NONAME, so there is no name either.
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_unclosed_noname
+    ADR X9, incl_entry_latest
+    LDR X11, [X9]
+    CMP X11, X22
+    B.EQ .Lincl_unclosed_noname
+    AND W26, W10, #F_LENMASK
+    CBZ W26, .Lincl_unclosed_noname
+    ADR X0, incl_unclosed_sep
+    MOV X1, #incl_unclosed_sep_len
+    BL platform_write
+    ADD X0, X22, #10                // Name field: after Link(8)+Flags(1)+Flags2(1)
+    MOV X1, X26
+    BL platform_write
+.Lincl_unclosed_noname:
+    ADR X0, incl_unclosed_tail
+    MOV X1, #incl_unclosed_tail_len
+    BL platform_write
+    // Abandon the definition, exactly as the line-error path does. STATE goes
+    // back to what the caller had, not blindly to 0 — a load that began inside
+    // a definition must be handed back still compiling. The dictionary rollback
+    // applies only to a definition THIS file opened: a file that merely left
+    // STATE set (a stray `]`) has nothing to roll back, colon_dsp/saved_here
+    // would be stale from an earlier `:`, and an inherited definition belongs
+    // to the caller.
+    ADR X9, incl_entry_state
+    LDR X10, [X9]
+    ADR X9, state
+    STR X10, [X9]
+    LDRB W10, [X22, #8]
+    TST W10, #F_HIDDEN
+    B.EQ .Lincl_err_tail
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.EQ .Lincl_err_tail
+    ADR X9, colon_dsp
+    LDR X19, [X9]                   // restore DSP (drop compile-time stack)
+    ADR X9, saved_here
+    LDR X21, [X9]                   // restore HERE
+    ADR X9, saved_latest
+    LDR X22, [X9]                   // restore LATEST
+    // A definition spanning lines leaves a half-built header, and the snapshot
+    // points AT it, so the restore above keeps its HIDDEN bit — drop it, or
+    // every later "is a definition open?" test answers yes. But only when it is
+    // OURS: saved_latest can BE the caller's still-open definition, because our
+    // own `:` is what recorded it, and unlinking that deletes work in progress
+    // and leaves `;` staring at a broken chain (verified: segfault).
+    ADR X9, incl_entry_latest
+    LDR X10, [X9]
+    CMP X10, X22
+    B.EQ .Lincl_unc_kept
+    DROP_PARTIAL_HEADER
+.Lincl_unc_kept:
+    ADR X9, do_depth
+    STR XZR, [X9]                   // reset DO nesting
+    ADR X9, leave_count
+    STR XZR, [X9]                   // reset leave chain
+    B .Lincl_err_tail
 
 .Lincl_open_err:
     // Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
@@ -3000,6 +3128,12 @@ forth_included:
 .section .rodata
 incl_err_sep:    .ascii ": ? "
 .equ incl_err_sep_len, . - incl_err_sep
+incl_unclosed_msg: .ascii ": definition not closed"
+.equ incl_unclosed_msg_len, . - incl_unclosed_msg
+incl_unclosed_sep: .ascii ": "
+.equ incl_unclosed_sep_len, . - incl_unclosed_sep
+incl_unclosed_tail: .ascii " (missing ;)\n"
+.equ incl_unclosed_tail_len, . - incl_unclosed_tail
 incl_err_open:   .ascii "Error: cannot open "
 .equ incl_err_open_len, . - incl_err_open
 .text
@@ -3008,6 +3142,14 @@ incl_err_open:   .ascii "Error: cannot open "
 .equ CF_ORIG, 1                     // forward reference (IF, ELSE, WHILE)
 .equ CF_DEST, 2                     // backward target (BEGIN)
 .equ CF_LEAVE, 3                    // saved leave count (DO)
+// The CASE family needs three of its own. ENDOF has to tell ITS OWN pending
+// OF-branch from a previous arm's exit branch — without that distinction an
+// extra ENDOF silently patched the wrong one and arms ran each other's bodies.
+// And with everything tagged, ENDOF/ENDCASE can no longer mistake IF's or DO's
+// tag for an address and hand it to patch_forward (which segfaulted).
+.equ CF_CASE, 4                     // CASE sentinel: the bottom of this CASE
+.equ CF_OF, 5                       // OF's pending 0branch, consumed by ENDOF
+.equ CF_ENDOF, 6                    // ENDOF's arm-exit branch, consumed by ENDCASE
 .equ MAX_LEAVES, 8                  // max LEAVE per nesting
 
 // cf_check_tag — verify top of stack matches expected tag.
@@ -3208,7 +3350,9 @@ forth_recurse:
 // CASE ( -- 0 )  Push sentinel on compile-time stack.
 .global forth_case
 forth_case:
-    STR XZR, [X19, #-CELL]!
+    STR XZR, [X19, #-CELL]!         // sentinel value (unused — keeps the shape)
+    MOV X9, #CF_CASE
+    STR X9, [X19, #-CELL]!          // push tag: ENDCASE stops here
     RET
 
 // OF ( x1 x2 -- | x1 )  Compile OVER = 0BRANCH(fwd) DROP.
@@ -3228,8 +3372,10 @@ forth_of:
     // Compile DROP
     ADR X0, forth_drop
     BL compile_call
-    // Push patch address
-    STR X23, [X19, #-CELL]!
+    // Push patch address + tag: only ENDOF may consume this
+    STR X23, [X19, #-CELL]!        // push patch address
+    MOV X9, #CF_OF
+    STR X9, [X19, #-CELL]!         // push tag: only ENDOF may consume this
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -3237,9 +3383,15 @@ forth_of:
 // ENDOF ( -- )  Compile branch, patch OF's 0branch.
 .global forth_endof
 forth_endof:
+    MOV X0, #CF_OF
+    STP X29, X30, [SP, #-16]!
+    BL cf_check_tag                // must be OUR arm's OF, not a previous
+                                   //   arm's exit branch and not IF/DO/BEGIN
+    LDP X29, X30, [SP], #16
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
-    // Pop OF's patch address
+    // Pop OF's patch address (tag first)
+    ADD X19, X19, #CELL            // drop tag
     LDR X23, [X19], #CELL
     // Compile unconditional branch
     BL compile_branch              // X0 = branch patch address
@@ -3247,8 +3399,10 @@ forth_endof:
     // Patch OF's 0branch to HERE
     MOV X0, X23
     BL patch_forward
-    // Push branch's patch address for ENDCASE
-    STR X24, [X19, #-CELL]!
+    // Push branch's patch address + tag for ENDCASE
+    STR X24, [X19, #-CELL]!        // push branch patch address
+    MOV X9, #CF_ENDOF
+    STR X9, [X19, #-CELL]!         // push tag: only ENDCASE may consume this
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
     RET
@@ -3261,11 +3415,26 @@ forth_endcase:
     ADR X0, forth_drop
     BL compile_call
 .Lendcase_loop:
-    LDR X0, [X19], #CELL          // pop address
-    CBZ X0, .Lendcase_done
+    // Bound the scan by the definition's control-flow base: with no CASE to
+    // close, walk off the compile-time stack and we'd patch whatever follows.
+    ADR X9, colon_dsp
+    LDR X9, [X9]
+    CMP X19, X9
+    B.HS .Lendcase_bad             // nothing left in this definition
+    LDR X9, [X19]                  // tag
+    CMP X9, #CF_CASE
+    B.EQ .Lendcase_done
+    CMP X9, #CF_ENDOF
+    B.NE .Lendcase_bad             // IF/DO/BEGIN left this — not ours to close
+    ADD X19, X19, #CELL            // drop tag
+    LDR X0, [X19], #CELL           // arm-exit branch address
     BL patch_forward
     B .Lendcase_loop
+.Lendcase_bad:
+    LDP X29, X30, [SP], #16        // unwind our frame before the longjmp
+    B .Lcf_mismatch
 .Lendcase_done:
+    ADD X19, X19, #2*CELL          // drop tag + sentinel
     LDP X29, X30, [SP], #16
     RET
 
@@ -5794,6 +5963,14 @@ cur_source_id:                      // source-id being compiled from (0 = REPL/n
     .quad 0
 .global cur_line_off
 cur_line_off:                       // byte offset of the current line within cur source file
+    .quad 0
+// What was already open when the current include started, so its EOF check can
+// tell a definition THIS file left open from one it merely inherited (a load
+// can begin inside a definition: `: foo [ include lib.fs ] ... ;`). Saved and
+// restored around nested includes, like the two above.
+incl_entry_latest:                  // LATEST on entry to forth_included
+    .quad 0
+incl_entry_state:                   // STATE on entry to forth_included
     .quad 0
 .global incl_resolved_addr
 incl_resolved_addr:                 // resolved path that actually opened the current file

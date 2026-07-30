@@ -7,6 +7,105 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ## Known Bugs
 
+- [x] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
+  `IF`/`DO`/`BEGIN` segfaults.** FIXED 2026-07-29 (branch staging-debug).
+  Found 2026-07-29 during the Dark Star port:
+  a stray `ENDOF` in a `DecodeLevel` dispatch loaded without complaint and
+  surfaced as a `stack underflow` at run time, several steps from the cause.
+  **Pre-existing on `main` (`2b68ee6`) — verified in a scratch worktree, so
+  this is not from the staging branches.**
+
+  Two separate faults. First, an unbalanced arm compiles quietly and emits
+  **wrong code** — not merely a leak. The branch targets are mis-resolved, so
+  an arm runs another arm's body and the case value is never consumed:
+
+      : bad  case 0 of 11 endof 1 of 22 endof endof endcase ;   \ extra ENDOF
+       ok
+      9 9 0 bad .s     <3> 9 9 11          <- correct by luck
+      9 9 1 bad .s     <5> 9 9 11 9 9      <- ran arm ONE, and leaked
+      9 9 5 bad .s     <8> 9 9 11 9 9 9 9 5
+
+  An `OF` with no `ENDOF` is equally quiet (`: bad2 case 0 of 11 endof of
+  endcase ;`, and `: bad3 case 0 of 11 endcase ;`).
+
+  Second, closing a non-`CASE` construct with a `CASE` word **segfaults the
+  process** — not an abort, a core dump, so a file load takes the session
+  with it:
+
+      : a6  if 1 endcase ;       Segmentation fault
+      : a7  if 1 endof ;         Segmentation fault
+      : a8  do 1 endcase ;       Segmentation fault
+      : a9  begin 1 endcase ;    Segmentation fault
+
+  The checker already exists and covers everything else, which is what makes
+  this look like an oversight rather than a design gap — `: t if ;` and
+  `: t begin ;` give `unresolved control flow`, `: t if until ;` gives
+  `? mismatched-control-flow`, and even a `CASE` missing its `ENDCASE`
+  (`: t case 0 of 11 endof ;`) is caught. It is only the arm-level bookkeeping
+  *inside* `CASE` that goes unchecked.
+
+  Likely root cause and fix: `ENDOF`/`ENDCASE` cannot tell an arm's pending
+  branch address from the `CASE` marker itself, so they resolve whatever is on
+  the control-flow stack and walk off it when the type is wrong. Making the
+  `CASE` marker a distinguishable tagged value — the way the `IF`/`BEGIN`
+  mismatch check already distinguishes its own — should fix the silent
+  mis-resolution and the segfault together. Worth checking whether the
+  `mismatched-control-flow` machinery can simply be extended to cover the
+  `CASE` words rather than adding a parallel one.
+
+  **The diagnosis held, with one correction: it needs THREE tags, not one.**
+  The whole family was untagged — `CASE` pushed a bare `0` sentinel and
+  `OF`/`ENDOF` pushed raw addresses — while every other control-flow word
+  pushes an `(address, tag)` pair. So:
+  - `CF_CASE` (sentinel), `CF_OF` (consumed only by `ENDOF`), `CF_ENDOF`
+    (consumed only by `ENDCASE`). One `CASE`-marker tag would NOT have caught
+    the extra-`ENDOF` case, because that bug is `ENDOF` failing to tell its own
+    pending `OF` branch from a previous arm's exit branch — a distinction only
+    two separate arm tags can make.
+  - The segfaults were exactly `patch_forward` receiving a TAG as an address
+    (`if 1 endcase` → writes to address 1, `do … endcase` → address 3). With
+    everything tagged they are checked, never patched.
+  - `ENDCASE`'s scan is now bounded by `colon_dsp`, so a missing `CASE` cannot
+    walk off the compile-time stack. That upgrades `: bad endcase ;` from
+    "the underflow guard happens to catch it" to a proper mismatch error.
+  - Reuses the existing `cf_check_tag` / `mismatched-control-flow` machinery as
+    hoped; no parallel checker.
+
+  Also found while reviewing, beyond the original report: `: bad case 1 of if 2
+  endof then endcase ;` — an `IF` opened inside an arm and closed out of order
+  — was a fifth segfault shape, and the likeliest of them to be typed for
+  real. The *unpaired* forms (`endcase` alone, `of … endof` with no `CASE`)
+  were never silent: they hit the stack-underflow guard and the session
+  survived. 12 tests added; well-formed nesting both ways (`CASE` in `IF`,
+  `IF` in an arm) is asserted alongside, since the first ARM64 attempt broke
+  *correct* code rather than letting broken code through — `STP` pushed the
+  pair with the tag below the value. Both arches now use the identical
+  two-`STR` push idiom `IF` uses.
+
+- [ ] **A control-flow closer with nothing open reports `stack underflow`, not
+  `mismatched-control-flow`.** Noticed 2026-07-29 while fixing the `CASE` bug
+  above, and deliberately left alone there because it is not a `CASE` problem —
+  it is uniform across the family:
+
+      : q1 then ;      stack underflow
+      : q2 until ;     stack underflow
+      : q3 repeat ;    stack underflow
+      : q4 loop ;      stack underflow
+      : q5 endof ;     stack underflow
+
+  `cf_check_tag` reads the top of the compile-time stack before checking
+  anything, so with nothing pushed it touches the guard page and the fault
+  handler reports first. Survivable and honest — the session recovers, no
+  wrong code is emitted — but it names the wrong cause, and a beginner who
+  types `then` with no `if` gets a message about the data stack.
+
+  Fix: bound `cf_check_tag` by `colon_dsp` the way `ENDCASE` now is, and
+  report `mismatched-control-flow` when the definition has no open construct.
+  One place, both arches; the reason it wasn't folded into the `CASE` fix is
+  that it changes the message for five existing words and their tests. Worth
+  checking `: q1 then ;` at the prompt *and* mid-file, since the file path is
+  where a wrong diagnosis costs the most.
+
 - [ ] **`:noname` inside a colon definition wedges a file load.** Found
   2026-07-25 during the interaction sweep, while checking a Codex review
   claim. `:noname` nested in an open definition is not supported — fair
@@ -38,6 +137,77 @@ completed. See Planning.md for high-level vision and design decisions.
   refuses `:noname` for exactly this reason (see CHANGELOG, `:e refuses a body
   that opens its own definition`); that guard is a patch over this hole at one
   entry point, not a fix for it.
+
+  **The second half is FIXED 2026-07-26 (branch load-unclosed)** — and it
+  turned out the `:noname` route was the exotic way in. The everyday one is a
+  **missing `;` at the end of a file**, which loaded "successfully" and left
+  the caller compiling: every line typed afterwards was swallowed into the
+  unterminated word, `bye` included, so the session could only be escaped with
+  Ctrl-D. `forth_included` only ever reported errors raised *per line*, and
+  "the file just stopped" is not one.
+  - `.Lincl_done` now checks before returning success, in both arches. The
+    test is `state ≠ 0` **or** LATEST still hidden — STATE alone would miss a
+    file ending `: foo [`, since `[` interprets inside an open definition (see
+    the Ctrl-D work). On a hit it reports, abandons the definition with the
+    same six-store recovery the line-error path already uses, and returns 1,
+    so main.s's existing policy applies unchanged: drop to a now-usable REPL
+    when interactive, exit non-zero for a script.
+  - The report **names the unfinished word** (`unc.fs: definition not closed:
+    bad (missing ;)`) rather than giving a line number, which at EOF points
+    one line past the end. In a long file the name is the question you have.
+  - **A load can begin inside an open definition** (`: foo [ include lib.fs ]
+    42 ;`), and that one belongs to the caller. The first version blamed the
+    file for it *and rolled it back*, destroying work in progress — worse than
+    the bug being fixed (caught by the Codex stop gate). So `forth_included`
+    now saves LATEST and STATE on entry, with the same nesting discipline as
+    the source context, and fires only when the file itself left something
+    open. Recovery is scoped to match: STATE is restored to the caller's
+    value, not zeroed, and the dictionary rolls back only for a definition
+    this file opened — a stray `]` has nothing to roll back, and
+    `colon_dsp`/`saved_here` would be stale from some earlier `:`.
+  - +8 integration tests both arches: the report, interactive recovery,
+    non-zero script exit, an interactive `include`, the stray `]`, an unclosed
+    *nested* include (inner reports, outer load continues), a load begun inside
+    an open definition, and a well-formed file as the false-positive guard.
+
+  - **Not** fixed here, and worth knowing why: a nested file's `:` overwrites
+    `saved_latest`/`saved_here`/`colon_dsp`, so an outer file's rollback can
+    restore the wrong point and leave its unfinished definition behind,
+    hidden. The obvious fix — save and restore them per load, like the source
+    context — is **wrong**, and was tried and reverted. Those three are not a
+    per-definition snapshot; they are the global fault-recovery anchor, which
+    `;` deliberately moves *forward* after every completed definition ("a
+    completed definition is a consistent recovery point", forth_semicolon).
+    Rewinding it per load would roll a later guard fault back past everything
+    the load defined. Including `colon_dsp` is worse still: the rewind spans
+    the `core.fs` load itself, so the next `abort` restores a data stack
+    pointer of 0 and the process segfaults — 7 integration tests caught it.
+    A real fix has to distinguish "anchor" from "current definition's
+    rollback point", which today are the same three variables.
+
+- [ ] **`include` inside `[ ... ]` mid-definition leaves the outer word
+  undefined**, and can strand a hidden entry. Pre-existing (verified against a
+  build without the unclosed-definition work): the require sentinel
+  `(inc:<name>)` is defined by the Forth `included` wrapper *after* the load
+  returns — so inside `: foo [ include lib.fs ] 42 ;` it lands between `foo`
+  and the chain end, LATEST becomes the sentinel, and `;` unhides *that*
+  instead of `foo`. `foo` stays hidden and unreachable, and its `:` also
+  re-clobbers `saved_latest`, so a later rollback restores the wrong point.
+  Reproduce with a *well-formed* library, which shows it has nothing to do
+  with unclosed definitions:
+
+      \ out3.fs
+      : keeper 7 ;
+      : foo [ include fine.fs ] 42 ;
+      \ keeper . -> 7    fine . -> 4    foo . -> ? foo
+
+  Fix directions: define the sentinel before the load rather than after (it
+  would need un-defining on failure), or record the load some way that does
+  not touch the dictionary while a definition is open. Worth settling before
+  anything else leans on `saved_latest` surviving a nested load.
+
+  Still open, the first half: `:noname` in compile state should say so rather
+  than underflow.
 
 - [x] **A stray `;` at the prompt was accepted in silence.**
   FIXED 2026-07-26 (branch semicolon-guard). Spotted in a user transcript
@@ -761,6 +931,101 @@ docs/Graphics.md for the API.
 ---
 
 ## Future / Usability
+
+- [x] **REPL "option B": emit the newline lazily, before the first byte of
+  output — DONE 2026-07-28** (branch lazy-newline). The one untried idea from
+  the 2026-07-26 format review; Brandon chose to build it the same day rather
+  than park it. Today the line editor emits a newline the moment you press
+  Enter, so a line that prints nothing still costs two screen lines: the
+  command, then ` ok` alone. Instead, set a *pending newline* on Enter and
+  let the first output byte flush it:
+
+      > : hello ." Hello World" ;  ok    <- silent line: one line, not two
+      > hello
+      Hello World ok
+      > list
+      : row ( n -- ) 8 .r cr ;           <- listing NOT jammed onto the command
+      …
+       ok
+
+  Why it is the interesting one: it buys gforth's compactness **without**
+  the jamming that killed the straight-inline experiment, because the
+  newline comes from the system rather than from every display word having
+  to start with `cr`. Nothing changes about how anyone writes Forth here —
+  no leading-`cr` sweep, no change to the `cr`-goes-last convention.
+
+  **It changes exactly one case.** ` ok` still appends wherever the cursor
+  is; all that moves is *when* the newline after your input is emitted:
+
+  | line | today | option B |
+  |------|-------|----------|
+  | silent (`: foo 1 ;`) | `> : foo 1 ;` + ` ok` on its own line | `> : foo 1 ;  ok` |
+  | output ending in `cr` (`hello`) | output line, then ` ok` | identical |
+  | output not ending in `cr` (`6 `) | `6  ok` | identical |
+
+  "Silent" is broader than one-line definitions, which is why it earns its
+  keep: `variable`/`constant`/`create`/`value`, `to`/`+to`, a successful
+  `include`/`require`, lines that only push — **and the closing line of a
+  multi-line definition**, which is the one line quiet-compile still spends
+  an ` ok` on. A four-line definition goes 5 screen lines → 4, on top of the
+  9 → 5 quiet-compile already bought.
+
+  - **Mechanism**: one flag. The REPL arms it after reading a line, and the
+    first thing written afterwards flushes it. The invariant to hold onto:
+    **` ok` is the only message allowed to append — everything else flushes
+    first.** Output flushes, errors flush, *and prompts flush*. That last
+    one is what prevents the `>  >  > ` sideways pile-up the straight-inline
+    experiment produced: press Enter on an empty line and the next prompt
+    does the flushing, so it still lands on a fresh line.
+  - **The risk is completeness, not design.** There are at least three write
+    paths (`platform_emit`, `platform_write`, `platform_write_fd`) and both
+    the interactive and piped input paths; any one that skips the check
+    yields `Hello World> ` jamming. Enumerate every caller before patching —
+    the same shape as the four-abort-path bug of 2026-07-27, where fixing
+    them one at a time kept half-working. Note `platform_write_fd` must
+    flush only for stdout: a write to a *file* must not emit a stray
+    newline to the terminal.
+  - **Errors: let them flush** (so `? name` keeps its own line, exactly as
+    today). Then `tests/test_lessons.py` needs no change — its
+    `unexpected()` skips lines starting with `> `, and with errors flushing
+    they never land there. The compact alternative
+    (`> nosuchword ? nosuchword`) reads well but *would* require fixing that
+    attribution first, or lesson rot goes undetected.
+  - Integration expectations are mostly unaffected: the ~75 `assert_output`
+    cases ending in `"N  ok"` all produce output, so they behave as before.
+    Silent-line cases move from a bare ` ok` line to `<command>  ok`.
+
+  **As built.** The prediction held: exactly one test in 843 changed — the
+  quiet-compile case that counted bare ` ok` lines, which now asserts the ok
+  lands on the definition's closing line (`loop ; ok`) and on neither
+  continuation line. Errors flush, so `test_lessons.py` needed no change.
+  Implementation is a single `pending_nl` flag in platform_linux.s, paid by
+  `platform_emit` (always) and `platform_write_fd` (**fd 1 only** — a write to
+  a file must not push a byte to the terminal), plus `platform_exit` so the
+  shell prompt never lands on a half-finished line. The flag is cleared before
+  the flushing write so paying it cannot recurse. Set by `forth_accept` (which
+  covers direct `ACCEPT` callers) and by the REPL after the line-editor hook;
+  `(edit-line)` and the Ctrl-D `bye` path stopped emitting their own newline.
+  Gotcha that cost a red run: core.s now references a symbol owned by
+  platform_linux.s, so the C unit-test harness fails to LINK until
+  `pending_nl` is stubbed in **both** `tests/test_helper_*.s` — the standing
+  rule for any core.s reference to a platform symbol.
+
+- **DECIDED 2026-07-28: keep ` ok`.** Removing it entirely was considered —
+  the symmetry argument is real (gforth reasoned that an `ok` makes a prompt
+  redundant; the reverse holds too, and printing *both* is the one redundant
+  combination). Rejected because `ok` is the most recognizable trait of a
+  Forth REPL: a `> ` prompt reads as house style, no `ok` at all reads as
+  "not a Forth". Recorded so it is not re-litigated. Two notes if it ever
+  comes back: (1) it needs option B's flag anyway, or output without a
+  trailing newline jams into the next prompt (`Hello World> `); (2) the
+  version that would pay for itself is dropping `ok` *and* showing stack
+  depth in the prompt — `> ` when clean, `<2> ` when two items are stranded
+  — which is Forth-literate rather than Forth-ignorant, cheap in asm
+  (`(sp0 - dsp)/8`), and surfaces the leftover-stack bug that bites
+  beginners. Also worth knowing for the record: classic BASIC printed `Ok`
+  with **no** prompt character, so dropping `ok` is shell/Python-like, not
+  BASIC-like.
 
 - [x] **Lesson replay suite — DONE 2026-07-25** (branch lesson-fixes):
   `make run-lessons` (`tests/test_lessons.py`, both arches) replays every
@@ -1852,11 +2117,61 @@ smaller risk surface.
 
 ## Future / Hardening
 
+- [ ] **A stale binary against a new `core.fs` now produces WRONG OUTPUT, not
+  an obvious failure — make the mismatch loud.** Found the hard way
+  2026-07-29: Brandon's Dark Star session on `staging` printed everything
+  appended to the command line —
+
+      > helloHello World ok
+      > 1 2 + .3  ok
+      > stackclear? stackclear
+
+  Reproduced exactly by pairing **main's binary with staging's core.fs**, so
+  the diagnosis is certain. Cause: the owed-newline change (2026-07-28) split
+  one behaviour across both halves — `core.fs`'s line editor stopped emitting
+  the newline on Enter, and the binary took over paying it in `platform_emit`
+  / `platform_write_fd`. Neither half is wrong alone; mixed versions mean
+  *nobody* emits it.
+
+  Two properties make this nastier than the old "stale binary lacks a
+  feature" case:
+  - **It only shows interactively.** A pipe uses `forth_accept` inside the
+    binary, and the old one still echoes the newline — so every suite passes
+    while the terminal is visibly broken. Our tests structurally cannot catch
+    it.
+  - **Three worktrees make it easy to hit.** Merging into `staging` updates
+    `src/forth/core.fs` in that tree, but the binary there is whatever `make`
+    last produced; `PATH` and `BASICFORTH_PATH` can even come from different
+    checkouts.
+
+  Diagnosis today is manual: `basicforth -v` reports `git describe` **at
+  build time**, so compare it with `git describe` in the tree
+  `BASICFORTH_PATH` points at.
+
+  Fix worth building: **a protocol number, not a version string.** The binary
+  exposes a small integer (bump it only when the core.fs↔binary contract
+  changes — the owed newline would have been bump #1); `core.fs` asserts it
+  is at least what this core.fs expects and otherwise prints one clear line
+  ("basicforth: binary is older than core.fs — run make"). One comparison,
+  one message, no build-system cleverness, and it stays quiet forever when
+  the two match. Comparing full version strings is the wrong shape: they
+  differ harmlessly all the time (dirty trees, different tags).
+
 - [ ] Replace `ld -N` with `mprotect` on dict_space at startup
   - Currently we use OMAGIC (`ld -N`) to make all segments RWX so compiled
     code in dict_space can execute.  The proper approach is to keep normal
     segment permissions and call `SYS_mprotect` on just the dict_space pages
     to add PROT_EXEC.  See BareMetalForth Lesson 37 for background.
+  - **There is now a performance argument too, not just a hygiene one**
+    (measured 2026-07-29, written up in docs/Performance.md): storing into
+    a `variable` in a tight loop costs ~28 ns against ~2 ns for `to` on a
+    `value`, despite compiling to the same three calls. The store lands in
+    a cell adjacent to the stub being executed, in a region that is both
+    writable and executable — the pattern a CPU treats as self-modifying
+    code, paid for with pipeline machine clears. Moving the store target to
+    the heap recovered most of the gap, which supports the mechanism.
+    Separating code from data pages is exactly what would remove it, so
+    this item may be worth more than its "proper approach" framing suggests.
 - [ ] Guard page after dict_space for dictionary overflow detection
   - Currently dict_space uses a software CHECK_DICT macro.  A guard page
     would provide zero-cost hardware detection, consistent with the data

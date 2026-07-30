@@ -360,3 +360,12 @@ forth_version_str:
 .global platform_err_not_found
 platform_err_not_found: .quad -2
 .text
+
+# Data symbol owned by platform_linux.s in the real binary: the owed-newline
+# flag ACCEPT sets instead of echoing a newline. Writable here — forth_accept
+# stores to it — and never read, since this harness has no terminal.
+.data
+.balign 8
+.global pending_nl
+pending_nl: .quad 0
+.text

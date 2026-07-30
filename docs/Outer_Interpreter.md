@@ -24,7 +24,8 @@ _start
         ├── If script_running still set (a fault recovered here) → exit non-zero
         ├── Save rp0, saved_latest, saved_here (for error recovery)
         ├── Print "> " prompt
-        ├── ACCEPT a line into input buffer
+        ├── ACCEPT a line into input buffer (Enter leaves a newline OWED;
+        │     the next write to stdout pays it — see below)
         ├── Empty line? → re-prompt
         ├── Set source_addr, source_len, to_in
         ├── DROP the count
@@ -71,6 +72,28 @@ multi-line display — `list`, `see`, `help`, `.module` — began on the command
 line (`> list : row ( n -- ) 8 .r cr ;`), bare Enter piled prompts sideways
 (`>  >  > `), and errors landed on the echoed line where the lesson harness
 does not look for them.
+
+What we kept from that review is the **owed newline** (2026-07-28): Enter
+prints no newline, and the next write to stdout pays it. A line that prints
+nothing therefore keeps its ` ok` on the command line —
+
+    > : foo 1 ;  ok
+    > variable v  ok
+    > 1 2 3 + + .
+    6  ok
+
+— while anything that prints still starts on a fresh line, because its first
+byte pays the debt. It changes exactly one case (the silent line) and asks
+nothing of how you write Forth: no leading-`cr` sweep, no display word needing
+special care. The rule that makes it safe is that ` ok` is the only message
+allowed to append; output, errors and prompts all flush first. See
+docs/Platform_Layer.md for where the flag lives.
+
+The other follow-up from that review — dropping ` ok` altogether — was decided
+against on 2026-07-28: it is the most recognizable trait of a Forth REPL, and
+a prompt reads as house style where its absence reads as a different language.
+docs/TODO.md keeps the reasoning, including the variant that would pay for
+itself (drop `ok`, show stack depth in the prompt).
 
 ### Why `cr` goes *after* your text here
 

@@ -2,6 +2,114 @@
 
 ## Unreleased
 
+### Fixed: unbalanced `CASE` arms compiled silently, and mixing `CASE` with `IF`/`DO`/`BEGIN` segfaulted
+- **An extra `ENDOF` emitted wrong code without a word of complaint.** Branch
+  targets were mis-resolved, so an arm ran another arm's body and the case
+  value was never consumed — a `stack underflow` surfaced later, several steps
+  from the cause. Found during the Dark Star port; pre-existing, not from the
+  recent branches.
+- **Closing a non-`CASE` construct with a `CASE` word crashed the process** —
+  `: bad if 1 endcase ;` and friends segfaulted rather than aborting, so a file
+  load took the session with it. Same for an `IF` opened inside an arm and
+  closed out of order (`case 1 of if 2 endof then endcase`), which is the
+  likeliest of these to be typed by accident.
+- Cause: the `CASE` family pushed **untagged** values — a bare `0` sentinel and
+  raw patch addresses — while every other control-flow word pushes an
+  `(address, tag)` pair. `ENDOF` therefore couldn't tell its own pending branch
+  from a previous arm's, and both `ENDOF` and `ENDCASE` could hand a *tag* to
+  the patcher as an address (`if 1 endcase` wrote to address 1).
+- Now tagged with three of its own — sentinel, pending-`OF`, pending-`ENDOF` —
+  checked through the existing `mismatched-control-flow` machinery, with
+  `ENDCASE`'s scan bounded so a missing `CASE` can't walk off the compile-time
+  stack. Every malformed shape aborts cleanly on both architectures; correct
+  code, including nesting either way, is unaffected. 12 tests.
+
+### Fixed: a missing `;` at the end of a file wedged the session
+
+- **A file that stops mid-definition is now a load error.** It used to load
+  *successfully* — `forth_included` only reported errors raised per line, and
+  "the file just stopped" is not one — so the caller was left compiling.
+  Everything typed afterwards was swallowed into the unterminated word,
+  **`bye` included**, which meant a session could only be escaped with Ctrl-D.
+  The trigger is a missing `;` at the end of a file, about as ordinary a
+  mistake as exists.
+- The recovery already existed and already worked: a line error *inside* a
+  definition resets STATE, drops the compile-time stack and rolls HERE and
+  LATEST back. The quiet EOF simply never checked. It does now, and takes
+  that same path — so an interactive session drops to a REPL that works, and
+  a script exits non-zero like any other failing Unix utility.
+- **The report names the unfinished word** — `game.fs: definition not closed:
+  draw-ship (missing ;)` — rather than a line number, which at EOF points one
+  line past the end of the file. In a long file the name is the question you
+  actually have.
+- **Only what the file itself left open counts.** A load can *begin* inside an
+  open definition — `: foo [ include lib.fs ] 42 ;` — and that definition
+  belongs to the caller. So the check compares against what was open when the
+  load started (saved and restored around nested includes, like the source
+  context already is): a hidden LATEST that differs from the inherited one
+  means this file opened it, and a STATE that differs from the caller's means
+  this file left it changed. STATE alone would not do even for the file's own
+  definition, since `[` interprets inside an open one.
+- Recovery is scoped the same way: STATE is restored to **what the caller
+  had**, not blindly to zero, and the dictionary is rolled back only for a
+  definition this file opened — a stray `]` has nothing to roll back and the
+  saved rollback registers would be stale from an earlier `:`. An unclosed
+  *nested* include reports and lets the outer load continue, matching how a
+  line error in a nested file already behaves.
+- What it deliberately does **not** touch: `saved_latest`/`saved_here`/
+  `colon_dsp`, the rollback anchor. A nested file's `:` does overwrite it, so
+  an outer file's rollback can restore the wrong point — but those are not
+  per-definition snapshots, they are the *global fault-recovery anchor*, moved
+  forward by every completed `;` on purpose ("a completed definition is a
+  consistent recovery point"). Saving and restoring them per load rewinds that
+  anchor past everything the load defined; with `colon_dsp` included it also
+  rewinds across the `core.fs` load itself, so the next `abort` sets the data
+  stack pointer to zero and the process dies. Tried, measured, reverted — the
+  real defect is recorded in docs/TODO.md instead.
+
+### A line that prints nothing keeps its ` ok` on the command line
+- **Enter no longer prints a newline — one is *owed*, and the next write to
+  stdout pays it.** So a silent line closes on the line you typed:
+
+      > : foo 1 ;  ok
+      > variable v  ok
+      > 1 2 3 + + .
+      6  ok
+
+  Anything that prints still starts on a fresh line, because its first byte
+  pays the debt. This changes exactly one case, the silent line — every line
+  that produces output behaves precisely as before.
+- "Silent" is broader than one-line definitions: `variable`/`constant`/
+  `create`/`value`, `to`/`+to`, a successful `include`/`require`, lines that
+  only push — **and the closing line of a multi-line definition**. A
+  four-line definition now takes 4 screen lines; before yesterday's
+  quiet-compile it took 9.
+- The rule that keeps it safe: **` ok` is the only message allowed to append.
+  Output, errors, and prompts all flush first.** Prompts matter — Enter on an
+  empty line leaves a newline owed and the next prompt pays it, so prompts
+  can't pile up sideways (`>  >  > `), which is what sank the inline-format
+  experiment two days ago. Errors keep their own line, so nothing about error
+  reporting or the lesson harness changes.
+- Implementation is one flag in the platform layer, paid by `platform_emit`
+  and by `platform_write_fd` **for stdout only** (a write to a *file* must not
+  push a stray byte to the terminal), plus `platform_exit` so the shell prompt
+  never lands on a half-finished line. Nothing changes about how you write
+  Forth: no leading-`cr` convention, no display word needing special care.
+### `key-enter`, `key-tab`, `key-backspace`
+- **Three more SDL keycode constants.** The list in `sdl3.fs` was whatever
+  `bounce.fs` needed — esc, space, q, arrows — so a game wanting Enter had to
+  find `SDLK_RETURN` in the SDL headers and write `$0d`. Enter is about as
+  common as Esc in a game loop; tab and backspace come along rather than be
+  fetched one at a time later.
+- **`help sdl3` now says the thing that was missing**: a printable key needs
+  no constant at all, because SDL's keycode for it *is* its ASCII code —
+  `[char] w` names the W key, and `key-q` was only `[char] q` spelled the long
+  way. The arrows are what the list exists for: no ASCII value, so SDL puts
+  them at `$4000004f` and up where you can only reach them by name.
+- A test pins all nine against `SDL_keycode.h`, plus `key-q = char q`. A wrong
+  keycode fails silently at run time — a key that simply never matches — so
+  it is worth one assertion.
+
 ### No ` ok` while a definition is open
 - **A multi-line definition no longer prints ` ok` after every line.** The
   `... ` continuation prompt already says "still compiling", so the ok was

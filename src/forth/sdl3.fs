@@ -74,10 +74,16 @@ $210 constant ev-close               \ SDL_EVENT_WINDOW_CLOSE_REQUESTED
 $300 constant ev-keydown             \ SDL_EVENT_KEY_DOWN
 $301 constant ev-keyup               \ SDL_EVENT_KEY_UP
 
-$1b       constant key-esc           \ SDLK_* keycodes
+\ SDLK_* keycodes, for the keys that have no character to name them by. A
+\ printable key needs nothing from this list: SDL's keycode for it IS its
+\ ASCII code, so `[char] w` and `key-q` are the same kind of number.
+$08       constant key-backspace
+$09       constant key-tab
+$0d       constant key-enter         \ SDLK_RETURN
+$1b       constant key-esc
 $20       constant key-space
-$71       constant key-q
-$40000050 constant key-left
+$71       constant key-q             \ = [char] q; kept, bounce.fs uses it
+$40000050 constant key-left          \ arrows are outside ASCII, so by number
 $4000004f constant key-right
 $40000052 constant key-up
 $40000051 constant key-down
