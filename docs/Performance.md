@@ -160,6 +160,47 @@ machine, same compiler: choosing the right loop structure is worth 9×. No
 amount of cleverness inside the body recovers what the wrong loop shape
 costs.
 
+## Storing into a `value` vs a `variable`
+
+Measured 2026-07-29, same laptop, 20×10^6 iterations, three runs each
+(spread under 15%). The loop body is one store or one read:
+
+    read a value      ( : rval 0 do n drop loop ; )      0.55 s   ~11 ns
+    read a variable   ( : rvar 0 do v @ drop loop ; )     0.59 s   ~12 ns
+    write a value     ( : wval 0 do i to n loop ; )       0.05 s   ~2 ns
+    write a variable  ( : wvar 0 do i v ! loop ; )        0.56 s   ~28 ns
+
+Reads are within a few percent. **Writes are 12× apart**, and not for the
+reason you would guess: both compile to *three* calls, and the `to` version
+is the bigger code (32 bytes against 24), because `to` compiles the address
+as an inline literal where `v` is a call.
+
+    : wval  7 to n ;      lit 7 | lit <addr> | !        \ 32 bytes
+    : wvar  7 v ! ;       lit 7 | call v    | !        \ 24 bytes
+
+What differs is *where the store lands relative to code being executed*.
+`v !` calls `v`'s push-the-address stub and then stores into the cell
+sitting immediately next to that stub — in a dictionary that is RWX with
+code and data interleaved. That is the pattern a CPU treats as
+self-modifying code, and it pays for it with pipeline machine clears.
+`to n` inlines the address, so the loop never executes code adjacent to
+the cell it writes.
+
+Supporting evidence, and its limit: pointing the store at a **heap** cell
+instead (via `allocate`) took it from 0.56 s to 0.21 s — most of the gap,
+which confirms the store's location matters. It does not account for the
+remaining 4× against `to`, so treat the mechanism as well-supported rather
+than settled.
+
+Two things follow. For a hot per-frame scalar, `value` + `to` is the
+faster shape as well as the safer one (`help defining-words` covers when
+you need a `variable` anyway — anything that must have an address). And
+this is a performance argument for the hardening item that would replace
+`ld -N` (OMAGIC, all segments RWX) with `mprotect` on just the dictionary:
+separating code from data pages is exactly what would remove the effect.
+
+Below a tight loop this is noise. 28 ns is nothing against a frame.
+
 ## Practical guidance
 
 - **Use `do`/`loop` for hot counted loops.** It is the one construct that
@@ -230,3 +271,8 @@ measures qemu's translation cost, not the board's.
 - docs/Conditionals.md — how `do`/`loop` and `begin`/`until` are compiled.
 - `help tools` — the reference entries for `time`, `dis`, and `see`.
 - docs/TODO.md, "Performance / Optimizer" — the open optimizer work.
+- docs/TODO.md, "Future / Hardening" — the `ld -N` → `mprotect` item, which
+  the `variable`-store measurement above turns into a performance question
+  as well as a hygiene one.
+- `help defining-words` — `value` vs `variable` semantics, and when only a
+  variable will do (anything that needs an address).
