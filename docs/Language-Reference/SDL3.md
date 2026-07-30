@@ -31,7 +31,8 @@ At a glance:
     sdl-event-type ( -- u )          type of the polled event
     sdl-key        ( -- keycode )    keycode of a key event
     ev-quit ev-close ev-keydown ev-keyup   ( -- u )    event types
-    key-esc key-space key-q key-left key-right key-up key-down ( -- u )
+    key-enter key-esc key-space key-tab key-backspace ( -- u )
+    key-q key-left key-right key-up key-down          ( -- u )
 
 ## sdl-open ( w h -- )
 Open a window with a w-by-h pixel drawing surface. With `sdl-scale` above 1
@@ -112,18 +113,32 @@ The type of the last polled event. Compare against `ev-quit`, `ev-close`,
 `ev-keydown`, `ev-keyup`.
 
 ## sdl-key ( -- keycode )
-The keycode of the last polled key event. Compare against the `key-*`
-constants (`key-esc`, `key-left`, ...); printable keys are their ASCII code
-(`char a` matches the A key).
+The keycode of the last polled key event. A printable key is its ASCII code,
+so compare with `[char] a` directly; the `key-*` constants below name the ones
+that have no character — `key-enter`, `key-esc`, the arrows.
 
 ## ev-quit ev-close ev-keydown ev-keyup ( -- u )
 Event-type constants: application quit, window close button, key press
 (includes auto-repeat), key release.
 
-## key-esc key-space key-q key-left key-right key-up key-down ( -- u )
-Keycode constants for the common game keys.
+## key-backspace key-tab key-enter key-esc key-space key-q key-left key-right key-up key-down ( -- u )
+Keycode constants for keys that have no character to name them by.
 
-    \ sdl-key key-esc = if ... then
+    \ sdl-key key-enter = if fire then
+
+**A printable key needs no constant.** SDL's keycode for it *is* its ASCII
+code, so `[char] w` names the W key directly and `key-q` is only `[char] q`
+spelled the long way:
+
+    \ sdl-key case
+    \   [char] w of  up     endof
+    \   [char] a of  left   endof
+    \   key-enter of  fire  endof
+    \ endcase
+
+The arrows are the exception the list exists for: they have no ASCII value, so
+SDL gives them keycodes in a high range (`$4000004f` and up) that you can only
+reach by name or by number.
 
 ## See Also
 

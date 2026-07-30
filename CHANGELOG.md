@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### `key-enter`, `key-tab`, `key-backspace`
+- **Three more SDL keycode constants.** The list in `sdl3.fs` was whatever
+  `bounce.fs` needed — esc, space, q, arrows — so a game wanting Enter had to
+  find `SDLK_RETURN` in the SDL headers and write `$0d`. Enter is about as
+  common as Esc in a game loop; tab and backspace come along rather than be
+  fetched one at a time later.
+- **`help sdl3` now says the thing that was missing**: a printable key needs
+  no constant at all, because SDL's keycode for it *is* its ASCII code —
+  `[char] w` names the W key, and `key-q` was only `[char] q` spelled the long
+  way. The arrows are what the list exists for: no ASCII value, so SDL puts
+  them at `$4000004f` and up where you can only reach them by name.
+- A test pins all nine against `SDL_keycode.h`, plus `key-q = char q`. A wrong
+  keycode fails silently at run time — a key that simply never matches — so
+  it is worth one assertion.
+
 ### No ` ok` while a definition is open
 - **A multi-line definition no longer prints ` ok` after every line.** The
   `... ` continuation prompt already says "still compiling", so the ok was
