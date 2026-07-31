@@ -20,6 +20,9 @@ At a glance:
     snd-close  ( -- )             close the device
     snd-vol    ( -- a-addr )      volume variable (0..32767)
 
+Sounds queued here play one after another. To play sounds **at the same
+time**, put them on different channels — see `help channels`.
+
 ## snd-open ( -- )
 Open the default audio playback device (signed 16-bit mono, 44100 Hz; SDL
 resamples for the hardware) and start it. Aborts with the SDL error message
@@ -35,7 +38,9 @@ soundless (every sound word a no-op) rather than abort:
 ## tone ( freq ms -- )
 Queue a square-wave tone of `freq` Hz for `ms` milliseconds and return
 immediately — SDL's audio thread plays it while your code keeps running.
-Back-to-back tones play back-to-back. A no-op if the device isn't open.
+Back-to-back tones play back-to-back, because `tone` always uses the same
+channel (`tone-ch`). Use `tone-on` for a tone that overlaps other sounds. A
+no-op if the device isn't open.
 
     : siren ( -- )  5 0 do  600 150 tone  900 150 tone  loop  snd-wait ;
 
@@ -43,7 +48,7 @@ Back-to-back tones play back-to-back. A no-op if the device isn't open.
 A short blip: `880 60 tone`.
 
 ## snd-wait ( -- )
-Block until every queued tone has finished playing. Use before `bye` in a
+Block until every channel has finished playing. Use before `bye` in a
 script, or the last tone is cut off.
 
 ## snd-close ( -- )
@@ -55,5 +60,5 @@ Square-wave amplitude, default 8000. Set with `to`:
     2000 to snd-vol   \ quiet
     beep
 
-See `docs/Sound.md` for how the backend works, and `help ffi` for the calling
-mechanism.
+See `help channels` for playing several sounds at once, `docs/Sound.md` for
+how the backend works, and `help ffi` for the calling mechanism.
