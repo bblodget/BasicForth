@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Fixed: closing the window killed the sound
+
+- **`sdl-close` tore down the audio device too**, so a game that opened both a
+  window and a sound stream lost its audio the moment it closed the window —
+  and did not find out until the next note, which wrote into freed memory and
+  aborted inside SDL's own audio thread:
+
+      __pthread_tpp_change_priority: Assertion `new_prio == -1 || ...' failed.
+      Aborted (core dumped)
+
+  Nothing in the message points at Forth, at `sdl-close`, or at the fact that
+  the two calls were minutes apart. Found while adding sound to a game.
+- Cause: `sdl-close` called **`SDL_Quit()`**, which ends *every* initialised
+  subsystem, not the one `sdl-open` started. `sound.fs` had it right all along
+  — `snd-close` quits only `SDL_INIT_AUDIO` — so the asymmetry was one-sided.
+- **`tone`'s guard could not catch it.** It skips when `snd-stream` is zero,
+  but `SDL_Quit()` frees the device behind `sound.fs`'s back and leaves the
+  handle set, so the guard saw a live-looking stream. A dangling pointer is
+  invisible to a null check, which is why this surfaced as a core dump rather
+  than a Forth error.
+- `sdl-close` now calls `SDL_QuitSubSystem(SDL_INIT_VIDEO)`, mirroring
+  `sdl-open`'s init exactly. Quitting a subsystem that was never started is a
+  no-op, so `sdl-close` is still safe to call when no window was opened — which
+  is what an `on-stop` hook relies on. Dropping `SDL_Quit()` costs nothing:
+  it releases global state at process exit, and exiting does that anyway.
+- Two tests, both under the existing SDL gate but running for real against
+  SDL's dummy video and audio drivers, so no display or sound card is needed:
+  a window opened and closed around a live audio stream, then a note played;
+  and the mirror, audio closed under a live window, then a pixel drawn and read
+  back. The first one core-dumps against the old `sdl-close`.
+
 ### Added: `<=`, `>=`, `u<=`, `u>=`
 
 - **The standard comparison set stops at `<` and `>`**, leaving you to write
