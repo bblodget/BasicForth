@@ -1,5 +1,82 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: closing the window killed the sound
+
+- **`sdl-close` tore down the audio device too**, so a game that opened both a
+  window and a sound stream lost its audio the moment it closed the window —
+  and did not find out until the next note, which wrote into freed memory and
+  aborted inside SDL's own audio thread:
+
+      __pthread_tpp_change_priority: Assertion `new_prio == -1 || ...' failed.
+      Aborted (core dumped)
+
+  Nothing in the message points at Forth, at `sdl-close`, or at the fact that
+  the two calls were minutes apart. Found while adding sound to a game.
+- Cause: `sdl-close` called **`SDL_Quit()`**, which ends *every* initialised
+  subsystem, not the one `sdl-open` started. `sound.fs` had it right all along
+  — `snd-close` quits only `SDL_INIT_AUDIO` — so the asymmetry was one-sided.
+- **`tone`'s guard could not catch it.** It skips when `snd-stream` is zero,
+  but `SDL_Quit()` frees the device behind `sound.fs`'s back and leaves the
+  handle set, so the guard saw a live-looking stream. A dangling pointer is
+  invisible to a null check, which is why this surfaced as a core dump rather
+  than a Forth error.
+- `sdl-close` now calls `SDL_QuitSubSystem(SDL_INIT_VIDEO)`, mirroring
+  `sdl-open`'s init exactly. Quitting a subsystem that was never started is a
+  no-op, so `sdl-close` is still safe to call when no window was opened — which
+  is what an `on-stop` hook relies on. Dropping `SDL_Quit()` costs nothing:
+  it releases global state at process exit, and exiting does that anyway.
+- Two tests, both under the existing SDL gate but running for real against
+  SDL's dummy video and audio drivers, so no display or sound card is needed:
+  a window opened and closed around a live audio stream, then a note played;
+  and the mirror, audio closed under a live window, then a pixel drawn and read
+  back. The first one core-dumps against the old `sdl-close`.
+
+### Added: `<=`, `>=`, `u<=`, `u>=`
+
+- **The standard comparison set stops at `<` and `>`**, leaving you to write
+  `> 0=` for less-or-equal. That is correct but wasteful: the compare already
+  set the processor's flags, and `> 0=` discards the one it wanted, builds a
+  flag in memory, then reads it back to invert it. Two calls, or three if you
+  wrap it in a definition.
+- Each new word is a **single primitive** — `forth_le` is `forth_less` with one
+  condition code changed (`jg` for `jge` on x86, `CSETM LE` for `LT` on ARM64)
+  — so `<=` costs exactly what `<` costs. Measured at 20×10^6 iterations, the
+  comparison itself drops from ~3.0 ns to ~1.6 ns against inline `> 0=`, and
+  from ~3.4 ns against a colon definition. Written up in `docs/Performance.md`.
+- These are **extensions, not Forth 2012 CORE**, and are listed as such in
+  `docs/Forth_Core_Words.md`. gforth provides the same four.
+- 28 tests, both architectures, concentrated on the cases that separate a real
+  implementation from a plausible one: equal operands, and the signed pair
+  whose difference overflows a cell (`MAX MIN <=`), which is wrong for anything
+  built on `-` and a sign test. Plus a differential sweep checking all four
+  against the slow forms they replace across 49 value pairs spanning both
+  signed and unsigned boundaries. Each was confirmed to fail when the
+  corresponding primitive is deliberately broken.
+
+### Documented: why there is no `not`
+
+- A recurring question, now answered in `help comparison`. "Not" has two
+  meanings that disagree on anything that isn't already a flag — `3 invert` is
+  `-4`, a *true* flag, while `3 0=` is false. FORTH-83 spelled the bitwise one
+  `NOT` and other systems spelled the logical one `NOT`, so the standard
+  dropped the name and kept `INVERT` and `0=`, which say which they mean. We
+  follow that, and now say so rather than looking merely incomplete.
+
+### Fixed: an integration assertion could pass no matter what the code did
+
+- `assert_output` matches by substring, and the captured output **includes the
+  echoed input** — so any expectation that also appears in the input was green
+  unconditionally. `'-1 1 <= .'` expecting `-1` would have passed against a
+  completely broken `<=`.
+- Added `assert_result`, which strips the echo (both the `> ` line and the
+  `... ` continuations a multi-line input produces) before matching, and used
+  it for the new comparison block. Found by deliberately breaking each new
+  primitive and noticing which tests stayed green. Pre-existing tests are
+  unaffected but have not been audited for the same hazard — filed in
+  `docs/TODO.md`.
+
 ## v0.13.0 — 2026-07-30
 
 ### Fixed: unbalanced `CASE` arms compiled silently, and mixing `CASE` with `IF`/`DO`/`BEGIN` segfaulted

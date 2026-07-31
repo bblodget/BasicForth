@@ -89,6 +89,45 @@ assert_output() {
     fi
 }
 
+# assert_result: like assert_output, but matches only what the interpreter
+# PRINTED.  run_forth captures the echoed input too ("> 5 5 <= ."), and
+# assert_output matches by substring, so an expectation that also occurs in the
+# input passes no matter what the word does -- '-1 1 <= .' expecting "-1" is
+# green even for a completely broken <=.  Dropping the echo first closes that
+# hole.  Both forms of echo have to go: the "> " line and the "... " lines a
+# multi-line input produces -- missing the latter is how the differential test
+# below first passed against a deliberately broken <= (its echo contains "0=",
+# which matched an expected "0").  Use this whenever the expected text could
+# appear in the input.
+assert_result() {
+    local name="$1"
+    local input="$2"
+    local expected="$3"
+
+    local t0 t1 ms
+    t0=$(date +%s.%N)
+    local output
+    output=$(run_forth "$input" | sed '/^> /d; /^>$/d; /^\.\.\. /d')
+    t1=$(date +%s.%N)
+    ms=$(elapsed_ms "$t0" "$t1")
+    update_slowest "$ms" "$name"
+
+    if [[ "$output" == *"$expected"* ]]; then
+        if [ "$ms" -ge "$SLOW_THRESHOLD_MS" ]; then
+            printf "  ${GREEN}PASS${NC}  %s ${YELLOW}(%d ms)${NC}\n" "$name" "$ms"
+        else
+            printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        fi
+        ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:    %s\n" "$input"
+        printf "    Expected: %s\n" "$expected"
+        printf "    Got:      %s\n" "$(echo "$output" | head -5)"
+        ((failed++))
+    fi
+}
+
 # assert_error: check that output contains a fixed substring (case-insensitive)
 assert_error() {
     local name="$1"
@@ -1002,6 +1041,29 @@ else
     else
         printf "  ${RED}FAIL${NC}  bye exits with audio open (process lingered or errored)\n"; ((failed++))
     fi
+    # Closing the window must not silence the game. sdl-close used to call
+    # SDL_Quit(), which ends EVERY subsystem, so tearing down the window also
+    # freed the audio device sound.fs was holding. snd-stream stayed non-zero,
+    # so tone's own `snd-stream 0=` guard could not see it, and the next note
+    # wrote into freed memory — a core dump inside SDL's audio thread, well
+    # away from anything Forth could report.
+    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$mix_a" | grep -q '0 audio-ok'; then
+        printf "  ${GREEN}PASS${NC}  sdl-close leaves audio alive (quits only SDL_INIT_VIDEO)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-close leaves audio alive\n    Got: %q\n" "$mix_a"; ((failed++))
+    fi
+    # The mirror, which already held: snd-close quits only SDL_INIT_AUDIO, so
+    # the window keeps drawing. Reads the pixel back to prove the surface is
+    # still live rather than merely that nothing crashed.
+    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$mix_b" | grep -q '16711680' && printf '%s' "$mix_b" | grep -q '0 video-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-close leaves the window drawable (quits only SDL_INIT_AUDIO)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-close leaves the window drawable\n    Got: %q\n" "$mix_b"; ((failed++))
+    fi
 fi
 
 # =========================================================================
@@ -1102,6 +1164,51 @@ assert_output "u< true"           '3 10 u< .'                          "-1"
 assert_output "u< false"          '10 3 u< .'                          "0"
 assert_output "u< equal"          '5 5 u< .'                           "0"
 assert_output "u< unsigned"       '-1 1 u< .'                          "0"
+
+# <= / >= / U<= / U>=  (extensions, not Forth 2012 CORE)
+# The interesting cases are the ones a naive `a b - 0<` would get wrong:
+# equal operands, and the signed pair that overflows on subtraction.
+assert_result "<= less"           '4 5 <= .'                           "-1"
+assert_result "<= equal"          '5 5 <= .'                           "-1"
+assert_result "<= greater"        '5 4 <= .'                           "0"
+assert_result ">= less"           '4 5 >= .'                           "0"
+assert_result ">= equal"          '5 5 >= .'                           "-1"
+assert_result ">= greater"        '5 4 >= .'                           "-1"
+assert_result "<= negative"       '-5 -4 <= .'                         "-1"
+assert_result ">= negative"       '-4 -5 >= .'                         "-1"
+assert_result "<= zero cross"     '-1 0 <= .'                          "-1"
+assert_result ">= zero cross"     '0 -1 >= .'                          "-1"
+# MAX = -1 1 rshift, MIN = 1 63 lshift.  MAX-MIN overflows a signed cell,
+# so these fail for any implementation that subtracts and tests the sign.
+assert_result "<= max/min"        '-1 1 rshift 1 63 lshift <= .'       "0"
+assert_result "<= min/max"        '1 63 lshift -1 1 rshift <= .'       "-1"
+assert_result ">= max/min"        '-1 1 rshift 1 63 lshift >= .'       "-1"
+assert_result ">= min/max"        '1 63 lshift -1 1 rshift >= .'       "0"
+assert_result "<= min/min"        '1 63 lshift dup <= .'               "-1"
+assert_result ">= max/max"        '-1 1 rshift dup >= .'               "-1"
+assert_result "u<= less"          '4 5 u<= .'                          "-1"
+assert_result "u<= equal"         '5 5 u<= .'                          "-1"
+assert_result "u<= greater"       '5 4 u<= .'                          "0"
+assert_result "u>= equal"         '5 5 u>= .'                          "-1"
+assert_result "u>= greater"       '5 4 u>= .'                          "-1"
+# -1 is the largest unsigned value, so u<= and <= must disagree here.
+assert_result "<= vs u<= signed"  '-1 1 <= .'                          "-1"
+assert_result "u<= unsigned"      '-1 1 u<= .'                         "0"
+assert_result "u<= wrap other"    '1 -1 u<= .'                         "-1"
+assert_result "u>= unsigned"      '-1 1 u>= .'                         "-1"
+assert_result "u<= zero"          '0 -1 u<= .'                         "-1"
+assert_result "u>= zero"          '0 0 u>= .'                          "-1"
+# Each new primitive must agree with the slow form it replaces, over a value
+# set that spans both signed and unsigned boundaries.  0 mismatches expected.
+assert_result "cmp differential" \
+    'create CV 1 63 lshift , -2 , -1 , 0 , 1 , 2 , -1 1 rshift ,
+     variable CBAD  : cv cells CV + @ ;  : ck = 0= if 1 CBAD +! then ;
+     : sweep 7 0 do 7 0 do
+         j cv i cv <=  j cv i cv > 0=          ck
+         j cv i cv >=  j cv i cv < 0=          ck
+         j cv i cv u<= j cv i cv swap u< 0=    ck
+         j cv i cv u>= j cv i cv u< 0=         ck
+       loop loop ;  sweep CBAD @ . ." mismatched"'          "0 mismatched"
 
 # +!
 assert_output "+!"                'variable x 10 x ! 5 x +! x @ .'    "15"

@@ -27,6 +27,7 @@ require graphics.fs
 \ this section) so a re-run can rebind after the library state changes.
 0 value (sdl3)
 0 value (SDL_Init)            0 value (SDL_Quit)
+0 value (SDL_QuitSubSystem)
 0 value (SDL_GetError)
 0 value (SDL_CreateWindow)    0 value (SDL_DestroyWindow)
 0 value (SDL_SetWindowTitle)
@@ -43,6 +44,7 @@ require graphics.fs
     s" libSDL3.so.0" dlopen to (sdl3)
     (sdl3) s" SDL_Init"            dlsym to (SDL_Init)
     (sdl3) s" SDL_Quit"            dlsym to (SDL_Quit)
+    (sdl3) s" SDL_QuitSubSystem"   dlsym to (SDL_QuitSubSystem)
     (sdl3) s" SDL_GetError"        dlsym to (SDL_GetError)
     (sdl3) s" SDL_CreateWindow"    dlsym to (SDL_CreateWindow)
     (sdl3) s" SDL_DestroyWindow"   dlsym to (SDL_DestroyWindow)
@@ -170,7 +172,11 @@ s" BasicForth" 2dup (z-title) swap cmove   \ default title...
     sdl-tex ?dup if 1 (SDL_DestroyTexture)  (ccall) drop  0 to sdl-tex then
     sdl-ren ?dup if 1 (SDL_DestroyRenderer) (ccall) drop  0 to sdl-ren then
     sdl-win ?dup if 1 (SDL_DestroyWindow)   (ccall) drop  0 to sdl-win then
-    0 (SDL_Quit) (ccall) drop
+    \ Quit only what sdl-open started. SDL_Quit() ends EVERY subsystem, so
+    \ closing a window would also tear down the audio device sound.fs opened
+    \ -- leaving snd-stream pointing at freed memory, which its `snd-stream
+    \ 0=` guard cannot detect, so the next tone writes into it.
+    SDL_INIT_VIDEO 1 (SDL_QuitSubSystem) (ccall) drop
     0 0 0 0 set-surface ;
 
 \ --- frame cycle ---
