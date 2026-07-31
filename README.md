@@ -56,7 +56,7 @@ module launch itself once and still be edited. Plus two interactive lessons
 (Modules, Printing), `time <word>` and a measured `docs/Performance.md`, and
 the lessons themselves are now replayed by the test suite. Builds on
 v0.12.0's graphics.
-123 unit tests + 895 integration tests + 36 PTY tests + 26 lesson replays.
+123 unit tests + 897 integration tests + 36 PTY tests + 26 lesson replays.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
