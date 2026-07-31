@@ -1041,6 +1041,29 @@ else
     else
         printf "  ${RED}FAIL${NC}  bye exits with audio open (process lingered or errored)\n"; ((failed++))
     fi
+    # Closing the window must not silence the game. sdl-close used to call
+    # SDL_Quit(), which ends EVERY subsystem, so tearing down the window also
+    # freed the audio device sound.fs was holding. snd-stream stayed non-zero,
+    # so tone's own `snd-stream 0=` guard could not see it, and the next note
+    # wrote into freed memory — a core dump inside SDL's audio thread, well
+    # away from anything Forth could report.
+    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$mix_a" | grep -q '0 audio-ok'; then
+        printf "  ${GREEN}PASS${NC}  sdl-close leaves audio alive (quits only SDL_INIT_VIDEO)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-close leaves audio alive\n    Got: %q\n" "$mix_a"; ((failed++))
+    fi
+    # The mirror, which already held: snd-close quits only SDL_INIT_AUDIO, so
+    # the window keeps drawing. Reads the pixel back to prove the surface is
+    # still live rather than merely that nothing crashed.
+    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$mix_b" | grep -q '16711680' && printf '%s' "$mix_b" | grep -q '0 video-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-close leaves the window drawable (quits only SDL_INIT_AUDIO)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-close leaves the window drawable\n    Got: %q\n" "$mix_b"; ((failed++))
+    fi
 fi
 
 # =========================================================================

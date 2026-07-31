@@ -54,7 +54,8 @@ Return from the current word immediately. Handy for an early-out guard.
     5 report          \ big
     -5 report         \ small
 
-Inside a `do … loop`, call `unloop` before `exit` (see `help loops`).
+Inside a `do … loop`, call `unloop` before `exit` (see `help loops`). A `begin`
+loop needs no `unloop`.
 
 ## See Also
 
