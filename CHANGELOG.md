@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added: mixing sound channels
+
+- **Sounds can now play at the same time.** The audio device holds
+  `snd-channels` streams (default 16, ceiling 64), all bound to one logical
+  device, and SDL mixes them — sounds on different channels overlap, sounds
+  queued on one channel still play in sequence. There is no mixer code here;
+  SDL does the mixing.
+- New words: `tone-on`, `ch-put`, `snd-alloc`, `ch-playing?`, `ch-queued`,
+  `ch-stop`, `snd-stop`, `ch-wait`, `ch-vol!`, `ch-vol@`, plus `snd-channels`,
+  `snd-max-channels`, `tone-ch` and `snd-unity`. Documented in
+  `help channels`; every one is a silent no-op with no device open, the same
+  contract `tone` already had.
+- **`tone` is unaffected.** It owns channel 0, so a run of plain tones plays
+  back-to-back exactly as before — existing programs, including a siren built
+  from consecutive tones, need no changes. `tone-on` is the opt-in overlap.
+- `snd-alloc` hands out channels round-robin and **steals the least recently
+  allocated** when all are busy: a program firing more sounds than it has
+  channels loses its stalest sound rather than refusing the newest. Round-robin
+  rather than lowest-free because a channel only counts as busy once audio is
+  queued, so two allocations in a row would otherwise both return channel 1.
+- Per-channel volume scales samples **as they are queued**, into a copy so
+  shared sample data is never modified. Not `SDL_SetAudioStreamGain`, which
+  takes a `float` — the FFI passes integers only.
+- **Needed the plain device API.** `SDL_OpenAudioDeviceStream`, the one-call
+  setup this used before, welds the device to the single stream it returns;
+  binding a second fails with *"Cannot change stream bindings on device opened
+  with SDL_OpenAudioDeviceStream"*. Nothing in the SDL3 header says so — it
+  surfaces only as a runtime error. Now opens with `SDL_OpenAudioDevice` and
+  binds each stream explicitly. Written up in `docs/Sound.md`.
+- 7 tests via SDL's dummy audio driver, each confirmed to fail when the
+  behaviour it covers is deliberately broken — including a regression guard
+  that bare `tone` still queues on the tone channel.
+
 ### Fixed: closing the window killed the sound
 
 - **`sdl-close` tore down the audio device too**, so a game that opened both a
