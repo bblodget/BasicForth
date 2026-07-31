@@ -538,7 +538,7 @@ sigsegv_handler:
     mov rp0(%rip), %rax
     mov %rax, GREGS_RSP(%rbx)           # RSP = rp0
 
-    mov sp0(%rip), %rax
+    mov %fs:sp0@tpoff, %rax
     mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
 
     # Always restore LATEST and HERE — a fault during forth_colon may

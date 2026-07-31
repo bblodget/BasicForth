@@ -197,7 +197,7 @@ forth_two_drop:
 .global forth_depth
 forth_depth:
 
-    mov sp0(%rip), %rax
+    mov %fs:sp0@tpoff, %rax
     sub %r15, %rax              # rax = sp0 - DSP (bytes)
     sar $3, %rax                # rax = depth (cells = bytes / 8)
     sub $CELL, %r15
@@ -1006,7 +1006,7 @@ forth_number:
 
     xor %eax, %eax              # RAX = result = 0
     xor %edx, %edx              # RDX = negate flag = 0
-    mov base(%rip), %rbp        # RBP = base
+    mov %fs:base@tpoff, %rbp        # RBP = base
 
     # Check for leading '-'
     movzbl (%rbx), %edi
@@ -1409,7 +1409,7 @@ forth_dot_s:
     push %rbp
 
     # Compute depth = (sp0 - DSP) / CELL
-    mov sp0(%rip), %rbx
+    mov %fs:sp0@tpoff, %rbx
     sub %r15, %rbx
     sar $3, %rbx                # rbx = depth
 
@@ -2912,7 +2912,7 @@ cf_check_tag:
     # (return-stack addresses below il_rsp). A CATCH established outside
     # this interpret_line nest (deeper stack, address >= il_rsp) stays
     # armed — the error return unwinds to it cooperatively.
-    mov handler(%rip), %rax
+    mov %fs:handler@tpoff, %rax
 .Lcf_unlink:
     test %rax, %rax
     jz .Lcf_unlinked
@@ -2921,7 +2921,7 @@ cf_check_tag:
     mov (%rax), %rax                # follow the chain link
     jmp .Lcf_unlink
 .Lcf_unlinked:
-    mov %rax, handler(%rip)
+    mov %rax, %fs:handler@tpoff
     # Longjmp back to forth_interpret_line's error return
     mov il_rsp(%rip), %rsp          # unwind to interpret_line's frame
     mov $1, %eax                    # return error
@@ -4391,7 +4391,8 @@ forth_does:
 .global forth_base
 forth_base:
     sub $CELL, %r15
-    lea base(%rip), %rax
+    mov %fs:0, %rax                 # thread pointer (TCB self-pointer)
+    lea base@tpoff(%rax), %rax      # this thread's own BASE cell
     mov %rax, (%r15)
     ret
 
@@ -4483,10 +4484,10 @@ forth_catch:
     pushq file_line_num(%rip)
     pushq cur_source_id(%rip)
     pushq cur_line_off(%rip)
-    pushq handler(%rip)             # frame: chain link
-    mov %rsp, handler(%rip)
+    pushq %fs:handler@tpoff             # frame: chain link
+    mov %rsp, %fs:handler@tpoff
     call *%rax
-    popq handler(%rip)              # normal return: unlink the frame,
+    popq %fs:handler@tpoff              # normal return: unlink the frame,
     add $11*CELL, %rsp              #   discard the snapshot (globals are live)
     sub $CELL, %r15
     movq $0, (%r15)                 # report success
@@ -4502,11 +4503,11 @@ forth_throw:
     add $CELL, %r15
     test %rax, %rax
     jz .Lthrow_noop
-    mov handler(%rip), %rcx
+    mov %fs:handler@tpoff, %rcx
     test %rcx, %rcx
     jz .Lthrow_uncaught
     mov %rcx, %rsp                  # unwind the return stack to the frame
-    popq handler(%rip)              # relink the previous handler
+    popq %fs:handler@tpoff              # relink the previous handler
     popq cur_line_off(%rip)         # restore input source + error context
     popq cur_source_id(%rip)
     popq file_line_num(%rip)
@@ -4537,11 +4538,11 @@ forth_throw:
     mov $1, %rdx
     call platform_write
 .Lthrow_reset:
-    mov sp0(%rip), %r15             # reset data stack
+    mov %fs:sp0@tpoff, %r15             # reset data stack
     mov rp0(%rip), %rsp             # reset return stack
     call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
-    movq $0, handler(%rip)          # no live frames on a reset stack
+    movq $0, %fs:handler@tpoff          # no live frames on a reset stack
     jmp repl_loop
 
 # ABORT ( i*x -- ) ( R: j*x -- )  Forth 2012 exception ext: ABORT is -1
@@ -4576,7 +4577,7 @@ forth_quit:
     mov rp0(%rip), %rsp             # reset return stack
     call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
-    movq $0, handler(%rip)          # frames died with the return stack
+    movq $0, %fs:handler@tpoff          # frames died with the return stack
     jmp repl_loop
 
 # ---------- Compiler Words ----------
@@ -5411,12 +5412,29 @@ dict_space:
 .global dict_space_end
 dict_space_end:
 
-# ---------- Variables ----------
-.data
+# ---------- Per-thread variables (TLS) ----------
+# These three must read differently in each thread, so they live in thread-local
+# storage rather than .data: the linker assigns each an offset and the access is
+# %fs:<name>@tpoff, i.e. thread-pointer + offset. Same instruction count as a
+# RIP-relative global, no lock, no lookup — and glibc allocates every thread's
+# copy inside pthread_create, initialised from the image below. A new thread
+# therefore starts life with BASE decimal and no live CATCH frame, which is
+# exactly right; its sp0 is filled in by the thread trampoline.
+.section .tdata,"awT",@progbits
 .align 8
 .global base
 base:                               # NUMBER base (default decimal)
     .quad 10
+.global sp0
+sp0:                                # This thread's initial DSP (for .S / depth)
+    .quad 0
+.global handler
+handler:                            # Innermost CATCH frame on this thread's
+    .quad 0                         #   return stack (0 = none)
+
+# ---------- Variables ----------
+.data
+.align 8
 .global source_addr
 source_addr:                        # PARSE-WORD: pointer to input buffer
     .quad 0
@@ -5425,9 +5443,6 @@ source_len:                         # PARSE-WORD: total length of input
     .quad 0
 .global to_in
 to_in:                              # PARSE-WORD: current parse offset
-    .quad 0
-.global sp0
-sp0:                                # Initial DSP value (for .S depth)
     .quad 0
 .global state
 state:                              # Compiler state (0=interpret, non-zero=compile)
@@ -5466,9 +5481,6 @@ session_mark_latest:                # session restore point (LATEST) — 0 = uns
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry
     .quad 0
-.global handler
-handler:                            # Innermost CATCH frame on the return stack
-    .quad 0                         #   (0 = no handler; cleared at repl_loop)
 .global il_rsp
 il_rsp:                             # RSP at interpret_line entry (for cf longjmp)
     .quad 0
