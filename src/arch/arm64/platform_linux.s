@@ -59,6 +59,15 @@
 // ---------- RAW MODE ----------
 // Switch terminal to raw mode for character-at-a-time input.
 // Saves original settings for restore on exit.
+// Address of a thread-local variable (local-exec model): the thread pointer
+// TPIDR_EL0 plus the offset the linker assigns. See the TLS block in core.s
+// for which vars are per-thread and why. Writes only \reg.
+.macro TLS_ADDR reg, sym
+    MRS \reg, TPIDR_EL0
+    ADD \reg, \reg, #:tprel_hi12:\sym, LSL #12
+    ADD \reg, \reg, #:tprel_lo12_nc:\sym
+.endm
+
 .global platform_raw_mode
 platform_raw_mode:
     STR X30, [SP, #-16]!
@@ -580,7 +589,7 @@ sigsegv_handler:
     LDR X3, [X3]
     STR X3, [X23, #UC_SP]              // SP = rp0
 
-    ADR X3, sp0
+    TLS_ADDR X3, sp0
     LDR X3, [X3]
     STR X3, [X23, #UC_X19]             // X19 = sp0 (DSP = empty)
 

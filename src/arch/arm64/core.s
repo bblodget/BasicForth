@@ -56,6 +56,18 @@
 // inside a definition, STATE is 0 and the header is legitimately still hidden.
 // A macro, not a subroutine: these sites are reached mid-unwind, where X30 is
 // not ours to clobber.
+
+// Address of a thread-local variable (local-exec model): the thread pointer
+// TPIDR_EL0 plus the offset the linker assigns. Replaces the ADR that would
+// address a plain global — three instructions instead of one, no lock and no
+// lookup. See the TLS block at the end of this file for which vars are
+// per-thread and why. Writes only \reg.
+.macro TLS_ADDR reg, sym
+    MRS \reg, TPIDR_EL0
+    ADD \reg, \reg, #:tprel_hi12:\sym, LSL #12
+    ADD \reg, \reg, #:tprel_lo12_nc:\sym
+.endm
+
 .macro DROP_PARTIAL_HEADER
     LDRB W9, [X22, #8]              // LATEST flags
     TST W9, #F_HIDDEN
@@ -213,7 +225,7 @@ forth_two_drop:
 .global forth_depth
 forth_depth:
 
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X9, [X9]               // X9 = sp0
     SUB X9, X9, X19            // X9 = sp0 - DSP (bytes)
     ASR X9, X9, #3             // X9 = depth (cells)
@@ -1101,7 +1113,7 @@ forth_number:
 
     MOV X25, #0                 // X25 = result
     MOV X26, #0                 // X26 = negate flag
-    ADR X9, base
+    TLS_ADDR X9, base
     LDR X10, [X9]               // X10 = base
 
     // Check for leading '-'
@@ -1487,7 +1499,7 @@ forth_dot_s:
     STP X23, X24, [SP, #-16]!
 
     // Compute depth = (sp0 - DSP) / CELL
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X23, [X9]               // X23 = sp0
     SUB X23, X23, X19           // X23 = sp0 - DSP (byte diff)
     ASR X23, X23, #3            // X23 = depth
@@ -3243,7 +3255,7 @@ cf_check_tag:
     // armed — the error return unwinds to it cooperatively.
     ADR X9, il_sp
     LDR X10, [X9]
-    ADR X11, handler
+    TLS_ADDR X11, handler
     LDR X12, [X11]
 .Lcf_unlink:
     CBZ X12, .Lcf_unlinked
@@ -4849,7 +4861,7 @@ forth_does:
 // BASE ( -- a-addr )  Push address of BASE variable.
 .global forth_base
 forth_base:
-    ADR X9, base
+    TLS_ADDR X9, base
     STR X9, [X19, #-CELL]!
     RET
 
@@ -4950,7 +4962,7 @@ forth_catch:
     ADR X11, file_line_num
     LDR X11, [X11]
     STP X10, X11, [SP, #-16]!       // frame: cur_source_id, file_line_num
-    ADR X12, handler
+    TLS_ADDR X12, handler
     LDR X10, [X12]
     ADR X11, cur_line_off
     LDR X11, [X11]
@@ -4959,7 +4971,7 @@ forth_catch:
     STR X10, [X12]                  // handler = this frame
     BLR X9                          // run the xt
     LDR X10, [SP]                   // normal return: unlink the frame,
-    ADR X11, handler
+    TLS_ADDR X11, handler
     STR X10, [X11]
     ADD SP, SP, #96                 //   discard the snapshot (globals are live)
     LDP X29, X30, [SP], #16
@@ -4974,7 +4986,7 @@ forth_catch:
 forth_throw:
     LDR X9, [X19], #CELL            // n
     CBZ X9, .Lthrow_noop
-    ADR X10, handler
+    TLS_ADDR X10, handler
     LDR X11, [X10]
     CBZ X11, .Lthrow_uncaught
     MOV SP, X11                     // unwind the return stack to the frame
@@ -5024,7 +5036,7 @@ forth_throw:
     MOV X1, #1
     BL platform_write
 .Lthrow_reset:
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X19, [X9]                   // reset data stack
     ADR X9, rp0
     LDR X9, [X9]
@@ -5032,7 +5044,7 @@ forth_throw:
     DROP_PARTIAL_HEADER             // uncaught throw abandons any open def
     ADR X9, state
     STR XZR, [X9]                   // reset compile state
-    ADR X9, handler
+    TLS_ADDR X9, handler
     STR XZR, [X9]                   // no live frames on a reset stack
     B repl_loop
 
@@ -5052,7 +5064,7 @@ forth_quit:
     MOV SP, X9                     // reset return stack
     ADR X9, state
     STR XZR, [X9]                  // reset compile state
-    ADR X9, handler
+    TLS_ADDR X9, handler
     STR XZR, [X9]                  // frames died with the return stack
     B repl_loop
 
@@ -5937,12 +5949,29 @@ dict_space:
 .global dict_space_end
 dict_space_end:
 
-// ---------- Variables ----------
-.data
+// ---------- Per-thread variables (TLS) ----------
+// These three must read differently in each thread, so they live in thread-local
+// storage rather than .data: the linker assigns each an offset and TLS_ADDR
+// forms the address as TPIDR_EL0 + offset. No lock, no lookup — and glibc
+// allocates every thread's copy inside pthread_create, initialised from the
+// image below. A new thread therefore starts life with BASE decimal and no live
+// CATCH frame, which is exactly right; its sp0 is filled in by the thread
+// trampoline.
+.section .tdata,"awT",%progbits
 .align 3
 .global base
 base:                               // NUMBER base (default decimal)
     .quad 10
+.global sp0
+sp0:                                // This thread's initial DSP (for .S / depth)
+    .quad 0
+.global handler
+handler:                            // Innermost CATCH frame on this thread's
+    .quad 0                         //   return stack (0 = none)
+
+// ---------- Variables ----------
+.data
+.align 3
 .global source_addr
 source_addr:                        // PARSE-WORD: pointer to input buffer
     .quad 0
@@ -5951,9 +5980,6 @@ source_len:                         // PARSE-WORD: total length of input
     .quad 0
 .global to_in
 to_in:                              // PARSE-WORD: current parse offset
-    .quad 0
-.global sp0
-sp0:                                // Initial DSP value (for .S depth)
     .quad 0
 .global state
 state:                              // Compiler state (0=interpret, non-zero=compile)
@@ -5992,9 +6018,6 @@ session_mark_latest:                // session restore point (LATEST) — 0 = un
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
     .quad 0
-.global handler
-handler:                            // Innermost CATCH frame on the return stack
-    .quad 0                         //   (0 = no handler; cleared at repl_loop)
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0

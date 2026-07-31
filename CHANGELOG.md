@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Groundwork: BASE, sp0 and handler are now per-thread (TLS)
+
+- First step toward concurrency (`docs/Threading.md`), and **nothing observable
+  changes yet** — no threads are created. `base`, `sp0` and `handler` simply
+  moved out of `.data` into thread-local storage, so that when worker threads
+  do arrive, each one gets its own copy.
+- Why those three: `depth` is computed as `(sp0 - DSP)/CELL`, so a worker
+  measuring against the REPL's `sp0` would report nonsense; and `handler`, the
+  head of the `catch` chain, would corrupt the REPL's chain if a worker spliced
+  into it. `base` came along because it is free to do so — a worker switching
+  to `hex` now cannot disturb the prompt.
+- Mechanism is the **hardware thread pointer** — `%fs` on x86-64, `TPIDR_EL0`
+  on ARM64 — so access stays a single instruction on x86 (`%fs:sp0@tpoff`) and
+  a three-instruction `TLS_ADDR` macro on ARM64. No lock, no lookup, and glibc
+  allocates each thread's copy inside `pthread_create`. The rejected
+  alternatives were a reserved register (31 scratch uses of `%r14` to audit)
+  and `pthread_getspecific` (a function call inside `depth`).
+- A new thread's TLS block is initialised from `.tdata`, so a worker will start
+  with `BASE` decimal and no live `CATCH` frame for free.
+- This lifts one restriction the threading design had planned to ship with:
+  `BASE` need not be read-only in workers. It does **not** yet make
+  `catch`/`throw` safe in a worker — a `CATCH` frame also snapshots ten shared
+  globals (the input source and file-error context) that `THROW` writes back,
+  so a worker's throw would still clobber the line the REPL is parsing. Only
+  the chain head moved. `docs/Threading.md` records the intended fix (skip the
+  snapshot off the REPL thread) for step 1, where a trampoline makes it
+  testable.
+- The C unit-test harness needed `__thread` on its `extern base`/`extern sp0`
+  declarations; without it the link fails on a TLS/non-TLS symbol mismatch.
+
 ### Fixed: closing the window killed the sound
 
 - **`sdl-close` tore down the audio device too**, so a game that opened both a

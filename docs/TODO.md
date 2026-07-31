@@ -921,12 +921,22 @@ docs/Graphics.md for the API.
   - `thread ( xt -- tid ior )` / `join ( tid -- ior )`
   - v1 rule (documented, not enforced): the REPL thread owns the
     dictionary — workers run compiled words only, no `:`/`create`/
-    interpret-`s"`/`save`, BASE read-only
+    interpret-`s"`/`save`
   - Channels as the blessed communication path: `chan`/`ch!`/`ch@`/`ch?`
     (ring buffer + pthread mutex/cond)
-  - Must-settle list in the doc: `handler` (catch/throw chain global) must
-    be per-thread or catch forbidden in workers; worker fault story
-    (signals are process-wide); per-thread locals stack; stack sizing
+  - [x] **Step 0 DONE 2026-07-31 (branch tls):** `base`/`sp0`/`handler`
+    moved to thread-local storage (`%fs` / `TPIDR_EL0`, local-exec model).
+    BASE is no longer read-only in workers, and adding another per-thread
+    variable is now a one-line change.
+  - Still to settle: **`catch`/`throw` in a worker is still unsafe** — the
+    CATCH frame snapshots ten shared globals (input source + file-error
+    context) that THROW writes back, clobbering the REPL's line; fix is to
+    skip the snapshot off the REPL thread, ~10 lines per arch, NOT a
+    280-site TLS conversion. Also: uncaught `throw` in a worker (intended:
+    the trampoline installs the worker's outermost `catch`, surfacing as
+    `join`'s ior); worker stack guard pages + a thread-aware SIGSEGV
+    handler (signals are process-wide); per-thread locals stack; stack
+    sizing
 
 ---
 

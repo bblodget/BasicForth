@@ -1,9 +1,11 @@
 # Threading — Design Notes
 
-Status: **design only, nothing implemented** (2026-07-22). Real concurrency
-for BasicForth: audio feeders, robot control loops at fixed Hz, socket
-readers — the Phase 8 item, given a concrete shape. Supersedes the
-"pthreads or clone?" question in TODO Phase 8: **pthreads, via the FFI.**
+Status: **step 0 done** (2026-07-31) — the per-thread variables now live in
+TLS. No threads yet: the trampoline, `thread`/`join` and channels are still
+ahead. Real concurrency for BasicForth: audio feeders, robot control loops at
+fixed Hz, socket readers — the Phase 8 item, given a concrete shape.
+Supersedes the "pthreads or clone?" question in TODO Phase 8: **pthreads, via
+the FFI.**
 
 ## Decision: FFI + pthreads (not raw clone)
 
@@ -41,6 +43,59 @@ Forth-level API (names unsettled):
     join   ( tid -- ior )        wait for it; frees its stacks
     \ later: detach, mutex/cond wrappers if channels aren't enough
 
+## Per-thread state: native TLS (done, 2026-07-31)
+
+Some globals must read differently in each thread. `sp0` is the obvious one —
+`depth` is `(sp0 - DSP)/CELL`, so a worker measuring against the REPL's `sp0`
+gets nonsense — and `handler`, the head of the `catch` chain, is the dangerous
+one: a worker splicing into the REPL's chain corrupts it.
+
+The mechanism is **native thread-local storage**, not a reserved register and
+not `pthread_getspecific`. Every thread already has a thread pointer the kernel
+and glibc maintain (`%fs` on x86-64, `TPIDR_EL0` on ARM64); the linker assigns
+each TLS variable an offset, and the address is thread-pointer + offset:
+
+    x86-64      mov %fs:sp0@tpoff, %rax          # one instruction, as before
+    ARM64       TLS_ADDR X9, sp0                 # macro: MRS + two ADDs
+
+Why not the alternatives: a reserved register means auditing 31 scratch uses of
+`%r14` (and the ARM64 equivalent) for no gain; `pthread_getspecific` puts a
+function call inside `depth`. TLS costs nothing at runtime and glibc allocates
+each thread's copy inside `pthread_create` automatically.
+
+Three variables moved: `base`, `sp0`, `handler` — about a dozen sites per arch,
+plus `__thread` on the C unit-test harness's `extern` declarations or the link
+fails on a TLS/non-TLS mismatch. Both arches land on an identical 24-byte TLS
+block (`base` 0, `sp0` 8, `handler` 16). Verified: local-exec TLS works in a
+`-nostartfiles -no-pie` dynamically linked binary on x86-64 and ARM64, each
+thread getting its own copy.
+
+A quiet bonus: a new thread's TLS block is initialised from the image in
+`.tdata`, so a worker starts with `BASE` decimal and no live `CATCH` frame
+without the trampoline doing anything. Only `sp0` needs filling in.
+
+**What this settles, precisely.** `BASE` no longer needs to be read-only: a
+worker doing `hex` cannot disturb the REPL. `depth`/`.s` will work in workers
+once the trampoline sets that thread's `sp0`. And the `catch` *chain* is now
+per-thread, so a worker can no longer splice into the REPL's chain.
+
+**What it does not settle: `catch`/`throw` is still not thread-safe.** Besides
+the chain link, a `CATCH` frame snapshots ten further globals — the input
+source (`source_addr`, `source_len`, `to_in`, `source_id`) and the file-error
+context (`il_rsp`/`il_sp`, `file_name_addr`, `file_name_len`, `file_line_num`,
+`cur_source_id`, `cur_line_off`) — and `THROW` writes all ten *back* while
+unwinding. Those are still plain globals, so a worker's `throw` would restore
+its snapshot over whatever line the REPL is parsing. Per-thread `handler` is
+necessary but not sufficient; **workers must not `catch` until this is fixed.**
+
+The cheap fix is not to move all ten into TLS — that is ~280 sites across both
+arches, in parser hot paths. The snapshot exists to restore the *interpreter's*
+input source across a throw, and a worker has no input source: it never
+interprets (see the dictionary rule below). So `catch`/`throw` should skip the
+snapshot and restore entirely when not on the REPL thread, gated on one
+per-thread flag in the TLS block. Roughly ten lines per arch, and testable the
+moment the trampoline exists — hence step 1, not step 0.
+
 ## The v1 rule: workers run compiled words only
 
 One dictionary, one `HERE`, one `LATEST`, one `BASE`, one pair of `s"`
@@ -50,7 +105,7 @@ line — the classic Forth answer:
 
 > **The REPL thread owns the dictionary.** Worker threads run
 > already-compiled words: no `:`, no `create`, no interpret-time `s"`, no
-> `save`/`load`, and treat `BASE` as read-only. They compute, they do I/O
+> `save`/`load`. They compute, they do I/O
 > on fds they own, and they talk to the main thread through channels.
 
 Documented as a rule, enforced by nothing (v1) — like `cmove`'s overlap
@@ -73,17 +128,20 @@ channel the prompt-peek drains; a control loop receiving setpoints).
 
 ## Interactions to settle (the honest list)
 
-- **`catch`/`throw`'s handler chain is a single global.** A worker calling
-  `catch` would splice into the REPL's chain — corruption. The handler
-  slot must become per-thread. This is one instance of the general
-  question below.
-- **Per-thread state ("user area").** Classic Forth gives each task its
-  own copy of `BASE`, `handler`, etc. via USER variables. Options: a
-  per-thread context block whose address rides in a reserved register or
-  below the data-stack base; or pthread TLS via FFI. v1 can defer almost
-  all of it by the workers-don't-interpret rule — but `handler` at minimum
-  must be settled if workers may `catch` (or v1 forbids `catch` in
-  workers, and says so).
+- **`catch`/`throw` is not thread-safe yet.** The chain head (`handler`) is
+  per-thread as of step 0, but a `CATCH` frame also snapshots ten shared
+  globals that `THROW` writes back — see the TLS section above. Fix: skip the
+  snapshot when not on the REPL thread, gated on a per-thread flag. Until
+  then, **workers must not `catch`.**
+- ~~Per-thread state ("user area").~~ **Settled by TLS** (above) for `base`,
+  `sp0`, `handler`. Adding another per-thread variable is now a one-line
+  change — move it into the `.tdata` block. `HERE`/`LATEST`/the `s"` buffers
+  deliberately stay shared, guarded by the dictionary rule.
+- **An uncaught `throw` in a worker.** Today `throw` with no handler resets
+  to the REPL, which is wrong from a worker thread. Intended shape: the
+  trampoline installs the worker's outermost `catch`, so an uncaught throw
+  ends *that thread* and surfaces as the `ior` from `join`. Cheap now that
+  the handler chain is per-thread.
 - **Fault recovery is process-wide.** The guard-page/segfault machinery is
   built around signals and one REPL. A worker that faults needs a decided
   story — likely: kill that thread, report at the next prompt, leak its
@@ -98,13 +156,18 @@ channel the prompt-peek drains; a control loop receiving setpoints).
 
 ## Sequencing
 
+0. **Per-thread `base`/`sp0`/`handler` via TLS — DONE 2026-07-31.** No
+   threads involved; behaviour identical, covered by the existing suites.
 1. Trampoline + `thread`/`join` on both arches; a worker that computes and
    `join`s. Unit tests via the C harness (needs test_helper stubs — see
    the unit-test convention), integration via deterministic join tests.
+   Proof tests: `depth` reads 0 inside a worker, and a `throw` in a worker
+   surfaces through `join`.
 2. Channels (`chan`/`ch!`/`ch@`/`ch?`) + the worker rule documented in the
    Language Reference and a Threading topic page.
-3. Per-thread `handler` (or an explicit no-catch-in-workers rule), fault
-   story, then the wider user-area question only when something needs it.
+3. Worker stack guard pages and a thread-aware SIGSEGV handler — the one
+   genuinely open design question. TLS helps: the handler can tell which
+   thread it is on.
 
 Chat needs none of this (docs/Sockets.md — non-blocking + poll); threading
 is its own arc with its own payoffs.

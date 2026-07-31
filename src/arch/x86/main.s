@@ -258,7 +258,7 @@ _start:
 
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
-    mov %r15, sp0(%rip)             # save initial DSP for .S / guards
+    mov %r15, %fs:sp0@tpoff             # save initial DSP for .S / guards
     lea dict_space(%rip), %r13      # HERE
     lea dict_throw(%rip), %r12      # LATEST (head of the built-in dictionary chain)
 
@@ -438,7 +438,7 @@ repl_loop:
 
     # Save return stack pointer for error recovery
     mov %rsp, rp0(%rip)
-    movq $0, handler(%rip)          # any CATCH frames died with the last line
+    movq $0, %fs:handler@tpoff          # any CATCH frames died with the last line
 
     # Save LATEST and HERE for guard page recovery
     mov %r12, saved_latest(%rip)
@@ -626,7 +626,7 @@ dict_full:
 
     # Reset return stack and data stack
     mov rp0(%rip), %rsp
-    mov sp0(%rip), %r15
+    mov %fs:sp0@tpoff, %r15
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)
