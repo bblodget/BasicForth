@@ -99,8 +99,11 @@ everything), so a pure drawing loop stays responsive to the desktop even if
 it never reads events.
 
 ## sdl-close ( -- )
-Destroy the texture, renderer, and window and quit SDL. (If sound is open,
-`snd-close` first — `sdl-close` shuts down all of SDL, audio included.)
+Destroy the texture, renderer, and window, and shut down SDL's video
+subsystem — only video, so a sound stream opened by `sound.fs` keeps playing
+and `snd-close` can be called whenever it suits you, in either order. Safe to
+call when no window was opened, which is what makes it a one-liner in an
+`on-stop` hook.
 
 ## sdl-poll ( -- flag )
 Poll one pending event into the event buffer; false when the queue is empty.
