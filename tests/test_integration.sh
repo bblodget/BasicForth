@@ -1064,6 +1064,82 @@ else
     else
         printf "  ${RED}FAIL${NC}  snd-close leaves the window drawable\n    Got: %q\n" "$mix_b"; ((failed++))
     fi
+
+    # --- mixing channels ---
+    # The point of channels: sounds on DIFFERENT channels play together.
+    # tone-on puts two tones on channels 1 and 2, and both must report queued
+    # audio at once, with the tone channel untouched.
+    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_mix" | grep -q -- '-1 -1 0 0 -1 0 mix-ok'; then
+        printf "  ${GREEN}PASS${NC}  channels mix; ch-stop stops only its own channel\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  channels mix / ch-stop scope\n    Got: %q\n" "$ch_mix"; ((failed++))
+    fi
+
+    # REGRESSION GUARD for the channel rewrite: bare `tone` must still queue on
+    # the dedicated tone channel, so a run of tones plays in SEQUENCE exactly
+    # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
+    # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
+    # land on some other channel. Dark Star's siren sweep depends on this.
+    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
+        printf "  ${GREEN}PASS${NC}  bare tone still sequences on the tone channel\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  tone sequencing on tone-ch\n    Got: %q\n" "$ch_seq"; ((failed++))
+    fi
+
+    # snd-alloc is round-robin, never hands back tone-ch, and steals the OLDEST
+    # channel once they are all busy. Filling every channel with a long tone
+    # and allocating twice must give 1 then 2 -- the two least recently used.
+    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open? drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_alloc" | grep -q '1 2 3 1 2 alloc-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-alloc round-robins, then steals the oldest\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-alloc round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
+    fi
+
+    # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
+    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open? drop snd-channels . snd-close 999 to snd-channels snd-open? drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open? drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
+    fi
+
+    # Volume clamps to 0..snd-unity, and an out-of-range channel is inert
+    # rather than a wild dictionary write.
+    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_vol" | grep -q '256 256 0 256 0 vol-ok'; then
+        printf "  ${GREEN}PASS${NC}  ch-vol clamps; out-of-range channels are inert\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ch-vol clamping / channel bounds\n    Got: %q\n" "$ch_vol"; ((failed++))
+    fi
+
+    # Scaling below unity must copy: the same loaded sound can be playing on
+    # several channels, so ch-put must never modify the caller's samples.
+    # 1000 and -1000 (65536-1000 = 64536 read back through zero-extending w@).
+    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open? drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_scale" | grep -q '1000 64536 -1 scale-ok'; then
+        printf "  ${GREEN}PASS${NC}  ch-put scales into a copy, leaving source samples intact\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ch-put scaled copy\n    Got: %q\n" "$ch_scale"; ((failed++))
+    fi
+
+    # Every channel word must be a silent no-op with no device open, the same
+    # contract tone already had, so a soundless system never aborts.
+    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . snd-alloc . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
+        printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  channel words with no device\n    Got: %q\n" "$ch_closed"; ((failed++))
+    fi
 fi
 
 # =========================================================================
