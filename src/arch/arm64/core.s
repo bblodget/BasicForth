@@ -4982,11 +4982,116 @@ forth_source:
 //   [56] source_id      [64] to_in          [72] source_len
 //   [80] source_addr    [88] saved DSP      [96] X29  [104] X30
 
+// ---------- Thread trampoline ----------
+// pthread_create starts a thread as a C function on a C stack, with none of the
+// Forth machine state: no DSP, no data stack, no return-stack convention. Hand
+// it a Forth xt directly and it does not crash -- it runs with whatever DSP
+// glibc's thread startup left behind and silently scribbles Forth cells onto
+// random writable memory (measured: depth reported -17590946912746). This
+// trampoline is the fix, and it is the whole reason threads need asm at all.
+//
+// Context block, allocated by `thread` in threads.fs and freed by `join`. It
+// sits ABOVE both stacks, which grow down away from it, so a worker that
+// overflows cannot rewrite the fields join depends on:
+//   [ 0] xt          [ 8] data-stack top   [16] return-stack top
+//   [24] ior         [32] tid              [40] state (1=running 2=finished)
+//   [48] registry link
+//
+// void *forth_thread_tramp(void *ctx)   -- the pthread start routine, X0 = ctx.
+//
+// This is a C function as far as glibc's start_thread is concerned, so it owes
+// AAPCS64 every callee-saved register: X19-X28 plus X29/X30. It clobbers X19
+// (DSP), X21 (HERE) and X22 (LATEST) itself, and the Forth word it runs is free
+// to use the rest. glibc's thread teardown runs after we return and expects
+// them intact. (Unlike x86-64, where the return address is already on the C
+// stack, X30 is live here and the BL below would destroy it.)
+.global forth_thread_tramp
+forth_thread_tramp:
+    STP X29, X30, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X21, X22, [SP, #-16]!
+    STP X19, X20, [SP, #-16]!
+    TLS_ADDR X9, thread_ctx
+    STR X0, [X9]                    // survives the Forth call; no scratch
+    TLS_ADDR X9, thread_csp         //   register does, and the engine
+    MOV X10, SP                     //   registers are all spoken for
+    STR X10, [X9]                   // our way back, out of the worker's reach
+
+    LDR X19, [X0, #8]               // DSP = this thread's own data stack
+    TLS_ADDR X9, sp0
+    STR X19, [X9]                   // so depth/.s measure against OUR stack
+    LDR X10, [X0, #16]
+    MOV SP, X10                     // return stack = this thread's own
+
+    // Run the xt through CATCH, not by calling it: an uncaught THROW in a
+    // worker would otherwise reset to the REPL, which is meaningless off the
+    // REPL thread. Wrapped, a worker that blows up ends only itself and its
+    // code comes back as join's ior.
+    LDR X9, [X0]                    // xt
+    STR X9, [X19, #-CELL]!          // push it for CATCH
+    BL forth_catch                  // ( xt -- 0 | n )
+    LDR X9, [X19], #CELL            // the ior
+
+    TLS_ADDR X10, thread_csp
+    LDR X11, [X10]
+    MOV SP, X11                     // back onto the C stack glibc gave us
+    TLS_ADDR X10, thread_ctx
+    LDR X10, [X10]
+    STR X9, [X10, #24]              // ctx.ior, collected by join
+    // ctx.state = finished, published AFTER the result. Unlike x86-64's TSO,
+    // ARM64 may reorder plain stores, so this is a store-RELEASE: it orders
+    // the ior store before it, and a reader that sees 'finished' cannot see a
+    // stale result. (join itself is safe either way -- pthread_join is a full
+    // synchronisation point -- but `threads` reads these fields live.)
+    MOV X11, #2
+    ADD X12, X10, #40
+    STLR X11, [X12]
+    LDP X19, X20, [SP], #16
+    LDP X21, X22, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X27, X28, [SP], #16
+    LDP X29, X30, [SP], #16
+    MOV X0, #0                      // return NULL
+    RET
+
+// (acq@) ( a-addr -- x )  Fetch with ACQUIRE ordering: loads issued after this
+// one cannot be reordered before it. Pairs with the STLR the trampoline uses to
+// publish ctx.state, so a reader that sees `finished` is guaranteed to see the
+// result stored before it. With a plain LDR on both sides ARM64 is free to
+// hoist the following load and report a stale value.
+.global forth_acq_fetch
+forth_acq_fetch:
+    LDR X9, [X19]
+    LDAR X10, [X9]
+    STR X10, [X19]
+    RET
+
+// (thread-tramp) ( -- addr )  Address of the trampoline, for pthread_create.
+.global forth_thread_tramp_addr
+forth_thread_tramp_addr:
+    ADRP X9, forth_thread_tramp
+    ADD X9, X9, :lo12:forth_thread_tramp
+    STR X9, [X19, #-CELL]!
+    RET
+
 // CATCH ( xt -- 0 | n )  Run xt; 0 on normal completion, n if it THROWs.
 .global forth_catch
 forth_catch:
     LDR X9, [X19], #CELL            // pop xt (saved DSP excludes it)
     STP X29, X30, [SP, #-16]!       // save frame pointer + return address
+    // The snapshot below is the interpreter's input source and error context --
+    // process-wide globals. A worker never interprets (it runs compiled words
+    // only), so it has nothing to save, and restoring its snapshot on THROW
+    // would scribble over the line the REPL is parsing. Workers reserve the
+    // same cells without touching shared state; THROW discards them. The frame
+    // shape is identical either way -- note the saved DSP shares an STP with
+    // source_addr, so that pair is still written on both paths.
+    TLS_ADDR X14, is_repl
+    LDR X14, [X14]
+    CBZ X14, .Lcatch_no_source
     ADR X10, source_addr
     LDR X10, [X10]
     STP X10, X19, [SP, #-16]!       // frame: source_addr, data-stack pointer
@@ -5010,10 +5115,16 @@ forth_catch:
     ADR X11, file_line_num
     LDR X11, [X11]
     STP X10, X11, [SP, #-16]!       // frame: cur_source_id, file_line_num
-    TLS_ADDR X12, handler
-    LDR X10, [X12]
     ADR X11, cur_line_off
     LDR X11, [X11]
+    B .Lcatch_link
+.Lcatch_no_source:
+    STP XZR, X19, [SP, #-16]!       // no source to save, but DSP still must be
+    SUB SP, SP, #64                 //   reserved, never read (THROW discards)
+    MOV X11, XZR
+.Lcatch_link:
+    TLS_ADDR X12, handler
+    LDR X10, [X12]
     STP X10, X11, [SP, #-16]!       // frame: chain link, cur_line_off
     MOV X10, SP
     STR X10, [X12]                  // handler = this frame
@@ -5040,6 +5151,9 @@ forth_throw:
     MOV SP, X11                     // unwind the return stack to the frame
     LDP X12, X13, [SP], #16
     STR X12, [X10]                  // relink the previous handler
+    TLS_ADDR X14, is_repl           // a worker's snapshot is reserved, not real
+    LDR X14, [X14]                  //   -- discard it rather than write it back
+    CBZ X14, .Lthrow_no_source
     ADR X10, cur_line_off
     STR X13, [X10]                  // restore input source + error context
     LDP X12, X13, [SP], #16
@@ -5065,6 +5179,11 @@ forth_throw:
     LDP X12, X19, [SP], #16         // source_addr + DSP saved by CATCH
     ADR X10, source_addr
     STR X12, [X10]
+    B .Lthrow_frame
+.Lthrow_no_source:
+    ADD SP, SP, #64                 // four reserved pairs, never written
+    LDP X12, X19, [SP], #16         // the DSP still comes back
+.Lthrow_frame:
     LDP X29, X30, [SP], #16         // CATCH's frame record
     STR X9, [X19, #-CELL]!          // push n
 .Lthrow_noop:
@@ -5908,7 +6027,9 @@ DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_catch
+DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
+DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_acq_fetch
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -6016,6 +6137,20 @@ sp0:                                // This thread's initial DSP (for .S / depth
 .global handler
 handler:                            // Innermost CATCH frame on this thread's
     .quad 0                         //   return stack (0 = none)
+.global is_repl
+is_repl:                            // 1 on the REPL thread, 0 in a worker. The
+    .quad 0                         //   .tdata image gives workers 0 for free;
+                                    //   main.s sets its own copy to 1.
+.global thread_ctx
+thread_ctx:                         // This worker's context block (0 on the REPL
+    .quad 0                         //   thread). Holds ctx across the Forth call,
+                                    //   where no scratch register survives.
+.global thread_csp
+thread_csp:                         // The C stack pointer to return on. Kept in
+    .quad 0                         //   TLS, NOT in the context block: the
+                                    //   worker's data stack grows down toward
+                                    //   its context, so an overflow there would
+                                    //   otherwise rewrite our way back to glibc.
 
 // ---------- Variables ----------
 .data

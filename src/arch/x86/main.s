@@ -259,6 +259,7 @@ _start:
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, %fs:sp0@tpoff             # save initial DSP for .S / guards
+    movq $1, %fs:is_repl@tpoff      # this is the REPL thread; workers get 0
     lea dict_space(%rip), %r13      # HERE
     lea dict_throw(%rip), %r12      # LATEST (head of the built-in dictionary chain)
 

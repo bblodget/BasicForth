@@ -284,6 +284,9 @@ _start:
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
     TLS_ADDR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
+    TLS_ADDR X9, is_repl
+    MOV X10, #1
+    STR X10, [X9]                   // this is the REPL thread; workers get 0
     ADR X21, dict_space             // HERE
     ADR X22, dict_throw             // LATEST (head of the built-in dictionary chain)
 

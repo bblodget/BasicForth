@@ -928,15 +928,24 @@ docs/Graphics.md for the API.
     moved to thread-local storage (`%fs` / `TPIDR_EL0`, local-exec model).
     BASE is no longer read-only in workers, and adding another per-thread
     variable is now a one-line change.
-  - Still to settle: **`catch`/`throw` in a worker is still unsafe** — the
-    CATCH frame snapshots ten shared globals (input source + file-error
-    context) that THROW writes back, clobbering the REPL's line; fix is to
-    skip the snapshot off the REPL thread, ~10 lines per arch, NOT a
-    280-site TLS conversion. Also: uncaught `throw` in a worker (intended:
-    the trampoline installs the worker's outermost `catch`, surfacing as
-    `join`'s ior); worker stack guard pages + a thread-aware SIGSEGV
-    handler (signals are process-wide); per-thread locals stack; stack
-    sizing
+  - [x] **Step 1 DONE 2026-07-31 (branch threads):** per-arch trampoline,
+    `thread ( xt -- t ior )` / `join ( t -- ior )` in `src/forth/threads.fs`,
+    and the `is_repl` gate so a worker's THROW no longer restores its
+    snapshot of the ten shared input-source globals over the REPL's line.
+    Uncaught throw in a worker ends only that thread (the trampoline runs
+    the xt through `catch`) and surfaces as join's ior. 7 integration tests
+    on both arches; `help concurrency`.
+  - [x] **Step 1.5 DONE 2026-08-01 (branch threads):** thread registry
+    (linked through the context blocks, no extra allocation), `threads`
+    listing word with running/finished state, `join ( t -- result status )`
+    splitting the worker's throw code from a join failure, and a spent
+    handle now reported as -60 instead of crashing. Reference page renamed
+    to Concurrency.md so `help threads` reaches the word, not the page.
+  - Still to settle: **channels** (`chan`/`ch!`/`ch@`/`ch?`) as the blessed
+    communication path — step 2; worker stack guard pages + a thread-aware
+    SIGSEGV handler (signals are process-wide, and a worker that overflows
+    currently walks into its own context block); per-thread locals stack;
+    stack sizing (fixed constants today)
 
 ---
 

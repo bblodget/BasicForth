@@ -4503,12 +4503,109 @@ forth_source:
 #   [56] source_id      [64] to_in          [72] source_len
 #   [80] source_addr    [88] saved DSP      [96] CATCH's return address
 
+# ---------- Thread trampoline ----------
+# pthread_create starts a thread as a C function on a C stack, with none of the
+# Forth machine state: no DSP, no data stack, no return-stack convention. Hand
+# it a Forth xt directly and it does not crash -- it runs with whatever DSP
+# glibc's thread startup left behind and silently scribbles Forth cells onto
+# random writable memory (measured: depth reported -17590946912746). This
+# trampoline is the fix, and it is the whole reason threads need asm at all.
+#
+# Context block, allocated by `thread` in threads.fs and freed by `join`. It
+# sits ABOVE both stacks, which grow down away from it, so a worker that
+# overflows cannot rewrite the fields join depends on:
+#   [ 0] xt          [ 8] data-stack top   [16] return-stack top
+#   [24] ior         [32] tid              [40] state (1=running 2=finished)
+#   [48] registry link
+#
+# void *forth_thread_tramp(void *ctx)   -- the pthread start routine.
+#
+# This is a C function as far as glibc's start_thread is concerned, so it owes
+# the SysV ABI every callee-saved register: RBX, RBP, R12-R15. It clobbers R15
+# (DSP), R13 (HERE) and R12 (LATEST) itself, and the Forth word it runs is free
+# to use the rest. glibc's thread teardown runs after we return and expects
+# them intact.
+.global forth_thread_tramp
+forth_thread_tramp:
+    push %rbx
+    push %rbp
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    mov %rdi, %fs:thread_ctx@tpoff  # survives the Forth call; no scratch
+                                    #   register does, and the engine
+                                    #   registers are all spoken for
+    mov %rsp, %fs:thread_csp@tpoff  # our way back, kept out of the worker's
+                                    #   reach (see thread_csp in the TLS block)
+    mov 8(%rdi), %r15               # DSP = this thread's own data stack
+    mov %r15, %fs:sp0@tpoff         # so depth/.s measure against OUR stack
+    mov 16(%rdi), %rsp              # return stack = this thread's own
+
+    # Run the xt through CATCH, not by calling it: an uncaught THROW in a
+    # worker would otherwise reset to the REPL, which is meaningless off the
+    # REPL thread. Wrapped, a worker that blows up ends only itself and its
+    # code comes back as join's ior.
+    mov (%rdi), %rax                # xt
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push it for CATCH
+    call forth_catch                # ( xt -- 0 | n )
+    mov (%r15), %rax                # the ior
+    add $CELL, %r15
+
+    mov %fs:thread_csp@tpoff, %rsp  # back onto the C stack glibc gave us
+    mov %fs:thread_ctx@tpoff, %rdi
+    mov %rax, 24(%rdi)              # ctx.ior, collected by join
+    movq $2, 40(%rdi)               # ctx.state = finished, published AFTER the
+                                    #   result. x86-64 is TSO -- stores retire
+                                    #   in order -- so no barrier is needed for
+                                    #   a reader that sees 'finished' to also
+                                    #   see the ior. ARM64 needs STLR here.
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbp
+    pop %rbx
+    xor %eax, %eax                  # return NULL
+    ret
+
+# (acq@) ( a-addr -- x )  Fetch with ACQUIRE ordering: loads issued after this
+# one cannot be reordered before it. Pairs with the store-release the
+# trampoline uses to publish ctx.state, so a reader that sees `finished` is
+# guaranteed to see the result stored before it -- a plain @ on both sides
+# would let ARM64 hoist the second load and report a stale value.
+# On x86-64 every load already has acquire semantics (TSO), so this is a plain
+# load; the word exists so callers need not know which arch they are on.
+.global forth_acq_fetch
+forth_acq_fetch:
+    mov (%r15), %rax
+    mov (%rax), %rax
+    mov %rax, (%r15)
+    ret
+
+# (thread-tramp) ( -- addr )  Address of the trampoline, for pthread_create.
+.global forth_thread_tramp_addr
+forth_thread_tramp_addr:
+    sub $CELL, %r15
+    lea forth_thread_tramp(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
 # CATCH ( xt -- 0 | n )  Run xt; 0 on normal completion, n if it THROWs.
 .global forth_catch
 forth_catch:
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # pop it (saved DSP excludes the xt)
     push %r15                       # frame: data-stack pointer
+    # The snapshot below is the interpreter's input source and error context --
+    # process-wide globals. A worker never interprets (it runs compiled words
+    # only), so it has nothing to save, and restoring its snapshot on THROW
+    # would scribble over the line the REPL is parsing. Workers therefore
+    # reserve the same ten cells without touching shared state; THROW discards
+    # them instead of writing them back. Frame shape stays identical either way.
+    cmpq $0, %fs:is_repl@tpoff
+    je .Lcatch_no_source
     pushq source_addr(%rip)         # frame: input source + error context
     pushq source_len(%rip)
     pushq to_in(%rip)
@@ -4519,6 +4616,10 @@ forth_catch:
     pushq file_line_num(%rip)
     pushq cur_source_id(%rip)
     pushq cur_line_off(%rip)
+    jmp .Lcatch_link
+.Lcatch_no_source:
+    sub $10*CELL, %rsp              # reserve, never read (THROW discards it)
+.Lcatch_link:
     pushq %fs:handler@tpoff             # frame: chain link
     mov %rsp, %fs:handler@tpoff
     call *%rax
@@ -4543,6 +4644,8 @@ forth_throw:
     jz .Lthrow_uncaught
     mov %rcx, %rsp                  # unwind the return stack to the frame
     popq %fs:handler@tpoff              # relink the previous handler
+    cmpq $0, %fs:is_repl@tpoff      # a worker's snapshot is reserved, not real
+    je .Lthrow_no_source            #   -- discard it rather than write it back
     popq cur_line_off(%rip)         # restore input source + error context
     popq cur_source_id(%rip)
     popq file_line_num(%rip)
@@ -4553,6 +4656,10 @@ forth_throw:
     popq to_in(%rip)
     popq source_len(%rip)
     popq source_addr(%rip)
+    jmp .Lthrow_dsp
+.Lthrow_no_source:
+    add $10*CELL, %rsp
+.Lthrow_dsp:
     pop %r15                        # restore DSP saved by CATCH
     sub $CELL, %r15
     mov %rax, (%r15)                # push n
@@ -5355,7 +5462,9 @@ DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_catch
+DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
+DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_acq_fetch
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5466,6 +5575,20 @@ sp0:                                # This thread's initial DSP (for .S / depth)
 .global handler
 handler:                            # Innermost CATCH frame on this thread's
     .quad 0                         #   return stack (0 = none)
+.global is_repl
+is_repl:                            # 1 on the REPL thread, 0 in a worker. The
+    .quad 0                         #   .tdata image gives workers 0 for free;
+                                    #   main.s sets its own copy to 1.
+.global thread_ctx
+thread_ctx:                         # This worker's context block (0 on the REPL
+    .quad 0                         #   thread). Holds ctx across the Forth call,
+                                    #   where no scratch register survives.
+.global thread_csp
+thread_csp:                         # The C stack pointer to return on. Kept in
+    .quad 0                         #   TLS, NOT in the context block: the
+                                    #   worker's data stack grows down toward
+                                    #   its context, so an overflow there would
+                                    #   otherwise rewrite our way back to glibc.
 
 # ---------- Variables ----------
 .data

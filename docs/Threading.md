@@ -1,8 +1,9 @@
 # Threading — Design Notes
 
-Status: **step 0 done** (2026-07-31) — the per-thread variables now live in
-TLS. No threads yet: the trampoline, `thread`/`join` and channels are still
-ahead. Real concurrency for BasicForth: audio feeders, robot control loops at
+Status: **steps 0, 1 and 1.5 done** (2026-08-01) — per-thread variables live in
+TLS, and `require threads.fs` gives you `thread`/`join`/`threads` running Forth
+words on real OS threads, on both arches, with a registry behind them. Channels
+(step 2) and worker stack guard pages (step 3) are still ahead. Real concurrency for BasicForth: audio feeders, robot control loops at
 fixed Hz, socket readers — the Phase 8 item, given a concrete shape.
 Supersedes the "pthreads or clone?" question in TODO Phase 8: **pthreads, via
 the FFI.**
@@ -37,11 +38,61 @@ assembly trampoline (~20 instructions):
 Stacks are `allocate`d by the parent at `thread` time and recorded in the
 context block, freed at `join`.
 
-Forth-level API (names unsettled):
+**The registry (step 1.5).** Live handles are kept on a linked list threaded
+through the context blocks themselves, so there is nothing extra to allocate.
+`thread` links, `join` unlinks. It buys three things at once: `threads` can list
+what is outstanding; `join` can reject a spent handle with `-60` instead of
+reading freed memory; and the "is this handle still alive?" question that three
+separate documentation rules had been standing in for now has an actual answer.
 
-    thread ( xt -- tid ior )     run xt in a new thread, own stacks
-    join   ( tid -- ior )        wait for it; frees its stacks
+No mutex in v1 — the list is mutated only by the REPL thread, which extends the
+rule that the REPL owns the dictionary. The `state` cell is the exception, since
+a worker writes it and the REPL reads it: it is a single aligned cell, published
+by the trampoline with **store-release** (`STLR` on ARM64) and read back through
+`(acq@)`, an **acquire** load. Both halves are required. Store-release alone
+orders the writer, but ARM64 also reorders *loads*, so a plain fetch on the
+reader could hoist the result load above the state load and report the initial 0
+for a worker that had thrown. x86-64's TSO gives both orderings for free, which
+is exactly why this class of bug is invisible on the development machine.
+
+**Handle ownership.** A handle has one owner and is joined exactly once. A
+successful `join` frees the block; a failed one frees nothing, because the
+worker may still be running on the stacks inside it. That asymmetry is
+deliberate, and it means a failed join leaks rather than retries — only
+`EDEADLK` (a thread joining itself) proves the block is still alive, whereas
+`EINVAL` usually means another join is in flight and will free it, and after
+`ESRCH` the tid may have been recycled onto an unrelated thread. The registry
+cannot tell those apart either — what it *can* do is catch the common mistake,
+a second join on a handle already reclaimed, and report `-60` rather than
+reading freed memory. A failed join leaves the handle registered on purpose:
+the realistic failure is one caller joining the wrong handle, and the rightful
+owner must still be able to reclaim.
+
+Two things the trampoline has to get right that are easy to miss:
+
+- **It owes the C ABI its callee-saved registers.** glibc's `start_thread`
+  calls it as an ordinary C function and keeps running afterwards to tear the
+  thread down. The trampoline clobbers DSP, HERE and LATEST itself, and the
+  Forth word it runs may use the rest, so it saves and restores
+  `RBX`/`RBP`/`R12`-`R15` (x86-64) and `X19`-`X28` (ARM64).
+- **Its return path must be out of the worker's reach.** The saved C stack
+  pointer lives in a TLS cell, not in the context block: both stacks grow down,
+  and a context sitting below a stack would let an ordinary overflow rewrite the
+  pointer the trampoline restores before returning — turning a stack overflow
+  into a wild jump. For the same reason the block is laid out
+  `[ data stack ][ return stack ][ context ]`, so both stacks grow *away* from
+  the context and the tid `join` needs stays intact.
+
+Forth-level API, as shipped (`src/forth/threads.fs`, `help concurrency`):
+
+    thread  ( xt -- t ior )         run xt in a new thread, own stacks
+    join    ( t -- result status )  wait for it; frees its stacks
+    threads ( -- )                  list the live threads
     \ later: detach, mutex/cond wrappers if channels aren't enough
+
+`join` returns two values because a worker's throw code and a failure of the
+join itself are different events that a single `ior` conflated — a worker
+throwing 35 read identically to `EDEADLK`.
 
 ## Per-thread state: native TLS (done, 2026-07-31)
 
@@ -79,22 +130,30 @@ worker doing `hex` cannot disturb the REPL. `depth`/`.s` will work in workers
 once the trampoline sets that thread's `sp0`. And the `catch` *chain* is now
 per-thread, so a worker can no longer splice into the REPL's chain.
 
-**What it does not settle: `catch`/`throw` is still not thread-safe.** Besides
+**`catch`/`throw` needed one more fix, done in step 1.** Besides
 the chain link, a `CATCH` frame snapshots ten further globals — the input
 source (`source_addr`, `source_len`, `to_in`, `source_id`) and the file-error
 context (`il_rsp`/`il_sp`, `file_name_addr`, `file_name_len`, `file_line_num`,
 `cur_source_id`, `cur_line_off`) — and `THROW` writes all ten *back* while
-unwinding. Those are still plain globals, so a worker's `throw` would restore
-its snapshot over whatever line the REPL is parsing. Per-thread `handler` is
-necessary but not sufficient; **workers must not `catch` until this is fixed.**
+unwinding. Those are plain globals, so a worker's `throw` restored its snapshot
+over whatever line the REPL was parsing — per-thread `handler` was necessary
+but not sufficient.
 
-The cheap fix is not to move all ten into TLS — that is ~280 sites across both
+The fix was **not** to move all ten into TLS: that is ~280 sites across both
 arches, in parser hot paths. The snapshot exists to restore the *interpreter's*
-input source across a throw, and a worker has no input source: it never
-interprets (see the dictionary rule below). So `catch`/`throw` should skip the
-snapshot and restore entirely when not on the REPL thread, gated on one
-per-thread flag in the TLS block. Roughly ten lines per arch, and testable the
-moment the trampoline exists — hence step 1, not step 0.
+input source across a throw, and a worker has no input source — it never
+interprets (see the dictionary rule below). So `catch` skips the snapshot and
+`throw` discards rather than restores it when `is_repl` is clear, one more cell
+in the TLS block that `.tdata` leaves 0 for workers automatically. The frame
+shape is identical on both paths, so nothing else changed.
+
+Worth recording how visible this was: with the gate removed, a worker looping
+on `catch`/`throw` while the REPL ran `evaluate` made the REPL re-parse
+fragments of its own line —
+
+    main computed (expect 6000):    →    .. ...main computed (main computed (
+
+which is the regression test in the integration suite.
 
 ## The v1 rule: workers run compiled words only
 
@@ -128,20 +187,15 @@ channel the prompt-peek drains; a control loop receiving setpoints).
 
 ## Interactions to settle (the honest list)
 
-- **`catch`/`throw` is not thread-safe yet.** The chain head (`handler`) is
-  per-thread as of step 0, but a `CATCH` frame also snapshots ten shared
-  globals that `THROW` writes back — see the TLS section above. Fix: skip the
-  snapshot when not on the REPL thread, gated on a per-thread flag. Until
-  then, **workers must not `catch`.**
+- ~~`catch`/`throw` is not thread-safe.~~ **Fixed in step 1** by the `is_repl`
+  gate — see the TLS section above. Workers may `catch` freely.
+- ~~An uncaught `throw` in a worker.~~ **Fixed in step 1**: the trampoline runs
+  the xt through `catch`, so an uncaught throw ends only that thread and its
+  code comes back as `join`'s `ior`.
 - ~~Per-thread state ("user area").~~ **Settled by TLS** (above) for `base`,
   `sp0`, `handler`. Adding another per-thread variable is now a one-line
   change — move it into the `.tdata` block. `HERE`/`LATEST`/the `s"` buffers
   deliberately stay shared, guarded by the dictionary rule.
-- **An uncaught `throw` in a worker.** Today `throw` with no handler resets
-  to the REPL, which is wrong from a worker thread. Intended shape: the
-  trampoline installs the worker's outermost `catch`, so an uncaught throw
-  ends *that thread* and surfaces as the `ior` from `join`. Cheap now that
-  the handler chain is per-thread.
 - **Fault recovery is process-wide.** The guard-page/segfault machinery is
   built around signals and one REPL. A worker that faults needs a decided
   story — likely: kill that thread, report at the next prompt, leak its
@@ -158,11 +212,10 @@ channel the prompt-peek drains; a control loop receiving setpoints).
 
 0. **Per-thread `base`/`sp0`/`handler` via TLS — DONE 2026-07-31.** No
    threads involved; behaviour identical, covered by the existing suites.
-1. Trampoline + `thread`/`join` on both arches; a worker that computes and
-   `join`s. Unit tests via the C harness (needs test_helper stubs — see
-   the unit-test convention), integration via deterministic join tests.
-   Proof tests: `depth` reads 0 inside a worker, and a `throw` in a worker
-   surfaces through `join`.
+1. **Trampoline + `thread`/`join` — DONE 2026-07-31.** Both arches, plus the
+   `is_repl` gate on the CATCH snapshot. Seven integration tests, including
+   the corruption regression. Proof tests pass: `depth` reads 0 inside a
+   worker, and a `throw` in a worker surfaces through `join`.
 2. Channels (`chan`/`ch!`/`ch@`/`ch?`) + the worker rule documented in the
    Language Reference and a Threading topic page.
 3. Worker stack guard pages and a thread-aware SIGSEGV handler — the one

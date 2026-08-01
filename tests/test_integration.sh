@@ -478,10 +478,10 @@ assert_output "; still ends a :noname"       ":noname 9 ; execute ."        "9"
 # The same rejection inside EVALUATE, which runs the same outer interpreter.
 # EVALUATE swallows the report (it returns the status to its caller and nothing
 # prints it -- true of an undefined word there too, not special to this), so
-# what is observable is that the line inside EVALUATE stopped.
+# what is observable is that the line inside EVALUATE stopped: the definition
+# resumes afterwards and the stray `;` did not end it.
 assert_output "stray ; inside evaluate stops that line" \
               ": t s\" ; 999 .\" evaluate 42 . ; t"                        "42"
-
 # The wording is per-token state, and a nested EVALUATE runs a whole interpret
 # loop inside ONE outer token -- so EVALUATE brackets it, like the source
 # context. Without that, an error raised later in the SAME outer token inherits
@@ -501,6 +501,7 @@ assert_output "evaluate nests two deep" \
               ": inner s\" 2 3 +\" evaluate ;
 : outer s\" inner\" evaluate ;
 outer ."                                                    "5"
+
 
 # =========================================================================
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"
@@ -5154,6 +5155,168 @@ else
     printf "  ${RED}FAIL${NC}  well-formed file false positive\n    Got: %q\n" "$unf_out"; ((failed++))
 fi
 rm -rf "$unc_dir"
+
+# =========================================================================
+section "THREADS (OS threads via pthreads)"
+# =========================================================================
+# require threads.fs is opt-in, so none of this runs at startup. A worker gets
+# its own data and return stacks from the trampoline; BASE, depth and the CATCH
+# chain are per-thread (TLS). See docs/Threading.md.
+thr_run() {
+    printf '%s\n' "$1" | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1
+}
+thr_check() {
+    local name="$1" input="$2" expected="$3" out
+    out=$(thr_run "$input")
+    if [[ "$out" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got:  %q\n" "$name" "$expected" "$out"; ((failed++))
+    fi
+}
+
+thr_check "a worker runs a Forth word to completion" \
+'require threads.fs
+variable c
+: work  1000 0 do 1 c +! loop ;
+: go    ['"'"'] work thread drop join 2drop  c @ . ;
+go' \
+"1000"
+
+# The anti-regression for the bug that motivated the trampoline: handing an xt
+# straight to pthread_create leaves DSP holding glibc startup garbage, and the
+# worker silently writes Forth cells to random memory. depth reported
+# -17590946912746. A correct trampoline gives the worker its own stack, so an
+# empty worker stack reads exactly 0.
+thr_check "a worker's data stack is its own (depth reads 0, not garbage)" \
+'require threads.fs
+variable d
+: probe  depth d ! ;
+: go     ['"'"'] probe thread drop join 2drop  d @ . ;
+go' \
+"0"
+
+thr_check "BASE is per-thread: a worker going hex leaves the REPL decimal" \
+'require threads.fs
+: w   hex ;
+: go  ['"'"'] w thread drop join 2drop  base @ . ;
+go' \
+"10"
+
+thr_check "an uncaught THROW in a worker surfaces as the join result" \
+'require threads.fs
+: boom  42 throw ;
+: go    ['"'"'] boom thread drop join drop . ;
+go' \
+"42"
+
+thr_check "CATCH works inside a worker" \
+'require threads.fs
+variable got
+: boom     42 throw ;
+: catcher  ['"'"'] boom catch got ! ;
+: go       ['"'"'] catcher thread drop join drop .  got @ . ;
+go' \
+"0 42"
+
+# The one Codex caught: per-thread `handler` is necessary but not sufficient.
+# A CATCH frame also snapshots ten shared globals (input source + file-error
+# context) that THROW writes back. Without the is_repl gate, a worker throwing
+# while the REPL parses restores its stale snapshot over the REPL's input
+# source and the REPL re-parses fragments of its own line -- verified by
+# disabling the gate, which turns the line below into garbage.
+thr_check "a worker throwing cannot corrupt the REPL's input source" \
+'require threads.fs
+variable t
+: boom    42 throw ;
+: hammer  20000 0 do ['"'"'] boom catch drop loop ;
+: churn   0 400 0 do s" 1 2 + " evaluate + loop ;
+: go      ['"'"'] hammer thread drop t !  churn .  t @ join drop . ;
+go' \
+"1200 0"
+
+# The trampoline is a C function to glibc's start_thread, so it owes the ABI
+# every callee-saved register (RBX/RBP/R12-R15; X19-X28 on ARM64) -- it clobbers
+# DSP, HERE and LATEST itself, and glibc's thread teardown runs after it
+# returns. Many create/join cycles exercise that teardown path repeatedly.
+thr_check "many create/join cycles leave the engine intact" \
+'require threads.fs
+variable c
+: work   100 0 do 1 c +! loop ;
+: churn  100 0 do ['"'"'] work thread drop join 2drop loop ;
+: go     churn  c @ .  6 7 * .  depth . ;
+go' \
+"10000 42 0"
+
+# A failed pthread_join must NOT free the block: the worker may still be running
+# and its stacks live inside it, so freeing there unmaps memory a live thread is
+# executing on. Forced deterministically -- a worker joining ITSELF gets EDEADLK
+# (35), which lands in the STATUS half of join's result. With the old
+# free-on-failure path this segfaults with a core dump. The rightful owner
+# must still be able to join afterwards, so the handle stays registered.
+thr_check "a failed join does not free a live worker's stacks" \
+'require threads.fs
+variable h  variable r
+: self-join  begin h @ until  h @ join r ! drop ;
+: go   ['"'"'] self-join thread drop h !
+       h @ join drop .  r @ .  6 7 * . ;
+go' \
+"0 35 42"
+
+# The registry turns a second join from a use-after-free into an honest error.
+thr_check "joining a spent handle reports instead of crashing" \
+'require threads.fs
+variable t
+: work  1 drop ;
+: go    ['"'"'] work thread drop t !
+        t @ join 2drop
+        t @ join swap drop . ;   \ status of the second join
+go' \
+"-60"
+
+# The reason join returns two values. A worker throwing 35 and a join failing
+# with EDEADLK 35 are different events; one ior could not tell them apart.
+thr_check "a worker throwing 35 is distinguishable from EDEADLK 35" \
+'require threads.fs
+: t35   35 throw ;
+: go    ['"'"'] t35 thread drop join . . ;   \ result then status
+go' \
+"0 35"
+
+# threads lists live handles and drops them as they are joined.
+thr_check "threads lists a live worker and forgets it once joined" \
+'require threads.fs
+variable t
+: work  1 drop ;
+: go    threads
+        ['"'"'] work thread drop t !
+        t @ join 2drop  threads ;
+go' \
+"(no threads)"
+
+# The trampoline publishes ctx.state with store-RELEASE and threads reads it
+# with (acq@) -- an acquire load. Both halves are needed: with plain loads on
+# the reader, ARM64 may hoist the result load above the state load and report
+# the initial 0 for a worker that actually threw. This polls state then reads
+# result, which is precisely that pattern.
+thr_check "a finished worker lists its real result, not a stale one" \
+'require threads.fs
+variable t
+: t42   42 throw ;
+: wait  begin t @ (t>ctx) (t-state) (acq@) finished = until ;
+: go    ['"'"'] t42 thread drop t !  wait  threads  t @ join . . ;
+go' \
+"finished  42"
+
+thr_check "two workers run concurrently and both complete" \
+'require threads.fs
+variable a  variable b  variable t1  variable t2
+: w1  5000 0 do 1 a +! loop ;
+: w2  5000 0 do 1 b +! loop ;
+: go  ['"'"'] w1 thread drop t1 !  ['"'"'] w2 thread drop t2 !
+      t1 @ join 2drop  t2 @ join 2drop  a @ .  b @ . ;
+go' \
+"5000 5000"
 
 # =========================================================================
 section "BYE"

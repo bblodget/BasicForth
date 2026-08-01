@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### Added: OS threads — `thread` and `join`
+
+- `require threads.fs` and a Forth word runs on a real OS thread, alongside the
+  prompt:
+
+      variable c
+      : work  1000 0 do 1 c +! loop ;
+      : go    ['] work thread drop join drop  c @ . ;
+      go                \ 1000
+
+- `thread ( xt -- t ior )` starts it; `join ( t -- result status )` waits, frees
+  its stacks, and reports; `threads ( -- )` lists what is outstanding. The
+  handle is the thread's context block rather than the raw pthread id, because
+  `join` cannot find the stacks to free from an id alone.
+- **`join` returns two values on purpose.** A worker throwing `35` and a join
+  failing with `EDEADLK 35` are different events — one is your program's logic,
+  the other a misuse of threads — and a single code could not tell them apart.
+  `status` is on top: 0 means the join worked and `result` is the worker's throw
+  code. Positive statuses are the system's `errno`, negative ones are ours.
+- **`threads` lists the live workers** with `running`/`finished` and, once
+  finished, the result waiting to be collected. A thread stays listed until you
+  `join` it, so the listing doubles as the reclaim to-do list.
+- **Joining twice no longer crashes.** A registry of live handles — linked
+  through the context blocks, so nothing extra is allocated — lets `join`
+  reject a spent handle with `-60` instead of reading freed memory.
+- **Each worker gets its own data and return stacks**, so `depth` inside a
+  worker starts at 0. This is the whole reason threads need assembly: handing a
+  Forth xt straight to `pthread_create` does not crash, it runs with whatever
+  DSP glibc's thread startup left in the register and silently writes Forth
+  cells onto random memory — `depth` read -17590946912746 in a spike. A small
+  per-arch trampoline sets up the thread's machine state first.
+- **A worker that throws ends only itself.** The trampoline runs the word
+  through `catch`, so an uncaught `throw` in a worker is a value you handle
+  rather than a session you lose. `catch` works normally inside a worker too.
+- Fixed as part of this: a `CATCH` frame also snapshots ten shared globals (the
+  interpreter's input source and file-error context) which `THROW` writes back.
+  A worker throwing while the prompt was parsing restored its stale snapshot
+  over the prompt's input source, and the REPL re-parsed fragments of its own
+  line. Workers now skip that snapshot entirely — they never interpret, so they
+  have no input source to save. There is a regression test.
+- **The rule: the prompt owns the dictionary.** Workers run already-compiled
+  words — no `:`, `create`, interpret-time `s"`, `save` or `load`. Documented,
+  not enforced. `help concurrency` covers it, and `docs/Threading.md` has the
+  design.
+- The trampoline is a C function as far as glibc's `start_thread` is concerned,
+  so it saves and restores every callee-saved register — `RBX`/`RBP`/`R12`-`R15`
+  on x86-64, `X19`-`X28` on ARM64. It clobbers DSP, HERE and LATEST itself, and
+  glibc's thread teardown runs after it returns and expects them intact.
+- A worker's block is laid out `[ data stack ][ return stack ][ context ]`, both
+  stacks growing **down, away from the context**, so an overflowing worker
+  cannot corrupt the thread id `join` needs. The trampoline keeps its return
+  path in TLS for the same reason — in the context block it would have been
+  writable by an overflow, turning a stack overflow into a wild jump.
+- A **failed** `join` frees nothing: the thread may still be running, and its
+  stacks are inside the block, so freeing there would unmap memory a live thread
+  is executing on — a leak is recoverable, a use-after-free is not. The block
+  leaks by design and the handle is spent; **a failed join must not be
+  retried**, since the usual cause is another thread already joining, whose
+  success frees the block. Give each handle one owner and join it exactly once
+  — a successful join frees it.
+- Not yet: channels for communication, and guard pages on worker stacks (an
+  overflowing worker walks down past its allocation into unmapped memory).
+
 ### Fixed: a compile-only word no longer lets the rest of the line run
 
 - Using a compile-only word at the prompt printed `compile only` and then **kept
