@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Faster: `lshift` and `rshift` on x86-64
+
+- **Shifting was twice the cost of multiplying**, which is backwards — a shift
+  is the cheaper operation on every machine. `2 *` timed 0.199 s where
+  `1 lshift` timed 0.314 s over the same 30 million calls.
+- Cause: both shifts operated on the top-of-stack cell **in place in memory**
+  with a variable count — `shlq %cl, (%r15)`. That form is disproportionately
+  expensive on the Zen 4 test machine. They now load the cell into a register,
+  shift it there, and store it back. One extra instruction, roughly half the
+  time: `1 lshift` drops from 0.390 s to 0.184 s, level with `2 *` at 0.185 s.
+- It is specifically the **variable count** that is slow, not the in-place
+  memory write. Every other primitive that writes the stack cell directly —
+  `+`, `-`, `and`, `or`, `xor`, `invert`, `negate`, `1+`, `1-`, and `2/`'s
+  `sarq $1, (%r15)` with its immediate count — was measured and is already at
+  the floor, costing nothing beyond its call. Nothing else needed changing.
+- ARM64 was never affected: with no memory read-modify-write to reach for, it
+  already loaded, shifted, and stored. The two architectures now match.
+- `2*` is defined as `1 lshift`, so it gets the same speedup.
+
 ### Added: mixing sound channels
 
 - **Sounds can now play at the same time.** The audio device holds
