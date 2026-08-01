@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added: float arguments in the FFI (`(ccallf)`, `>f32`)
+
+- **The FFI could not call a C function that takes a float**, and three
+  separate features had already been bent around that one gap:
+  `SDL_SetAudioStreamGain(stream, float)`, sherpa-onnx's TTS entry point, and
+  per-channel audio volume. Floats travel in their own register file
+  (XMM0–7 / V0–V7), which `(ccall)` never touched.
+- `(ccallf)` and `(ccallf>f)` take the integer arguments, then the float ones,
+  then both counts. Grouping them costs nothing: each ABI fills its two
+  register files independently of how the parameters interleave in the C
+  prototype, so the groups still land where C expects them.
+- `>f32 ( n d -- bits )` builds an IEEE-754 single from a ratio. **Forth still
+  never holds a float** — a float argument is an opaque bit pattern in an
+  ordinary cell. `>f32` is the only place the engine touches floating-point
+  hardware, and a zero denominator gives `0` rather than an infinity.
+- Verified against libm rather than by inspection, because exact functions turn
+  a misplaced register into a wrong *number* instead of a crash: `fdimf` is
+  asymmetric so it checks argument **order**, `fmaf` exercises three float
+  registers at once, and `ldexpf` mixes an integer with a float. 7 tests on
+  both architectures, each confirmed to fail when the corresponding register
+  path is deliberately broken.
+- `(ccall)` is untouched, so every existing binding is unaffected.
+
 ### Faster: `lshift` and `rshift` on x86-64
 
 - **Shifting was twice the cost of multiplying**, which is backwards — a shift
