@@ -1464,8 +1464,14 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
+# Error-report prefixes. The reporter (repl_error in main.s, .Lincl_error
+# below) prints err_pfx + the offending token, so an error site chooses its own
+# wording by pointing err_pfx at one of these. Keeps every line error on one
+# format -- "<why> <token>" -- and on one code path.
+err_pfx_question: .ascii "? "
+.equ err_pfx_question_len, . - err_pfx_question
+err_pfx_conly:    .ascii "compile only: "
+.equ err_pfx_conly_len, . - err_pfx_conly
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2206,6 +2212,17 @@ forth_interpret_line:
     test %rax, %rax
     jz .Lil_done
 
+    # Remember the token before FIND consumes it, so any error site below can
+    # name it, and reset the wording to the default -- that reset is what stops
+    # one error's wording leaking onto the next. Two stores per word in the
+    # outer interpreter only; the inner loop of a compiled word never comes here.
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, err_token_addr(%rip)
+    lea err_pfx_question(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $err_pfx_question_len, err_pfx_len(%rip)
+
     # FIND ( c-addr u -- xt flag | c-addr u 0 )
     call forth_find
 
@@ -2281,6 +2298,7 @@ forth_interpret_line:
     mov CELL(%r15), %rax            # c-addr (second)
     mov %rax, err_token_addr(%rip)
     add $2*CELL, %r15               # clean up c-addr and u
+                                    # wording stays the per-token default, "? "
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)
@@ -2314,12 +2332,15 @@ forth_interpret_line:
     ret
 
 .Lil_compile_only:
-    # Compile-only word used in interpret mode — non-fatal, continue parsing
+    # Compile-only word used in interpret mode. This aborts the line, like every
+    # other error: it used to print and keep parsing, so the rest of the line ran
+    # anyway. `['] dup 999 .` then executed `dup` on an empty stack, and the
+    # underflow -- not the real mistake -- was what you saw.
     add $2*CELL, %r15               # drop xt, flag
-    lea msg_compile_only(%rip), %rsi
-    mov $msg_compile_only_len, %rdx
-    call platform_write
-    jmp .Lil_loop
+    lea err_pfx_conly(%rip), %rax   # report as "compile only: <token>"
+    mov %rax, err_pfx_addr(%rip)
+    movq $err_pfx_conly_len, err_pfx_len(%rip)
+    jmp .Lil_err_return             # err_token was saved before FIND
 
 # ---------- PAREN (comment word, IMMEDIATE) ----------
 # ( "ccc)" -- )
@@ -2375,6 +2396,12 @@ forth_evaluate:
     mov source_len(%rip), %rbp      # save old source_len
     mov to_in(%rip), %r14           # save old to_in
     mov source_id(%rip), %r8        # save old source_id
+    # The error wording belongs to the OUTER token being interpreted. The nested
+    # interpret_line below resets it per token of its own string, so without
+    # this an error raised later in the same outer token would inherit the inner
+    # string's wording. Bracket it like the source context.
+    pushq err_pfx_addr(%rip)
+    pushq err_pfx_len(%rip)
 
     # Set new source context
     mov %rsi, source_addr(%rip)
@@ -2387,12 +2414,17 @@ forth_evaluate:
     push %rax                       # save result
 
     # Restore source context
+    mov 8(%rsp), %rcx               # err_pfx_len  (result is at 0(%rsp))
+    mov %rcx, err_pfx_len(%rip)
+    mov 16(%rsp), %rcx              # err_pfx_addr
+    mov %rcx, err_pfx_addr(%rip)
     mov %rbx, source_addr(%rip)
     mov %rbp, source_len(%rip)
     mov %r14, to_in(%rip)
     mov %r8, source_id(%rip)
 
     pop %rax                        # restore result
+    add $2*CELL, %rsp               # drop the saved err_pfx pair
     pop %r8
     pop %r14
     pop %rbp
@@ -2648,9 +2680,12 @@ forth_included:
     # Print line number
     mov file_line_num(%rip), %rax
     call .Lprint_signed
-    # Print ": ? "
+    # Print ": " then the error's own wording (see err_pfx_addr)
     lea incl_err_sep(%rip), %rsi
     mov $incl_err_sep_len, %rdx
+    call platform_write
+    mov err_pfx_addr(%rip), %rsi
+    mov err_pfx_len(%rip), %rdx
     call platform_write
     # Print offending token
     mov err_token_addr(%rip), %rsi
@@ -2853,7 +2888,7 @@ forth_included:
     jmp .Lincl_pop_regs
 
 .section .rodata
-incl_err_sep:    .ascii ": ? "
+incl_err_sep:    .ascii ": "
 .equ incl_err_sep_len, . - incl_err_sep
 incl_unclosed_msg: .ascii ": definition not closed"
 .equ incl_unclosed_msg_len, . - incl_unclosed_msg
@@ -5480,6 +5515,12 @@ session_mark_latest:                # session restore point (LATEST) — 0 = uns
     .quad 0
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry
+    .quad 0
+.global err_pfx_addr
+err_pfx_addr:                       # Wording for the current line error; the
+    .quad 0                         #   reporter prints it, then err_token
+.global err_pfx_len
+err_pfx_len:
     .quad 0
 .global il_rsp
 il_rsp:                             # RSP at interpret_line entry (for cf longjmp)

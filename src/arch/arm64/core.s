@@ -1555,8 +1555,14 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
+// Error-report prefixes. The reporter (repl_error in main.s, .Lincl_error
+// below) prints err_pfx + the offending token, so an error site chooses its own
+// wording by pointing err_pfx at one of these. Keeps every line error on one
+// format -- "<why> <token>" -- and on one code path.
+err_pfx_question: .ascii "? "
+.equ err_pfx_question_len, . - err_pfx_question
+err_pfx_conly:    .ascii "compile only: "
+.equ err_pfx_conly_len, . - err_pfx_conly
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2403,6 +2409,21 @@ forth_interpret_line:
     LDR X9, [X19]                   // u is on top
     CBZ X9, .Lil_done
 
+    // Remember the token before FIND consumes it, so any error site below can
+    // name it, and reset the wording to the default -- that reset is what stops
+    // one error's wording leaking onto the next.
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]            // c-addr
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADR X9, err_pfx_question
+    ADR X10, err_pfx_addr
+    STR X9, [X10]
+    MOV X9, #err_pfx_question_len
+    ADR X10, err_pfx_len
+    STR X9, [X10]
+
     // FIND ( c-addr u -- xt flag | c-addr u 0 )
     BL forth_find
 
@@ -2523,12 +2544,18 @@ forth_interpret_line:
     RET
 
 .Lil_compile_only:
-    // Compile-only word used in interpret mode — non-fatal, continue parsing
+    // Compile-only word used in interpret mode. This aborts the line, like every
+    // other error: it used to print and keep parsing, so the rest of the line ran
+    // anyway. `['] dup 999 .` then executed `dup` on an empty stack, and the
+    // underflow -- not the real mistake -- was what you saw.
     ADD X19, X19, #2*CELL           // drop xt, flag
-    ADR X0, msg_compile_only
-    MOV X1, #msg_compile_only_len
-    BL platform_write
-    B .Lil_loop
+    ADR X9, err_pfx_conly           // report as "compile only: <token>"
+    ADR X10, err_pfx_addr
+    STR X9, [X10]
+    MOV X9, #err_pfx_conly_len
+    ADR X10, err_pfx_len
+    STR X9, [X10]
+    B .Lil_err_return               // err_token was saved before FIND
 
 // ---------- PAREN (comment word, IMMEDIATE) ----------
 // ( "ccc)" -- )
@@ -2595,6 +2622,17 @@ forth_evaluate:
     LDR X25, [X13]                  // save old to_in
     ADR X14, source_id
     LDR X27, [X14]                  // save old source_id
+    // The error wording belongs to the OUTER token being interpreted. The
+    // nested interpret_line below resets it per token of its own string, so
+    // without this an error raised later in the same outer token would inherit
+    // the inner string's wording. Bracket it like the source context.
+    // NOT X9/X10/X11-X14: X9 is u, X10 is c-addr, and X11-X14 hold the
+    // source-context addresses the block below stores through.
+    ADR X15, err_pfx_addr
+    LDR X15, [X15]
+    ADR X16, err_pfx_len
+    LDR X16, [X16]
+    STP X15, X16, [SP, #-16]!       // X15 at [SP], X16 at [SP+8]
 
     // Set new source context
     STR X10, [X11]                  // source_addr = c-addr
@@ -2616,6 +2654,11 @@ forth_evaluate:
     STR X25, [X9]
     ADR X9, source_id
     STR X27, [X9]
+    LDP X9, X10, [SP], #16          // err_pfx addr, len
+    ADR X11, err_pfx_addr
+    STR X9, [X11]
+    ADR X11, err_pfx_len
+    STR X10, [X11]
 
     MOV X0, X26                     // restore result
     LDP X27, X28, [SP], #16
@@ -2935,9 +2978,14 @@ forth_included:
     ADR X9, file_line_num
     LDR X0, [X9]
     BL .Lprint_signed
-    // Print ": ? "
+    // Print ": " then the error's own wording (see err_pfx_addr)
     ADR X0, incl_err_sep
     MOV X1, #incl_err_sep_len
+    BL platform_write
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
     BL platform_write
     // Print offending token
     ADR X9, err_token_addr
@@ -3186,7 +3234,7 @@ forth_included:
     B .Lincl_pop_regs
 
 .section .rodata
-incl_err_sep:    .ascii ": ? "
+incl_err_sep:    .ascii ": "
 .equ incl_err_sep_len, . - incl_err_sep
 incl_unclosed_msg: .ascii ": definition not closed"
 .equ incl_unclosed_msg_len, . - incl_unclosed_msg
@@ -6017,6 +6065,12 @@ session_mark_latest:                // session restore point (LATEST) — 0 = un
     .quad 0
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
+    .quad 0
+.global err_pfx_addr
+err_pfx_addr:                       // Wording for the current line error; the
+    .quad 0                         //   reporter prints it, then err_token
+.global err_pfx_len
+err_pfx_len:
     .quad 0
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)

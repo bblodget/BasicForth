@@ -553,9 +553,11 @@ repl_loop:
     jmp repl_loop
 
 repl_error:
-    # Print "? " + token + newline
-    lea err_msg(%rip), %rsi
-    mov $err_len, %rdx
+    # Print the error's own wording + token + newline. The wording is chosen by
+    # the site that raised it (see err_pfx_addr in core.s) so every line error
+    # reads the same shape: "? nosuchword", "compile only: dup".
+    mov err_pfx_addr(%rip), %rsi
+    mov err_pfx_len(%rip), %rdx
     call platform_write
 
     mov err_token_len(%rip), %rdx

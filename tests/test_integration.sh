@@ -465,14 +465,42 @@ assert_error  "begin outside def" "begin"                                   "com
 # `;` is compile-only like its siblings above -- a stray one used to be
 # accepted in silence, which swallowed a typo at the end of a REPL line.
 assert_error  "semicolon outside def" ";"                                   "compile only"
-# it is reported, not fatal: the rest of the line still runs and the stack is
-# untouched (the message goes to stdout, so it lands in the captured output)
-assert_output "stray ; keeps the line going" "1 2 ; + ."                    "3"
+# it names the offending word and ABORTS the line, like every other error.
+# It used to report and keep parsing, so the rest of the line ran anyway --
+# `['] dup 999 .` then executed `dup` on an empty stack and the underflow, not
+# the real mistake, was what you saw. The stack is left as it was.
+assert_output "stray ; names the word"       "1 2 ; + ."         "compile only: ;"
+assert_output "stray ; aborts the line, stack untouched" "1 2 ; + .
+.s"                                                         "<2> 1 2"
 # and it is still perfectly good at the end of a definition
 assert_output "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
 assert_output "; still ends a :noname"       ":noname 9 ; execute ."        "9"
-# the same rejection inside EVALUATE, which runs the same outer interpreter
-assert_error  "stray ; inside evaluate" ": t s\" ;\" evaluate ; t"          "compile only"
+# The same rejection inside EVALUATE, which runs the same outer interpreter.
+# EVALUATE swallows the report (it returns the status to its caller and nothing
+# prints it -- true of an undefined word there too, not special to this), so
+# what is observable is that the line inside EVALUATE stopped.
+assert_output "stray ; inside evaluate stops that line" \
+              ": t s\" ; 999 .\" evaluate 42 . ; t"                        "42"
+
+# The wording is per-token state, and a nested EVALUATE runs a whole interpret
+# loop inside ONE outer token -- so EVALUATE brackets it, like the source
+# context. Without that, an error raised later in the SAME outer token inherits
+# the inner string's wording. Reaching a wording-less error site at run time
+# takes `execute` on a compile-only word, which skips the compile-only check and
+# lands in cf_check_tag with a bogus tag. Verified: with the bracketing removed
+# the second line below reports "compile only: mismatched-control-flow".
+assert_output "a nested evaluate does not leak its error wording" \
+              ": leaky s\" ;\" evaluate  0 99 ' then execute ;
+leaky"                                                      "? mismatched-control-flow"
+# the same error with no evaluate in front, as the control
+assert_output "control-flow mismatch reports plainly" \
+              ": plain 0 99 ' then execute ;
+plain"                                                      "? mismatched-control-flow"
+# and nesting still returns values correctly through two levels
+assert_output "evaluate nests two deep" \
+              ": inner s\" 2 3 +\" evaluate ;
+: outer s\" inner\" evaluate ;
+outer ."                                                    "5"
 
 # =========================================================================
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"

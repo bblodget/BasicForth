@@ -605,9 +605,13 @@ repl_loop:
     B repl_loop
 
 repl_error:
-    // Print "? " + token + newline
-    ADR X0, err_msg
-    MOV X1, #err_len
+    // Print the error's own wording + token + newline. The wording is chosen by
+    // the site that raised it (see err_pfx_addr in core.s) so every line error
+    // reads the same shape: "? nosuchword", "compile only: dup".
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
     BL platform_write
 
     ADR X9, err_token_len

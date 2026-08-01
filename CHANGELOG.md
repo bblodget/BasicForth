@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Fixed: a compile-only word no longer lets the rest of the line run
+
+- Using a compile-only word at the prompt printed `compile only` and then **kept
+  interpreting the line**, so the real mistake was buried under whatever
+  happened next:
+
+      ['] dup 999 .
+      compile only
+      stack underflow          \ `dup` ran on an empty stack; 999 never printed
+
+  Every other line error aborts the line. This one now does too, and it names
+  the word:
+
+      ['] dup 999 .
+      compile only: [']
+
+- The misdirection is not hypothetical. It cost real debugging time: `['] hi`
+  reported `compile only` and then ran `hi`, whose output read exactly like the
+  success of the thing being tested.
+- Line errors now share one shape, `<why> <token>`, because the reporter prints
+  a prefix the error site chooses rather than a hardcoded `? `. So `? nosuchword`
+  and `compile only: ;` come out of the same code path, at the prompt and in
+  `file.fs:12:` reports alike.
+- `evaluate` brackets that wording the way it already brackets the input source.
+  Without it, a nested `evaluate` — a whole interpret loop running inside one
+  outer token — left its wording behind, and an error later in the same token
+  reported as `compile only: mismatched-control-flow`.
+- Known and unchanged: `evaluate` swallows the report either way — it returns
+  the status to its caller and nothing prints it, which is equally true of an
+  undefined word there. What is observable is that the offending line stops.
+
+### Clearer help for `'` and `[']`
+
+- `help '` did not mention that tick is `immediate`, so it reads as though it
+  only works at the prompt. It works inside a definition too, compiling the xt
+  as a literal — the same thing `[']` does.
+- `help [']` called itself "the compile-time form of `'`", implying `'` was not.
+  The real difference runs the other way: `[']` is the one with a restriction,
+  being compile-only, while `'` is happy in both places. Use `'` unless you are
+  writing code to port to other Forths, where `'` is not immediate.
+- Both entries now say why there is no run-time tick (`'` resolves the name
+  while compiling) and point at `parse-name find` for a name chosen at run time.
+
 ### Groundwork: BASE, sp0 and handler are now per-thread (TLS)
 
 - First step toward concurrency (`docs/Threading.md`), and **nothing observable
