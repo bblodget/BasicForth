@@ -930,6 +930,65 @@ assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 
 assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
 assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
 
+# --- float arguments ---
+# libm is the oracle: exact, well-defined functions, so a wrong register or a
+# wrong ORDER gives a wrong number rather than a crash.
+# >f32 first -- the bit patterns are checkable by hand:
+#   0.5 = 0x3F000000 = 1056964608     1.0  = 0x3F800000 = 1065353216
+#   0.25 = 0x3E800000 = 1048576000   -0.5  = 0xBF000000 = 3204448256
+assert_result ">f32 bit patterns" \
+    "include $FFI  1 2 >f32 . 1 1 >f32 . 1 4 >f32 . -1 2 >f32 . 0 1 >f32 ." \
+    "1056964608 1065353216 1048576000 3204448256 0"
+# A zero denominator gives 0, not an infinity: a bad ratio should be silence
+# rather than a value that poisons whatever consumes it.
+assert_result ">f32 divide by zero -> 0" "include $FFI  1 0 >f32 . 0 0 >f32 ." "0 0"
+
+# The float-call tests need several lines: one REPL line has a length limit,
+# and these bind three symbols before calling. `f>i` rounds an f32 bit pattern
+# back to an integer so the result is printable (not `rnd`, which core.fs
+# already uses for random numbers).
+fpre="include $FFI
+s\" libm.so.6\" dlopen value LM
+LM s\" lroundf\" dlsym value LR
+: f>i ( fbits -- n ) 0 1 LR (ccallf) ;"
+
+# One float in, integer out: the value reaches the float register at all.
+# lroundf rounds half AWAY from zero, so 2.5 -> 3 and -3.5 -> -4.
+assert_result "ccallf 1 float arg (lroundf)" \
+    "$fpre
+: t 7 2 >f32 f>i . 5 2 >f32 f>i . -7 2 >f32 f>i . ;
+t" \
+    "4 3 -4"
+# Two floats with a float result. fdimf(a,b) = max(a-b,0) is ASYMMETRIC, so
+# swapping the float registers changes the answer -- this checks their ORDER,
+# not merely that both arrived.
+assert_result "ccallf 2 float args, order (fdimf)" \
+    "$fpre
+LM s\" fdimf\" dlsym value FD
+: t 9 1 >f32 3 1 >f32 0 2 FD (ccallf>f) f>i .  3 1 >f32 9 1 >f32 0 2 FD (ccallf>f) f>i . ;
+t" \
+    "6 0"
+# Three floats: fmaf(a,b,c) = a*b+c, a different answer if any pair swapped.
+assert_result "ccallf 3 float args (fmaf)" \
+    "$fpre
+LM s\" fmaf\" dlsym value FM
+: t 3 1 >f32 4 1 >f32 5 1 >f32 0 3 FM (ccallf>f) f>i .  10 1 >f32 10 1 >f32 1 1 >f32 0 3 FM (ccallf>f) f>i . ;
+t" \
+    "17 101"
+# Mixed: ldexpf(float x, int exp) = x * 2^exp. C interleaves them; we group
+# integers first and floats second, and the ABI still lines up because each
+# register file is assigned independently of the other.
+assert_result "ccallf mixed int and float (ldexpf)" \
+    "$fpre
+LM s\" ldexpf\" dlsym value LX
+: t 2 3 1 >f32 1 1 LX (ccallf>f) f>i .  10 1 1 >f32 1 1 LX (ccallf>f) f>i .  -1 7 1 >f32 1 1 LX (ccallf>f) f>i . ;
+t" \
+    "12 1024 4"
+# With no float args at all, (ccallf) must behave exactly like (ccall).
+assert_result "ccallf with no floats == ccall" \
+    "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 0 r> (ccallf) . ; t" \
+    "42"
+
 # SDL3 backend — needs libSDL3 on the host. Uses SDL's dummy video driver so
 # no display is required: open window + renderer + streaming texture, lock,
 # draw through the graphics.fs surface, read the pixel back, close. Skipped

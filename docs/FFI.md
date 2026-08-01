@@ -48,9 +48,49 @@ buf 68 fmt 9876 4 snprintf-fn (ccall)
 The C return value (RAX / X0) is pushed on the data stack. On x86-64, AL is
 zeroed before the call, so variadic functions (printf-family) work.
 
+## Float arguments
+
+`(ccall)` is integer-only, but plenty of C functions want a float — a gain, a
+speed, a scale. `(ccallf)` handles those:
+
+| Word | Stack | Meaning |
+|------|-------|---------|
+| `(ccallf)` | ( iargs.. fargs.. nint nfloat fnptr -- ret ) | call, integer result |
+| `(ccallf>f)` | ( iargs.. fargs.. nint nfloat fnptr -- fbits ) | call, float result |
+| `>f32` | ( n d -- bits ) | the f32 bit pattern of n/d |
+
+**Forth still never holds a float.** A float argument is passed as its
+IEEE-754 single-precision *bit pattern* in an ordinary cell, and `>f32` builds
+one from a ratio. Nothing in Forth can do arithmetic on it; it is an opaque
+value handed to C.
+
+The float arguments are grouped *after* the integer ones on the Forth stack,
+whatever order the C prototype uses. That costs nothing: both ABIs give float
+parameters their own register file (XMM0–7 on x86-64, V0–V7 on ARM64) and fill
+it in its own order, independently of how the parameters interleave. So the
+two groups can be handed over separately and still land where C expects:
+
+```
+\ float ldexpf(float x, int exp)   -- C interleaves; we group
+2  3 1 >f32  1 1 ldexpf-fn (ccallf>f)     \ 3.0 * 2^2 = 12.0
+```
+
+`>f32` is the only place the engine touches floating-point hardware
+(`cvtsi2ss`/`divss`, `SCVTF`/`FDIV`), and it hands back bits rather than a
+float, so the property that BasicForth has no float stack is preserved.
+
+A denominator of zero yields `0` rather than an infinity — a bad ratio should
+be silence, not a value that poisons whatever consumes it.
+
+Verified against libm, whose functions are exact and well defined, so a
+misplaced register gives a wrong *number* rather than a crash: `fdimf` is
+asymmetric and so checks argument *order*, `fmaf` exercises three float
+registers at once, and `ldexpf` mixes an integer with a float.
+
 Current limits, by design (extend when a binding needs it):
-- No floating-point arguments or returns.
-- No arguments past the sixth (none of the SDL 2D surface needs more).
+- 6 integer arguments on x86-64, 8 on ARM64; 8 float arguments on both.
+- Single-precision only. A `double` parameter needs a separate path (a
+  different register width and, for varargs, promotion rules).
 - No callbacks (C calling back into Forth). SDL3 is poll-based, so none are
   needed for the graphics/input/audio roadmap.
 
