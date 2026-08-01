@@ -1143,6 +1143,134 @@ else
 fi
 
 # =========================================================================
+section "WAV decoding (wavcore.fs)"
+# =========================================================================
+# wavcore.fs is deliberately FFI-free -- no SDL, no audio device -- so these
+# run on every architecture, including under qemu where `require sound.fs`
+# aborts on dlopen. The fixtures are built in Forth rather than committed as
+# binaries, so the bytes under test are visible in this file.
+wav_dir="$(mktemp -d)"
+wav_forth="${FORTH/.\//$PWD/}"   # absolutize: the test cds into $wav_dir
+cat > "$wav_dir/mk.fs" <<'WAVEOF'
+require wavcore.fs
+create WB 2048 allot   variable WP   variable WN
+: b, ( c -- )        WB WP @ + c!  1 WP +! ;
+: w, ( x -- )        WB WP @ + w!  2 WP +! ;
+: l, ( x -- )        WB WP @ + l!  4 WP +! ;
+: tag, ( c-addr u -- ) 0 ?do dup i + c@ b, loop drop ;
+: fmt, ( chans bits -- )   \ a fmt chunk for `chans` channels at `bits` bits
+    s" fmt " tag,  16 l,
+    1 w,                          ( chans bits )
+    over w,  44100 l,  88200 l,  2 w,  w,  drop ;
+: pcm, ( frames chans -- )  * 0 ?do  i 100 * 1000 -  w,  loop ;
+: save-as ( c-addr u -- )  w/o bin create-file drop >r
+    WB WP @ r@ write-file drop  r> close-file drop ;
+\ a well-formed 16-bit mono file, optionally with junk before fmt and a loop
+: start, ( -- )  0 WP !  s" RIFF" tag,  0 l,  s" WAVE" tag, ;
+: finish, ( -- ) WP @ 8 -  WB 4 + l! ;      \ patch the RIFF size field
+: data, ( frames chans -- )  2dup * 2*  s" data" tag, l,  pcm, ;
+: smpl, ( start end -- )
+    s" smpl" tag,  60 l,
+    0 l, 0 l, 0 l, 60 l, 0 l, 0 l, 0 l,  1 l,  0 l,     \ 36-byte header
+    0 l, 0 l,                                    \ cuePointId, loop type
+    swap l, l,                                   \ start, end
+    0 l, 0 l, ;
+: junk, ( -- )  s" LIST" tag,  8 l,  s" INFO" tag,  s" hey" tag, 0 b, ;
+: mk-ok      start, 1 16 fmt,  8 1 data, finish,  s" ok.wav" save-as ;
+: mk-stereo  start, 2 16 fmt,  8 2 data, finish,  s" st.wav" save-as ;
+: mk-junk    start, junk, 1 16 fmt, 8 1 data, finish, s" junk.wav" save-as ;
+: mk-loop    start, 1 16 fmt, 2 6 smpl, 8 1 data, finish, s" loop.wav" save-as ;
+: mk-badloop start, 1 16 fmt, 6 2 smpl, 8 1 data, finish, s" bad.wav" save-as ;
+\ The smpl end point is INCLUSIVE, so on 8 frames the largest legal end is 7;
+\ end=8 is already one frame past the audio and must be refused.
+: mk-edge    start, 1 16 fmt, 2 7 smpl, 8 1 data, finish, s" edge.wav" save-as ;
+: mk-past    start, 1 16 fmt, 2 8 smpl, 8 1 data, finish, s" past.wav" save-as ;
+: mk-8bit    start, 1 8 fmt,  8 1 data, finish,  s" b8.wav" save-as ;
+: mk-nofmt   start, 8 1 data, finish,            s" nofmt.wav" save-as ;
+: mk-nodata  start, 1 16 fmt, finish,            s" nodat.wav" save-as ;
+: mk-short   0 WP ! s" RIFF" tag, 0 l, finish,   s" tiny.wav" save-as ;
+: mk-notriff 0 WP ! s" JUNK" tag, 0 l, s" WAVE" tag, finish, s" nr.wav" save-as ;
+: mk-runover start, 1 16 fmt,  s" data" tag, 9999 l,  8 1 pcm, finish,
+             s" over.wav" save-as ;
+: build  mk-ok mk-stereo mk-junk mk-loop mk-badloop mk-edge mk-past mk-8bit
+         mk-nofmt mk-nodata mk-short mk-notriff mk-runover ;
+: ? ( c-addr u -- ) wav-load dup 0= if drop wav-why type ."  | " exit then
+    dup wav-frames . dup wav-rate . dup wav-chans .
+    dup wav-loop? if dup wav-loop-start . dup wav-loop-end . else ." - " then
+    ." | " wav-free ;
+: run  build
+    s" ok.wav" ?  s" st.wav" ?  s" junk.wav" ?  s" loop.wav" ?  s" bad.wav" ?
+    s" edge.wav" ?  s" past.wav" ?
+    s" b8.wav" ?  s" nofmt.wav" ?  s" nodat.wav" ?  s" tiny.wav" ?
+    s" nr.wav" ?  s" over.wav" ?  s" gone.wav" ?
+    ." depth=" depth . ;
+run
+bye
+WAVEOF
+wav_out=$( cd "$wav_dir" && BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth mk.fs 2>&1 )
+# Expected, in order: mono 8 frames; stereo 8 frames; junk chunk skipped;
+# loop kept; reversed loop dropped; then each refusal by name.
+wav_want='8 44100 1 - | 8 44100 2 - | 8 44100 1 - | 8 44100 1 2 6 | 8 44100 1 - | 8 44100 1 2 7 | 8 44100 1 - |'
+wav_want2='wav: need 16-bit samples'
+wav_want3='wav: no fmt chunk'
+wav_want4='wav: no data chunk'
+wav_want5='wav: too short to be a RIFF file'
+wav_want6='wav: not a RIFF file'
+wav_want7='wav: a chunk runs past the end of the file'
+wav_want8='wav: cannot read the file'
+if printf '%s' "$wav_out" | grep -qF "$wav_want" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want2" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want3" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want4" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want5" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want6" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want7" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want8" \
+   && printf '%s' "$wav_out" | grep -qF 'depth=0'; then
+    printf "  ${GREEN}PASS${NC}  wav-load decodes, skips unknown chunks, refuses the rest by name\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav-load decoding\n    Got: %s\n" "$(echo "$wav_out" | tail -3)"; ((failed++))
+fi
+
+# Many load/free cycles must stay correct: the file image is a SECOND heap
+# block, so wav-free has two things to release and a mistake there shows up as
+# a double-free or a corrupted later load. NOTE this does not detect a plain
+# leak -- there is no heap-usage introspection to assert against, and 500
+# copies of a 60-byte fixture would not exhaust anything. It is a stability
+# check, not a memory-accounting one.
+wav_leak=$( cd "$wav_dir" && printf 'require wavcore.fs\n: cyc s" ok.wav" wav-load dup 0= if drop false exit then dup wav-frames 8 <> if wav-free false exit then wav-free true ;\n: many true 500 0 ?do cyc 0= if drop false leave then loop ;\nmany . depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth 2>&1 )
+if printf '%s' "$wav_leak" | grep -q -- '-1 0'; then
+    printf "  ${GREEN}PASS${NC}  500 wav load/free cycles stay correct\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav load/free cycles\n    Got: %s\n" "$(echo "$wav_leak" | tail -2)"; ((failed++))
+fi
+
+# A refused loop must report -1 -1, not the numbers it just refused. Reporting
+# the rejected end back would hand a caller the very value that indexes past
+# the audio, and "no loop" would answer differently depending on HOW the file
+# was wrong (no smpl chunk, reversed range, or out of range).
+wav_noloop=$( cd "$wav_dir" && \
+    printf 'require wavcore.fs\n: e ( c-addr u -- ) wav-load dup wav-loop-start . dup wav-loop-end . wav-free ;\ns\" ok.wav\" e s\" bad.wav\" e s\" past.wav\" e s\" loop.wav\" e depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth 2>&1 )
+if printf '%s' "$wav_noloop" | grep -q -- '-1 -1 -1 -1 -1 -1 2 6 0'; then
+    printf "  ${GREEN}PASS${NC}  a refused loop reports -1 -1, not the value it refused\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused loop endpoints\n    Got: %s\n" "$(echo "$wav_noloop" | tail -2)"; ((failed++))
+fi
+
+# Accessors on a failed load (0) must be inert rather than dereference null.
+wav_null=$(printf 'require wavcore.fs\n0 wav-frames . 0 wav-rate . 0 wav-chans . 0 wav-bytes . 0 wav-data . 0 wav-loop? . 0 wav-free .\" null-ok\" depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+if printf '%s' "$wav_null" | grep -q '0 0 0 0 0 0 null-ok0'; then
+    printf "  ${GREEN}PASS${NC}  wav accessors are inert on a failed load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav accessors on null\n    Got: %s\n" "$(echo "$wav_null" | tail -2)"; ((failed++))
+fi
+
+rm -rf "$wav_dir"
+
+# =========================================================================
 section "Dynamic Memory (heap)"
 # =========================================================================
 # ALLOCATE/FREE round-trip: store and read a cell, ior 0 throughout.

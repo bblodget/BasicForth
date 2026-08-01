@@ -138,9 +138,16 @@ qemu sysroot); on the board, SDL3 must be in the Pumpkian image.
 
 Current state: square waves on mixing channels. Possible next steps: other
 waveforms (triangle/noise), a note/duration music word (`PLAY "CDE"` style),
-and **sampled sound** — a `wav.fs` that loads 16-bit PCM and plays it through
-`ch-put`, which is what the channel layer was built for. Speech synthesis
-would then sit on top of that as one more sample source.
+and **sampled sound**. `wavcore.fs` is the first half of that: it decodes
+16-bit PCM WAV files into sample handles (`help samples`). A `wav.fs` on top
+will play one through `ch-put`, which is what the channel layer was built for.
+Speech synthesis then sits above that as one more source of samples.
+
+`wavcore.fs` deliberately requires **nothing** — no FFI, no SDL. That is not
+tidiness: `require sound.fs` aborts on a machine with no libSDL3, which
+includes the aarch64 QEMU run, so a decoder living inside it would be
+untestable on half our architectures. Split out, the decoder's tests run
+everywhere and only playback skips.
 
 One limit worth knowing before building on this: audio is **pushed from your
 main loop**. SDL3 offers a pull callback, but a Forth word cannot serve as a C
