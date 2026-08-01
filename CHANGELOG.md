@@ -43,6 +43,38 @@
 - ARM64 was never affected: with no memory read-modify-write to reach for, it
   already loaded, shifted, and stored. The two architectures now match.
 - `2*` is defined as `1 lshift`, so it gets the same speedup.
+### Added: WAV decoding (`wavcore.fs`)
+
+- **`wav-load` reads a `.wav` file into a sample handle**, with `wav-frames`,
+  `wav-rate`, `wav-chans`, `wav-bytes`, `wav-data`, `wav-loop?`,
+  `wav-loop-start`, `wav-loop-end` and `wav-free`. Documented in
+  `help samples`.
+- Accepts uncompressed **16-bit PCM, mono or stereo**. Anything else is
+  refused *by name* through `wav-why` rather than mis-decoded into noise —
+  a wrong bit depth otherwise plays as loud static.
+- Chunks are walked properly, so a file carrying `LIST` or `fact` metadata
+  before its audio loads correctly. Audio only begins at byte 44 in the
+  simplest files, and assuming it is a common way to get this wrong.
+- Loop points are read from the `smpl` chunk, and **validated**: a loop whose
+  start is not before its end, or whose end is not inside the audio, is
+  dropped rather than trusted, so `wav-loop?` true means the range is real.
+  The end point is **inclusive** (the spec calls it the last sample played),
+  so on an n-frame sample the largest legal end is `n-1` — an off-by-one here
+  accepts `n` and reads one frame past the buffer on every loop. Caught in
+  review; the original tests looped well inside the sample and never touched
+  the boundary, which is why it survived them.
+- A partial trailing frame is trimmed at load, so `wav-bytes` is always a
+  whole number of frames.
+- The file is read once and kept, with the sample pointing into that image
+  rather than copying the audio out — one read, one file's worth of memory,
+  and `wav-free` releases both blocks.
+- **Requires nothing.** No FFI, no SDL. `require sound.fs` aborts on a machine
+  without libSDL3, which includes the aarch64 QEMU run, so a decoder living
+  inside `sound.fs` could not be tested on half our architectures. Split out,
+  its 3 tests run on **both** arches while only playback skips.
+- Test fixtures are built in Forth rather than committed as binaries, so the
+  bytes under test are readable in `tests/test_integration.sh`. Each test was
+  confirmed to fail when the parser is deliberately broken.
 
 ### Added: mixing sound channels
 
