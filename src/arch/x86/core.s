@@ -626,7 +626,9 @@ forth_lshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shlq %cl, (%r15)            # top = x1 << u
+    mov (%r15), %rax
+    shl %cl, %rax
+    mov %rax, (%r15)            # top = x1 << u
     ret
 
 # RSHIFT ( x1 u -- x2 )
@@ -636,7 +638,9 @@ forth_rshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shrq %cl, (%r15)            # top = x1 >> u (logical)
+    mov (%r15), %rax
+    shr %cl, %rax
+    mov %rax, (%r15)            # top = x1 >> u (logical)
     ret
 
 # 2/ ( x -- x/2 )
