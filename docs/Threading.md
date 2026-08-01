@@ -3,7 +3,7 @@
 Status: **steps 0, 1 and 1.5 done** (2026-08-01) — per-thread variables live in
 TLS, and `require threads.fs` gives you `thread`/`join`/`threads` running Forth
 words on real OS threads, on both arches, with a registry behind them. Channels
-(step 2) and worker stack guard pages (step 3) are still ahead. Real concurrency for BasicForth: audio feeders, robot control loops at
+(step 2) is still ahead. Real concurrency for BasicForth: audio feeders, robot control loops at
 fixed Hz, socket readers — the Phase 8 item, given a concrete shape.
 Supersedes the "pthreads or clone?" question in TODO Phase 8: **pthreads, via
 the FFI.**
@@ -218,9 +218,16 @@ channel the prompt-peek drains; a control loop receiving setpoints).
    worker, and a `throw` in a worker surfaces through `join`.
 2. Channels (`chan`/`ch!`/`ch@`/`ch?`) + the worker rule documented in the
    Language Reference and a Threading topic page.
-3. Worker stack guard pages and a thread-aware SIGSEGV handler — the one
-   genuinely open design question. TLS helps: the handler can tell which
-   thread it is on.
+3. **Worker stack fences — DONE 2026-08-01.** A `PROT_NONE` page below the
+   data stack, between the two stacks, and above the return stack, via a new
+   `(prot-none)` primitive. Unfenced, the two stacks were neighbours: a return
+   stack that overflowed walked into the data stack, and a data stack popped
+   past empty read the return stack — wrong answers, no crash. No change to
+   the fault path was needed: the SIGSEGV handler only *recovers* faults inside
+   the main thread's own guard pages, so a worker's fence fault falls through
+   to the default handler and dumps core. A thread-aware handler is still
+   wanted for a nicer report, but it is no longer what stands between a worker
+   and silent corruption.
 
 Chat needs none of this (docs/Sockets.md — non-blocking + poll); threading
 is its own arc with its own payoffs.

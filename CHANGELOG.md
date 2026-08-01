@@ -62,8 +62,15 @@
   retried**, since the usual cause is another thread already joining, whose
   success frees the block. Give each handle one owner and join it exactly once
   — a successful join frees it.
-- Not yet: channels for communication, and guard pages on worker stacks (an
-  overflowing worker walks down past its allocation into unmapped memory).
+- **A worker's stacks are fenced.** A `PROT_NONE` page sits below the data
+  stack, between the two stacks, and above the return stack. Without them the
+  two stacks were neighbours, and the failure was the quiet kind: a return
+  stack that overflowed walked into the data stack, and a data stack popped
+  past empty read the return stack — wrong answers, no crash, nothing to
+  debug. Now either overrun dies at once. This needed no change to the fault
+  path: the SIGSEGV handler only *recovers* faults inside the main thread's own
+  guard pages, so a worker's fence fault falls through to the default handler.
+- Not yet: channels for communication.
 
 ### Fixed: a compile-only word no longer lets the rest of the line run
 

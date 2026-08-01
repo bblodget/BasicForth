@@ -1050,6 +1050,17 @@ platform_munmap:
     syscall
     ret
 
+# platform_prot_none(addr, len) -> 0 or -errno
+# Make a page-aligned range unreadable and unwritable, so touching it faults.
+# Used to fence a worker thread's stacks: without it an overflowing worker
+# silently walks into the neighbouring stack instead of dying loudly.
+.global platform_prot_none
+platform_prot_none:
+    mov $10, %rax                   # SYS_mprotect
+    xor %edx, %edx                  # PROT_NONE
+    syscall
+    ret
+
 # ---------- FFI: dynamic libraries ----------
 # The one place the platform layer calls the C library instead of the kernel:
 # loading shared libraries needs ld.so, which only libc's dlopen/dlsym reach.

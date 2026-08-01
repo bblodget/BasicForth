@@ -941,11 +941,14 @@ docs/Graphics.md for the API.
     splitting the worker's throw code from a join failure, and a spent
     handle now reported as -60 instead of crashing. Reference page renamed
     to Concurrency.md so `help threads` reaches the word, not the page.
+  - [x] **Worker stack fences DONE 2026-08-01:** PROT_NONE pages below the
+    data stack, between the stacks, and above the return stack, via a new
+    `(prot-none)` primitive. Unfenced the stacks were neighbours and an
+    overrun corrupted the other one silently.
   - Still to settle: **channels** (`chan`/`ch!`/`ch@`/`ch?`) as the blessed
-    communication path — step 2; worker stack guard pages + a thread-aware
-    SIGSEGV handler (signals are process-wide, and a worker that overflows
-    currently walks into its own context block); per-thread locals stack;
-    stack sizing (fixed constants today)
+    communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
+    nicer report now that fences make the failure loud); per-thread locals
+    stack; stack sizing (fixed constants today)
 
 ---
 

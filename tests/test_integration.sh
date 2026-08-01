@@ -5308,6 +5308,26 @@ variable t
 go' \
 "finished  42"
 
+# A worker's stacks are fenced with PROT_NONE pages below the data stack,
+# between the two stacks, and above the return stack. Without them the two
+# stacks are neighbours: a return stack that overflows walks into the data
+# stack, and a data stack popped past empty reads the return stack -- wrong
+# answers with no crash. Popping an empty stack and touching it must now die
+# loudly. Verified: unfenced, the line below prints SURVIVED-SILENTLY.
+thr_out=$(printf '%s\n' 'require threads.fs
+: under  drop dup ;
+: go     ['"'"'] under thread drop join 2drop ;
+go
+." REACHED-THE-END"' | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1)
+thr_status=$?
+# The REPL echoes its input, so a marker string appears in the output either
+# way -- the exit status is what distinguishes a fenced fault from surviving.
+if [ "$thr_status" -ne 0 ]; then
+    printf "  ${GREEN}PASS${NC}  a worker stack overrun faults instead of corrupting its neighbour\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  worker stack overrun was not fenced (exit %s)\n" "$thr_status"; ((failed++))
+fi
+
 thr_check "two workers run concurrently and both complete" \
 'require threads.fs
 variable a  variable b  variable t1  variable t2

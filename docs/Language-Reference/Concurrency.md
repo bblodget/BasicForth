@@ -84,6 +84,11 @@ and return stack, so `depth` inside a worker starts at 0 and its arithmetic
 cannot disturb yours. `BASE` is per-thread too — a worker calling `hex` leaves
 the prompt in decimal.
 
+Those stacks are **fenced**: run off either end — too deep a recursion, or one
+`drop` too many — and the thread dies at once rather than quietly reading and
+writing its other stack. The whole process goes down with it, which is loud and
+obvious; that is the intent. Worker stacks are a fixed size and do not grow.
+
     : w   hex ;
     : go  ['] w thread drop join 2drop  base @ . ;
     go                \ 10

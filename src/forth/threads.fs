@@ -27,25 +27,34 @@ s" libc.so.6" dlopen value (libc)
 \   0 xt   8 dtop   16 rtop   24 ior   32 tid   40 state   48 next
 64 constant (t-ctx)                         \ bytes of context block
 
-\ One allocation holds both stacks and the context, so one free returns it all,
-\ laid out deliberately:
+\ One allocation holds both stacks and the context, so one free returns it all.
+\ The stacks are FENCED: a PROT_NONE page sits below the data stack, between the
+\ two stacks, and above the return stack.
 \
-\     [ data stack ][ return stack ][ context ]
-\      t          dtop            rtop/ctx
+\     [guard][ data stack ][guard][ return stack ][guard][ context ]
 \
-\ Both stacks grow DOWN, so they grow away from the context. That matters
-\ because the context carries the tid join needs; if the context sat below a
-\ stack, an overflowing worker would corrupt it. (The trampoline keeps its
-\ return path in TLS for the same reason.) A worker that overflows its data
-\ stack instead walks down past the allocation base into unmapped memory and
-\ faults. Sizes are fixed in v1 and there are still no guard pages -- those
-\ need a thread-aware SIGSEGV handler, which is its own step.
+\ Both stacks grow down. Without the fences a worker that overflowed its return
+\ stack walked silently into its own data stack, and a data stack popped past
+\ empty walked into the return stack -- wrong answers, no crash, nothing to
+\ debug. With them every direction hits a dead page and dies loudly: the
+\ SIGSEGV handler only recovers faults inside the MAIN thread's guard pages, so
+\ any other address re-raises with the default handler and dumps core.
+\ The context sits above the top fence, out of reach of both stacks.
+4096  constant (t-page)
 8192  constant thread-dstack                \ bytes of data stack per worker
 65536 constant thread-rstack                \ bytes of return stack per worker
 
-\ The context sits above both stacks, 16-aligned; the return stack top is the
-\ same address, so the C ABI's 16-byte alignment holds on entry.
-: (t>ctx)   ( t -- ctx )  thread-dstack + thread-rstack + 15 + -16 and ;
+: (t-pgup)  ( a -- a' )  (t-page) 1- + (t-page) negate and ;   \ round up to a page
+
+\ Everything is measured from the first page boundary at or above the handle.
+: (t>g0)    ( t -- a )  (t-pgup) ;                      \ fence below the data stack
+: (t>dlow)  ( t -- a )  (t>g0) (t-page) + ;
+: (t>dtop)  ( t -- a )  (t>dlow) thread-dstack + ;      \ DSP starts here
+: (t>g1)    ( t -- a )  (t>dtop) ;                      \ fence between the stacks
+: (t>rlow)  ( t -- a )  (t>g1) (t-page) + ;
+: (t>rtop)  ( t -- a )  (t>rlow) thread-rstack + ;      \ SP starts here
+: (t>g2)    ( t -- a )  (t>rtop) ;                      \ fence above the return stack
+: (t>ctx)   ( t -- ctx )  (t>g2) (t-page) + ;
 : (t-dtop)  ( ctx -- a )   8 + ;
 : (t-rtop)  ( ctx -- a )  16 + ;
 : (t-ior)   ( ctx -- a )  24 + ;
@@ -91,18 +100,31 @@ variable (t-head)
         (t>ctx) (t-next) @
     repeat  2drop ;
 
+\ Fence the three boundary pages, returning 0 or the first errno. Written as
+\ its own word because the handle has to survive all three calls -- computing
+\ the second and third guard from whatever happened to be under `over` was a
+\ bug that fenced the wrong pages and left the stacks open.
+: (t-fence) ( t -- ior )
+    dup (t>g0) (t-page) (prot-none)          ( t ior )
+    over (t>g1) (t-page) (prot-none) or      ( t ior )
+    swap (t>g2) (t-page) (prot-none) or ;    ( ior )
+
 : thread ( xt -- t ior )
-    thread-dstack thread-rstack + (t-ctx) + 16 + allocate
+    (t-page) 4 * thread-dstack + thread-rstack + (t-ctx) + allocate
     if  2drop  0 -59  exit  then            ( xt t )
     dup (t>ctx)                             ( xt t ctx )
     rot over !                              ( t ctx )   \ xt at ctx+0
-    over thread-dstack + over (t-dtop) !    ( t ctx )   \ data stack top
-    dup over (t-rtop) !                     ( t ctx )   \ return stack top = ctx
+    over (t>dtop) over (t-dtop) !           ( t ctx )   \ fenced regions
+    over (t>rtop) over (t-rtop) !           ( t ctx )
     0 over (t-ior) !
     0 over (t-next) !
     running over (t-state) !                \ before create: the worker may
                                             \   publish `finished` immediately
     over (t-link)
+    \ Fence the three boundary pages. If mprotect fails the thread would run
+    \ unfenced, which is the very thing this prevents -- so refuse to start it.
+    over (t-fence)                          ( t ctx ior )
+    ?dup if  >r drop dup (t-unlink) free drop  0 r>  exit  then
     dup (t-tid)  0  (thread-tramp)  3 pick  4 (pthread-create) (ccall)  ( t ctx ior )
     ?dup if                                 \ create failed: unlink, no leak
         nip  over (t-unlink)  swap free drop  0 swap  exit  then

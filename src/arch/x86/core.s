@@ -4584,6 +4584,18 @@ forth_acq_fetch:
     mov %rax, (%r15)
     ret
 
+# (prot-none) ( addr u -- ior )  Fence off a page-aligned range: any access
+# faults. 0 on success, a positive errno on failure.
+.global forth_prot_none
+forth_prot_none:
+    mov (%r15), %rsi                # u
+    mov CELL(%r15), %rdi            # addr
+    add $CELL, %r15
+    call platform_prot_none
+    neg %rax                        # -errno -> positive ior; 0 stays 0
+    mov %rax, (%r15)
+    ret
+
 # (thread-tramp) ( -- addr )  Address of the trampoline, for pthread_create.
 .global forth_thread_tramp_addr
 forth_thread_tramp_addr:
@@ -5463,7 +5475,8 @@ DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
 DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
-DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_acq_fetch
+DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
+DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
 DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
 .global dict_include
 .global dict_hook_store
