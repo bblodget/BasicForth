@@ -2117,6 +2117,19 @@ smaller risk surface.
 
 ## Future / Hardening
 
+- [ ] **Sweep the other libraries for public-looking names with no help entry.**
+  The reference audit only ran over the CORE dictionary, so anything that
+  appears after a `require` was invisible to it — `sound.fs` had `snd-dev` and
+  `snd-stream`, raw SDL handles with undecorated names and no documentation,
+  and nothing noticed. Brandon spotted it by trying `help snd-dev`.
+  Fixed for the audio tree, and there is now an audit covering
+  `require wav.fs`. The same check should be extended to `sdl3.fs`,
+  `graphics.fs`, `fontcore.fs` and `shellutil.fs` — a quick look shows sdl3.fs
+  leaves `SDL_INIT_VIDEO`, `XRGB8888`, `TEX_STREAMING` and `SCALE_NEAREST`
+  bare and undocumented, which is the same shape.
+  The rule to apply: a name a user is expected to pass to something is API and
+  needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
+
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
   input** along with the output (`> 5 5 <= .` then `-1  ok`). So any assertion
