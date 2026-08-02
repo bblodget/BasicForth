@@ -821,6 +821,10 @@ platform_system:
     MOV X29, SP
     STP X19, X20, [SP, #-16]!       // X20 holds cmd ptr across calls
     MOV X20, X0                     // save cmd ptr
+    // The child writes to fd 1 itself, so none of our write paths run and the
+    // owed newline would never be paid -- its first line would land on the
+    // command line. Settle it before handing the terminal over.
+    BL pay_pending_nl
     BL platform_restore_term        // terminal → cooked for the child
     // build argv = ["/bin/sh", "-c", cmd, NULL]
     ADR X1, sh_path
@@ -920,6 +924,11 @@ platform_popen:
     MOV X0, #-24                    // -EMFILE: all pipe slots busy
     B .Lpo_ret
 .Lpo_have_slot:
+    // Both directions pay. A W/O child keeps the terminal for its stdout, and
+    // an R/O child -- whose stdout is the pipe -- still inherits STDERR, so it
+    // can dirty the line too. The cost is one line break on a line that
+    // captures silently; mashed-up error text is worse.
+    BL pay_pending_nl
     BL platform_restore_term        // terminal → cooked for the child
     ADR X0, pipe_fds
     MOV X1, #0                      // flags = 0

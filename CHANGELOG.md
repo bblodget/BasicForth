@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed: `sh` output ran onto the command line
+
+- `sh echo hello` printed `> sh echo hellohello`. The owed newline is paid by
+  our own write paths, and a **child process writes to fd 1 itself**, so none
+  of them run — the newline was still owed when the child's first line came
+  out. `platform_system` now settles it before handing the terminal over, and
+  so does `platform_popen`, whose `w/o` child keeps the terminal for its
+  stdout.
+- Third writer-we-don't-own found since the owed newline shipped, after the
+  SIGSEGV guard messages and the prompts. The lesson each time is the same:
+  enumerate every route to fd 1, not just the ones inside `platform_write_fd`.
+- One consequence: a shell command that prints **nothing** now costs a newline
+  where it used to keep ` ok` on the command line. Whether the child will print
+  cannot be known in advance, and a command that prints is the common case.
+
 ### Fixed: several reference entries were empty at the prompt
 
 - A `## ` heading immediately followed by another leaves the first entry
