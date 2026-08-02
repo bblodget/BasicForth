@@ -36,27 +36,27 @@ and project phases.
 
 ## Status
 
-**v0.13.0** — **Text on the framebuffer, and a prompt that stays out of your
-way.** Graphics gained words but no way to *label* anything; now `require
-font-terminus-8x16.fs` or `font-vga-8x8.fs` gives `text` and `glyph` on the
-framebuffer, two CP437 faces that load together and switch by name, both
-magnified by `font-scale` (as sprites are by `stamp-scale`) and positioned on
-the text grid by **`>xy`**, which converts a character cell to its pixel
-corner with the scale folded in. The prompt got quiet in the other
-direction: a line that prints nothing now keeps its ` ok` **on the line you
-typed**, nothing is echoed at all while a definition is open, and four ways
-to wedge a session are closed — a stray `;`, an aborted definition that used
-to disable Ctrl-D for good, a `require` cycle that blew the data stack, and a
-file ending mid-definition, which used to load *successfully* and swallow
-everything typed afterward, `bye` included. **Unbalanced `CASE` arms no
-longer compile silently**, and `if … endcase` and its family abort instead of
-segfaulting. Modules learned **`delete <name>`** and **`list`**, `variable`
-now starts at zero, **`+to`** adds to a value, and **`booting?`** lets a
-module launch itself once and still be edited. Plus two interactive lessons
-(Modules, Printing), `time <word>` and a measured `docs/Performance.md`, and
-the lessons themselves are now replayed by the test suite. Builds on
-v0.12.0's graphics.
-123 unit tests + 915 integration tests + 36 PTY tests + 26 lesson replays.
+**v0.14.0** — **Sound you can layer, and threads to run it on.** Audio was one
+queue: a tone waited for whatever was already playing. Now the device holds
+**mixing channels** — sounds on different channels play together, sounds queued
+on one play in turn — and `tone` keeps its own, so a run of tones is still a
+run of tones. **WAV files load and play**: 8, 16 and 32-bit integer and 32-bit
+float, mono or stereo, plus 24-bit widened losslessly because SDL has no format
+for it. Measured against a real organ sample set, the first decoder read 406
+files of 13,529; this one reads all of them. Volume is SDL's own gain, so it
+changes sound *already playing*, and **`ch-fade`** takes a channel down
+gently where `ch-stop` cuts it off. Reaching the gain at all needed
+**float arguments in the FFI** (`(ccallf)`, `>f32`) — three separate features
+had been bent around that gap. `wav-from` decodes a `.wav` already in memory,
+so a sound can ship as Forth source the way the fonts do.
+
+And BasicForth **runs Forth on OS threads** — `thread`, `join`, `threads`, with
+`BASE`, `sp0` and the exception handler moved into thread-local storage and
+worker stacks fenced by guard pages. Plus `<=`, `>=`, `u<=`, `u>=` as
+primitives; a compile-only word now aborts the line and names itself instead of
+letting the rest of it run; and a child process no longer prints onto the
+command line you typed. Builds on v0.13.0.
+123 unit tests + 951 integration tests + 36 PTY tests + 26 lesson replays.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -110,11 +110,20 @@ What works today:
   `STAMP-SCALE` does sprites, and `>XY` turns a character cell into its pixel
   corner with the scale folded in, so a layout survives both a font switch
   and a scale change
-- Sound: square-wave tones through SDL3's default playback device
-  (`sound.fs`): `SND-OPEN`, `TONE`, `BEEP`, `SND-WAIT` — queued, so game
-  loops keep running while a sound plays
+- Sound: mixing channels through SDL3's playback device (`sound.fs`) —
+  `SND-OPEN`, `TONE`, `BEEP`, `TONE-ON`, `SND-WAIT`. Sounds on different
+  channels play together, sounds queued on one play in turn; `CH-VOL!` is
+  SDL's own gain so it reaches audio already playing, and `CH-FADE` +
+  `SND-PUMP` take a channel down gently
+- Samples: `WAV-LOAD` reads a `.wav` (8/16/32-bit integer and 32-bit float,
+  mono or stereo, 24-bit widened losslessly), `WAV-FROM` decodes one already
+  in memory, and `WAV-PLAY` puts it on a channel (`wavcore.fs`, `wav.fs`)
+- Threads: `THREAD` runs a Forth word on an OS thread, `JOIN` waits for it,
+  `THREADS` lists them — `BASE`, `sp0` and the exception handler are
+  thread-local, and worker stacks are fenced with guard pages
 - FFI: `dlopen`/`dlsym`/`(ccall)` call any C library directly from Forth
-  (`ffi.fs`) — SDL3 is bound this way, with zero C glue code
+  (`ffi.fs`) — SDL3 is bound this way, with zero C glue code. `(CCALLF)` and
+  `>F32` pass float arguments, which integer-only cells otherwise cannot
 - Tools: `WORDS`, `.MODULE` (list the module's words), `DUMP`, `.S`,
   `VERSION` (also `basicforth -v`), and `DIS` — disassemble any word, your
   own or a primitive, with call targets named (`disasm.fs`)
@@ -129,8 +138,9 @@ What works today:
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
-What's next: a GPU backend (SDL_GPU) behind the surface API, sockets and
-threading — plus a package registry, the locals word set, and more games.
+What's next: a GPU backend (SDL_GPU) behind the surface API and sockets —
+plus a package registry, the locals word set, speech synthesis, and more
+games. (Threading shipped in v0.14.0.)
 
 ## Building
 
