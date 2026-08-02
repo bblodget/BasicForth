@@ -54,6 +54,12 @@ script, or the last tone is cut off.
 ## snd-close ( -- )
 Stop and close the audio device. Sound words become no-ops again.
 
+## snd-rate ( -- n )
+The sample rate `tone` generates at, 44100. SDL converts to whatever the
+hardware wants, so this is our side of the conversation, not the device's.
+It is also the rate `tone-on` declares on a channel, which is why a tone after
+a wav sounds right rather than inheriting the file's rate.
+
 ## snd-vol ( value: 0..32767 )
 Square-wave amplitude, default 8000. Set with `to`:
 

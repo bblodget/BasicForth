@@ -56,8 +56,14 @@ C code runs with no safety net: a bad pointer or wrong argument count can
 crash BasicForth. Check stack pictures against the C prototype.
 
 ## (ccallf) ( iargs.. fargs.. nint nfloat fnptr -- ret )
+Call a C function that takes **float** parameters, returning its integer
+result.
+
 ## (ccallf>f) ( iargs.. fargs.. nint nfloat fnptr -- fbits )
-Call a C function that takes **float** parameters. Push the integer arguments
+The same call, for a function that *returns* a float — the result comes back
+as f32 bits, the same form `>f32` produces.
+
+Both take the arguments the same way. Push the integer arguments
 in C order, then the float arguments in C order, then the two counts, then the
 function pointer. `(ccallf)` returns the integer result; `(ccallf>f)` returns
 a float result as bits.
@@ -100,6 +106,9 @@ functions (error messages, version strings).
     \ 0 (SDL_GetError) (ccall) ztype
 
 ## (dlopen) ( zaddr -- handle )
+The raw primitive under `dlopen`: a NUL-terminated path in, `0` back on
+failure instead of aborting.
+
 ## (dlsym) ( handle zaddr -- fnptr )
-The raw primitives under `dlopen`/`dlsym`: same jobs, NUL-terminated string
-addresses in, `0` back on failure instead of aborting.
+The raw primitive under `dlsym`: a NUL-terminated symbol name in, `0` back on
+failure instead of aborting.
