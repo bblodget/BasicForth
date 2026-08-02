@@ -538,7 +538,7 @@ sigsegv_handler:
     mov rp0(%rip), %rax
     mov %rax, GREGS_RSP(%rbx)           # RSP = rp0
 
-    mov sp0(%rip), %rax
+    mov %fs:sp0@tpoff, %rax
     mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
 
     # Always restore LATEST and HERE — a fault during forth_colon may
@@ -1047,6 +1047,17 @@ platform_mmap_anon:
 .global platform_munmap
 platform_munmap:
     mov $SYS_munmap, %rax
+    syscall
+    ret
+
+# platform_prot_none(addr, len) -> 0 or -errno
+# Make a page-aligned range unreadable and unwritable, so touching it faults.
+# Used to fence a worker thread's stacks: without it an overflowing worker
+# silently walks into the neighbouring stack instead of dying loudly.
+.global platform_prot_none
+platform_prot_none:
+    mov $10, %rax                   # SYS_mprotect
+    xor %edx, %edx                  # PROT_NONE
     syscall
     ret
 
