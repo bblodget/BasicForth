@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: the Concurrency lesson could freeze at the step that defines `run2`
+
+- The lesson showed `run2` four steps before anything aimed the workers, and
+  invited the reader back to the prompt after every step. Typing the word that
+  had just appeared on screen ran `0 0 (count)` — a loop stepping by **zero**,
+  never reaching `LIMIT` — in two threads at once, and `join` waited on workers
+  that could not finish. Only Ctrl-C got the session back.
+- The counters and start positions are now `value`s with their starting numbers
+  in the definition, so `run2` works the moment it exists. `value` requires an
+  initial value, which makes the bug unrepresentable rather than merely fixed.
+- The lesson suite covers it now: the step runs `run2 .`, so a lesson that
+  wedges is reported as a failing lesson instead of a hang.
+- The helpers step was split in two, since adding a line pushed it past a
+  20-row terminal.
+
+### Changed: tutorials prefer `value` over `variable` for plain numbers
+
+- A forgotten `@` on a `variable` doesn't fail — it hands you an address that
+  looks like a plausible number. A `value` has nothing to forget. `variable`
+  stays for anything that needs the **address**: `+!`, `allot`ed arrays,
+  buffers, FFI out-parameters, and any cell chosen at run time (`to` parses its
+  target name when the line is compiled).
+- The rule is stated in `help defining-words` under `value`, and the Snake
+  lesson mentions it where it introduces `variable`. Snake's variables step was
+  split so the note doesn't push it past a 24-row terminal.
+- The Concurrency lesson's shared-counter warning now names `+to` alongside
+  `+!`: both are read-modify-write, and the sugar hides the race rather than
+  removing it.
+
 ## v0.14.0 — 2026-08-02
 
 ### Added: `wav-from` — decode a `.wav` already in memory
