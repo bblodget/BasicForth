@@ -134,6 +134,10 @@ platform_mmap_anon:
 platform_munmap:
     ret
 
+.global platform_prot_none
+platform_prot_none:
+    ret
+
 .global platform_ioctl
 platform_ioctl:
     mov $-1, %rax               # return error

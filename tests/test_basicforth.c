@@ -84,11 +84,15 @@ extern void init_engine(int64_t here_val, int64_t latest_val);
 extern char data_stack_top;
 extern char dict_space;
 extern char dict_include;
-extern int64_t base;
+/* base and sp0 live in thread-local storage (see the TLS block in core.s), so
+   they must be declared __thread here or the link fails on a TLS/non-TLS
+   symbol mismatch. The test harness is single-threaded, so it simply sees the
+   main thread's copy. */
+extern __thread int64_t base;
 extern int64_t source_addr;
 extern int64_t source_len;
 extern int64_t to_in;
-extern int64_t sp0;
+extern __thread int64_t sp0;
 extern int64_t error_flag;
 
 /* --- Test framework --- */

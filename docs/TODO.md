@@ -921,12 +921,34 @@ docs/Graphics.md for the API.
   - `thread ( xt -- tid ior )` / `join ( tid -- ior )`
   - v1 rule (documented, not enforced): the REPL thread owns the
     dictionary — workers run compiled words only, no `:`/`create`/
-    interpret-`s"`/`save`, BASE read-only
+    interpret-`s"`/`save`
   - Channels as the blessed communication path: `chan`/`ch!`/`ch@`/`ch?`
     (ring buffer + pthread mutex/cond)
-  - Must-settle list in the doc: `handler` (catch/throw chain global) must
-    be per-thread or catch forbidden in workers; worker fault story
-    (signals are process-wide); per-thread locals stack; stack sizing
+  - [x] **Step 0 DONE 2026-07-31 (branch tls):** `base`/`sp0`/`handler`
+    moved to thread-local storage (`%fs` / `TPIDR_EL0`, local-exec model).
+    BASE is no longer read-only in workers, and adding another per-thread
+    variable is now a one-line change.
+  - [x] **Step 1 DONE 2026-07-31 (branch threads):** per-arch trampoline,
+    `thread ( xt -- t ior )` / `join ( t -- ior )` in `src/forth/threads.fs`,
+    and the `is_repl` gate so a worker's THROW no longer restores its
+    snapshot of the ten shared input-source globals over the REPL's line.
+    Uncaught throw in a worker ends only that thread (the trampoline runs
+    the xt through `catch`) and surfaces as join's ior. 7 integration tests
+    on both arches; `help concurrency`.
+  - [x] **Step 1.5 DONE 2026-08-01 (branch threads):** thread registry
+    (linked through the context blocks, no extra allocation), `threads`
+    listing word with running/finished state, `join ( t -- result status )`
+    splitting the worker's throw code from a join failure, and a spent
+    handle now reported as -60 instead of crashing. Reference page renamed
+    to Concurrency.md so `help threads` reaches the word, not the page.
+  - [x] **Worker stack fences DONE 2026-08-01:** PROT_NONE pages below the
+    data stack, between the stacks, and above the return stack, via a new
+    `(prot-none)` primitive. Unfenced the stacks were neighbours and an
+    overrun corrupted the other one silently.
+  - Still to settle: **channels** (`chan`/`ch!`/`ch@`/`ch?`) as the blessed
+    communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
+    nicer report now that fences make the failure loud); per-thread locals
+    stack; stack sizing (fixed constants today)
 
 ---
 

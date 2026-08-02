@@ -12,6 +12,15 @@
 
 .include "version.inc"
 
+// Address of a thread-local variable (local-exec model): the thread pointer
+// TPIDR_EL0 plus the offset the linker assigns. See the TLS block in core.s
+// for which vars are per-thread and why. Writes only \reg.
+.macro TLS_ADDR reg, sym
+    MRS \reg, TPIDR_EL0
+    ADD \reg, \reg, #:tprel_hi12:\sym, LSL #12
+    ADD \reg, \reg, #:tprel_lo12_nc:\sym
+.endm
+
 .global _start
 
 .equ CELL, 8
@@ -273,8 +282,11 @@ _start:
 
     // Initialize engine registers
     ADR X19, data_stack_top         // DSP = sp0 (empty stack)
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     STR X19, [X9]                   // save initial DSP for .S / guards
+    TLS_ADDR X9, is_repl
+    MOV X10, #1
+    STR X10, [X9]                   // this is the REPL thread; workers get 0
     ADR X21, dict_space             // HERE
     ADR X22, dict_throw             // LATEST (head of the built-in dictionary chain)
 
@@ -471,7 +483,7 @@ repl_loop:
     MOV X9, SP
     ADR X10, rp0
     STR X9, [X10]
-    ADR X10, handler
+    TLS_ADDR X10, handler
     STR XZR, [X10]                  // any CATCH frames died with the last line
 
     // Save LATEST and HERE for guard page recovery
@@ -596,9 +608,13 @@ repl_loop:
     B repl_loop
 
 repl_error:
-    // Print "? " + token + newline
-    ADR X0, err_msg
-    MOV X1, #err_len
+    // Print the error's own wording + token + newline. The wording is chosen by
+    // the site that raised it (see err_pfx_addr in core.s) so every line error
+    // reads the same shape: "? nosuchword", "compile only: dup".
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
     BL platform_write
 
     ADR X9, err_token_len
@@ -668,7 +684,7 @@ dict_full:
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X19, [X9]
 
     // If we were compiling, abort the definition
