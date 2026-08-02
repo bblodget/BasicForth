@@ -166,13 +166,22 @@ data stack — the normal "stop what you're doing and listen" reset.
 Clear the data stack and `quit`. The blunt-instrument error recovery.
 Equivalent to `-1 throw`, so a `catch` traps it.
 
-## abort" ( flag -- )  (compile-only; text follows)
-Inside a definition, compile a guard: at run time, if the flag is true, print
-the message and `-2 throw` (the standard `abort"` code) — a `catch` traps it
-as -2, message already printed.
+## abort" ( flag -- )  (text follows)
+If the flag is true, print the message and `-2 throw` (the standard `abort"`
+code) — a `catch` traps it as -2, message already printed. False consumes the
+flag and carries on.
 
     : checked  1 abort" went boom" ;
     checked           \ went boom  (and aborts)
+
+Inside a definition it compiles a guard that runs when the word does. Outside
+one it acts immediately, which is what makes the everyday allocation check
+work at the top of a file:
+
+    1024 allocate abort" out of memory" value buf
+
+`allocate` leaves an address *and* an error code; `abort"` takes the code, so
+`value` gets the address.
 
 ## bye ( -- )
 Leave BasicForth, restoring the terminal. If the session has unsaved work,

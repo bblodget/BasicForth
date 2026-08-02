@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: `abort"` did nothing outside a definition
+
+- `-1 abort" boom"` at the prompt, or at the top level of a `.fs` file, printed
+  nothing and did not abort. It is `IMMEDIATE` with no interpreting branch, so
+  it *ran*: `postpone`d its guard into the dictionary where nothing would ever
+  call it, and returned — **without consuming its flag**. Its own comment
+  claimed `COMPILE_ONLY`, but `; immediate` sets only the immediate bit, so the
+  check that would have refused it never fired.
+- The leftover flag is what made it harmful rather than merely useless. The
+  everyday idiom at the top of a file
+
+      1024 allocate abort" out of memory" value buf
+
+  left `( addr ior )` intact, so `buf` bound the **error code** and the address
+  was orphaned on the stack. `buf` was 0, and the first store into it faulted —
+  a segfault several lines from the cause.
+- `abort"` is now STATE-smart, exactly like `s"` and `."` beside it, and lives
+  with them because its interpreting half needs the same parser. Compiled code
+  is unchanged. Both branches parse the message, so the rest of the line is
+  consumed whether the flag was true or not.
+- The message now ends its own line. It never paid the owed newline, so an
+  `abort"` firing at the prompt ran straight into the next one (`went boom> `).
+- Nothing shipped was affected: every `abort"` in `core.fs` and the libraries
+  is inside a definition, where it always compiled correctly. That is also why
+  no suite caught it — found while writing a lesson that used the idiom.
+
 ## v0.14.0 — 2026-08-02
 
 ### Added: `wav-from` — decode a `.wav` already in memory
