@@ -2,6 +2,122 @@
 
 ## Unreleased
 
+### Fixed: several reference entries were empty at the prompt
+
+- A `## ` heading immediately followed by another leaves the first entry
+  **blank** in `help`, because it shows one heading and the text beneath it.
+  Stacking them reads perfectly well in the file and is broken where it counts.
+  Five entries shipped that way — `AUDIO_S16LE`, `AUDIO_S32LE`, `AUDIO_F32LE`,
+  `wav-loop-start` and `(ccallf)` — plus one that predated this work,
+  `(dlopen)`. All six now have their own text, and a lint fails the build on
+  any entry with nothing under it. The lint's first version only looked for two
+  headings on consecutive lines, and so missed the same fault with a blank line
+  between them — caught in review. It now checks for an empty body, and only
+  for WORD entries: a heading with a stack effect. Headings without one are
+  section titles, which legitimately have nothing but more headings beneath.
+- Also found this way: the reference audit only swept the CORE dictionary, so
+  anything appearing after a `require` was invisible to it. `sound.fs` had
+  `snd-dev` and `snd-stream` — raw SDL handles with undecorated, undocumented
+  names. They are `(parenthesised)` now, the format constants users actually
+  pass to `ch-format!` are documented, and a second audit covers the audio
+  library tree. The other libraries have the same shape and are filed in
+  `docs/TODO.md`.
+
+### Added: playing WAV files (`wav.fs`), and audio volume that actually works
+
+- **`wav-play` plays a loaded sample on a mixing channel**, `wav-play-on`
+  picks the channel, `wav-ms` says how long it runs. Sounds on different
+  channels play together; the same sample can be sounding on several at once,
+  because nothing is copied or modified. `help playing`.
+- **Volume is now SDL's per-stream gain**, set through the new float FFI, and
+  that is strictly better than the sample-scaling it replaces: it changes
+  sound *already playing*, costs nothing at queue time, needs no copy of the
+  caller's samples, and works whatever format the channel carries. The whole
+  scale-into-a-copy path is gone.
+- **`ch-fade ( ms ch -- )` fades out and stops** — the soft counterpart to
+  `ch-stop`, which cuts the waveform wherever it happens to be and can click.
+  This is what could not be built in the channels release: fading needed to
+  re-queue ramped source data, and SDL cannot read back what is queued. With
+  gain it is just a value moving over time.
+- **A fade belongs to the sound it was started on**, and queueing anything new
+  on the channel cancels it. Without that rule a fade reaches past its own
+  sound: a short sound that ends before the fade does leaves the deadline
+  armed, and the next sound on that channel — very likely an unrelated one,
+  since `snd-alloc` hands out channels that fell silent — gets stopped when it
+  arrives. Found in review; the first fix covered only an explicit `ch-stop`
+  and missed both the natural-completion and the reallocation paths.
+- **Changing the volume during a fade works.** A fade moves the gain and never
+  the setting, so `ch-vol@` reports what you chose throughout, the ramp carries
+  on from the new level, and the new level is what remains when the fade ends.
+  Also a review finding: the first version snapshotted the volume at `ch-fade`
+  time and wrote it back afterwards, silently reverting any change made while
+  fading. The fix was to delete the snapshot — with the gain and the setting
+  kept separate there is nothing to save and restore. A third finding in the
+  same area: `ch-vol!` also applied the gain directly, so a volume change
+  mid-fade jumped the gain to full for one frame before the next pump snapped
+  it back. While a fade runs the gain belongs to the fade, and `ch-vol!` now
+  only records.
+- **`snd-pump` services the channels; call it once a frame.** Nothing else
+  can: SDL pulls audio on its own thread and a Forth word cannot be a C
+  callback, so the program's loop is the only clock available.
+- Volume must be set **before** the audio is queued: SDL pulls on its own
+  schedule and can take the first chunk before a later `ch-vol!` lands, so the
+  sound starts at the channel's previous level. `snd-alloc`, set, then
+  `wav-play-on`. Documented in `help playing`; `wav-play` cannot help, since it
+  does not hand back the channel until after queueing.
+- **Per-channel formats and rates** (`ch-format!`, `ch-format@`). A 48 kHz
+  stereo float file and a 16 kHz mono one can play in the same moment; SDL
+  converts each. Each queued chunk keeps the format it was queued with, so the
+  format can change while audio is still playing. Whoever queues sets it —
+  `tone-on` does too, so a channel that last carried a wav does not
+  reinterpret a square wave.
+
+### Fixed: a channel playing at a rate other than the device's never finished
+
+- Found while preparing an interactive demo, and missed by every test because
+  they all used the device's own rate so nothing resampled. A stream that IS
+  resampling holds a few input bytes back waiting for more input, so a channel
+  fed a 16 kHz sample against a 44.1 kHz device sat at 14 bytes queued for
+  ever. `snd-wait` spun on it, and `snd-alloc` never saw that channel free
+  again — after enough sounds every channel looks permanently busy.
+- `ch-playing?` now asks the **output** side, which does reach zero. What the
+  stream holds back is a fraction of a millisecond and is never heard.
+- The first fix was to flush the stream after every `ch-put`, which also
+  works — but flushing declares end-of-input, and SDL warns of a gap at the
+  join, so it would have put a gap between consecutive tones. That is exactly
+  the seamless sequencing `tone` has always had, and the reason channel 0 is
+  reserved for it. Caught in review before it shipped; there is now a test
+  asserting consecutive tones queue as one unbroken run.
+- `ch-queued` is left meaning what it says — bytes put in, not yet converted —
+  and documented as such rather than quietly redefined.
+- The bytes a resampling stream holds back are **never converted and never
+  heard**, so reporting the channel finished is accurate rather than early.
+  Measured: a channel left with 8 bytes still shows 8 queued and 0 available
+  half a second later. The amount is bounded by the resampler's window — about
+  14 bytes, under half a millisecond — and the consequence, that a sound
+  shorter than that is dropped entirely, is documented in `help channels`.
+  Avoiding the drop would mean flushing after every sound, which costs an
+  audible gap between consecutive sounds; losing a quarter of a millisecond
+  does not.
+
+### Added: 8, 24 and 32-bit WAV files
+
+- `wavcore.fs` accepted only 16-bit PCM. Measured against a real GrandOrgue
+  sample set, that read **406 of 13,529 files — 3%**. The rest were 24-bit
+  (12,235) and 32-bit float (888): 16-bit is what game assets and TTS output
+  use, not what anything professionally recorded uses.
+- Now accepts 8, 16 and 32-bit integer and 32-bit float — every depth SDL has
+  a format for, handed to the device untouched — plus 24-bit. **All 13,529
+  load.**
+- **24-bit is the only conversion, because SDL has no 24-bit format at all.**
+  It is widened to 32-bit by shifting up 8, which is lossless and puts the
+  sign bit where a 32-bit sample wants it without a sign test. Narrowing to 16
+  would discard a third of every sample for no gain. Verified sample-for-sample
+  against a reference decoder, negatives included.
+- Bit depth does not imply float-ness — 32-bit files come both ways — so the
+  format code decides, and `wav-float?` reports it. `wav-bits` reports the
+  depth **as stored**, so a widened 24-bit file says 32.
+
 ### Added: float arguments in the FFI (`(ccallf)`, `>f32`)
 
 - **The FFI could not call a C function that takes a float**, and three

@@ -174,8 +174,9 @@ s" BasicForth" 2dup (z-title) swap cmove   \ default title...
     sdl-win ?dup if 1 (SDL_DestroyWindow)   (ccall) drop  0 to sdl-win then
     \ Quit only what sdl-open started. SDL_Quit() ends EVERY subsystem, so
     \ closing a window would also tear down the audio device sound.fs opened
-    \ -- leaving snd-stream pointing at freed memory, which its `snd-stream
-    \ 0=` guard cannot detect, so the next tone writes into it.
+    \ -- leaving sound.fs's channel streams pointing at freed memory, which
+    \ its `(snd-stream) 0=` guard cannot detect, so the next tone writes
+    \ into one.
     SDL_INIT_VIDEO 1 (SDL_QuitSubSystem) (ccall) drop
     0 0 0 0 set-surface ;
 
