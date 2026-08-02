@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added: `wav-from` — decode a `.wav` already in memory
+
+- `wav-load` reads a file. `wav-from ( c-addr u -- sample|0 )` takes the same
+  bytes from anywhere else: compiled into a program, read down a pipe, built by
+  a tool. Everything the file loader accepts, refuses and reports, this does
+  too — the decoder was already two halves internally, and this exposes the
+  second one.
+- The image is **copied**. A sample points into its own block and `wav-free`
+  releases it, so adopting the caller's bytes would hand it memory the caller
+  still owns — and those bytes may be in the dictionary or about to be reused.
+- This is how a sound can ship as Forth source rather than a separate file: a
+  generated `.fs` holds the bytes and calls `wav-from`, so `require` finds it on
+  `BASICFORTH_PATH` like any other library. The bundled fonts already work this
+  way, which is what makes it the natural answer rather than teaching
+  `wav-load` to search a path — searching is for **code**, and a sound file
+  found on the library path instead of your own directory would be a trap.
+- Not needed for audio you generate yourself: raw samples go straight to
+  `ch-put` once the channel knows their format.
+
 ### Fixed: `sh` output ran onto the command line
 
 - `sh echo hello` printed `> sh echo hellohello`. The owed newline is paid by

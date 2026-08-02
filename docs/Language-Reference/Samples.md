@@ -17,6 +17,7 @@ carry on without its sound effect instead of aborting.
 At a glance:
 
     wav-load        ( c-addr u -- sample|0 )  read a .wav file
+    wav-from        ( c-addr u -- sample|0 )  decode a .wav already in memory
     wav-why         ( -- c-addr u )           why the last load failed
     wav-free        ( sample -- )             release it
     wav-frames      ( sample -- n )           length in sample frames
@@ -49,6 +50,26 @@ its audio loads fine. (Audio does *not* reliably begin at byte 44 — that is
 only true of the simplest files.)
 
     s" step.wav" wav-load ?dup 0= if  wav-why type cr  then
+
+## wav-from ( c-addr u -- sample|0 )
+Decode a `.wav` **image already in memory** — the same bytes a file holds, from
+wherever you got them: compiled into a program, read down a pipe, built by a
+tool. Everything `wav-load` accepts, refuses and reports, this does too; the
+only difference is where the bytes came from.
+
+    blip-image blip-image-len wav-from value blip
+
+The image is **copied**. A sample points into its own block and `wav-free`
+releases it, so adopting your bytes would hand it memory you still own — and
+your buffer may be in the dictionary, or about to be reused.
+
+This is how a sound ships as Forth source rather than as a separate file: a
+generated `.fs` holds the bytes and calls `wav-from`, so `require` finds it on
+`BASICFORTH_PATH` like any other library. The bundled fonts work the same way.
+
+To play audio you generated yourself — a waveform you computed rather than a
+file you decoded — you do not need this at all: hand the raw samples straight
+to `ch-put` after telling the channel their format with `ch-format!`.
 
 ## wav-why ( -- c-addr u )
 The reason the last `wav-load` returned 0, as a string. Each refusal names
