@@ -75,6 +75,13 @@ and read it back with `@` ("fetch"):
     5 score +!        \ add 5 to it
     score @ .         \ prints 5
 
+When all you ever want is the *number*, `value` says it with less ceremony —
+`0 value score`, then plain `score` to read and `to score` to write, with no
+`@` to forget. Use `variable` when something needs the **address**: `+!` does,
+and so do the arrays a few steps from here.
+
+## The boxes the game needs
+
 The snake needs a handful of these. Define them all now:
 
     variable dx  variable dy        \ direction we're moving (-1, 0, or 1)
