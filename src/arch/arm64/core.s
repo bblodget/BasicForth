@@ -56,6 +56,18 @@
 // inside a definition, STATE is 0 and the header is legitimately still hidden.
 // A macro, not a subroutine: these sites are reached mid-unwind, where X30 is
 // not ours to clobber.
+
+// Address of a thread-local variable (local-exec model): the thread pointer
+// TPIDR_EL0 plus the offset the linker assigns. Replaces the ADR that would
+// address a plain global — three instructions instead of one, no lock and no
+// lookup. See the TLS block at the end of this file for which vars are
+// per-thread and why. Writes only \reg.
+.macro TLS_ADDR reg, sym
+    MRS \reg, TPIDR_EL0
+    ADD \reg, \reg, #:tprel_hi12:\sym, LSL #12
+    ADD \reg, \reg, #:tprel_lo12_nc:\sym
+.endm
+
 .macro DROP_PARTIAL_HEADER
     LDRB W9, [X22, #8]              // LATEST flags
     TST W9, #F_HIDDEN
@@ -213,7 +225,7 @@ forth_two_drop:
 .global forth_depth
 forth_depth:
 
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X9, [X9]               // X9 = sp0
     SUB X9, X9, X19            // X9 = sp0 - DSP (bytes)
     ASR X9, X9, #3             // X9 = depth (cells)
@@ -974,6 +986,145 @@ forth_ccall:
     LDP X29, X30, [SP], #16
     RET
 
+// (ccallf) ( iarg1..iargN farg1..fargM nint nfloat fnptr -- ret )
+// Like (ccall), but some parameters are 32-bit floats. AAPCS64 fills separate
+// register files -- integers in X0-X7, floats in V0-V7 -- and assigns each in
+// its own order regardless of how they interleave in the C prototype, so
+// grouping the floats after the integers on the Forth stack loses nothing.
+//
+// A float argument is its IEEE-754 single-precision BIT PATTERN in the low 32
+// bits of a cell; >f32 builds one. Forth never holds a float, only its bits.
+//
+// Limits: 8 integer args, 8 float args, integer return only (a float return
+// comes back in V0, which this does not read).
+//
+// The addresses are computed with ADD before each load: the register-offset
+// form of a 32-bit LDR only accepts a shift of 0 or 2, not the LSL #3 that
+// stepping over 64-bit cells needs.
+// (ccallf>f) is the same call with the result taken from V0 as f32 bits,
+// which is what makes the multi-float register path testable against libm.
+.global forth_ccallf
+forth_ccallf:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STR X23, [SP, #-16]!
+    MOV X23, #0                 // integer return
+    B .Lccallf_common
+.global forth_ccallf_f
+forth_ccallf_f:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STR X23, [SP, #-16]!
+    MOV X23, #1                 // float return
+.Lccallf_common:
+    LDR X9,  [X19]              // fnptr (top)
+    LDR X10, [X19, #CELL]       // nfloat
+    LDR X11, [X19, #(2*CELL)]   // nint
+    ADD X19, X19, #(3*CELL)     // pop fnptr + nfloat + nint; args remain
+    // Floats sit on top: fargJ at [DSP + (nfloat-J)*8].
+    CBZ X10, .Lccallf_ints
+    SUB X12, X10, #1
+    ADD X12, X19, X12, LSL #3
+    LDR S0, [X12]
+    CMP X10, #2
+    B.LO .Lccallf_ints
+    SUB X12, X10, #2
+    ADD X12, X19, X12, LSL #3
+    LDR S1, [X12]
+    CMP X10, #3
+    B.LO .Lccallf_ints
+    SUB X12, X10, #3
+    ADD X12, X19, X12, LSL #3
+    LDR S2, [X12]
+    CMP X10, #4
+    B.LO .Lccallf_ints
+    SUB X12, X10, #4
+    ADD X12, X19, X12, LSL #3
+    LDR S3, [X12]
+    CMP X10, #5
+    B.LO .Lccallf_ints
+    SUB X12, X10, #5
+    ADD X12, X19, X12, LSL #3
+    LDR S4, [X12]
+    CMP X10, #6
+    B.LO .Lccallf_ints
+    SUB X12, X10, #6
+    ADD X12, X19, X12, LSL #3
+    LDR S5, [X12]
+    CMP X10, #7
+    B.LO .Lccallf_ints
+    SUB X12, X10, #7
+    ADD X12, X19, X12, LSL #3
+    LDR S6, [X12]
+    CMP X10, #8
+    B.LO .Lccallf_ints
+    SUB X12, X10, #8
+    ADD X12, X19, X12, LSL #3
+    LDR S7, [X12]
+.Lccallf_ints:
+    // Integers sit under them: base = DSP + nfloat*8, iargK at base+(nint-K)*8.
+    ADD X13, X19, X10, LSL #3
+    CBZ X11, .Lccallf_go
+    SUB X12, X11, #1
+    LDR X0, [X13, X12, LSL #3]
+    CMP X11, #2
+    B.LO .Lccallf_go
+    SUB X12, X11, #2
+    LDR X1, [X13, X12, LSL #3]
+    CMP X11, #3
+    B.LO .Lccallf_go
+    SUB X12, X11, #3
+    LDR X2, [X13, X12, LSL #3]
+    CMP X11, #4
+    B.LO .Lccallf_go
+    SUB X12, X11, #4
+    LDR X3, [X13, X12, LSL #3]
+    CMP X11, #5
+    B.LO .Lccallf_go
+    SUB X12, X11, #5
+    LDR X4, [X13, X12, LSL #3]
+    CMP X11, #6
+    B.LO .Lccallf_go
+    SUB X12, X11, #6
+    LDR X5, [X13, X12, LSL #3]
+    CMP X11, #7
+    B.LO .Lccallf_go
+    SUB X12, X11, #7
+    LDR X6, [X13, X12, LSL #3]
+    CMP X11, #8
+    B.LO .Lccallf_go
+    SUB X12, X11, #8
+    LDR X7, [X13, X12, LSL #3]
+.Lccallf_go:
+    ADD X19, X19, X11, LSL #3   // pop the integer args
+    ADD X19, X19, X10, LSL #3   // pop the float args
+    BLR X9
+    CBZ X23, 1f
+    FMOV W0, S0                 // float return: hand back the f32 bit pattern
+1:  STR X0, [X19, #-CELL]!      // push the C return value
+    LDR X23, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// >f32 ( n d -- bits )
+// The IEEE-754 single-precision bit pattern of n/d, as an integer. This is the
+// only place the engine touches floating point, and the result is a bit
+// pattern -- the Forth stack still never holds a float. d = 0 gives 0 rather
+// than an infinity, so a bad ratio is silence and not a wild value.
+.global forth_to_f32
+forth_to_f32:
+    LDR X9, [X19], #CELL        // pop d
+    LDR X10, [X19]              // n
+    CBZ X9, 1f
+    SCVTF S0, X10
+    SCVTF S1, X9
+    FDIV S0, S0, S1
+    FMOV W11, S0                // writing W zeroes the upper half of X11
+    STR X11, [X19]
+    RET
+1:  STR XZR, [X19]
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 .global forth_emit
@@ -1101,7 +1252,7 @@ forth_number:
 
     MOV X25, #0                 // X25 = result
     MOV X26, #0                 // X26 = negate flag
-    ADR X9, base
+    TLS_ADDR X9, base
     LDR X10, [X9]               // X10 = base
 
     // Check for leading '-'
@@ -1487,7 +1638,7 @@ forth_dot_s:
     STP X23, X24, [SP, #-16]!
 
     // Compute depth = (sp0 - DSP) / CELL
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X23, [X9]               // X23 = sp0
     SUB X23, X23, X19           // X23 = sp0 - DSP (byte diff)
     ASR X23, X23, #3            // X23 = depth
@@ -1543,8 +1694,14 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
+// Error-report prefixes. The reporter (repl_error in main.s, .Lincl_error
+// below) prints err_pfx + the offending token, so an error site chooses its own
+// wording by pointing err_pfx at one of these. Keeps every line error on one
+// format -- "<why> <token>" -- and on one code path.
+err_pfx_question: .ascii "? "
+.equ err_pfx_question_len, . - err_pfx_question
+err_pfx_conly:    .ascii "compile only: "
+.equ err_pfx_conly_len, . - err_pfx_conly
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2391,6 +2548,21 @@ forth_interpret_line:
     LDR X9, [X19]                   // u is on top
     CBZ X9, .Lil_done
 
+    // Remember the token before FIND consumes it, so any error site below can
+    // name it, and reset the wording to the default -- that reset is what stops
+    // one error's wording leaking onto the next.
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]            // c-addr
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADR X9, err_pfx_question
+    ADR X10, err_pfx_addr
+    STR X9, [X10]
+    MOV X9, #err_pfx_question_len
+    ADR X10, err_pfx_len
+    STR X9, [X10]
+
     // FIND ( c-addr u -- xt flag | c-addr u 0 )
     BL forth_find
 
@@ -2511,12 +2683,18 @@ forth_interpret_line:
     RET
 
 .Lil_compile_only:
-    // Compile-only word used in interpret mode — non-fatal, continue parsing
+    // Compile-only word used in interpret mode. This aborts the line, like every
+    // other error: it used to print and keep parsing, so the rest of the line ran
+    // anyway. `['] dup 999 .` then executed `dup` on an empty stack, and the
+    // underflow -- not the real mistake -- was what you saw.
     ADD X19, X19, #2*CELL           // drop xt, flag
-    ADR X0, msg_compile_only
-    MOV X1, #msg_compile_only_len
-    BL platform_write
-    B .Lil_loop
+    ADR X9, err_pfx_conly           // report as "compile only: <token>"
+    ADR X10, err_pfx_addr
+    STR X9, [X10]
+    MOV X9, #err_pfx_conly_len
+    ADR X10, err_pfx_len
+    STR X9, [X10]
+    B .Lil_err_return               // err_token was saved before FIND
 
 // ---------- PAREN (comment word, IMMEDIATE) ----------
 // ( "ccc)" -- )
@@ -2583,6 +2761,17 @@ forth_evaluate:
     LDR X25, [X13]                  // save old to_in
     ADR X14, source_id
     LDR X27, [X14]                  // save old source_id
+    // The error wording belongs to the OUTER token being interpreted. The
+    // nested interpret_line below resets it per token of its own string, so
+    // without this an error raised later in the same outer token would inherit
+    // the inner string's wording. Bracket it like the source context.
+    // NOT X9/X10/X11-X14: X9 is u, X10 is c-addr, and X11-X14 hold the
+    // source-context addresses the block below stores through.
+    ADR X15, err_pfx_addr
+    LDR X15, [X15]
+    ADR X16, err_pfx_len
+    LDR X16, [X16]
+    STP X15, X16, [SP, #-16]!       // X15 at [SP], X16 at [SP+8]
 
     // Set new source context
     STR X10, [X11]                  // source_addr = c-addr
@@ -2604,6 +2793,11 @@ forth_evaluate:
     STR X25, [X9]
     ADR X9, source_id
     STR X27, [X9]
+    LDP X9, X10, [SP], #16          // err_pfx addr, len
+    ADR X11, err_pfx_addr
+    STR X9, [X11]
+    ADR X11, err_pfx_len
+    STR X10, [X11]
 
     MOV X0, X26                     // restore result
     LDP X27, X28, [SP], #16
@@ -2923,9 +3117,14 @@ forth_included:
     ADR X9, file_line_num
     LDR X0, [X9]
     BL .Lprint_signed
-    // Print ": ? "
+    // Print ": " then the error's own wording (see err_pfx_addr)
     ADR X0, incl_err_sep
     MOV X1, #incl_err_sep_len
+    BL platform_write
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
     BL platform_write
     // Print offending token
     ADR X9, err_token_addr
@@ -3174,7 +3373,7 @@ forth_included:
     B .Lincl_pop_regs
 
 .section .rodata
-incl_err_sep:    .ascii ": ? "
+incl_err_sep:    .ascii ": "
 .equ incl_err_sep_len, . - incl_err_sep
 incl_unclosed_msg: .ascii ": definition not closed"
 .equ incl_unclosed_msg_len, . - incl_unclosed_msg
@@ -3243,7 +3442,7 @@ cf_check_tag:
     // armed — the error return unwinds to it cooperatively.
     ADR X9, il_sp
     LDR X10, [X9]
-    ADR X11, handler
+    TLS_ADDR X11, handler
     LDR X12, [X11]
 .Lcf_unlink:
     CBZ X12, .Lcf_unlinked
@@ -4849,7 +5048,7 @@ forth_does:
 // BASE ( -- a-addr )  Push address of BASE variable.
 .global forth_base
 forth_base:
-    ADR X9, base
+    TLS_ADDR X9, base
     STR X9, [X19, #-CELL]!
     RET
 
@@ -4922,11 +5121,130 @@ forth_source:
 //   [56] source_id      [64] to_in          [72] source_len
 //   [80] source_addr    [88] saved DSP      [96] X29  [104] X30
 
+// ---------- Thread trampoline ----------
+// pthread_create starts a thread as a C function on a C stack, with none of the
+// Forth machine state: no DSP, no data stack, no return-stack convention. Hand
+// it a Forth xt directly and it does not crash -- it runs with whatever DSP
+// glibc's thread startup left behind and silently scribbles Forth cells onto
+// random writable memory (measured: depth reported -17590946912746). This
+// trampoline is the fix, and it is the whole reason threads need asm at all.
+//
+// Context block, allocated by `thread` in threads.fs and freed by `join`. It
+// sits ABOVE both stacks, which grow down away from it, so a worker that
+// overflows cannot rewrite the fields join depends on:
+//   [ 0] xt          [ 8] data-stack top   [16] return-stack top
+//   [24] ior         [32] tid              [40] state (1=running 2=finished)
+//   [48] registry link
+//
+// void *forth_thread_tramp(void *ctx)   -- the pthread start routine, X0 = ctx.
+//
+// This is a C function as far as glibc's start_thread is concerned, so it owes
+// AAPCS64 every callee-saved register: X19-X28 plus X29/X30. It clobbers X19
+// (DSP), X21 (HERE) and X22 (LATEST) itself, and the Forth word it runs is free
+// to use the rest. glibc's thread teardown runs after we return and expects
+// them intact. (Unlike x86-64, where the return address is already on the C
+// stack, X30 is live here and the BL below would destroy it.)
+.global forth_thread_tramp
+forth_thread_tramp:
+    STP X29, X30, [SP, #-16]!
+    STP X27, X28, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X21, X22, [SP, #-16]!
+    STP X19, X20, [SP, #-16]!
+    TLS_ADDR X9, thread_ctx
+    STR X0, [X9]                    // survives the Forth call; no scratch
+    TLS_ADDR X9, thread_csp         //   register does, and the engine
+    MOV X10, SP                     //   registers are all spoken for
+    STR X10, [X9]                   // our way back, out of the worker's reach
+
+    LDR X19, [X0, #8]               // DSP = this thread's own data stack
+    TLS_ADDR X9, sp0
+    STR X19, [X9]                   // so depth/.s measure against OUR stack
+    LDR X10, [X0, #16]
+    MOV SP, X10                     // return stack = this thread's own
+
+    // Run the xt through CATCH, not by calling it: an uncaught THROW in a
+    // worker would otherwise reset to the REPL, which is meaningless off the
+    // REPL thread. Wrapped, a worker that blows up ends only itself and its
+    // code comes back as join's ior.
+    LDR X9, [X0]                    // xt
+    STR X9, [X19, #-CELL]!          // push it for CATCH
+    BL forth_catch                  // ( xt -- 0 | n )
+    LDR X9, [X19], #CELL            // the ior
+
+    TLS_ADDR X10, thread_csp
+    LDR X11, [X10]
+    MOV SP, X11                     // back onto the C stack glibc gave us
+    TLS_ADDR X10, thread_ctx
+    LDR X10, [X10]
+    STR X9, [X10, #24]              // ctx.ior, collected by join
+    // ctx.state = finished, published AFTER the result. Unlike x86-64's TSO,
+    // ARM64 may reorder plain stores, so this is a store-RELEASE: it orders
+    // the ior store before it, and a reader that sees 'finished' cannot see a
+    // stale result. (join itself is safe either way -- pthread_join is a full
+    // synchronisation point -- but `threads` reads these fields live.)
+    MOV X11, #2
+    ADD X12, X10, #40
+    STLR X11, [X12]
+    LDP X19, X20, [SP], #16
+    LDP X21, X22, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X25, X26, [SP], #16
+    LDP X27, X28, [SP], #16
+    LDP X29, X30, [SP], #16
+    MOV X0, #0                      // return NULL
+    RET
+
+// (acq@) ( a-addr -- x )  Fetch with ACQUIRE ordering: loads issued after this
+// one cannot be reordered before it. Pairs with the STLR the trampoline uses to
+// publish ctx.state, so a reader that sees `finished` is guaranteed to see the
+// result stored before it. With a plain LDR on both sides ARM64 is free to
+// hoist the following load and report a stale value.
+.global forth_acq_fetch
+forth_acq_fetch:
+    LDR X9, [X19]
+    LDAR X10, [X9]
+    STR X10, [X19]
+    RET
+
+// (prot-none) ( addr u -- ior )  Fence off a page-aligned range: any access
+// faults. 0 on success, a positive errno on failure.
+.global forth_prot_none
+forth_prot_none:
+    STP X29, X30, [SP, #-16]!
+    LDR X1, [X19]                   // u
+    LDR X0, [X19, #CELL]            // addr
+    ADD X19, X19, #CELL
+    BL platform_prot_none
+    NEG X0, X0                      // -errno -> positive ior; 0 stays 0
+    STR X0, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
+// (thread-tramp) ( -- addr )  Address of the trampoline, for pthread_create.
+.global forth_thread_tramp_addr
+forth_thread_tramp_addr:
+    ADRP X9, forth_thread_tramp
+    ADD X9, X9, :lo12:forth_thread_tramp
+    STR X9, [X19, #-CELL]!
+    RET
+
 // CATCH ( xt -- 0 | n )  Run xt; 0 on normal completion, n if it THROWs.
 .global forth_catch
 forth_catch:
     LDR X9, [X19], #CELL            // pop xt (saved DSP excludes it)
     STP X29, X30, [SP, #-16]!       // save frame pointer + return address
+    // The snapshot below is the interpreter's input source and error context --
+    // process-wide globals. A worker never interprets (it runs compiled words
+    // only), so it has nothing to save, and restoring its snapshot on THROW
+    // would scribble over the line the REPL is parsing. Workers reserve the
+    // same cells without touching shared state; THROW discards them. The frame
+    // shape is identical either way -- note the saved DSP shares an STP with
+    // source_addr, so that pair is still written on both paths.
+    TLS_ADDR X14, is_repl
+    LDR X14, [X14]
+    CBZ X14, .Lcatch_no_source
     ADR X10, source_addr
     LDR X10, [X10]
     STP X10, X19, [SP, #-16]!       // frame: source_addr, data-stack pointer
@@ -4950,16 +5268,22 @@ forth_catch:
     ADR X11, file_line_num
     LDR X11, [X11]
     STP X10, X11, [SP, #-16]!       // frame: cur_source_id, file_line_num
-    ADR X12, handler
-    LDR X10, [X12]
     ADR X11, cur_line_off
     LDR X11, [X11]
+    B .Lcatch_link
+.Lcatch_no_source:
+    STP XZR, X19, [SP, #-16]!       // no source to save, but DSP still must be
+    SUB SP, SP, #64                 //   reserved, never read (THROW discards)
+    MOV X11, XZR
+.Lcatch_link:
+    TLS_ADDR X12, handler
+    LDR X10, [X12]
     STP X10, X11, [SP, #-16]!       // frame: chain link, cur_line_off
     MOV X10, SP
     STR X10, [X12]                  // handler = this frame
     BLR X9                          // run the xt
     LDR X10, [SP]                   // normal return: unlink the frame,
-    ADR X11, handler
+    TLS_ADDR X11, handler
     STR X10, [X11]
     ADD SP, SP, #96                 //   discard the snapshot (globals are live)
     LDP X29, X30, [SP], #16
@@ -4974,12 +5298,15 @@ forth_catch:
 forth_throw:
     LDR X9, [X19], #CELL            // n
     CBZ X9, .Lthrow_noop
-    ADR X10, handler
+    TLS_ADDR X10, handler
     LDR X11, [X10]
     CBZ X11, .Lthrow_uncaught
     MOV SP, X11                     // unwind the return stack to the frame
     LDP X12, X13, [SP], #16
     STR X12, [X10]                  // relink the previous handler
+    TLS_ADDR X14, is_repl           // a worker's snapshot is reserved, not real
+    LDR X14, [X14]                  //   -- discard it rather than write it back
+    CBZ X14, .Lthrow_no_source
     ADR X10, cur_line_off
     STR X13, [X10]                  // restore input source + error context
     LDP X12, X13, [SP], #16
@@ -5005,6 +5332,11 @@ forth_throw:
     LDP X12, X19, [SP], #16         // source_addr + DSP saved by CATCH
     ADR X10, source_addr
     STR X12, [X10]
+    B .Lthrow_frame
+.Lthrow_no_source:
+    ADD SP, SP, #64                 // four reserved pairs, never written
+    LDP X12, X19, [SP], #16         // the DSP still comes back
+.Lthrow_frame:
     LDP X29, X30, [SP], #16         // CATCH's frame record
     STR X9, [X19, #-CELL]!          // push n
 .Lthrow_noop:
@@ -5024,7 +5356,7 @@ forth_throw:
     MOV X1, #1
     BL platform_write
 .Lthrow_reset:
-    ADR X9, sp0
+    TLS_ADDR X9, sp0
     LDR X19, [X9]                   // reset data stack
     ADR X9, rp0
     LDR X9, [X9]
@@ -5032,7 +5364,7 @@ forth_throw:
     DROP_PARTIAL_HEADER             // uncaught throw abandons any open def
     ADR X9, state
     STR XZR, [X9]                   // reset compile state
-    ADR X9, handler
+    TLS_ADDR X9, handler
     STR XZR, [X9]                   // no live frames on a reset stack
     B repl_loop
 
@@ -5052,7 +5384,7 @@ forth_quit:
     MOV SP, X9                     // reset return stack
     ADR X9, state
     STR XZR, [X9]                  // reset compile state
-    ADR X9, handler
+    TLS_ADDR X9, handler
     STR XZR, [X9]                  // frames died with the return stack
     B repl_loop
 
@@ -5844,11 +6176,17 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
-DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
+DEFWORD dict_ccallf,      "(ccallf)",     forth_ccallf,      dict_ccall
+DEFWORD dict_ccallf_f,    "(ccallf>f)",   forth_ccallf_f,    dict_ccallf
+DEFWORD dict_to_f32,      ">f32",         forth_to_f32,      dict_ccallf_f
+DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_to_f32
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_catch
+DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
+DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
+DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5937,12 +6275,43 @@ dict_space:
 .global dict_space_end
 dict_space_end:
 
-// ---------- Variables ----------
-.data
+// ---------- Per-thread variables (TLS) ----------
+// These three must read differently in each thread, so they live in thread-local
+// storage rather than .data: the linker assigns each an offset and TLS_ADDR
+// forms the address as TPIDR_EL0 + offset. No lock, no lookup — and glibc
+// allocates every thread's copy inside pthread_create, initialised from the
+// image below. A new thread therefore starts life with BASE decimal and no live
+// CATCH frame, which is exactly right; its sp0 is filled in by the thread
+// trampoline.
+.section .tdata,"awT",%progbits
 .align 3
 .global base
 base:                               // NUMBER base (default decimal)
     .quad 10
+.global sp0
+sp0:                                // This thread's initial DSP (for .S / depth)
+    .quad 0
+.global handler
+handler:                            // Innermost CATCH frame on this thread's
+    .quad 0                         //   return stack (0 = none)
+.global is_repl
+is_repl:                            // 1 on the REPL thread, 0 in a worker. The
+    .quad 0                         //   .tdata image gives workers 0 for free;
+                                    //   main.s sets its own copy to 1.
+.global thread_ctx
+thread_ctx:                         // This worker's context block (0 on the REPL
+    .quad 0                         //   thread). Holds ctx across the Forth call,
+                                    //   where no scratch register survives.
+.global thread_csp
+thread_csp:                         // The C stack pointer to return on. Kept in
+    .quad 0                         //   TLS, NOT in the context block: the
+                                    //   worker's data stack grows down toward
+                                    //   its context, so an overflow there would
+                                    //   otherwise rewrite our way back to glibc.
+
+// ---------- Variables ----------
+.data
+.align 3
 .global source_addr
 source_addr:                        // PARSE-WORD: pointer to input buffer
     .quad 0
@@ -5951,9 +6320,6 @@ source_len:                         // PARSE-WORD: total length of input
     .quad 0
 .global to_in
 to_in:                              // PARSE-WORD: current parse offset
-    .quad 0
-.global sp0
-sp0:                                // Initial DSP value (for .S depth)
     .quad 0
 .global state
 state:                              // Compiler state (0=interpret, non-zero=compile)
@@ -5992,9 +6358,12 @@ session_mark_latest:                // session restore point (LATEST) — 0 = un
 .global rp0
 rp0:                                // Return stack pointer at repl_loop entry
     .quad 0
-.global handler
-handler:                            // Innermost CATCH frame on the return stack
-    .quad 0                         //   (0 = no handler; cleared at repl_loop)
+.global err_pfx_addr
+err_pfx_addr:                       // Wording for the current line error; the
+    .quad 0                         //   reporter prints it, then err_token
+.global err_pfx_len
+err_pfx_len:
+    .quad 0
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0

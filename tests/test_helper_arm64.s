@@ -133,6 +133,10 @@ platform_mmap_anon:
 platform_munmap:
     RET
 
+.global platform_prot_none
+platform_prot_none:
+    RET
+
 .global platform_ioctl
 platform_ioctl:
     MOV X0, #-1                     // return error

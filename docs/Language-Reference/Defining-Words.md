@@ -34,8 +34,8 @@ than run.
     5 square .        \ 25
 
 `;` is **compile-only** — there is nothing for it to finish at the prompt, so a
-stray one (a typo at the end of a line, usually) reports `compile only` and is
-ignored. The rest of the line still runs, and the stack is untouched.
+stray one (a typo at the end of a line, usually) reports `compile only: ;` and
+abandons the rest of the line, like any other error. The stack is untouched.
 
 If the name already exists, the new definition shadows the old one and a
 `redefined square` note is printed — it catches accidental name collisions
@@ -177,12 +177,31 @@ aborts the line (so a typo can't hand `execute` or `catch` a bogus xt).
 
     2 3 ' + execute .     \ 5
 
+**`'` works at the prompt and inside a definition.** It is `immediate`, so when
+the compiler meets it, it runs right then and compiles the xt as a literal —
+the same thing `[']` does. Use `'` everywhere and you will not go wrong:
+
+    : apply-add  ' + execute ;
+    2 3 apply-add .       \ 5
+
+The catch of being immediate is that there is no *run-time* tick: `'` always
+resolves the name while compiling, so it cannot look up a name your program
+chooses later. For that, parse and search at run time with `parse-name find`
+(see `help interpreter` — note `find` keeps the string on a miss).
+
 ## ['] ( "name" -- )   compile-time; at run time: ( -- xt )
-The compile-time form of `'`: inside a definition it compiles the next word's xt
-as a literal.
+The standard-Forth spelling for ticking a name inside a definition. Here it does
+exactly what `'` does when compiling — the difference is the other direction:
+**`[']` is compile-only and errors at the prompt**, while `'` is happy in both
+places.
 
     : apply-add  ['] + execute ;
     2 3 apply-add .       \ 5
+    ['] +                 \ compile only
+
+Reach for `[']` when you want code that ports to other Forths, where `'` is
+*not* immediate and behaves differently inside a definition. Otherwise `'`
+reads better and works in more places.
 
 ## immediate ( -- )
 Mark the most recently defined word as *immediate*, so it runs during

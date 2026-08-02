@@ -258,7 +258,8 @@ _start:
 
     # Initialize engine registers
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
-    mov %r15, sp0(%rip)             # save initial DSP for .S / guards
+    mov %r15, %fs:sp0@tpoff             # save initial DSP for .S / guards
+    movq $1, %fs:is_repl@tpoff      # this is the REPL thread; workers get 0
     lea dict_space(%rip), %r13      # HERE
     lea dict_throw(%rip), %r12      # LATEST (head of the built-in dictionary chain)
 
@@ -438,7 +439,7 @@ repl_loop:
 
     # Save return stack pointer for error recovery
     mov %rsp, rp0(%rip)
-    movq $0, handler(%rip)          # any CATCH frames died with the last line
+    movq $0, %fs:handler@tpoff          # any CATCH frames died with the last line
 
     # Save LATEST and HERE for guard page recovery
     mov %r12, saved_latest(%rip)
@@ -553,9 +554,11 @@ repl_loop:
     jmp repl_loop
 
 repl_error:
-    # Print "? " + token + newline
-    lea err_msg(%rip), %rsi
-    mov $err_len, %rdx
+    # Print the error's own wording + token + newline. The wording is chosen by
+    # the site that raised it (see err_pfx_addr in core.s) so every line error
+    # reads the same shape: "? nosuchword", "compile only: dup".
+    mov err_pfx_addr(%rip), %rsi
+    mov err_pfx_len(%rip), %rdx
     call platform_write
 
     mov err_token_len(%rip), %rdx
@@ -626,7 +629,7 @@ dict_full:
 
     # Reset return stack and data stack
     mov rp0(%rip), %rsp
-    mov sp0(%rip), %r15
+    mov %fs:sp0@tpoff, %r15
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)

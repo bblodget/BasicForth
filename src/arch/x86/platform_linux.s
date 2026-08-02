@@ -538,7 +538,7 @@ sigsegv_handler:
     mov rp0(%rip), %rax
     mov %rax, GREGS_RSP(%rbx)           # RSP = rp0
 
-    mov sp0(%rip), %rax
+    mov %fs:sp0@tpoff, %rax
     mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
 
     # Always restore LATEST and HERE — a fault during forth_colon may
@@ -742,6 +742,10 @@ platform_rename:
 platform_system:
     push %rbx
     mov %rdi, %rbx                  # save cmd ptr (callee-saved across restore_term)
+    # The child writes to fd 1 itself, so none of our write paths run and the
+    # owed newline would never be paid -- its first line would land on the
+    # command line. Settle it before handing the terminal over.
+    call pay_pending_nl
     call platform_restore_term      # terminal → cooked for the child
     # build argv = ["/bin/sh", "-c", cmd, NULL]
     lea sh_path(%rip), %rax
@@ -830,6 +834,14 @@ platform_popen:
     mov $-24, %rax                  # -EMFILE: all pipe slots busy
     jmp .Lpo_ret
 .Lpo_have_slot:
+    # Both directions pay. A W/O child keeps the terminal for its stdout, and
+    # an R/O child -- whose stdout is the pipe -- still inherits STDERR, so it
+    # can dirty the line too: `s" ls /nope" r/o open-pipe` otherwise prints the
+    # error straight onto the command line.
+    # The cost is one newline on a line that captures silently, and pending_nl
+    # is set once per input line, so it is one line break at worst -- the same
+    # price any line pays for producing output. Mashed-up error text is worse.
+    call pay_pending_nl
     call platform_restore_term      # terminal → cooked for the child
     lea pipe_fds(%rip), %rdi
     xor %esi, %esi                  # flags = 0
@@ -1047,6 +1059,17 @@ platform_mmap_anon:
 .global platform_munmap
 platform_munmap:
     mov $SYS_munmap, %rax
+    syscall
+    ret
+
+# platform_prot_none(addr, len) -> 0 or -errno
+# Make a page-aligned range unreadable and unwritable, so touching it faults.
+# Used to fence a worker thread's stacks: without it an overflowing worker
+# silently walks into the neighbouring stack instead of dying loudly.
+.global platform_prot_none
+platform_prot_none:
+    mov $10, %rax                   # SYS_mprotect
+    xor %edx, %edx                  # PROT_NONE
     syscall
     ret
 

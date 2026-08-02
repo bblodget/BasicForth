@@ -197,7 +197,7 @@ forth_two_drop:
 .global forth_depth
 forth_depth:
 
-    mov sp0(%rip), %rax
+    mov %fs:sp0@tpoff, %rax
     sub %r15, %rax              # rax = sp0 - DSP (bytes)
     sar $3, %rax                # rax = depth (cells = bytes / 8)
     sub $CELL, %r15
@@ -626,7 +626,9 @@ forth_lshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shlq %cl, (%r15)            # top = x1 << u
+    mov (%r15), %rax
+    shl %cl, %rax
+    mov %rax, (%r15)            # top = x1 << u
     ret
 
 # RSHIFT ( x1 u -- x2 )
@@ -636,7 +638,9 @@ forth_rshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shrq %cl, (%r15)            # top = x1 >> u (logical)
+    mov (%r15), %rax
+    shr %cl, %rax
+    mov %rax, (%r15)            # top = x1 >> u (logical)
     ret
 
 # 2/ ( x -- x/2 )
@@ -877,6 +881,128 @@ forth_ccall:
     pop %rbp
     ret
 
+# (ccallf) ( iarg1..iargN farg1..fargM nint nfloat fnptr -- ret )
+# Like (ccall), but some parameters are 32-bit floats. The two ABIs fill
+# separate register files -- integers in RDI/RSI/RDX/RCX/R8/R9, floats in
+# XMM0-7 -- and each is assigned in its own order regardless of how they are
+# interleaved in the C prototype. So grouping the floats after the integers on
+# the Forth stack loses nothing, and saves passing a mask.
+#
+# A float argument is its IEEE-754 single-precision BIT PATTERN in the low 32
+# bits of a cell; >f32 builds one. Forth never holds a float, only its bits.
+#
+# Limits: 6 integer args, 8 float args, integer return only (a float return
+# comes back in XMM0, which this does not read).
+# (ccallf>f) is the same call with the result taken from XMM0 as f32 bits,
+# which is what makes the multi-float register path testable against libm.
+.global forth_ccallf
+forth_ccallf:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    xor %r13d, %r13d            # integer return
+    jmp .Lccallf_common
+.global forth_ccallf_f
+forth_ccallf_f:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    mov $1, %r13d               # float return
+.Lccallf_common:
+    mov (%r15), %rbx            # fnptr (top)
+    mov CELL(%r15), %r12        # nfloat
+    mov 2*CELL(%r15), %rax      # nint
+    add $3*CELL, %r15           # pop fnptr + nfloat + nint; args remain
+    # Floats sit on top: fargJ at [DSP + (nfloat-J)*8].
+    test %r12, %r12
+    jz .Lccallf_ints
+    movss -8(%r15,%r12,8), %xmm0
+    cmp $2, %r12
+    jb .Lccallf_ints
+    movss -16(%r15,%r12,8), %xmm1
+    cmp $3, %r12
+    jb .Lccallf_ints
+    movss -24(%r15,%r12,8), %xmm2
+    cmp $4, %r12
+    jb .Lccallf_ints
+    movss -32(%r15,%r12,8), %xmm3
+    cmp $5, %r12
+    jb .Lccallf_ints
+    movss -40(%r15,%r12,8), %xmm4
+    cmp $6, %r12
+    jb .Lccallf_ints
+    movss -48(%r15,%r12,8), %xmm5
+    cmp $7, %r12
+    jb .Lccallf_ints
+    movss -56(%r15,%r12,8), %xmm6
+    cmp $8, %r12
+    jb .Lccallf_ints
+    movss -64(%r15,%r12,8), %xmm7
+.Lccallf_ints:
+    # Integers sit under them: base = DSP + nfloat*8, iargK at base+(nint-K)*8.
+    # R11 holds the base because RCX/RDI/RSI are themselves argument registers.
+    lea (%r15,%r12,8), %r11
+    test %rax, %rax
+    jz .Lccallf_go
+    mov -8(%r11,%rax,8), %rdi   # arg1
+    cmp $2, %rax
+    jb .Lccallf_go
+    mov -16(%r11,%rax,8), %rsi  # arg2
+    cmp $3, %rax
+    jb .Lccallf_go
+    mov -24(%r11,%rax,8), %rdx  # arg3
+    cmp $4, %rax
+    jb .Lccallf_go
+    mov -32(%r11,%rax,8), %rcx  # arg4
+    cmp $5, %rax
+    jb .Lccallf_go
+    mov -40(%r11,%rax,8), %r8   # arg5
+    cmp $6, %rax
+    jb .Lccallf_go
+    mov -48(%r11,%rax,8), %r9   # arg6
+.Lccallf_go:
+    lea (%r15,%rax,8), %r15     # pop the integer args
+    lea (%r15,%r12,8), %r15     # pop the float args
+    and $-16, %rsp
+    mov %r12d, %eax             # AL = vector registers used (varargs contract)
+    call *%rbx
+    test %r13, %r13
+    jz 1f
+    movd %xmm0, %eax            # float return: hand back the f32 bit pattern
+1:  sub $CELL, %r15             # push the C return value
+    mov %rax, (%r15)
+    lea -24(%rbp), %rsp
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# >f32 ( n d -- bits )
+# The IEEE-754 single-precision bit pattern of n/d, as an integer. This is the
+# only place the engine touches floating point, and the result is a bit
+# pattern -- the Forth stack still never holds a float. d = 0 gives 0 rather
+# than an infinity, so a bad ratio is silence and not a wild value.
+.global forth_to_f32
+forth_to_f32:
+    mov (%r15), %rcx            # d
+    mov CELL(%r15), %rax        # n
+    add $CELL, %r15             # pop d
+    test %rcx, %rcx
+    jz 1f
+    cvtsi2ssq %rax, %xmm0
+    cvtsi2ssq %rcx, %xmm1
+    divss %xmm1, %xmm0
+    movd %xmm0, %eax
+    mov %rax, (%r15)
+    ret
+1:  movq $0, (%r15)
+    ret
+
 # ---------- EMIT (Forth-level) ----------
 # ( char -- )
 .global forth_emit
@@ -1006,7 +1132,7 @@ forth_number:
 
     xor %eax, %eax              # RAX = result = 0
     xor %edx, %edx              # RDX = negate flag = 0
-    mov base(%rip), %rbp        # RBP = base
+    mov %fs:base@tpoff, %rbp        # RBP = base
 
     # Check for leading '-'
     movzbl (%rbx), %edi
@@ -1409,7 +1535,7 @@ forth_dot_s:
     push %rbp
 
     # Compute depth = (sp0 - DSP) / CELL
-    mov sp0(%rip), %rbx
+    mov %fs:sp0@tpoff, %rbx
     sub %r15, %rbx
     sar $3, %rbx                # rbx = depth
 
@@ -1464,8 +1590,14 @@ forth_bye:
 .section .rodata
 bye_msg:    .ascii "Goodbye!\n"
 .equ bye_len, . - bye_msg
-msg_compile_only: .ascii "compile only\n"
-.equ msg_compile_only_len, . - msg_compile_only
+# Error-report prefixes. The reporter (repl_error in main.s, .Lincl_error
+# below) prints err_pfx + the offending token, so an error site chooses its own
+# wording by pointing err_pfx at one of these. Keeps every line error on one
+# format -- "<why> <token>" -- and on one code path.
+err_pfx_question: .ascii "? "
+.equ err_pfx_question_len, . - err_pfx_question
+err_pfx_conly:    .ascii "compile only: "
+.equ err_pfx_conly_len, . - err_pfx_conly
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2206,6 +2338,17 @@ forth_interpret_line:
     test %rax, %rax
     jz .Lil_done
 
+    # Remember the token before FIND consumes it, so any error site below can
+    # name it, and reset the wording to the default -- that reset is what stops
+    # one error's wording leaking onto the next. Two stores per word in the
+    # outer interpreter only; the inner loop of a compiled word never comes here.
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, err_token_addr(%rip)
+    lea err_pfx_question(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $err_pfx_question_len, err_pfx_len(%rip)
+
     # FIND ( c-addr u -- xt flag | c-addr u 0 )
     call forth_find
 
@@ -2281,6 +2424,7 @@ forth_interpret_line:
     mov CELL(%r15), %rax            # c-addr (second)
     mov %rax, err_token_addr(%rip)
     add $2*CELL, %r15               # clean up c-addr and u
+                                    # wording stays the per-token default, "? "
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)
@@ -2314,12 +2458,15 @@ forth_interpret_line:
     ret
 
 .Lil_compile_only:
-    # Compile-only word used in interpret mode — non-fatal, continue parsing
+    # Compile-only word used in interpret mode. This aborts the line, like every
+    # other error: it used to print and keep parsing, so the rest of the line ran
+    # anyway. `['] dup 999 .` then executed `dup` on an empty stack, and the
+    # underflow -- not the real mistake -- was what you saw.
     add $2*CELL, %r15               # drop xt, flag
-    lea msg_compile_only(%rip), %rsi
-    mov $msg_compile_only_len, %rdx
-    call platform_write
-    jmp .Lil_loop
+    lea err_pfx_conly(%rip), %rax   # report as "compile only: <token>"
+    mov %rax, err_pfx_addr(%rip)
+    movq $err_pfx_conly_len, err_pfx_len(%rip)
+    jmp .Lil_err_return             # err_token was saved before FIND
 
 # ---------- PAREN (comment word, IMMEDIATE) ----------
 # ( "ccc)" -- )
@@ -2375,6 +2522,12 @@ forth_evaluate:
     mov source_len(%rip), %rbp      # save old source_len
     mov to_in(%rip), %r14           # save old to_in
     mov source_id(%rip), %r8        # save old source_id
+    # The error wording belongs to the OUTER token being interpreted. The nested
+    # interpret_line below resets it per token of its own string, so without
+    # this an error raised later in the same outer token would inherit the inner
+    # string's wording. Bracket it like the source context.
+    pushq err_pfx_addr(%rip)
+    pushq err_pfx_len(%rip)
 
     # Set new source context
     mov %rsi, source_addr(%rip)
@@ -2387,12 +2540,17 @@ forth_evaluate:
     push %rax                       # save result
 
     # Restore source context
+    mov 8(%rsp), %rcx               # err_pfx_len  (result is at 0(%rsp))
+    mov %rcx, err_pfx_len(%rip)
+    mov 16(%rsp), %rcx              # err_pfx_addr
+    mov %rcx, err_pfx_addr(%rip)
     mov %rbx, source_addr(%rip)
     mov %rbp, source_len(%rip)
     mov %r14, to_in(%rip)
     mov %r8, source_id(%rip)
 
     pop %rax                        # restore result
+    add $2*CELL, %rsp               # drop the saved err_pfx pair
     pop %r8
     pop %r14
     pop %rbp
@@ -2648,9 +2806,12 @@ forth_included:
     # Print line number
     mov file_line_num(%rip), %rax
     call .Lprint_signed
-    # Print ": ? "
+    # Print ": " then the error's own wording (see err_pfx_addr)
     lea incl_err_sep(%rip), %rsi
     mov $incl_err_sep_len, %rdx
+    call platform_write
+    mov err_pfx_addr(%rip), %rsi
+    mov err_pfx_len(%rip), %rdx
     call platform_write
     # Print offending token
     mov err_token_addr(%rip), %rsi
@@ -2853,7 +3014,7 @@ forth_included:
     jmp .Lincl_pop_regs
 
 .section .rodata
-incl_err_sep:    .ascii ": ? "
+incl_err_sep:    .ascii ": "
 .equ incl_err_sep_len, . - incl_err_sep
 incl_unclosed_msg: .ascii ": definition not closed"
 .equ incl_unclosed_msg_len, . - incl_unclosed_msg
@@ -2912,7 +3073,7 @@ cf_check_tag:
     # (return-stack addresses below il_rsp). A CATCH established outside
     # this interpret_line nest (deeper stack, address >= il_rsp) stays
     # armed — the error return unwinds to it cooperatively.
-    mov handler(%rip), %rax
+    mov %fs:handler@tpoff, %rax
 .Lcf_unlink:
     test %rax, %rax
     jz .Lcf_unlinked
@@ -2921,7 +3082,7 @@ cf_check_tag:
     mov (%rax), %rax                # follow the chain link
     jmp .Lcf_unlink
 .Lcf_unlinked:
-    mov %rax, handler(%rip)
+    mov %rax, %fs:handler@tpoff
     # Longjmp back to forth_interpret_line's error return
     mov il_rsp(%rip), %rsp          # unwind to interpret_line's frame
     mov $1, %eax                    # return error
@@ -4391,7 +4552,8 @@ forth_does:
 .global forth_base
 forth_base:
     sub $CELL, %r15
-    lea base(%rip), %rax
+    mov %fs:0, %rax                 # thread pointer (TCB self-pointer)
+    lea base@tpoff(%rax), %rax      # this thread's own BASE cell
     mov %rax, (%r15)
     ret
 
@@ -4467,12 +4629,121 @@ forth_source:
 #   [56] source_id      [64] to_in          [72] source_len
 #   [80] source_addr    [88] saved DSP      [96] CATCH's return address
 
+# ---------- Thread trampoline ----------
+# pthread_create starts a thread as a C function on a C stack, with none of the
+# Forth machine state: no DSP, no data stack, no return-stack convention. Hand
+# it a Forth xt directly and it does not crash -- it runs with whatever DSP
+# glibc's thread startup left behind and silently scribbles Forth cells onto
+# random writable memory (measured: depth reported -17590946912746). This
+# trampoline is the fix, and it is the whole reason threads need asm at all.
+#
+# Context block, allocated by `thread` in threads.fs and freed by `join`. It
+# sits ABOVE both stacks, which grow down away from it, so a worker that
+# overflows cannot rewrite the fields join depends on:
+#   [ 0] xt          [ 8] data-stack top   [16] return-stack top
+#   [24] ior         [32] tid              [40] state (1=running 2=finished)
+#   [48] registry link
+#
+# void *forth_thread_tramp(void *ctx)   -- the pthread start routine.
+#
+# This is a C function as far as glibc's start_thread is concerned, so it owes
+# the SysV ABI every callee-saved register: RBX, RBP, R12-R15. It clobbers R15
+# (DSP), R13 (HERE) and R12 (LATEST) itself, and the Forth word it runs is free
+# to use the rest. glibc's thread teardown runs after we return and expects
+# them intact.
+.global forth_thread_tramp
+forth_thread_tramp:
+    push %rbx
+    push %rbp
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    mov %rdi, %fs:thread_ctx@tpoff  # survives the Forth call; no scratch
+                                    #   register does, and the engine
+                                    #   registers are all spoken for
+    mov %rsp, %fs:thread_csp@tpoff  # our way back, kept out of the worker's
+                                    #   reach (see thread_csp in the TLS block)
+    mov 8(%rdi), %r15               # DSP = this thread's own data stack
+    mov %r15, %fs:sp0@tpoff         # so depth/.s measure against OUR stack
+    mov 16(%rdi), %rsp              # return stack = this thread's own
+
+    # Run the xt through CATCH, not by calling it: an uncaught THROW in a
+    # worker would otherwise reset to the REPL, which is meaningless off the
+    # REPL thread. Wrapped, a worker that blows up ends only itself and its
+    # code comes back as join's ior.
+    mov (%rdi), %rax                # xt
+    sub $CELL, %r15
+    mov %rax, (%r15)                # push it for CATCH
+    call forth_catch                # ( xt -- 0 | n )
+    mov (%r15), %rax                # the ior
+    add $CELL, %r15
+
+    mov %fs:thread_csp@tpoff, %rsp  # back onto the C stack glibc gave us
+    mov %fs:thread_ctx@tpoff, %rdi
+    mov %rax, 24(%rdi)              # ctx.ior, collected by join
+    movq $2, 40(%rdi)               # ctx.state = finished, published AFTER the
+                                    #   result. x86-64 is TSO -- stores retire
+                                    #   in order -- so no barrier is needed for
+                                    #   a reader that sees 'finished' to also
+                                    #   see the ior. ARM64 needs STLR here.
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbp
+    pop %rbx
+    xor %eax, %eax                  # return NULL
+    ret
+
+# (acq@) ( a-addr -- x )  Fetch with ACQUIRE ordering: loads issued after this
+# one cannot be reordered before it. Pairs with the store-release the
+# trampoline uses to publish ctx.state, so a reader that sees `finished` is
+# guaranteed to see the result stored before it -- a plain @ on both sides
+# would let ARM64 hoist the second load and report a stale value.
+# On x86-64 every load already has acquire semantics (TSO), so this is a plain
+# load; the word exists so callers need not know which arch they are on.
+.global forth_acq_fetch
+forth_acq_fetch:
+    mov (%r15), %rax
+    mov (%rax), %rax
+    mov %rax, (%r15)
+    ret
+
+# (prot-none) ( addr u -- ior )  Fence off a page-aligned range: any access
+# faults. 0 on success, a positive errno on failure.
+.global forth_prot_none
+forth_prot_none:
+    mov (%r15), %rsi                # u
+    mov CELL(%r15), %rdi            # addr
+    add $CELL, %r15
+    call platform_prot_none
+    neg %rax                        # -errno -> positive ior; 0 stays 0
+    mov %rax, (%r15)
+    ret
+
+# (thread-tramp) ( -- addr )  Address of the trampoline, for pthread_create.
+.global forth_thread_tramp_addr
+forth_thread_tramp_addr:
+    sub $CELL, %r15
+    lea forth_thread_tramp(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
 # CATCH ( xt -- 0 | n )  Run xt; 0 on normal completion, n if it THROWs.
 .global forth_catch
 forth_catch:
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # pop it (saved DSP excludes the xt)
     push %r15                       # frame: data-stack pointer
+    # The snapshot below is the interpreter's input source and error context --
+    # process-wide globals. A worker never interprets (it runs compiled words
+    # only), so it has nothing to save, and restoring its snapshot on THROW
+    # would scribble over the line the REPL is parsing. Workers therefore
+    # reserve the same ten cells without touching shared state; THROW discards
+    # them instead of writing them back. Frame shape stays identical either way.
+    cmpq $0, %fs:is_repl@tpoff
+    je .Lcatch_no_source
     pushq source_addr(%rip)         # frame: input source + error context
     pushq source_len(%rip)
     pushq to_in(%rip)
@@ -4483,10 +4754,14 @@ forth_catch:
     pushq file_line_num(%rip)
     pushq cur_source_id(%rip)
     pushq cur_line_off(%rip)
-    pushq handler(%rip)             # frame: chain link
-    mov %rsp, handler(%rip)
+    jmp .Lcatch_link
+.Lcatch_no_source:
+    sub $10*CELL, %rsp              # reserve, never read (THROW discards it)
+.Lcatch_link:
+    pushq %fs:handler@tpoff             # frame: chain link
+    mov %rsp, %fs:handler@tpoff
     call *%rax
-    popq handler(%rip)              # normal return: unlink the frame,
+    popq %fs:handler@tpoff              # normal return: unlink the frame,
     add $11*CELL, %rsp              #   discard the snapshot (globals are live)
     sub $CELL, %r15
     movq $0, (%r15)                 # report success
@@ -4502,11 +4777,13 @@ forth_throw:
     add $CELL, %r15
     test %rax, %rax
     jz .Lthrow_noop
-    mov handler(%rip), %rcx
+    mov %fs:handler@tpoff, %rcx
     test %rcx, %rcx
     jz .Lthrow_uncaught
     mov %rcx, %rsp                  # unwind the return stack to the frame
-    popq handler(%rip)              # relink the previous handler
+    popq %fs:handler@tpoff              # relink the previous handler
+    cmpq $0, %fs:is_repl@tpoff      # a worker's snapshot is reserved, not real
+    je .Lthrow_no_source            #   -- discard it rather than write it back
     popq cur_line_off(%rip)         # restore input source + error context
     popq cur_source_id(%rip)
     popq file_line_num(%rip)
@@ -4517,6 +4794,10 @@ forth_throw:
     popq to_in(%rip)
     popq source_len(%rip)
     popq source_addr(%rip)
+    jmp .Lthrow_dsp
+.Lthrow_no_source:
+    add $10*CELL, %rsp
+.Lthrow_dsp:
     pop %r15                        # restore DSP saved by CATCH
     sub $CELL, %r15
     mov %rax, (%r15)                # push n
@@ -4537,11 +4818,11 @@ forth_throw:
     mov $1, %rdx
     call platform_write
 .Lthrow_reset:
-    mov sp0(%rip), %r15             # reset data stack
+    mov %fs:sp0@tpoff, %r15             # reset data stack
     mov rp0(%rip), %rsp             # reset return stack
     call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
-    movq $0, handler(%rip)          # no live frames on a reset stack
+    movq $0, %fs:handler@tpoff          # no live frames on a reset stack
     jmp repl_loop
 
 # ABORT ( i*x -- ) ( R: j*x -- )  Forth 2012 exception ext: ABORT is -1
@@ -4576,7 +4857,7 @@ forth_quit:
     mov rp0(%rip), %rsp             # reset return stack
     call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
-    movq $0, handler(%rip)          # frames died with the return stack
+    movq $0, %fs:handler@tpoff          # frames died with the return stack
     jmp repl_loop
 
 # ---------- Compiler Words ----------
@@ -5315,11 +5596,17 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
-DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
+DEFWORD dict_ccallf,      "(ccallf)",     forth_ccallf,      dict_ccall
+DEFWORD dict_ccallf_f,    "(ccallf>f)",   forth_ccallf_f,    dict_ccallf
+DEFWORD dict_to_f32,      ">f32",         forth_to_f32,      dict_ccallf_f
+DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_to_f32
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_catch
+DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
+DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
+DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5411,12 +5698,43 @@ dict_space:
 .global dict_space_end
 dict_space_end:
 
-# ---------- Variables ----------
-.data
+# ---------- Per-thread variables (TLS) ----------
+# These three must read differently in each thread, so they live in thread-local
+# storage rather than .data: the linker assigns each an offset and the access is
+# %fs:<name>@tpoff, i.e. thread-pointer + offset. Same instruction count as a
+# RIP-relative global, no lock, no lookup — and glibc allocates every thread's
+# copy inside pthread_create, initialised from the image below. A new thread
+# therefore starts life with BASE decimal and no live CATCH frame, which is
+# exactly right; its sp0 is filled in by the thread trampoline.
+.section .tdata,"awT",@progbits
 .align 8
 .global base
 base:                               # NUMBER base (default decimal)
     .quad 10
+.global sp0
+sp0:                                # This thread's initial DSP (for .S / depth)
+    .quad 0
+.global handler
+handler:                            # Innermost CATCH frame on this thread's
+    .quad 0                         #   return stack (0 = none)
+.global is_repl
+is_repl:                            # 1 on the REPL thread, 0 in a worker. The
+    .quad 0                         #   .tdata image gives workers 0 for free;
+                                    #   main.s sets its own copy to 1.
+.global thread_ctx
+thread_ctx:                         # This worker's context block (0 on the REPL
+    .quad 0                         #   thread). Holds ctx across the Forth call,
+                                    #   where no scratch register survives.
+.global thread_csp
+thread_csp:                         # The C stack pointer to return on. Kept in
+    .quad 0                         #   TLS, NOT in the context block: the
+                                    #   worker's data stack grows down toward
+                                    #   its context, so an overflow there would
+                                    #   otherwise rewrite our way back to glibc.
+
+# ---------- Variables ----------
+.data
+.align 8
 .global source_addr
 source_addr:                        # PARSE-WORD: pointer to input buffer
     .quad 0
@@ -5425,9 +5743,6 @@ source_len:                         # PARSE-WORD: total length of input
     .quad 0
 .global to_in
 to_in:                              # PARSE-WORD: current parse offset
-    .quad 0
-.global sp0
-sp0:                                # Initial DSP value (for .S depth)
     .quad 0
 .global state
 state:                              # Compiler state (0=interpret, non-zero=compile)
@@ -5466,9 +5781,12 @@ session_mark_latest:                # session restore point (LATEST) — 0 = uns
 .global rp0
 rp0:                                # Return stack pointer at repl_loop entry
     .quad 0
-.global handler
-handler:                            # Innermost CATCH frame on the return stack
-    .quad 0                         #   (0 = no handler; cleared at repl_loop)
+.global err_pfx_addr
+err_pfx_addr:                       # Wording for the current line error; the
+    .quad 0                         #   reporter prints it, then err_token
+.global err_pfx_len
+err_pfx_len:
+    .quad 0
 .global il_rsp
 il_rsp:                             # RSP at interpret_line entry (for cf longjmp)
     .quad 0

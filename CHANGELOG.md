@@ -2,6 +2,405 @@
 
 ## Unreleased
 
+### Added: `wav-from` — decode a `.wav` already in memory
+
+- `wav-load` reads a file. `wav-from ( c-addr u -- sample|0 )` takes the same
+  bytes from anywhere else: compiled into a program, read down a pipe, built by
+  a tool. Everything the file loader accepts, refuses and reports, this does
+  too — the decoder was already two halves internally, and this exposes the
+  second one.
+- The image is **copied**. A sample points into its own block and `wav-free`
+  releases it, so adopting the caller's bytes would hand it memory the caller
+  still owns — and those bytes may be in the dictionary or about to be reused.
+- This is how a sound can ship as Forth source rather than a separate file: a
+  generated `.fs` holds the bytes and calls `wav-from`, so `require` finds it on
+  `BASICFORTH_PATH` like any other library. The bundled fonts already work this
+  way, which is what makes it the natural answer rather than teaching
+  `wav-load` to search a path — searching is for **code**, and a sound file
+  found on the library path instead of your own directory would be a trap.
+- Not needed for audio you generate yourself: raw samples go straight to
+  `ch-put` once the channel knows their format.
+
+### Fixed: `sh` output ran onto the command line
+
+- `sh echo hello` printed `> sh echo hellohello`. The owed newline is paid by
+  our own write paths, and a **child process writes to fd 1 itself**, so none
+  of them run — the newline was still owed when the child's first line came
+  out. `platform_system` now settles it before handing the terminal over, and
+  so does `platform_popen`, whose `w/o` child keeps the terminal for its
+  stdout.
+- Third writer-we-don't-own found since the owed newline shipped, after the
+  SIGSEGV guard messages and the prompts. The lesson each time is the same:
+  enumerate every route to fd 1, not just the ones inside `platform_write_fd`.
+- One consequence: a shell command that prints **nothing** now costs a newline
+  where it used to keep ` ok` on the command line. Whether the child will print
+  cannot be known in advance, and a command that prints is the common case.
+
+### Fixed: several reference entries were empty at the prompt
+
+- A `## ` heading immediately followed by another leaves the first entry
+  **blank** in `help`, because it shows one heading and the text beneath it.
+  Stacking them reads perfectly well in the file and is broken where it counts.
+  Five entries shipped that way — `AUDIO_S16LE`, `AUDIO_S32LE`, `AUDIO_F32LE`,
+  `wav-loop-start` and `(ccallf)` — plus one that predated this work,
+  `(dlopen)`. All six now have their own text, and a lint fails the build on
+  any entry with nothing under it. The lint's first version only looked for two
+  headings on consecutive lines, and so missed the same fault with a blank line
+  between them — caught in review. It now checks for an empty body, and only
+  for WORD entries: a heading with a stack effect. Headings without one are
+  section titles, which legitimately have nothing but more headings beneath.
+- Also found this way: the reference audit only swept the CORE dictionary, so
+  anything appearing after a `require` was invisible to it. `sound.fs` had
+  `snd-dev` and `snd-stream` — raw SDL handles with undecorated, undocumented
+  names. They are `(parenthesised)` now, the format constants users actually
+  pass to `ch-format!` are documented, and a second audit covers the audio
+  library tree. The other libraries have the same shape and are filed in
+  `docs/TODO.md`.
+
+### Added: playing WAV files (`wav.fs`), and audio volume that actually works
+
+- **`wav-play` plays a loaded sample on a mixing channel**, `wav-play-on`
+  picks the channel, `wav-ms` says how long it runs. Sounds on different
+  channels play together; the same sample can be sounding on several at once,
+  because nothing is copied or modified. `help playing`.
+- **Volume is now SDL's per-stream gain**, set through the new float FFI, and
+  that is strictly better than the sample-scaling it replaces: it changes
+  sound *already playing*, costs nothing at queue time, needs no copy of the
+  caller's samples, and works whatever format the channel carries. The whole
+  scale-into-a-copy path is gone.
+- **`ch-fade ( ms ch -- )` fades out and stops** — the soft counterpart to
+  `ch-stop`, which cuts the waveform wherever it happens to be and can click.
+  This is what could not be built in the channels release: fading needed to
+  re-queue ramped source data, and SDL cannot read back what is queued. With
+  gain it is just a value moving over time.
+- **A fade belongs to the sound it was started on**, and queueing anything new
+  on the channel cancels it. Without that rule a fade reaches past its own
+  sound: a short sound that ends before the fade does leaves the deadline
+  armed, and the next sound on that channel — very likely an unrelated one,
+  since `snd-alloc` hands out channels that fell silent — gets stopped when it
+  arrives. Found in review; the first fix covered only an explicit `ch-stop`
+  and missed both the natural-completion and the reallocation paths.
+- **Changing the volume during a fade works.** A fade moves the gain and never
+  the setting, so `ch-vol@` reports what you chose throughout, the ramp carries
+  on from the new level, and the new level is what remains when the fade ends.
+  Also a review finding: the first version snapshotted the volume at `ch-fade`
+  time and wrote it back afterwards, silently reverting any change made while
+  fading. The fix was to delete the snapshot — with the gain and the setting
+  kept separate there is nothing to save and restore. A third finding in the
+  same area: `ch-vol!` also applied the gain directly, so a volume change
+  mid-fade jumped the gain to full for one frame before the next pump snapped
+  it back. While a fade runs the gain belongs to the fade, and `ch-vol!` now
+  only records.
+- **`snd-pump` services the channels; call it once a frame.** Nothing else
+  can: SDL pulls audio on its own thread and a Forth word cannot be a C
+  callback, so the program's loop is the only clock available.
+- Volume must be set **before** the audio is queued: SDL pulls on its own
+  schedule and can take the first chunk before a later `ch-vol!` lands, so the
+  sound starts at the channel's previous level. `snd-alloc`, set, then
+  `wav-play-on`. Documented in `help playing`; `wav-play` cannot help, since it
+  does not hand back the channel until after queueing.
+- **Per-channel formats and rates** (`ch-format!`, `ch-format@`). A 48 kHz
+  stereo float file and a 16 kHz mono one can play in the same moment; SDL
+  converts each. Each queued chunk keeps the format it was queued with, so the
+  format can change while audio is still playing. Whoever queues sets it —
+  `tone-on` does too, so a channel that last carried a wav does not
+  reinterpret a square wave.
+
+### Fixed: a channel playing at a rate other than the device's never finished
+
+- Found while preparing an interactive demo, and missed by every test because
+  they all used the device's own rate so nothing resampled. A stream that IS
+  resampling holds a few input bytes back waiting for more input, so a channel
+  fed a 16 kHz sample against a 44.1 kHz device sat at 14 bytes queued for
+  ever. `snd-wait` spun on it, and `snd-alloc` never saw that channel free
+  again — after enough sounds every channel looks permanently busy.
+- `ch-playing?` now asks the **output** side, which does reach zero. What the
+  stream holds back is a fraction of a millisecond and is never heard.
+- The first fix was to flush the stream after every `ch-put`, which also
+  works — but flushing declares end-of-input, and SDL warns of a gap at the
+  join, so it would have put a gap between consecutive tones. That is exactly
+  the seamless sequencing `tone` has always had, and the reason channel 0 is
+  reserved for it. Caught in review before it shipped; there is now a test
+  asserting consecutive tones queue as one unbroken run.
+- `ch-queued` is left meaning what it says — bytes put in, not yet converted —
+  and documented as such rather than quietly redefined.
+- The bytes a resampling stream holds back are **never converted and never
+  heard**, so reporting the channel finished is accurate rather than early.
+  Measured: a channel left with 8 bytes still shows 8 queued and 0 available
+  half a second later. The amount is bounded by the resampler's window — about
+  14 bytes, under half a millisecond — and the consequence, that a sound
+  shorter than that is dropped entirely, is documented in `help channels`.
+  Avoiding the drop would mean flushing after every sound, which costs an
+  audible gap between consecutive sounds; losing a quarter of a millisecond
+  does not.
+
+### Added: 8, 24 and 32-bit WAV files
+
+- `wavcore.fs` accepted only 16-bit PCM. Measured against a real GrandOrgue
+  sample set, that read **406 of 13,529 files — 3%**. The rest were 24-bit
+  (12,235) and 32-bit float (888): 16-bit is what game assets and TTS output
+  use, not what anything professionally recorded uses.
+- Now accepts 8, 16 and 32-bit integer and 32-bit float — every depth SDL has
+  a format for, handed to the device untouched — plus 24-bit. **All 13,529
+  load.**
+- **24-bit is the only conversion, because SDL has no 24-bit format at all.**
+  It is widened to 32-bit by shifting up 8, which is lossless and puts the
+  sign bit where a 32-bit sample wants it without a sign test. Narrowing to 16
+  would discard a third of every sample for no gain. Verified sample-for-sample
+  against a reference decoder, negatives included.
+- Bit depth does not imply float-ness — 32-bit files come both ways — so the
+  format code decides, and `wav-float?` reports it. `wav-bits` reports the
+  depth **as stored**, so a widened 24-bit file says 32.
+
+### Added: OS threads — `thread` and `join`
+
+- `require threads.fs` and a Forth word runs on a real OS thread, alongside the
+  prompt:
+
+      variable c
+      : work  1000 0 do 1 c +! loop ;
+      : go    ['] work thread drop join drop  c @ . ;
+      go                \ 1000
+
+- `thread ( xt -- t ior )` starts it; `join ( t -- result status )` waits, frees
+  its stacks, and reports; `threads ( -- )` lists what is outstanding. The
+  handle is the thread's context block rather than the raw pthread id, because
+  `join` cannot find the stacks to free from an id alone.
+- **`join` returns two values on purpose.** A worker throwing `35` and a join
+  failing with `EDEADLK 35` are different events — one is your program's logic,
+  the other a misuse of threads — and a single code could not tell them apart.
+  `status` is on top: 0 means the join worked and `result` is the worker's throw
+  code. Positive statuses are the system's `errno`, negative ones are ours.
+- **`threads` lists the live workers** with `running`/`finished` and, once
+  finished, the result waiting to be collected. A thread stays listed until you
+  `join` it, so the listing doubles as the reclaim to-do list.
+- **Joining twice no longer crashes.** A registry of live handles — linked
+  through the context blocks, so nothing extra is allocated — lets `join`
+  reject a spent handle with `-60` instead of reading freed memory.
+- **Each worker gets its own data and return stacks**, so `depth` inside a
+  worker starts at 0. This is the whole reason threads need assembly: handing a
+  Forth xt straight to `pthread_create` does not crash, it runs with whatever
+  DSP glibc's thread startup left in the register and silently writes Forth
+  cells onto random memory — `depth` read -17590946912746 in a spike. A small
+  per-arch trampoline sets up the thread's machine state first.
+- **A worker that throws ends only itself.** The trampoline runs the word
+  through `catch`, so an uncaught `throw` in a worker is a value you handle
+  rather than a session you lose. `catch` works normally inside a worker too.
+- Fixed as part of this: a `CATCH` frame also snapshots ten shared globals (the
+  interpreter's input source and file-error context) which `THROW` writes back.
+  A worker throwing while the prompt was parsing restored its stale snapshot
+  over the prompt's input source, and the REPL re-parsed fragments of its own
+  line. Workers now skip that snapshot entirely — they never interpret, so they
+  have no input source to save. There is a regression test.
+- **The rule: the prompt owns the dictionary.** Workers run already-compiled
+  words — no `:`, `create`, interpret-time `s"`, `save` or `load`. Documented,
+  not enforced. `help concurrency` covers it, and `docs/Threading.md` has the
+  design.
+- The trampoline is a C function as far as glibc's `start_thread` is concerned,
+  so it saves and restores every callee-saved register — `RBX`/`RBP`/`R12`-`R15`
+  on x86-64, `X19`-`X28` on ARM64. It clobbers DSP, HERE and LATEST itself, and
+  glibc's thread teardown runs after it returns and expects them intact.
+- A worker's block is laid out `[ data stack ][ return stack ][ context ]`, both
+  stacks growing **down, away from the context**, so an overflowing worker
+  cannot corrupt the thread id `join` needs. The trampoline keeps its return
+  path in TLS for the same reason — in the context block it would have been
+  writable by an overflow, turning a stack overflow into a wild jump.
+- A **failed** `join` frees nothing: the thread may still be running, and its
+  stacks are inside the block, so freeing there would unmap memory a live thread
+  is executing on — a leak is recoverable, a use-after-free is not. The block
+  leaks by design and the handle is spent; **a failed join must not be
+  retried**, since the usual cause is another thread already joining, whose
+  success frees the block. Give each handle one owner and join it exactly once
+  — a successful join frees it.
+- **A worker's stacks are fenced.** A `PROT_NONE` page sits below the data
+  stack, between the two stacks, and above the return stack. Without them the
+  two stacks were neighbours, and the failure was the quiet kind: a return
+  stack that overflowed walked into the data stack, and a data stack popped
+  past empty read the return stack — wrong answers, no crash, nothing to
+  debug. Now either overrun dies at once. This needed no change to the fault
+  path: the SIGSEGV handler only *recovers* faults inside the main thread's own
+  guard pages, so a worker's fence fault falls through to the default handler.
+- Not yet: channels for communication.
+
+### Fixed: a compile-only word no longer lets the rest of the line run
+
+- Using a compile-only word at the prompt printed `compile only` and then **kept
+  interpreting the line**, so the real mistake was buried under whatever
+  happened next:
+
+      ['] dup 999 .
+      compile only
+      stack underflow          \ `dup` ran on an empty stack; 999 never printed
+
+  Every other line error aborts the line. This one now does too, and it names
+  the word:
+
+      ['] dup 999 .
+      compile only: [']
+
+- The misdirection is not hypothetical. It cost real debugging time: `['] hi`
+  reported `compile only` and then ran `hi`, whose output read exactly like the
+  success of the thing being tested.
+- Line errors now share one shape, `<why> <token>`, because the reporter prints
+  a prefix the error site chooses rather than a hardcoded `? `. So `? nosuchword`
+  and `compile only: ;` come out of the same code path, at the prompt and in
+  `file.fs:12:` reports alike.
+- `evaluate` brackets that wording the way it already brackets the input source.
+  Without it, a nested `evaluate` — a whole interpret loop running inside one
+  outer token — left its wording behind, and an error later in the same token
+  reported as `compile only: mismatched-control-flow`.
+- Known and unchanged: `evaluate` swallows the report either way — it returns
+  the status to its caller and nothing prints it, which is equally true of an
+  undefined word there. What is observable is that the offending line stops.
+
+### Clearer help for `'` and `[']`
+
+- `help '` did not mention that tick is `immediate`, so it reads as though it
+  only works at the prompt. It works inside a definition too, compiling the xt
+  as a literal — the same thing `[']` does.
+- `help [']` called itself "the compile-time form of `'`", implying `'` was not.
+  The real difference runs the other way: `[']` is the one with a restriction,
+  being compile-only, while `'` is happy in both places. Use `'` unless you are
+  writing code to port to other Forths, where `'` is not immediate.
+- Both entries now say why there is no run-time tick (`'` resolves the name
+  while compiling) and point at `parse-name find` for a name chosen at run time.
+
+### Groundwork: BASE, sp0 and handler are now per-thread (TLS)
+
+- First step toward concurrency (`docs/Threading.md`), and **nothing observable
+  changes yet** — no threads are created. `base`, `sp0` and `handler` simply
+  moved out of `.data` into thread-local storage, so that when worker threads
+  do arrive, each one gets its own copy.
+- Why those three: `depth` is computed as `(sp0 - DSP)/CELL`, so a worker
+  measuring against the REPL's `sp0` would report nonsense; and `handler`, the
+  head of the `catch` chain, would corrupt the REPL's chain if a worker spliced
+  into it. `base` came along because it is free to do so — a worker switching
+  to `hex` now cannot disturb the prompt.
+- Mechanism is the **hardware thread pointer** — `%fs` on x86-64, `TPIDR_EL0`
+  on ARM64 — so access stays a single instruction on x86 (`%fs:sp0@tpoff`) and
+  a three-instruction `TLS_ADDR` macro on ARM64. No lock, no lookup, and glibc
+  allocates each thread's copy inside `pthread_create`. The rejected
+  alternatives were a reserved register (31 scratch uses of `%r14` to audit)
+  and `pthread_getspecific` (a function call inside `depth`).
+- A new thread's TLS block is initialised from `.tdata`, so a worker will start
+  with `BASE` decimal and no live `CATCH` frame for free.
+- This lifts one restriction the threading design had planned to ship with:
+  `BASE` need not be read-only in workers. It does **not** yet make
+  `catch`/`throw` safe in a worker — a `CATCH` frame also snapshots ten shared
+  globals (the input source and file-error context) that `THROW` writes back,
+  so a worker's throw would still clobber the line the REPL is parsing. Only
+  the chain head moved. `docs/Threading.md` records the intended fix (skip the
+  snapshot off the REPL thread) for step 1, where a trampoline makes it
+  testable.
+- The C unit-test harness needed `__thread` on its `extern base`/`extern sp0`
+  declarations; without it the link fails on a TLS/non-TLS symbol mismatch.
+### Added: float arguments in the FFI (`(ccallf)`, `>f32`)
+
+- **The FFI could not call a C function that takes a float**, and three
+  separate features had already been bent around that one gap:
+  `SDL_SetAudioStreamGain(stream, float)`, sherpa-onnx's TTS entry point, and
+  per-channel audio volume. Floats travel in their own register file
+  (XMM0–7 / V0–V7), which `(ccall)` never touched.
+- `(ccallf)` and `(ccallf>f)` take the integer arguments, then the float ones,
+  then both counts. Grouping them costs nothing: each ABI fills its two
+  register files independently of how the parameters interleave in the C
+  prototype, so the groups still land where C expects them.
+- `>f32 ( n d -- bits )` builds an IEEE-754 single from a ratio. **Forth still
+  never holds a float** — a float argument is an opaque bit pattern in an
+  ordinary cell. `>f32` is the only place the engine touches floating-point
+  hardware, and a zero denominator gives `0` rather than an infinity.
+- Verified against libm rather than by inspection, because exact functions turn
+  a misplaced register into a wrong *number* instead of a crash: `fdimf` is
+  asymmetric so it checks argument **order**, `fmaf` exercises three float
+  registers at once, and `ldexpf` mixes an integer with a float. 7 tests on
+  both architectures, each confirmed to fail when the corresponding register
+  path is deliberately broken.
+- `(ccall)` is untouched, so every existing binding is unaffected.
+
+### Faster: `lshift` and `rshift` on x86-64
+
+- **Shifting was twice the cost of multiplying**, which is backwards — a shift
+  is the cheaper operation on every machine. `2 *` timed 0.199 s where
+  `1 lshift` timed 0.314 s over the same 30 million calls.
+- Cause: both shifts operated on the top-of-stack cell **in place in memory**
+  with a variable count — `shlq %cl, (%r15)`. That form is disproportionately
+  expensive on the Zen 4 test machine. They now load the cell into a register,
+  shift it there, and store it back. One extra instruction, roughly half the
+  time: `1 lshift` drops from 0.390 s to 0.184 s, level with `2 *` at 0.185 s.
+- It is specifically the **variable count** that is slow, not the in-place
+  memory write. Every other primitive that writes the stack cell directly —
+  `+`, `-`, `and`, `or`, `xor`, `invert`, `negate`, `1+`, `1-`, and `2/`'s
+  `sarq $1, (%r15)` with its immediate count — was measured and is already at
+  the floor, costing nothing beyond its call. Nothing else needed changing.
+- ARM64 was never affected: with no memory read-modify-write to reach for, it
+  already loaded, shifted, and stored. The two architectures now match.
+- `2*` is defined as `1 lshift`, so it gets the same speedup.
+### Added: WAV decoding (`wavcore.fs`)
+
+- **`wav-load` reads a `.wav` file into a sample handle**, with `wav-frames`,
+  `wav-rate`, `wav-chans`, `wav-bytes`, `wav-data`, `wav-loop?`,
+  `wav-loop-start`, `wav-loop-end` and `wav-free`. Documented in
+  `help samples`.
+- Accepts uncompressed **16-bit PCM, mono or stereo**. Anything else is
+  refused *by name* through `wav-why` rather than mis-decoded into noise —
+  a wrong bit depth otherwise plays as loud static.
+- Chunks are walked properly, so a file carrying `LIST` or `fact` metadata
+  before its audio loads correctly. Audio only begins at byte 44 in the
+  simplest files, and assuming it is a common way to get this wrong.
+- Loop points are read from the `smpl` chunk, and **validated**: a loop whose
+  start is not before its end, or whose end is not inside the audio, is
+  dropped rather than trusted, so `wav-loop?` true means the range is real.
+  The end point is **inclusive** (the spec calls it the last sample played),
+  so on an n-frame sample the largest legal end is `n-1` — an off-by-one here
+  accepts `n` and reads one frame past the buffer on every loop. Caught in
+  review; the original tests looped well inside the sample and never touched
+  the boundary, which is why it survived them.
+- A partial trailing frame is trimmed at load, so `wav-bytes` is always a
+  whole number of frames.
+- The file is read once and kept, with the sample pointing into that image
+  rather than copying the audio out — one read, one file's worth of memory,
+  and `wav-free` releases both blocks.
+- **Requires nothing.** No FFI, no SDL. `require sound.fs` aborts on a machine
+  without libSDL3, which includes the aarch64 QEMU run, so a decoder living
+  inside `sound.fs` could not be tested on half our architectures. Split out,
+  its 3 tests run on **both** arches while only playback skips.
+- Test fixtures are built in Forth rather than committed as binaries, so the
+  bytes under test are readable in `tests/test_integration.sh`. Each test was
+  confirmed to fail when the parser is deliberately broken.
+
+### Added: mixing sound channels
+
+- **Sounds can now play at the same time.** The audio device holds
+  `snd-channels` streams (default 16, ceiling 64), all bound to one logical
+  device, and SDL mixes them — sounds on different channels overlap, sounds
+  queued on one channel still play in sequence. There is no mixer code here;
+  SDL does the mixing.
+- New words: `tone-on`, `ch-put`, `snd-alloc`, `ch-playing?`, `ch-queued`,
+  `ch-stop`, `snd-stop`, `ch-wait`, `ch-vol!`, `ch-vol@`, plus `snd-channels`,
+  `snd-max-channels`, `tone-ch` and `snd-unity`. Documented in
+  `help channels`; every one is a silent no-op with no device open, the same
+  contract `tone` already had.
+- **`tone` is unaffected.** It owns channel 0, so a run of plain tones plays
+  back-to-back exactly as before — existing programs, including a siren built
+  from consecutive tones, need no changes. `tone-on` is the opt-in overlap.
+- `snd-alloc` hands out channels round-robin and **steals the least recently
+  allocated** when all are busy: a program firing more sounds than it has
+  channels loses its stalest sound rather than refusing the newest. Round-robin
+  rather than lowest-free because a channel only counts as busy once audio is
+  queued, so two allocations in a row would otherwise both return channel 1.
+- Per-channel volume scales samples **as they are queued**, into a copy so
+  shared sample data is never modified. Not `SDL_SetAudioStreamGain`, which
+  takes a `float` — the FFI passes integers only.
+- **Needed the plain device API.** `SDL_OpenAudioDeviceStream`, the one-call
+  setup this used before, welds the device to the single stream it returns;
+  binding a second fails with *"Cannot change stream bindings on device opened
+  with SDL_OpenAudioDeviceStream"*. Nothing in the SDL3 header says so — it
+  surfaces only as a runtime error. Now opens with `SDL_OpenAudioDevice` and
+  binds each stream explicitly. Written up in `docs/Sound.md`.
+- 7 tests via SDL's dummy audio driver, each confirmed to fail when the
+  behaviour it covers is deliberately broken — including a regression guard
+  that bare `tone` still queues on the tone channel.
+
 ### Fixed: closing the window killed the sound
 
 - **`sdl-close` tore down the audio device too**, so a game that opened both a

@@ -59,6 +59,15 @@
 // ---------- RAW MODE ----------
 // Switch terminal to raw mode for character-at-a-time input.
 // Saves original settings for restore on exit.
+// Address of a thread-local variable (local-exec model): the thread pointer
+// TPIDR_EL0 plus the offset the linker assigns. See the TLS block in core.s
+// for which vars are per-thread and why. Writes only \reg.
+.macro TLS_ADDR reg, sym
+    MRS \reg, TPIDR_EL0
+    ADD \reg, \reg, #:tprel_hi12:\sym, LSL #12
+    ADD \reg, \reg, #:tprel_lo12_nc:\sym
+.endm
+
 .global platform_raw_mode
 platform_raw_mode:
     STR X30, [SP, #-16]!
@@ -580,7 +589,7 @@ sigsegv_handler:
     LDR X3, [X3]
     STR X3, [X23, #UC_SP]              // SP = rp0
 
-    ADR X3, sp0
+    TLS_ADDR X3, sp0
     LDR X3, [X3]
     STR X3, [X23, #UC_X19]             // X19 = sp0 (DSP = empty)
 
@@ -812,6 +821,10 @@ platform_system:
     MOV X29, SP
     STP X19, X20, [SP, #-16]!       // X20 holds cmd ptr across calls
     MOV X20, X0                     // save cmd ptr
+    // The child writes to fd 1 itself, so none of our write paths run and the
+    // owed newline would never be paid -- its first line would land on the
+    // command line. Settle it before handing the terminal over.
+    BL pay_pending_nl
     BL platform_restore_term        // terminal → cooked for the child
     // build argv = ["/bin/sh", "-c", cmd, NULL]
     ADR X1, sh_path
@@ -911,6 +924,11 @@ platform_popen:
     MOV X0, #-24                    // -EMFILE: all pipe slots busy
     B .Lpo_ret
 .Lpo_have_slot:
+    // Both directions pay. A W/O child keeps the terminal for its stdout, and
+    // an R/O child -- whose stdout is the pipe -- still inherits STDERR, so it
+    // can dirty the line too. The cost is one line break on a line that
+    // captures silently; mashed-up error text is worse.
+    BL pay_pending_nl
     BL platform_restore_term        // terminal → cooked for the child
     ADR X0, pipe_fds
     MOV X1, #0                      // flags = 0
@@ -1137,6 +1155,17 @@ platform_mmap_anon:
 .global platform_munmap
 platform_munmap:
     MOV X8, #SYS_munmap
+    SVC #0
+    RET
+
+// platform_prot_none(addr, len) -> 0 or -errno
+// Make a page-aligned range unreadable and unwritable, so touching it faults.
+// Used to fence a worker thread's stacks: without it an overflowing worker
+// silently walks into the neighbouring stack instead of dying loudly.
+.global platform_prot_none
+platform_prot_none:
+    MOV X2, #0                      // PROT_NONE
+    MOV X8, #226                    // SYS_mprotect
     SVC #0
     RET
 

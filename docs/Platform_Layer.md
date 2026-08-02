@@ -104,9 +104,33 @@ next prompt pays it, so prompts can't pile up sideways (`>  >  > `).
 
 Both write paths honour it — `platform_emit` always (it is stdout by
 definition) and `platform_write_fd` **only when fd = 1**, since a write to a
-file must not push a stray byte to the terminal. `platform_exit` pays a final
-owed newline so the shell prompt never lands on a half-finished line. The flag
-is cleared *before* the flushing write, so paying it cannot recurse.
+file must not push a stray byte to the terminal. The flag is cleared *before*
+the flushing write, so paying it cannot recurse.
+
+**Every other route to fd 1 has to pay too, and finding them all has been the
+recurring cost of this design.** Three so far beyond the write paths:
+
+- `platform_exit`, so the shell prompt never lands on a half-finished line.
+- The **SIGSEGV guard messages** (`stack underflow`, `stack overflow`), which
+  write with a raw syscall from the handler and so bypass `platform_write`.
+- **`platform_system`**, because the *child process* writes to fd 1 itself.
+  Nothing of ours runs, so the newline must be settled before the fork —
+  otherwise `sh echo hello` prints `> sh echo hellohello`.
+- **`platform_popen`, both directions.** A `w/o` child keeps the terminal for
+  its stdout. An `r/o` child's stdout is the pipe — but it still inherits
+  **stderr**, so it can dirty the line just as easily.
+
+That last one is the useful shape of the rule, and it took two wrong answers to
+find. The question is not "does this fork", and it is not "can it reach **fd
+1**" — it is **"can anything reach the terminal that we will not write
+ourselves"**. A child holds fd 2 whatever you do with fd 1.
+
+The cost of paying is a line break on a line that captures silently. Since
+`pending_nl` is set once per input line, that is one break at worst — the same
+price any line pays for producing output.
+
+The rule when adding anything that can reach the terminal: enumerate the
+`SYS_write` sites *and* anything that hands fd 1 to code we do not control.
 
 Called by `forth_emit` in core.s, which pops the character from the data
 stack and passes it in the appropriate register.
