@@ -231,7 +231,7 @@ two things it used to mean. See `docs/Language-Reference/Comparison.md`.
 | Word          | Stack effect                                  | Layer | Status | Notes                   |
 |---------------|-----------------------------------------------|-------|--------|-------------------------|
 | ABORT         | ( -- )                                        | asm   | (x)    | Clear stacks, reset REPL |
-| ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE)      |
+| ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE); interpreted: acts now |
 | QUIT          | ( -- )                                        | asm   | (x)    | Reset RSP, enter REPL    |
 | ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | (x)    | core.fs (always false)   |
 | S"            | ( "ccc" -- c-addr u )                         | both  | (x)    | Inline string literal; interpreted: transient buffer |
