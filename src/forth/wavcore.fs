@@ -197,12 +197,15 @@ variable (wv-why-a)   variable (wv-why-u)
     true ;
 
 \ --- the loader ---
-: wav-load ( c-addr u -- sample|0 )
+: (wv-reset) ( -- )
     s" wav: ok" (wv-fail) drop
     -1 (wv-l0) !  -1 (wv-l1) !  0 (wv-dp) !  0 (wv-dn) !
     0 (wv-rate) !  0 (wv-ch) !  0 (wv-buf) !
-    0 (wv-bits) !  0 (wv-float) !  0 (wv-conv) !
-    (wv-slurp) 0= if s" wav: cannot read the file" (wv-fail) exit then
+    0 (wv-bits) !  0 (wv-float) !  0 (wv-conv) ! ;
+
+\ Decode the RIFF image already sitting in (wv-buf)/(wv-len). Takes ownership
+\ of that block: on success the sample holds it, on failure it is released.
+: (wv-decode) ( -- sample|0 )
     (wv-len) @ 12 <
         if (wv-drop-buf) s" wav: too short to be a RIFF file" (wv-fail) exit then
     (wv-buf) @ l@ (wv-RIFF) <>
@@ -243,3 +246,24 @@ variable (wv-why-a)   variable (wv-why-u)
     (wv-bits) @ (wv-s) @ 56 + !
     (wv-float) @ (wv-s) @ 64 + !
     (wv-s) @ ;
+
+\ Read a .wav file.
+: wav-load ( c-addr u -- sample|0 )
+    (wv-reset)
+    (wv-slurp) 0= if s" wav: cannot read the file" (wv-fail) exit then
+    (wv-decode) ;
+
+\ Decode a .wav image that is already in memory -- a blob compiled into a
+\ program, something read from a pipe, anything. Same bytes a file holds; the
+\ only difference is where they came from.
+\ The image is COPIED, because a sample points into its own block and wav-free
+\ releases it: the caller's bytes may be in the dictionary, or about to be
+\ reused, and must not be adopted.
+: wav-from ( c-addr u -- sample|0 )
+    (wv-reset)
+    dup 0= if 2drop s" wav: empty image" (wv-fail) exit then
+    dup (wv-len) !
+    dup allocate if drop 2drop s" wav: out of memory" (wv-fail) exit then
+    (wv-buf) !
+    (wv-buf) @ swap move
+    (wv-decode) ;

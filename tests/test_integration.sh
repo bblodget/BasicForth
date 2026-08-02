@@ -1520,6 +1520,27 @@ else
     printf "  ${RED}FAIL${NC}  24-bit widening values\n    Got: %s\n" "$(echo "$wav_widen" | tail -2)"; ((failed++))
 fi
 
+# wav-from decodes an image already in memory -- the same bytes a file holds.
+# It must agree with wav-load exactly, including through the 24-bit widening
+# path, which swaps the image for a converted block mid-decode. And it must
+# COPY: the sample points into its own block and wav-free releases it, so
+# adopting the caller's bytes would free memory the caller still owns. The last
+# check reads the source buffer's RIFF tag back after the sample is freed
+# (1179011410 = "RIFF" as a little-endian cell). A zero-length image is named
+# as such: without that guard it still fails, but through the allocate path,
+# reporting "out of memory" for a problem that has nothing to do with memory.
+wav_from=$( cd "$wav_dir" && printf 'require wavcore.fs\n0 value RAW  0 value LEN\n: slurp r/o bin open-file drop >r r@ file-size drop drop to LEN LEN allocate drop to RAW RAW LEN r@ read-file drop drop r> close-file drop ;\n: d dup 0= if drop ." X" exit then dup wav-frames . dup wav-bits . dup wav-loop? if dup wav-loop-start . then wav-free ;\ns" b24.wav" slurp\ns" b24.wav" wav-load d  RAW LEN wav-from d\nRAW l@ 1179011410 = . RAW free drop\ns" loop.wav" slurp RAW LEN wav-from d\nRAW 0 wav-from drop wav-why type\nRAW free drop depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth 2>&1 )
+# Each Forth line prints its own output line, so match them separately.
+if printf '%s' "$wav_from" | grep -q '8 32 8 32' \
+   && printf '%s' "$wav_from" | grep -q -- '-1' \
+   && printf '%s' "$wav_from" | grep -q '8 16 2' \
+   && printf '%s' "$wav_from" | grep -q 'wav: empty image'; then
+    printf "  ${GREEN}PASS${NC}  wav-from decodes an in-memory image, copying it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav-from\n    Got: %s\n" "$(echo "$wav_from" | tail -3)"; ((failed++))
+fi
+
 # Many load/free cycles must stay correct: the file image is a SECOND heap
 # block, so wav-free has two things to release and a mistake there shows up as
 # a double-free or a corrupted later load. NOTE this does not detect a plain
