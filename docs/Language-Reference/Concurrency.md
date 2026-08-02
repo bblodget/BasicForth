@@ -20,8 +20,17 @@ alone.
     require threads.fs
     variable c
     : work  1000 0 do 1 c +! loop ;
-    : go    ['] work thread drop join 2drop  c @ . ;
+    : go    ['] work thread throw  join throw throw  c @ . ;
     go                \ 1000
+
+`thread throw` rather than `thread drop`: `throw` passes a 0 ior through and
+stops on anything else. Dropping it instead means a thread that never started
+looks just like one that finished — you get an answer, and it is wrong.
+
+Throwing straight out like that is fine for **one** thread. With several, it is
+a trap: a throw on the third `thread` walks away from the two already running,
+and nothing is left to join them or free their stacks. Start them all, join
+them all, and report afterwards — `tutorial Concurrency` builds that pattern.
 
 A worker runs **already-compiled** words only: no `:`, no `create`, no
 interpret-time `s"`, no `save`/`load`. Define first, then run — `help
@@ -40,7 +49,7 @@ failing with `EDEADLK 35` is a bug in how you are using threads. One combined
 code could not tell them apart.
 
     : t35   35 throw ;
-    : go    ['] t35 thread drop join . . ;   \ prints status, then result
+    : go    ['] t35 thread throw  join . . ;  \ prints status, then result
     go                \ 0 35    — status 0: the join was fine.
                       \           result 35: what the worker threw.
 
@@ -90,7 +99,7 @@ writing its other stack. The whole process goes down with it, which is loud and
 obvious; that is the intent. Worker stacks are a fixed size and do not grow.
 
     : w   hex ;
-    : go  ['] w thread drop join 2drop  base @ . ;
+    : go  ['] w thread throw  join throw throw  base @ . ;
     go                \ 10
 
 ## Errors come back as a value
@@ -99,7 +108,7 @@ code comes back as `join`'s `result`. So a worker failing is something you
 handle, not a session you lose.
 
     : boom  42 throw ;
-    : go    ['] boom thread drop join drop . ;
+    : go    ['] boom thread throw  join drop . ;
     go                \ 42
 
 `catch` works normally inside a worker, so a thread can handle its own errors
