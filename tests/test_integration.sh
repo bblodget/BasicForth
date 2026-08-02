@@ -5232,6 +5232,32 @@ sh_out=$(printf 'sh echo hi-from-sh\n42 .\nbye\n' | timeout 2 $FORTH 2>&1)
 [[ "$sh_out" == *"hi-from-sh"* && "$sh_out" == *"42  ok"* ]] \
     && { printf "  ${GREEN}PASS${NC}  sh runs a command, interpreter resumes after it\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  sh basic\n    Got: %s\n" "$(echo "$sh_out"|head -4)"; ((failed++)); }
+# The child writes to fd 1 ITSELF, so none of our write paths run -- the owed
+# newline has to be settled before the fork or the child's first line lands on
+# the echoed command line ("sh echo hellohello"). Same for open-pipe with w/o,
+# whose child keeps the terminal for stdout. The echo line must therefore end
+# right after the command, with the output on the line below.
+sh_nl=$(printf 'sh echo hi-from-sh\nbye\n' | timeout 2 $FORTH 2>&1)
+if printf '%s' "$sh_nl" | grep -qx '> sh echo hi-from-sh' \
+   && printf '%s' "$sh_nl" | grep -qx 'hi-from-sh'; then
+    printf "  ${GREEN}PASS${NC}  sh output starts on its own line, not the command's\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  sh output ran onto the command line\n    Got: %s\n" "$(echo "$sh_nl"|head -3)"; ((failed++))
+fi
+# An R/O pipe pays too. Its child's stdout is the pipe, but it still inherits
+# STDERR -- so it can dirty the terminal line, and without paying, the error
+# lands on the command line ("> tls: cannot access ..."). The cost is one line
+# break on a line that captures silently, which is what any line producing
+# output pays; mashed-up error text is worse. The question is never "does this
+# fork" but "can anything reach the TERMINAL that we will not write ourselves".
+po_nl=$(printf ': t s" ls /definitely-no-such-path" r/o open-pipe drop close-pipe 2drop ;\nt\nbye\n' \
+    | timeout 5 $FORTH 2>&1)
+if printf '%s' "$po_nl" | grep -qx '> t' \
+   && printf '%s' "$po_nl" | grep -q '^ls: cannot access'; then
+    printf "  ${GREEN}PASS${NC}  an r/o child's stderr starts on its own line\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  r/o child stderr ran onto the command line\n    Got: %s\n" "$(echo "$po_nl"|head -4)"; ((failed++))
+fi
 # Bare `sh` with no command prints usage, doesn't choke.
 sh_use=$(printf 'sh\nbye\n' | timeout 2 $FORTH 2>&1)
 [[ "$sh_use" == *"usage: sh <command>"* ]] \
