@@ -959,6 +959,65 @@ assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 
 assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
 assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
 
+# --- float arguments ---
+# libm is the oracle: exact, well-defined functions, so a wrong register or a
+# wrong ORDER gives a wrong number rather than a crash.
+# >f32 first -- the bit patterns are checkable by hand:
+#   0.5 = 0x3F000000 = 1056964608     1.0  = 0x3F800000 = 1065353216
+#   0.25 = 0x3E800000 = 1048576000   -0.5  = 0xBF000000 = 3204448256
+assert_result ">f32 bit patterns" \
+    "include $FFI  1 2 >f32 . 1 1 >f32 . 1 4 >f32 . -1 2 >f32 . 0 1 >f32 ." \
+    "1056964608 1065353216 1048576000 3204448256 0"
+# A zero denominator gives 0, not an infinity: a bad ratio should be silence
+# rather than a value that poisons whatever consumes it.
+assert_result ">f32 divide by zero -> 0" "include $FFI  1 0 >f32 . 0 0 >f32 ." "0 0"
+
+# The float-call tests need several lines: one REPL line has a length limit,
+# and these bind three symbols before calling. `f>i` rounds an f32 bit pattern
+# back to an integer so the result is printable (not `rnd`, which core.fs
+# already uses for random numbers).
+fpre="include $FFI
+s\" libm.so.6\" dlopen value LM
+LM s\" lroundf\" dlsym value LR
+: f>i ( fbits -- n ) 0 1 LR (ccallf) ;"
+
+# One float in, integer out: the value reaches the float register at all.
+# lroundf rounds half AWAY from zero, so 2.5 -> 3 and -3.5 -> -4.
+assert_result "ccallf 1 float arg (lroundf)" \
+    "$fpre
+: t 7 2 >f32 f>i . 5 2 >f32 f>i . -7 2 >f32 f>i . ;
+t" \
+    "4 3 -4"
+# Two floats with a float result. fdimf(a,b) = max(a-b,0) is ASYMMETRIC, so
+# swapping the float registers changes the answer -- this checks their ORDER,
+# not merely that both arrived.
+assert_result "ccallf 2 float args, order (fdimf)" \
+    "$fpre
+LM s\" fdimf\" dlsym value FD
+: t 9 1 >f32 3 1 >f32 0 2 FD (ccallf>f) f>i .  3 1 >f32 9 1 >f32 0 2 FD (ccallf>f) f>i . ;
+t" \
+    "6 0"
+# Three floats: fmaf(a,b,c) = a*b+c, a different answer if any pair swapped.
+assert_result "ccallf 3 float args (fmaf)" \
+    "$fpre
+LM s\" fmaf\" dlsym value FM
+: t 3 1 >f32 4 1 >f32 5 1 >f32 0 3 FM (ccallf>f) f>i .  10 1 >f32 10 1 >f32 1 1 >f32 0 3 FM (ccallf>f) f>i . ;
+t" \
+    "17 101"
+# Mixed: ldexpf(float x, int exp) = x * 2^exp. C interleaves them; we group
+# integers first and floats second, and the ABI still lines up because each
+# register file is assigned independently of the other.
+assert_result "ccallf mixed int and float (ldexpf)" \
+    "$fpre
+LM s\" ldexpf\" dlsym value LX
+: t 2 3 1 >f32 1 1 LX (ccallf>f) f>i .  10 1 1 >f32 1 1 LX (ccallf>f) f>i .  -1 7 1 >f32 1 1 LX (ccallf>f) f>i . ;
+t" \
+    "12 1024 4"
+# With no float args at all, (ccallf) must behave exactly like (ccall).
+assert_result "ccallf with no floats == ccall" \
+    "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 0 r> (ccallf) . ; t" \
+    "42"
+
 # SDL3 backend — needs libSDL3 on the host. Uses SDL's dummy video driver so
 # no display is required: open window + renderer + streaming texture, lock,
 # draw through the graphics.fs surface, read the pixel back, close. Skipped
@@ -1093,7 +1152,211 @@ else
     else
         printf "  ${RED}FAIL${NC}  snd-close leaves the window drawable\n    Got: %q\n" "$mix_b"; ((failed++))
     fi
+
+    # --- mixing channels ---
+    # The point of channels: sounds on DIFFERENT channels play together.
+    # tone-on puts two tones on channels 1 and 2, and both must report queued
+    # audio at once, with the tone channel untouched.
+    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_mix" | grep -q -- '-1 -1 0 0 -1 0 mix-ok'; then
+        printf "  ${GREEN}PASS${NC}  channels mix; ch-stop stops only its own channel\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  channels mix / ch-stop scope\n    Got: %q\n" "$ch_mix"; ((failed++))
+    fi
+
+    # REGRESSION GUARD for the channel rewrite: bare `tone` must still queue on
+    # the dedicated tone channel, so a run of tones plays in SEQUENCE exactly
+    # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
+    # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
+    # land on some other channel. Dark Star's siren sweep depends on this.
+    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
+        printf "  ${GREEN}PASS${NC}  bare tone still sequences on the tone channel\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  tone sequencing on tone-ch\n    Got: %q\n" "$ch_seq"; ((failed++))
+    fi
+
+    # snd-alloc is round-robin, never hands back tone-ch, and steals the OLDEST
+    # channel once they are all busy. Filling every channel with a long tone
+    # and allocating twice must give 1 then 2 -- the two least recently used.
+    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open? drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_alloc" | grep -q '1 2 3 1 2 alloc-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-alloc round-robins, then steals the oldest\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-alloc round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
+    fi
+
+    # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
+    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open? drop snd-channels . snd-close 999 to snd-channels snd-open? drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open? drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
+    fi
+
+    # Volume clamps to 0..snd-unity, and an out-of-range channel is inert
+    # rather than a wild dictionary write.
+    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_vol" | grep -q '256 256 0 256 0 vol-ok'; then
+        printf "  ${GREEN}PASS${NC}  ch-vol clamps; out-of-range channels are inert\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ch-vol clamping / channel bounds\n    Got: %q\n" "$ch_vol"; ((failed++))
+    fi
+
+    # Scaling below unity must copy: the same loaded sound can be playing on
+    # several channels, so ch-put must never modify the caller's samples.
+    # 1000 and -1000 (65536-1000 = 64536 read back through zero-extending w@).
+    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open? drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_scale" | grep -q '1000 64536 -1 scale-ok'; then
+        printf "  ${GREEN}PASS${NC}  ch-put scales into a copy, leaving source samples intact\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ch-put scaled copy\n    Got: %q\n" "$ch_scale"; ((failed++))
+    fi
+
+    # Every channel word must be a silent no-op with no device open, the same
+    # contract tone already had, so a soundless system never aborts.
+    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . snd-alloc . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
+        printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  channel words with no device\n    Got: %q\n" "$ch_closed"; ((failed++))
+    fi
 fi
+
+# =========================================================================
+section "WAV decoding (wavcore.fs)"
+# =========================================================================
+# wavcore.fs is deliberately FFI-free -- no SDL, no audio device -- so these
+# run on every architecture, including under qemu where `require sound.fs`
+# aborts on dlopen. The fixtures are built in Forth rather than committed as
+# binaries, so the bytes under test are visible in this file.
+wav_dir="$(mktemp -d)"
+wav_forth="${FORTH/.\//$PWD/}"   # absolutize: the test cds into $wav_dir
+cat > "$wav_dir/mk.fs" <<'WAVEOF'
+require wavcore.fs
+create WB 2048 allot   variable WP   variable WN
+: b, ( c -- )        WB WP @ + c!  1 WP +! ;
+: w, ( x -- )        WB WP @ + w!  2 WP +! ;
+: l, ( x -- )        WB WP @ + l!  4 WP +! ;
+: tag, ( c-addr u -- ) 0 ?do dup i + c@ b, loop drop ;
+: fmt, ( chans bits -- )   \ a fmt chunk for `chans` channels at `bits` bits
+    s" fmt " tag,  16 l,
+    1 w,                          ( chans bits )
+    over w,  44100 l,  88200 l,  2 w,  w,  drop ;
+: pcm, ( frames chans -- )  * 0 ?do  i 100 * 1000 -  w,  loop ;
+: save-as ( c-addr u -- )  w/o bin create-file drop >r
+    WB WP @ r@ write-file drop  r> close-file drop ;
+\ a well-formed 16-bit mono file, optionally with junk before fmt and a loop
+: start, ( -- )  0 WP !  s" RIFF" tag,  0 l,  s" WAVE" tag, ;
+: finish, ( -- ) WP @ 8 -  WB 4 + l! ;      \ patch the RIFF size field
+: data, ( frames chans -- )  2dup * 2*  s" data" tag, l,  pcm, ;
+: smpl, ( start end -- )
+    s" smpl" tag,  60 l,
+    0 l, 0 l, 0 l, 60 l, 0 l, 0 l, 0 l,  1 l,  0 l,     \ 36-byte header
+    0 l, 0 l,                                    \ cuePointId, loop type
+    swap l, l,                                   \ start, end
+    0 l, 0 l, ;
+: junk, ( -- )  s" LIST" tag,  8 l,  s" INFO" tag,  s" hey" tag, 0 b, ;
+: mk-ok      start, 1 16 fmt,  8 1 data, finish,  s" ok.wav" save-as ;
+: mk-stereo  start, 2 16 fmt,  8 2 data, finish,  s" st.wav" save-as ;
+: mk-junk    start, junk, 1 16 fmt, 8 1 data, finish, s" junk.wav" save-as ;
+: mk-loop    start, 1 16 fmt, 2 6 smpl, 8 1 data, finish, s" loop.wav" save-as ;
+: mk-badloop start, 1 16 fmt, 6 2 smpl, 8 1 data, finish, s" bad.wav" save-as ;
+\ The smpl end point is INCLUSIVE, so on 8 frames the largest legal end is 7;
+\ end=8 is already one frame past the audio and must be refused.
+: mk-edge    start, 1 16 fmt, 2 7 smpl, 8 1 data, finish, s" edge.wav" save-as ;
+: mk-past    start, 1 16 fmt, 2 8 smpl, 8 1 data, finish, s" past.wav" save-as ;
+: mk-8bit    start, 1 8 fmt,  8 1 data, finish,  s" b8.wav" save-as ;
+: mk-nofmt   start, 8 1 data, finish,            s" nofmt.wav" save-as ;
+: mk-nodata  start, 1 16 fmt, finish,            s" nodat.wav" save-as ;
+: mk-short   0 WP ! s" RIFF" tag, 0 l, finish,   s" tiny.wav" save-as ;
+: mk-notriff 0 WP ! s" JUNK" tag, 0 l, s" WAVE" tag, finish, s" nr.wav" save-as ;
+: mk-runover start, 1 16 fmt,  s" data" tag, 9999 l,  8 1 pcm, finish,
+             s" over.wav" save-as ;
+: build  mk-ok mk-stereo mk-junk mk-loop mk-badloop mk-edge mk-past mk-8bit
+         mk-nofmt mk-nodata mk-short mk-notriff mk-runover ;
+: ? ( c-addr u -- ) wav-load dup 0= if drop wav-why type ."  | " exit then
+    dup wav-frames . dup wav-rate . dup wav-chans .
+    dup wav-loop? if dup wav-loop-start . dup wav-loop-end . else ." - " then
+    ." | " wav-free ;
+: run  build
+    s" ok.wav" ?  s" st.wav" ?  s" junk.wav" ?  s" loop.wav" ?  s" bad.wav" ?
+    s" edge.wav" ?  s" past.wav" ?
+    s" b8.wav" ?  s" nofmt.wav" ?  s" nodat.wav" ?  s" tiny.wav" ?
+    s" nr.wav" ?  s" over.wav" ?  s" gone.wav" ?
+    ." depth=" depth . ;
+run
+bye
+WAVEOF
+wav_out=$( cd "$wav_dir" && BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth mk.fs 2>&1 )
+# Expected, in order: mono 8 frames; stereo 8 frames; junk chunk skipped;
+# loop kept; reversed loop dropped; then each refusal by name.
+wav_want='8 44100 1 - | 8 44100 2 - | 8 44100 1 - | 8 44100 1 2 6 | 8 44100 1 - | 8 44100 1 2 7 | 8 44100 1 - |'
+wav_want2='wav: need 16-bit samples'
+wav_want3='wav: no fmt chunk'
+wav_want4='wav: no data chunk'
+wav_want5='wav: too short to be a RIFF file'
+wav_want6='wav: not a RIFF file'
+wav_want7='wav: a chunk runs past the end of the file'
+wav_want8='wav: cannot read the file'
+if printf '%s' "$wav_out" | grep -qF "$wav_want" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want2" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want3" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want4" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want5" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want6" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want7" \
+   && printf '%s' "$wav_out" | grep -qF "$wav_want8" \
+   && printf '%s' "$wav_out" | grep -qF 'depth=0'; then
+    printf "  ${GREEN}PASS${NC}  wav-load decodes, skips unknown chunks, refuses the rest by name\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav-load decoding\n    Got: %s\n" "$(echo "$wav_out" | tail -3)"; ((failed++))
+fi
+
+# Many load/free cycles must stay correct: the file image is a SECOND heap
+# block, so wav-free has two things to release and a mistake there shows up as
+# a double-free or a corrupted later load. NOTE this does not detect a plain
+# leak -- there is no heap-usage introspection to assert against, and 500
+# copies of a 60-byte fixture would not exhaust anything. It is a stability
+# check, not a memory-accounting one.
+wav_leak=$( cd "$wav_dir" && printf 'require wavcore.fs\n: cyc s" ok.wav" wav-load dup 0= if drop false exit then dup wav-frames 8 <> if wav-free false exit then wav-free true ;\n: many true 500 0 ?do cyc 0= if drop false leave then loop ;\nmany . depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth 2>&1 )
+if printf '%s' "$wav_leak" | grep -q -- '-1 0'; then
+    printf "  ${GREEN}PASS${NC}  500 wav load/free cycles stay correct\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav load/free cycles\n    Got: %s\n" "$(echo "$wav_leak" | tail -2)"; ((failed++))
+fi
+
+# A refused loop must report -1 -1, not the numbers it just refused. Reporting
+# the rejected end back would hand a caller the very value that indexes past
+# the audio, and "no loop" would answer differently depending on HOW the file
+# was wrong (no smpl chunk, reversed range, or out of range).
+wav_noloop=$( cd "$wav_dir" && \
+    printf 'require wavcore.fs\n: e ( c-addr u -- ) wav-load dup wav-loop-start . dup wav-loop-end . wav-free ;\ns\" ok.wav\" e s\" bad.wav\" e s\" past.wav\" e s\" loop.wav\" e depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 20 $wav_forth 2>&1 )
+if printf '%s' "$wav_noloop" | grep -q -- '-1 -1 -1 -1 -1 -1 2 6 0'; then
+    printf "  ${GREEN}PASS${NC}  a refused loop reports -1 -1, not the value it refused\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused loop endpoints\n    Got: %s\n" "$(echo "$wav_noloop" | tail -2)"; ((failed++))
+fi
+
+# Accessors on a failed load (0) must be inert rather than dereference null.
+wav_null=$(printf 'require wavcore.fs\n0 wav-frames . 0 wav-rate . 0 wav-chans . 0 wav-bytes . 0 wav-data . 0 wav-loop? . 0 wav-free .\" null-ok\" depth .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+if printf '%s' "$wav_null" | grep -q '0 0 0 0 0 0 null-ok0'; then
+    printf "  ${GREEN}PASS${NC}  wav accessors are inert on a failed load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  wav accessors on null\n    Got: %s\n" "$(echo "$wav_null" | tail -2)"; ((failed++))
+fi
+
+rm -rf "$wav_dir"
 
 # =========================================================================
 section "Dynamic Memory (heap)"

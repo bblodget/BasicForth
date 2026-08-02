@@ -626,7 +626,9 @@ forth_lshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shlq %cl, (%r15)            # top = x1 << u
+    mov (%r15), %rax
+    shl %cl, %rax
+    mov %rax, (%r15)            # top = x1 << u
     ret
 
 # RSHIFT ( x1 u -- x2 )
@@ -636,7 +638,9 @@ forth_rshift:
 
     mov (%r15), %rcx            # rcx = shift count
     add $CELL, %r15             # pop count
-    shrq %cl, (%r15)            # top = x1 >> u (logical)
+    mov (%r15), %rax
+    shr %cl, %rax
+    mov %rax, (%r15)            # top = x1 >> u (logical)
     ret
 
 # 2/ ( x -- x/2 )
@@ -875,6 +879,128 @@ forth_ccall:
     lea -8(%rbp), %rsp
     pop %rbx
     pop %rbp
+    ret
+
+# (ccallf) ( iarg1..iargN farg1..fargM nint nfloat fnptr -- ret )
+# Like (ccall), but some parameters are 32-bit floats. The two ABIs fill
+# separate register files -- integers in RDI/RSI/RDX/RCX/R8/R9, floats in
+# XMM0-7 -- and each is assigned in its own order regardless of how they are
+# interleaved in the C prototype. So grouping the floats after the integers on
+# the Forth stack loses nothing, and saves passing a mask.
+#
+# A float argument is its IEEE-754 single-precision BIT PATTERN in the low 32
+# bits of a cell; >f32 builds one. Forth never holds a float, only its bits.
+#
+# Limits: 6 integer args, 8 float args, integer return only (a float return
+# comes back in XMM0, which this does not read).
+# (ccallf>f) is the same call with the result taken from XMM0 as f32 bits,
+# which is what makes the multi-float register path testable against libm.
+.global forth_ccallf
+forth_ccallf:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    xor %r13d, %r13d            # integer return
+    jmp .Lccallf_common
+.global forth_ccallf_f
+forth_ccallf_f:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    mov $1, %r13d               # float return
+.Lccallf_common:
+    mov (%r15), %rbx            # fnptr (top)
+    mov CELL(%r15), %r12        # nfloat
+    mov 2*CELL(%r15), %rax      # nint
+    add $3*CELL, %r15           # pop fnptr + nfloat + nint; args remain
+    # Floats sit on top: fargJ at [DSP + (nfloat-J)*8].
+    test %r12, %r12
+    jz .Lccallf_ints
+    movss -8(%r15,%r12,8), %xmm0
+    cmp $2, %r12
+    jb .Lccallf_ints
+    movss -16(%r15,%r12,8), %xmm1
+    cmp $3, %r12
+    jb .Lccallf_ints
+    movss -24(%r15,%r12,8), %xmm2
+    cmp $4, %r12
+    jb .Lccallf_ints
+    movss -32(%r15,%r12,8), %xmm3
+    cmp $5, %r12
+    jb .Lccallf_ints
+    movss -40(%r15,%r12,8), %xmm4
+    cmp $6, %r12
+    jb .Lccallf_ints
+    movss -48(%r15,%r12,8), %xmm5
+    cmp $7, %r12
+    jb .Lccallf_ints
+    movss -56(%r15,%r12,8), %xmm6
+    cmp $8, %r12
+    jb .Lccallf_ints
+    movss -64(%r15,%r12,8), %xmm7
+.Lccallf_ints:
+    # Integers sit under them: base = DSP + nfloat*8, iargK at base+(nint-K)*8.
+    # R11 holds the base because RCX/RDI/RSI are themselves argument registers.
+    lea (%r15,%r12,8), %r11
+    test %rax, %rax
+    jz .Lccallf_go
+    mov -8(%r11,%rax,8), %rdi   # arg1
+    cmp $2, %rax
+    jb .Lccallf_go
+    mov -16(%r11,%rax,8), %rsi  # arg2
+    cmp $3, %rax
+    jb .Lccallf_go
+    mov -24(%r11,%rax,8), %rdx  # arg3
+    cmp $4, %rax
+    jb .Lccallf_go
+    mov -32(%r11,%rax,8), %rcx  # arg4
+    cmp $5, %rax
+    jb .Lccallf_go
+    mov -40(%r11,%rax,8), %r8   # arg5
+    cmp $6, %rax
+    jb .Lccallf_go
+    mov -48(%r11,%rax,8), %r9   # arg6
+.Lccallf_go:
+    lea (%r15,%rax,8), %r15     # pop the integer args
+    lea (%r15,%r12,8), %r15     # pop the float args
+    and $-16, %rsp
+    mov %r12d, %eax             # AL = vector registers used (varargs contract)
+    call *%rbx
+    test %r13, %r13
+    jz 1f
+    movd %xmm0, %eax            # float return: hand back the f32 bit pattern
+1:  sub $CELL, %r15             # push the C return value
+    mov %rax, (%r15)
+    lea -24(%rbp), %rsp
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# >f32 ( n d -- bits )
+# The IEEE-754 single-precision bit pattern of n/d, as an integer. This is the
+# only place the engine touches floating point, and the result is a bit
+# pattern -- the Forth stack still never holds a float. d = 0 gives 0 rather
+# than an infinity, so a bad ratio is silence and not a wild value.
+.global forth_to_f32
+forth_to_f32:
+    mov (%r15), %rcx            # d
+    mov CELL(%r15), %rax        # n
+    add $CELL, %r15             # pop d
+    test %rcx, %rcx
+    jz 1f
+    cvtsi2ssq %rax, %xmm0
+    cvtsi2ssq %rcx, %xmm1
+    divss %xmm1, %xmm0
+    movd %xmm0, %eax
+    mov %rax, (%r15)
+    ret
+1:  movq $0, (%r15)
     ret
 
 # ---------- EMIT (Forth-level) ----------
@@ -5470,7 +5596,10 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
-DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
+DEFWORD dict_ccallf,      "(ccallf)",     forth_ccallf,      dict_ccall
+DEFWORD dict_ccallf_f,    "(ccallf>f)",   forth_ccallf_f,    dict_ccallf
+DEFWORD dict_to_f32,      ">f32",         forth_to_f32,      dict_ccallf_f
+DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_to_f32
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened

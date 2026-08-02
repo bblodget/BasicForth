@@ -986,6 +986,145 @@ forth_ccall:
     LDP X29, X30, [SP], #16
     RET
 
+// (ccallf) ( iarg1..iargN farg1..fargM nint nfloat fnptr -- ret )
+// Like (ccall), but some parameters are 32-bit floats. AAPCS64 fills separate
+// register files -- integers in X0-X7, floats in V0-V7 -- and assigns each in
+// its own order regardless of how they interleave in the C prototype, so
+// grouping the floats after the integers on the Forth stack loses nothing.
+//
+// A float argument is its IEEE-754 single-precision BIT PATTERN in the low 32
+// bits of a cell; >f32 builds one. Forth never holds a float, only its bits.
+//
+// Limits: 8 integer args, 8 float args, integer return only (a float return
+// comes back in V0, which this does not read).
+//
+// The addresses are computed with ADD before each load: the register-offset
+// form of a 32-bit LDR only accepts a shift of 0 or 2, not the LSL #3 that
+// stepping over 64-bit cells needs.
+// (ccallf>f) is the same call with the result taken from V0 as f32 bits,
+// which is what makes the multi-float register path testable against libm.
+.global forth_ccallf
+forth_ccallf:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STR X23, [SP, #-16]!
+    MOV X23, #0                 // integer return
+    B .Lccallf_common
+.global forth_ccallf_f
+forth_ccallf_f:
+    STP X29, X30, [SP, #-16]!
+    MOV X29, SP
+    STR X23, [SP, #-16]!
+    MOV X23, #1                 // float return
+.Lccallf_common:
+    LDR X9,  [X19]              // fnptr (top)
+    LDR X10, [X19, #CELL]       // nfloat
+    LDR X11, [X19, #(2*CELL)]   // nint
+    ADD X19, X19, #(3*CELL)     // pop fnptr + nfloat + nint; args remain
+    // Floats sit on top: fargJ at [DSP + (nfloat-J)*8].
+    CBZ X10, .Lccallf_ints
+    SUB X12, X10, #1
+    ADD X12, X19, X12, LSL #3
+    LDR S0, [X12]
+    CMP X10, #2
+    B.LO .Lccallf_ints
+    SUB X12, X10, #2
+    ADD X12, X19, X12, LSL #3
+    LDR S1, [X12]
+    CMP X10, #3
+    B.LO .Lccallf_ints
+    SUB X12, X10, #3
+    ADD X12, X19, X12, LSL #3
+    LDR S2, [X12]
+    CMP X10, #4
+    B.LO .Lccallf_ints
+    SUB X12, X10, #4
+    ADD X12, X19, X12, LSL #3
+    LDR S3, [X12]
+    CMP X10, #5
+    B.LO .Lccallf_ints
+    SUB X12, X10, #5
+    ADD X12, X19, X12, LSL #3
+    LDR S4, [X12]
+    CMP X10, #6
+    B.LO .Lccallf_ints
+    SUB X12, X10, #6
+    ADD X12, X19, X12, LSL #3
+    LDR S5, [X12]
+    CMP X10, #7
+    B.LO .Lccallf_ints
+    SUB X12, X10, #7
+    ADD X12, X19, X12, LSL #3
+    LDR S6, [X12]
+    CMP X10, #8
+    B.LO .Lccallf_ints
+    SUB X12, X10, #8
+    ADD X12, X19, X12, LSL #3
+    LDR S7, [X12]
+.Lccallf_ints:
+    // Integers sit under them: base = DSP + nfloat*8, iargK at base+(nint-K)*8.
+    ADD X13, X19, X10, LSL #3
+    CBZ X11, .Lccallf_go
+    SUB X12, X11, #1
+    LDR X0, [X13, X12, LSL #3]
+    CMP X11, #2
+    B.LO .Lccallf_go
+    SUB X12, X11, #2
+    LDR X1, [X13, X12, LSL #3]
+    CMP X11, #3
+    B.LO .Lccallf_go
+    SUB X12, X11, #3
+    LDR X2, [X13, X12, LSL #3]
+    CMP X11, #4
+    B.LO .Lccallf_go
+    SUB X12, X11, #4
+    LDR X3, [X13, X12, LSL #3]
+    CMP X11, #5
+    B.LO .Lccallf_go
+    SUB X12, X11, #5
+    LDR X4, [X13, X12, LSL #3]
+    CMP X11, #6
+    B.LO .Lccallf_go
+    SUB X12, X11, #6
+    LDR X5, [X13, X12, LSL #3]
+    CMP X11, #7
+    B.LO .Lccallf_go
+    SUB X12, X11, #7
+    LDR X6, [X13, X12, LSL #3]
+    CMP X11, #8
+    B.LO .Lccallf_go
+    SUB X12, X11, #8
+    LDR X7, [X13, X12, LSL #3]
+.Lccallf_go:
+    ADD X19, X19, X11, LSL #3   // pop the integer args
+    ADD X19, X19, X10, LSL #3   // pop the float args
+    BLR X9
+    CBZ X23, 1f
+    FMOV W0, S0                 // float return: hand back the f32 bit pattern
+1:  STR X0, [X19, #-CELL]!      // push the C return value
+    LDR X23, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// >f32 ( n d -- bits )
+// The IEEE-754 single-precision bit pattern of n/d, as an integer. This is the
+// only place the engine touches floating point, and the result is a bit
+// pattern -- the Forth stack still never holds a float. d = 0 gives 0 rather
+// than an infinity, so a bad ratio is silence and not a wild value.
+.global forth_to_f32
+forth_to_f32:
+    LDR X9, [X19], #CELL        // pop d
+    LDR X10, [X19]              // n
+    CBZ X9, 1f
+    SCVTF S0, X10
+    SCVTF S1, X9
+    FDIV S0, S0, S1
+    FMOV W11, S0                // writing W zeroes the upper half of X11
+    STR X11, [X19]
+    RET
+1:  STR XZR, [X19]
+    RET
+
 // ---------- EMIT (Forth-level) ----------
 // ( char -- )
 .global forth_emit
@@ -6037,7 +6176,10 @@ DEFWORD dict_fill32,      "fill32",       forth_fill32,      dict_defer_fetch
 DEFWORD dict_dlopen,      "(dlopen)",     forth_dlopen,      dict_fill32
 DEFWORD dict_dlsym,       "(dlsym)",      forth_dlsym,       dict_dlopen
 DEFWORD dict_ccall,       "(ccall)",      forth_ccall,       dict_dlsym
-DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_ccall
+DEFWORD dict_ccallf,      "(ccallf)",     forth_ccallf,      dict_ccall
+DEFWORD dict_ccallf_f,    "(ccallf>f)",   forth_ccallf_f,    dict_ccallf
+DEFWORD dict_to_f32,      ">f32",         forth_to_f32,      dict_ccallf_f
+DEFWORD dict_text_attr,   "(attr!)",      forth_text_attr,   dict_to_f32
 DEFWORD dict_otty,        "(otty?)",      forth_otty,        dict_text_attr
 DEFWORD dict_inc_opened,  "(inc-opened?)", forth_inc_opened, dict_otty
 DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened

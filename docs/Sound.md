@@ -51,22 +51,60 @@ with the SDL error message for when you want to know why.
 
 ## How it works
 
-`sound.fs` binds eight SDL3 calls via the FFI (see [FFI.md](FFI.md)) and
+`sound.fs` binds twelve SDL3 calls via the FFI (see [FFI.md](FFI.md)) and
 synthesizes samples in Forth — integer-only, signed 16-bit mono at 44100 Hz
 (SDL converts/resamples to whatever the device wants):
 
-- `snd-open?` → `SDL_Init(SDL_INIT_AUDIO)` +
-  `SDL_OpenAudioDeviceStream(default, spec, 0, 0)` — the single-call setup
-  path; passing a NULL callback makes it a push queue. Streams open paused,
-  so `SDL_ResumeAudioStreamDevice` starts it. Any step failing unwinds what
-  came before and returns false; `snd-open` is the same but aborts.
+- `snd-open?` → `SDL_Init(SDL_INIT_AUDIO)` + `SDL_OpenAudioDevice(default,
+  spec)`, then one `SDL_CreateAudioStream` + `SDL_BindAudioStream` per
+  channel, then `SDL_ResumeAudioDevice`. Any step failing unwinds what came
+  before and returns false; `snd-open` is the same but aborts.
 - `tone` → fills a heap buffer (`allocate`/`free`) with ±`snd-vol`, flipping
-  every `44100 / (2*freq)` samples, then `SDL_PutAudioStreamData`.
-- `snd-wait` → polls `SDL_GetAudioStreamQueued` every 10 ms until empty.
-- `snd-close` → `SDL_DestroyAudioStream` (closes the device it opened) +
+  every `44100 / (2*freq)` samples, then `ch-put` on `tone-ch`.
+- `ch-put` → `SDL_PutAudioStreamData` on that channel's stream, scaling into
+  a copy first if the channel's volume is below `snd-unity`.
+- `ch-queued` / `snd-wait` → `SDL_GetAudioStreamQueued`, polled every 10 ms.
+- `ch-stop` → `SDL_ClearAudioStream`.
+- `snd-close` → `SDL_DestroyAudioStream` per channel, `SDL_CloseAudioDevice`,
   `SDL_QuitSubSystem(SDL_INIT_AUDIO)` — subsystem-scoped, so it never tears
   down a live video session. (`sdl-close`'s full `SDL_Quit` ends audio too;
   close sound first, as `bounce` does.)
+
+### Why the plain device API, not `SDL_OpenAudioDeviceStream`
+
+The obvious setup call is `SDL_OpenAudioDeviceStream`, which opens a device
+and hands back a stream in one step — and that is what `sound.fs` used while
+it was single-stream. It cannot be used here. A device opened that way is
+welded to the stream it returned, and any later bind fails with:
+
+    Cannot change stream bindings on device opened with SDL_OpenAudioDeviceStream
+
+So mixing requires opening the device with `SDL_OpenAudioDevice` and creating
+and binding every stream explicitly. Nothing in the header says the two paths
+differ this way; it shows up only as a runtime error from
+`SDL_BindAudioStream`.
+
+### Channels
+
+The device holds `snd-channels` streams (default 16, ceiling 64), all bound to
+one logical device, and **SDL mixes them** — there is no mixer code here.
+Sounds on different channels play together; sounds queued on one channel play
+in sequence.
+
+`snd-alloc` hands out channels round-robin and **steals the least recently
+allocated** when all are busy, so a program that fires more sounds than it has
+channels loses its stalest rather than refusing the newest. It is round-robin
+rather than lowest-free because a channel only counts as busy once audio is
+queued on it — two allocations before either was given samples would otherwise
+both return channel 1.
+
+Channel 0 is reserved for `tone`, which is what keeps a run of plain tones
+playing in sequence exactly as it did before channels existed.
+
+Per-channel volume is applied by **scaling samples as they are queued**, into
+a copy so shared sample data is never modified. It is not `SDL_SetAudioStreamGain`,
+which takes a `float` — the FFI passes integers only, and a float argument
+goes in a different register file entirely (see [FFI.md](FFI.md)).
 
 Constants and the 12-byte `SDL_AudioSpec` layout are verified against the
 SDL3 headers by `tools/sdl3off.c`.
@@ -98,7 +136,22 @@ qemu sysroot); on the board, SDL3 must be in the Pumpkian image.
 
 ## Scope and what's next
 
-Current state: square waves only — the authentic 1980s BASIC `BEEP`. Possible
-next steps: other waveforms (triangle/noise), a note/duration music word
-(`PLAY "CDE"` style), mixing multiple channels, and sampled sound effects for
-games.
+Current state: square waves on mixing channels. Possible next steps: other
+waveforms (triangle/noise), a note/duration music word (`PLAY "CDE"` style),
+and **sampled sound**. `wavcore.fs` is the first half of that: it decodes
+16-bit PCM WAV files into sample handles (`help samples`). A `wav.fs` on top
+will play one through `ch-put`, which is what the channel layer was built for.
+Speech synthesis then sits above that as one more source of samples.
+
+`wavcore.fs` deliberately requires **nothing** — no FFI, no SDL. That is not
+tidiness: `require sound.fs` aborts on a machine with no libSDL3, which
+includes the aarch64 QEMU run, so a decoder living inside it would be
+untestable on half our architectures. Split out, the decoder's tests run
+everywhere and only playback skips.
+
+One limit worth knowing before building on this: audio is **pushed from your
+main loop**. SDL3 offers a pull callback, but a Forth word cannot serve as a C
+callback, so nothing tops up the queue except code you run. A long frame
+starves it and you hear a gap. Looping sound and streaming synthesis will each
+need a "service the queue" word called once a frame; a real audio thread would
+remove the constraint, and threading is a planned phase.
