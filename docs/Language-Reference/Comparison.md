@@ -150,6 +150,28 @@ halving).
 
     256 2 rshift .    \ 64
 
+## popcount ( x -- n )
+How many bits of `x` are set — 0 to 64. Also called the population count or
+Hamming weight.
+
+    7 popcount .      \ 3
+    255 popcount .    \ 8
+    -1 popcount .     \ 64   (every bit of a cell)
+
+Counting bits directly is worth reaching for when you can pack many small
+values into one cell and ask a question about all of them at once. Testing
+thirty-two 2-bit fields for zero costs a shift, an `or`, an `invert`, an `and`
+and one `popcount` — no loop, and the same work whether one field matches or
+all of them do.
+
+    \ how many of the 32 two-bit fields in x are 00?
+    : zero-fields ( x -- n )
+        dup 1 rshift or invert  $5555555555555555 and  popcount ;
+
+Write a mask with the `$` prefix rather than `[ hex ] … [ decimal ]`. The
+bracket form leaves `BASE` decimal whatever it was before, so loading the
+definition would quietly pull the rug from under someone working in hex.
+
 ## There is no `not`
 
 A reasonable thing to reach for, and deliberately absent. "Not" has two

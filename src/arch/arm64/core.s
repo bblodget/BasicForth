@@ -730,6 +730,21 @@ forth_invert:
     STR X9, [X19]
     RET
 
+// POPCOUNT ( x -- n )
+// Count the set bits in x. CNT counts per BYTE, so ADDV sums the eight
+// per-byte counts into one. V0 is caller-saved scratch; CNT/ADDV are
+// mandatory Advanced SIMD in ARMv8-A.
+.global forth_popcount
+forth_popcount:
+
+    LDR X9, [X19]
+    FMOV D0, X9
+    CNT V0.8B, V0.8B
+    ADDV B0, V0.8B
+    FMOV W9, S0
+    STR X9, [X19]
+    RET
+
 // LSHIFT ( x1 u -- x2 )
 // Logical left shift
 .global forth_lshift
@@ -6033,7 +6048,8 @@ DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
 DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
 DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
-DEFWORD dict_rot,        "rot",        forth_rot,         dict_invert
+DEFWORD dict_popcount,   "popcount",   forth_popcount,    dict_invert
+DEFWORD dict_rot,        "rot",        forth_rot,         dict_popcount
 DEFWORD dict_nip,        "nip",        forth_nip,         dict_rot
 DEFWORD dict_tuck,       "tuck",       forth_tuck,        dict_nip
 DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
