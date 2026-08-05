@@ -74,15 +74,18 @@ we'll make the job bigger at the end and check that the ratio survives.
 
 ## Two workers
 
-Each worker needs its own counter and its own place to start. Give them
-variables so we can re-aim them without rewriting the workers:
+Each worker needs its own counter and its own place to start. Name them with
+`value` so we can re-aim them without rewriting the workers:
 
-    variable stride
-    variable n0  variable n1  variable c0  variable c1
-    variable t0  variable t1
-    : w0  n0 @ stride @ (count) c0 ! ;
-    : w1  n1 @ stride @ (count) c1 ! ;
+    2 value stride
+    3 value n0    4 value n1
+    0 value c0    0 value c1
+    0 value t0    0 value t1
+    : w0  n0 stride (count) to c0 ;
+    : w1  n1 stride (count) to c1 ;
 
+A `value` says what it holds from the moment it exists — the workers are aimed
+at every second number already. Reading one takes no `@`, and `to` sets it.
 
 Each worker writes **its own** counter, exactly once, at the end. Type `next`.
 
@@ -100,8 +103,8 @@ nothing left to free them.
 
 ## Helpers that remember
 
-    variable failed
-    : (note) ( ior -- )  failed @ if drop exit then  failed ! ;
+    0 value failed
+    : (note) ( ior -- )  failed if drop exit then  to failed ;
     : spawn  ( xt -- t )  thread (note) ;
     : wait   ( t -- )     dup 0= if drop exit then  join (note) (note) ;
 
@@ -109,19 +112,30 @@ nothing left to free them.
 handle and remembers the ior. `wait` skips a handle of 0 — a thread that never
 started — and checks both halves of what `join` gives back.
 
+## Start two, join two
+
+Now the driver. Every start is matched by a wait, and only then do we look at
+whether anything went wrong:
+
     : run2 ( -- n )
-        0 failed !
-        ' w0 spawn t0 !   ' w1 spawn t1 !
-        t0 @ wait   t1 @ wait
-        failed @ throw
-        c0 @ c1 @ + ;
+        0 to failed
+        ' w0 spawn to t0   ' w1 spawn to t1
+        t0 wait   t1 wait
+        failed throw
+        c0 c1 + ;
+
+    run2 .        \ 17983
+
+It runs right now, because the workers were aimed the moment they were
+defined.
 
 ## Deal the numbers out
 
 The obvious split: one worker takes every second number starting at 3, the
-other every second number starting at 4.
+other every second number starting at 4. That is the deal the values already
+hold; naming it lets us put it back later.
 
-    : naive2  3 n0 !  4 n1 !  2 stride ! ;
+    : naive2  3 to n0  4 to n1  2 to stride ;
     naive2  run2 .        \ 17983
 
 Same answer as `serial` — the split is correct. Now time it:
@@ -147,7 +161,7 @@ threads, one core's worth of effort. Type `next`.
 Give each worker odd numbers by stepping over the evens entirely: start at 3
 and 5, step by 4.
 
-    : odds2  3 n0 !  5 n1 !  4 stride ! ;
+    : odds2  3 to n0  5 to n1  4 to stride ;
     odds2  run2 .         \ 17983
     time p2
 
@@ -158,26 +172,27 @@ split of the *input* is not an even split of the *work*.
 
 Same shape again — each with its own start, its own counter, its own handle:
 
-    variable n2  variable n3  variable c2  variable c3
-    variable t2  variable t3
-    : w2  n2 @ stride @ (count) c2 ! ;
-    : w3  n3 @ stride @ (count) c3 ! ;
+    0 value n2    0 value n3
+    0 value c2    0 value c3
+    0 value t2    0 value t3
+    : w2  n2 stride (count) to c2 ;
+    : w3  n3 stride (count) to c3 ;
 
 Nothing here is shared between workers. That is the whole trick. Type `next`.
 
 ## Run all four
 
     : run4 ( -- n )
-        0 failed !
-        ' w0 spawn t0 !   ' w1 spawn t1 !
-        ' w2 spawn t2 !   ' w3 spawn t3 !
-        t0 @ wait  t1 @ wait  t2 @ wait  t3 @ wait
-        failed @ throw
-        c0 @ c1 @ + c2 @ + c3 @ + ;
+        0 to failed
+        ' w0 spawn to t0   ' w1 spawn to t1
+        ' w2 spawn to t2   ' w3 spawn to t3
+        t0 wait  t1 wait  t2 wait  t3 wait
+        failed throw
+        c0 c1 + c2 + c3 + ;
 
 Starts 3, 5, 7, 9 stepping by 8 — four interleaved runs of odd numbers:
 
-    : odds4  3 n0 !  5 n1 !  7 n2 !  9 n3 !  8 stride ! ;
+    : odds4  3 to n0  5 to n1  7 to n2  9 to n3  8 to stride ;
     : p4  run4 drop ;
     odds4  run4 .         \ 17983
     time p4
@@ -216,16 +231,20 @@ reason to reach for threads at all.
 
 ## Sharing, and how to get it wrong
 
-Threads share all of memory. One `variable` is visible to every thread, which
-is how the counters come back.
+Threads share all of memory. One `value` — or one `variable` — is visible to
+every thread, which is how the counters come back.
 
-That also means two threads writing the same cell will lose data. `+!` is
-especially treacherous — it reads, adds, and writes, and another thread can
-slip in between:
+That also means two threads writing the same one will lose data. Adding to a
+shared total is the classic way to get bitten, because *add* is not one step:
+it reads, adds, and writes, and another thread can slip in between the read
+and the write. Both spellings have the flaw:
 
-    \ DON'T: two workers, one counter
-    \ : w0  ... total +! ;
-    \ : w1  ... total +! ;
+    \ DON'T: two workers, one total
+    \ : w0  ... total +! ;          \ variable
+    \ : w1  ... 1 +to total ;       \ value — same race, fewer clues
+
+`+to` is the more dangerous of the two only because it looks like a single
+act. Neither is atomic; nothing in Forth makes them so.
 
 Counts vanish, and never the same ones twice. Give each worker its own cell
 and add them up after `join`, as we did. Channels will make sharing safe
