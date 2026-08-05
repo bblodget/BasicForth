@@ -619,6 +619,42 @@ forth_invert:
     notq (%r15)
     ret
 
+# POPCOUNT ( x -- n )
+# Count the set bits in x, by the SWAR method: pairs, then nibbles, then the
+# multiply that sums all eight bytes into the top one.
+#
+# Deliberately NOT the POPCNT instruction. POPCNT is x86-64-v2, and we build
+# with no -march flag — every other primitive here is baseline x86-64, so
+# using it would quietly raise the CPU requirement for the whole system, and
+# an older machine would die on SIGILL with nothing to explain it. This costs
+# a handful of cycles that no caller will notice. (ARM64 can use CNT: unlike
+# POPCNT it is mandatory in ARMv8-A, so it raises nothing.)
+.global forth_popcount
+forth_popcount:
+
+    mov (%r15), %rax
+    mov %rax, %rdx
+    shr $1, %rdx
+    movabs $0x5555555555555555, %rcx
+    and %rcx, %rdx
+    sub %rdx, %rax                  # pairs: count of each 2 bits
+    movabs $0x3333333333333333, %rcx
+    mov %rax, %rdx
+    and %rcx, %rdx
+    shr $2, %rax
+    and %rcx, %rax
+    add %rdx, %rax                  # nibbles
+    mov %rax, %rdx
+    shr $4, %rdx
+    add %rdx, %rax
+    movabs $0x0F0F0F0F0F0F0F0F, %rcx
+    and %rcx, %rax                  # bytes
+    movabs $0x0101010101010101, %rcx
+    imul %rcx, %rax                 # sum of bytes lands in the top byte
+    shr $56, %rax
+    mov %rax, (%r15)
+    ret
+
 # LSHIFT ( x1 u -- x2 )
 # Logical left shift
 .global forth_lshift
@@ -5453,7 +5489,8 @@ DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
 DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
 DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
-DEFWORD dict_rot,        "rot",        forth_rot,         dict_invert
+DEFWORD dict_popcount,   "popcount",   forth_popcount,    dict_invert
+DEFWORD dict_rot,        "rot",        forth_rot,         dict_popcount
 DEFWORD dict_nip,        "nip",        forth_nip,         dict_rot
 DEFWORD dict_tuck,       "tuck",       forth_tuck,        dict_nip
 DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck

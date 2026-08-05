@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Added: `popcount` — how many bits of a cell are set
+
+- `popcount ( x -- n )`, 0 to 64. The reason to want it is packing: thirty-two
+  2-bit fields fit in a cell, and asking "how many are zero" costs a shift, an
+  `or`, an `invert`, an `and` and one `popcount` — no loop, and the same work
+  whether one field matches or all of them do. `help popcount` shows the idiom.
+- **x86 does NOT use the `POPCNT` instruction.** It is x86-64-v2, we build with
+  no `-march` flag, and every other primitive here is baseline x86-64 — so
+  using it would quietly raise the CPU requirement of the whole system, and an
+  older machine would die on `SIGILL` with nothing to explain it. The SWAR
+  sequence costs a handful of cycles instead, ~10% on a benchmark that calls it
+  in a tight loop and nothing at all anywhere else.
+- ARM64 *does* use the hardware `CNT`, because unlike `POPCNT` it is mandatory
+  Advanced SIMD in ARMv8-A and raises nothing. `CNT` counts per byte, so `ADDV`
+  sums the lanes. Both files say why they differ.
+
+### Added: `examples/dice.fs` — a threaded Monte Carlo simulation
+
+- Throw a d4 231 times, count the 1s, repeat a billion times, report the most
+  ever seen. A billion battles runs in about 40 seconds on 8 cores.
+- It is really three lessons about making threaded code fast, in the order the
+  gains actually arrive: giving each worker its **own cache line** (a shared
+  RNG seed made 4 threads run 4x *slower* than 1, with no lock anywhere in
+  sight), then **batching 32 throws into one 64-bit value** and counting them
+  with `popcount` (~20x), and only then the threads themselves (~11x).
+- And a lesson in verifying an optimisation. The batched version passed a
+  bit-exact check against a naive counter, and reproduced the mean and standard
+  deviation exactly — while inflating the far tail by ~50%, the only region the
+  program measures. xorshift64 is F2-linear, so 32 fields sliced out of one
+  output are not independent. splitmix64's output mix is what makes batching
+  legitimate; `battle-slow` stays in the file as the reference.
+
 ### Fixed: the Concurrency lesson could freeze at the step that defines `run2`
 
 - The lesson showed `run2` four steps before anything aimed the workers, and
