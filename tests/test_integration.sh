@@ -423,8 +423,9 @@ assert_output "session survives uncaught throw" \
     "$(printf '77 throw\n1 2 + .')"  "3  ok"
 assert_output "uncaught abort stays silent" \
     "$(printf '1 2 3 abort\n5 5 + . depth .')"  "10 0"
-assert_output "catch intercepts abort\" as -2" \
-    ": risky true abort\" boom\" ; ' risky catch ."  "boom-2"
+# The message ends its own line, so the throw code lands on the next one.
+assert_result "catch intercepts abort\" as -2" \
+    ": risky true abort\" boom\" ; ' risky catch ."  "$(printf 'boom\n-2')"
 assert_output "nested catch rethrows outward" \
     ": inner 7 throw ; : outer ['] inner catch 100 + throw ; ' outer catch ."  "107"
 assert_output "throw across evaluate restores source" \
@@ -1840,6 +1841,31 @@ assert_output "abort recovers"     '1 2 abort 3 .'                   "> "
 # ABORT"
 assert_output 'abort" true'        ': test true abort" oops" ; test' "oops"
 assert_output 'abort" false'       ': test false abort" oops" 42 ; test .' "42"
+
+# ABORT" OUTSIDE a definition.  It is IMMEDIATE, so with no interpreting
+# branch it used to RUN at the prompt: POSTPONE its code into the dictionary
+# where nothing would call it, and return -- no message, no abort, and the
+# flag left on the stack.  That last part is what made it dangerous rather
+# than merely useless: `allocate abort" ..." value buf` bound the IOR and
+# orphaned the address, so the next store went to whatever 0 points at.
+# assert_result throughout: every expectation here also appears in the input.
+assert_result 'abort" interpreting, true flag, prints'  \
+    '-1 abort" interp-boom"'                            "interp-boom"
+assert_result 'abort" interpreting, true flag, aborts the line'  \
+    "$(printf '1 2 -1 abort" x" 3 4\ndepth .')"         "0"
+assert_result 'abort" interpreting, false flag, eats the flag'  \
+    '0 abort" nope" depth .'                            "0"
+assert_result 'abort" interpreting, false flag, emits no code'  \
+    'here 0 abort" nope" here = .'                      "-1"
+# The whole reason this matters: the everyday allocate idiom at a file's top
+# level.  Broken, this bound 0 and left the address behind (0 1).
+assert_result 'abort" interpreting binds allocate address, not ior'  \
+    '64 allocate abort" oom" value b1  b1 0<> . depth .'  "-1 0"
+# The message has to pay the owed newline like every other error; without the
+# cr it ran straight into the next prompt ("oops> ").  The following line's
+# output can only start a line of its own if the newline was paid.
+assert_result 'abort" message ends the line'  \
+    "$(printf ': t -1 abort" oops" ;\nt\n." tail" cr')"  "$(printf 'oops\ntail')"
 
 # >NUMBER
 assert_output ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
