@@ -877,11 +877,18 @@ docs/Graphics.md for the API.
   at any scale above 1 (the first draft of the docs example had exactly that
   bug). Named for what it returns, not `gotoxy`: `at-xy` already moves the
   terminal cursor, and this moves nothing.
-- [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
-  `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
-  `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
-  soundless via `snd-open? drop`); wall blips in bounce.fs; dummy-driver
-  integration tests; docs/Sound.md + `man sound`
+- [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-close`,
+  `tone` (queued integer square wave, S16 mono 44100), `beep`, `snd-wait`,
+  `snd-vol`; no-ops when the device isn't open (games degrade to soundless
+  via `snd-open drop`); wall blips in bounce.fs; dummy-driver integration
+  tests; docs/Sound.md + `man sound`.
+  **`snd-open?` retired 2026-08-06** (branch sound-api): `snd-open ( -- ior )`
+  now, 0 = success, idempotent, with `snd-ready?` as the real predicate and
+  `snd-why` for SDL's reason. The `?` had read as a question while the word
+  opened — asking it opened a second device and leaked the first — and its
+  true-means-success flag fought `abort"`, which fires on true. Default
+  `snd-channels` 16 → 64 at the same time; measured cost of the extra 48
+  streams is ~100 KB and <1 µs per `snd-pump`.
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 

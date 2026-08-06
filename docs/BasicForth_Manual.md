@@ -710,7 +710,7 @@ keeps running while they play:
 
 `tone ( freq ms -- )` returns immediately; `snd-wait` blocks until the queue
 drains (use it before `bye`). With no device open the sound words are silent
-no-ops — games open with `snd-open? drop` to run soundless on a system with
+no-ops — games open with `snd-open drop` to run soundless on a system with
 no audio instead of aborting. See `help sound` and `docs/Sound.md`; the
 bouncing-ball demo `examples/bounce.fs` blips off the walls.
 
