@@ -57,7 +57,7 @@ variable b-done
 
 : bounce ( -- )
     4 to sdl-scale  b-w b-h sdl-open
-    snd-open? drop                     \ no audio -> blips are no-ops
+    snd-open drop                      \ no audio -> blips are no-ops
     40 b-x !  30 b-y !  4 b-dx !  3 b-dy !
     false b-done !
     begin  b-frame  b-events  b-step  b-done @  until

@@ -25,8 +25,9 @@ require sound.fs      \ the SDL3 audio backend (pulls in ffi.fs itself)
 
 | Word | Stack | Meaning |
 |------|-------|---------|
-| `snd-open` | ( -- ) | open the default playback device, start it; aborts if none |
-| `snd-open?` | ( -- flag ) | tolerant open: false if the system has no audio |
+| `snd-open` | ( -- ior ) | open the default playback device, start it; 0 = success |
+| `snd-ready?` | ( -- flag ) | is a device open right now? |
+| `snd-why` | ( -- c-addr u ) | why the last `snd-open` failed |
 | `tone` | ( freq ms -- ) | queue a square-wave tone; returns at once |
 | `beep` | ( -- ) | a short blip (880 Hz, 60 ms) |
 | `snd-wait` | ( -- ) | block until everything queued has played |
@@ -35,7 +36,7 @@ require sound.fs      \ the SDL3 audio backend (pulls in ffi.fs itself)
 
 ```
 > require sound.fs
-> snd-open
+> snd-open drop
 > 440 200 tone        \ concert A for 200 ms — returns immediately
 > beep
 > snd-wait snd-close
@@ -45,9 +46,14 @@ require sound.fs      \ the SDL3 audio backend (pulls in ffi.fs itself)
 loop keeps animating while a sound plays, and back-to-back tones play
 back-to-back. Use `snd-wait` before `bye` in a script, or the last tone is cut
 off. With no device open, `tone`/`beep`/`snd-wait` are silent no-ops — so a
-game opens sound with `snd-open? drop` and simply runs soundless on a system
-with no working audio (headless, no sound server), while `snd-open` aborts
-with the SDL error message for when you want to know why.
+game writes `snd-open drop` and simply runs soundless on a system with no
+working audio (headless, no sound server). `snd-open` returns an **ior** — 0
+for success, like `allocate` and `open-file` — so the caller who *requires*
+sound writes `snd-open abort" no audio device"`, and the one who wants the
+reason writes `snd-open if snd-why type cr then`. One word, no `0=` anywhere.
+
+Opening an already-open device succeeds and does nothing, so a redundant call
+(an `on-start` hook after a dirty `:e`) costs nothing and disturbs nothing.
 
 ## How it works
 
@@ -55,10 +61,12 @@ with the SDL error message for when you want to know why.
 synthesizes samples in Forth — integer-only, signed 16-bit mono at 44100 Hz
 (SDL converts/resamples to whatever the device wants):
 
-- `snd-open?` → `SDL_Init(SDL_INIT_AUDIO)` + `SDL_OpenAudioDevice(default,
+- `snd-open` → `SDL_Init(SDL_INIT_AUDIO)` + `SDL_OpenAudioDevice(default,
   spec)`, then one `SDL_CreateAudioStream` + `SDL_BindAudioStream` per
-  channel, then `SDL_ResumeAudioDevice`. Any step failing unwinds what came
-  before and returns false; `snd-open` is the same but aborts.
+  channel, then `SDL_ResumeAudioDevice`. Any step failing snapshots
+  `SDL_GetError` for `snd-why`, unwinds what came before, and returns a
+  non-zero ior. The snapshot has to happen *before* the unwind: `snd-close`
+  calls `SDL_QuitSubSystem`, which would replace the message.
 - `tone` → fills a heap buffer (`allocate`/`free`) with ±`snd-vol`, flipping
   every `44100 / (2*freq)` samples, then `ch-put` on `tone-ch`.
 - `ch-put` → `SDL_PutAudioStreamData` on that channel's stream, scaling into
@@ -86,7 +94,7 @@ differ this way; it shows up only as a runtime error from
 
 ### Channels
 
-The device holds `snd-channels` streams (default 16, ceiling 64), all bound to
+The device holds `snd-channels` streams (default 64, the ceiling), all bound to
 one logical device, and **SDL mixes them** — there is no mixer code here.
 Sounds on different channels play together; sounds queued on one channel play
 in sequence.
@@ -116,7 +124,7 @@ include examples/bounce.fs    \ requires sdl3.fs + sound.fs itself
 bounce                \ blips on every wall hit
 ```
 
-`bounce` opens sound alongside the window (`snd-open? drop` — soundless if
+`bounce` opens sound alongside the window (`snd-open drop` — soundless if
 there's no audio) and `(b-axis)` plays a 660 Hz blip whenever the square
 reverses. `bounce-frames` (the automated-test variant) never opens sound, so
 its blips are no-ops.
@@ -127,7 +135,7 @@ The integration tests use SDL's **dummy audio driver**
 (`SDL_AUDIO_DRIVER=dummy`), so no sound hardware is needed: `tone` before
 opening must leave the stack depth unchanged (the no-op path), then open,
 tone (aborts if the queue write fails), zero/negative durations as no-ops,
-close. A second case sets a bogus `SDL_AUDIO_DRIVER` and checks `snd-open?`
+close. A second case sets a bogus `SDL_AUDIO_DRIVER` and checks `snd-open`
 returns false without aborting; a third checks `bye` with the device still
 open actually ends the process (SDL spawns threads, so `platform_exit` must
 use `exit_group` — see [Platform_Layer.md](Platform_Layer.md)). See the FFI

@@ -5,7 +5,7 @@ it. Sounds on *different* channels play **together**; sounds queued on *one*
 channel play **one after another**. Load the backend with `require sound.fs`.
 
     require sound.fs
-    snd-open
+    snd-open drop
     440 300 1 tone-on        \ channel 1
     660 300 2 tone-on        \ channel 2 -- both sound at once
     snd-wait snd-close
@@ -15,7 +15,7 @@ still plays in sequence. Ask for another channel when you want overlap.
 
 At a glance:
 
-    snd-channels     ( -- n )          how many channels (set before snd-open)
+    snd-channels     ( -- n )          how many channels (64; rarely changed)
     snd-max-channels ( -- n )          hard ceiling, 64
     tone-ch          ( -- 0 )          the channel `tone` uses
     snd-alloc        ( -- ch )         a free channel, else steal the oldest
@@ -39,13 +39,26 @@ At a glance:
     AUDIO_U8         ( -- fmt )        8-bit unsigned samples
 
 ## snd-channels ( -- n )
-How many channels the device has, default 16. Read **once**, when `snd-open`
-runs, so set it first:
+How many channels the device has. It defaults to 64 — the ceiling — because
+channels cost almost nothing: 64 instead of 16 measures at about 100 KB of
+memory and under a microsecond per `snd-pump`. So most programs never touch
+this.
 
-    32 to snd-channels   snd-open
+The reason to **shrink** it is to force channel reuse cheaply: filling every
+channel to exercise `snd-alloc`'s stealing takes 10 ms at 4 channels and
+218 ms at 64, which is why the test suite turns it down.
 
-Clamped into `2 .. snd-max-channels`. Channels are cheap — one SDL stream
-each — so raise it freely if a program layers many sounds.
+Read **once**, when `snd-open` runs, and `snd-open` on an already-open device
+does nothing — so changing it needs an explicit close, and the close goes
+**first**, while the channels being closed are still the ones that are open:
+
+    snd-close   4 to snd-channels   snd-open drop
+
+(`snd-close` clears every slot regardless, so the other order no longer leaks
+streams — but it does orphan anything still playing on a channel above the new
+count, which the `ch-` words can no longer reach.)
+
+Clamped into `2 .. snd-max-channels`.
 
 ## snd-max-channels ( -- n )
 The hard ceiling on `snd-channels`, 64.
@@ -227,7 +240,7 @@ name a format when queueing raw samples with `ch-put`.
 ## Notes
 
 Every one of these is a silent no-op with no device open, so a program runs
-unchanged on a machine with no working audio (`snd-open? drop`).
+unchanged on a machine with no working audio (`snd-open drop`).
 
 ## See Also
 

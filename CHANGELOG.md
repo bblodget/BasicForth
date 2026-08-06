@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### Changed: `snd-open` returns an ior, and `snd-open?` is gone
+
+- **`snd-open ( -- ior )`** — 0 for success, like `allocate` and `open-file`.
+  One word now serves both callers, with no `0=` in either:
+
+      snd-open drop                     \ don't care; soundless is fine
+      snd-open abort" no audio device"  \ sound is a requirement
+      snd-open if snd-why type cr then  \ handle it, with SDL's own reason
+
+- **`snd-open?` is deleted.** Its `?` read as a question while the word
+  actually *opened*, and both halves of that mistake drew blood. Calling it to
+  ask "is sound on?" opened a **second device and leaked the first** —
+  measured at 21, 25, 29 across three calls, with `snd-close` reclaiming only
+  the last. And its true-means-success flag fought `abort"`, which fires on
+  true: `snd-open? abort" no sound"` aborted precisely when the open
+  *succeeded*, and let a real failure through silently. An ior gets both right
+  because the interesting case is non-zero either way.
+- **`snd-ready? ( -- flag )`** is the question it was mistaken for.
+- **`snd-why ( -- c-addr u )`** gives SDL's reason for the last failure, the
+  detail an opaque ior cannot carry — the same shape as `wav-load`/`wav-why`.
+  The message is *copied* at the moment of failure: `SDL_GetError` is only
+  valid until the next SDL call, and every failure path runs `snd-close`,
+  whose `SDL_QuitSubSystem` would replace it.
+- **Opening an already-open device succeeds and does nothing.** A redundant
+  call is now free — an `on-start` hook runs twice after a dirty `:e` — where
+  before it leaked. Deliberately a guard rather than a close-then-open, which
+  would clear every queue, reset every volume and pop the device; the real
+  reopen is spelled `snd-close snd-open`.
+- Closes a decision `docs/Exceptions.md` had recorded as deferred on the
+  grounds that `?`-variants "cost nothing".
+
+### Fixed: `snd-close` left dangling stream handles after a `snd-channels` shrink
+
+- `snd-close` walked `snd-channels` slots, but `snd-channels` is a *value* the
+  caller can write. Shrink it while a device is open and the tail of the table
+  falls outside its own cleanup: `snd-open drop  4 to snd-channels  snd-close`
+  destroyed 4 streams and left **60 stale handles** in a table this word
+  promises to empty.
+- Scope, measured rather than assumed: it is **not** a memory leak — the
+  `SDL_QuitSubSystem` at the end of `snd-close` frees every remaining audio
+  object, and 50 open/shrink/close cycles move RSS by nothing. Nor does
+  touching one fault today: SDL rejects the freed pointer and `ch-queued`
+  reads 0. What is left is 60 dangling handles and a broken invariant, with
+  the not-faulting part being SDL's defensiveness rather than a contract.
+- It now walks `snd-max-channels` — what the table is sized to, and what the
+  comment above it already claimed ("a fixed ceiling means snd-close can
+  always clear every slot"). `(ch-reset)` had it right; only the close path
+  used the mutable bound.
+- Found reviewing the `snd-channels` default change — and the shrink-then-close
+  order was the one this changelog's own first draft recommended. The docs now
+  put `snd-close` **before** the change, which also avoids orphaning anything
+  still playing above the new count.
+
+### Changed: `snd-channels` now defaults to 64, the ceiling
+
+- Measured rather than assumed. Against 16: **+104 KB** peak RSS, identical
+  open time and CPU over three seconds of playback, and `snd-pump` at 0.94 µs
+  instead of 0.25 µs — 3.8× on a ratio, 0.006% of a frame at 60 fps. The
+  per-channel Forth tables were already sized at `snd-max-channels`, so the
+  only real cost is the extra SDL streams.
+- `snd-alloc` therefore never has to steal in practice, and nobody has to know
+  the knob exists. It survives for the case that actually wants it: shrinking
+  to force channel reuse in a test costs 10 ms at 4 channels against 218 ms
+  at 64.
+
 ### Changed: `free` on a null address now succeeds
 
 - **`0 free` returned ior 22 and now returns 0**, doing nothing — the same as

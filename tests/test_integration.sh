@@ -1133,18 +1133,20 @@ if [[ "$FORTH" == *qemu* ]]; then
 elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
 else
-    snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open? . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_out" | grep -q '0 -1 0 put-ok'; then
+    if printf '%s' "$snd_out" | grep -q '0 0 0 put-ok'; then
         printf "  ${GREEN}PASS${NC}  SDL3 audio open+tone (queued PCM via dummy audio driver)\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 audio open+tone\n    Got: %q\n" "$snd_out"; ((failed++))
     fi
-    # No working audio (bogus driver): snd-open? must return false without
-    # aborting, and tone must stay a no-op — a game degrades to soundless.
-    snd_na=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? . 300 50 tone depth . .\" na-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # No working audio (bogus driver): snd-open must report a non-zero ior
+    # without aborting, snd-why must say why, and tone must stay a no-op — a
+    # game degrades to soundless. The ior is 1 here; only zero/non-zero is
+    # contractual, so the assertion also accepts the message being present.
+    snd_na=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open 0<> . snd-ready? . 300 50 tone depth . snd-why type .\" na-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=nosuchdriver BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_na" | grep -q '0 0 na-ok'; then
+    if printf '%s' "$snd_na" | grep -q -- '-1 0 0 .*not available.*na-ok'; then
         printf "  ${GREEN}PASS${NC}  SDL3 audio unavailable -> soundless no-op\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 audio unavailable -> soundless no-op\n    Got: %q\n" "$snd_na"; ((failed++))
@@ -1166,7 +1168,7 @@ else
     # so tone's own `snd-stream 0=` guard could not see it, and the next note
     # wrote into freed memory — a core dump inside SDL's audio thread, well
     # away from anything Forth could report.
-    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
+    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open drop\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$mix_a" | grep -q '0 audio-ok'; then
         printf "  ${GREEN}PASS${NC}  sdl-close leaves audio alive (quits only SDL_INIT_VIDEO)\n"; ((passed++))
@@ -1176,7 +1178,7 @@ else
     # The mirror, which already held: snd-close quits only SDL_INIT_AUDIO, so
     # the window keeps drawing. Reads the pixel back to prove the surface is
     # still live rather than merely that nothing crashed.
-    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
+    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open drop\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$mix_b" | grep -q '16711680' && printf '%s' "$mix_b" | grep -q '0 video-ok'; then
         printf "  ${GREEN}PASS${NC}  snd-close leaves the window drawable (quits only SDL_INIT_AUDIO)\n"; ((passed++))
@@ -1188,7 +1190,7 @@ else
     # The point of channels: sounds on DIFFERENT channels play together.
     # tone-on puts two tones on channels 1 and 2, and both must report queued
     # audio at once, with the tone channel untouched.
-    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_mix" | grep -q -- '-1 -1 0 0 -1 0 mix-ok'; then
         printf "  ${GREEN}PASS${NC}  channels mix; ch-stop stops only its own channel\n"; ((passed++))
@@ -1201,7 +1203,7 @@ else
     # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
     # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
     # land on some other channel. Dark Star's siren sweep depends on this.
-    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
         printf "  ${GREEN}PASS${NC}  bare tone still sequences on the tone channel\n"; ((passed++))
@@ -1212,7 +1214,7 @@ else
     # snd-alloc is round-robin, never hands back tone-ch, and steals the OLDEST
     # channel once they are all busy. Filling every channel with a long tone
     # and allocating twice must give 1 then 2 -- the two least recently used.
-    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open? drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_alloc" | grep -q '1 2 3 1 2 alloc-ok'; then
         printf "  ${GREEN}PASS${NC}  snd-alloc round-robins, then steals the oldest\n"; ((passed++))
@@ -1221,7 +1223,7 @@ else
     fi
 
     # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
-    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open? drop snd-channels . snd-close 999 to snd-channels snd-open? drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open? drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open drop snd-channels . snd-close 999 to snd-channels snd-open drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
         printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
@@ -1229,9 +1231,60 @@ else
         printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
     fi
 
+    # snd-close must clear EVERY slot, not just the first snd-channels of
+    # them. snd-channels is user-writable, so shrinking it while a device is
+    # open once hid the tail from its own cleanup: open 64, drop to 4, close,
+    # and 60 handles stayed in the table pointing at destroyed streams.
+    # This counts non-null handles, which is the invariant snd-close states
+    # for itself -- NOT proof that streams leaked, because SDL_QuitSubSystem
+    # frees them (RSS is flat over 50 such cycles). The defect is the dangling
+    # handles; the ior and (snd-dev) both look healthy throughout.
+    snd_shrink=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: live 0 snd-max-channels 0 do i cells (ch-streams) + @ if 1+ then loop ;\n: t snd-open drop live . 4 to snd-channels snd-close live . snd-open drop live . snd-close live . .\" shrink-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_shrink" | grep -q '64 0 4 0 shrink-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-close clears every slot after a shrink\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-close leaves streams after a shrink\n    Got: %q\n" "$snd_shrink"; ((failed++))
+    fi
+
+    # Opening an already-open device SUCCEEDS and changes nothing. The device
+    # handle is the observable that actually moves: before the guard, three
+    # opens gave three devices (21, 25, 29) and snd-close reclaimed only the
+    # last, leaking two devices and their streams. Asserting on the ior alone
+    # would pass against the leaking version, since that returned success too.
+    snd_idem=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value D1\n: t snd-open . (snd-dev) to D1 snd-open . (snd-dev) D1 = . snd-open . (snd-dev) D1 = . snd-ready? . snd-close snd-ready? . .\" idem-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_idem" | grep -q -- '0 0 -1 0 -1 -1 0 idem-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open is idempotent (no second device)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-open idempotence\n    Got: %q\n" "$snd_idem"; ((failed++))
+    fi
+
+    # A redundant open must not disturb what is already playing. This is the
+    # reason the guard exists rather than a close-then-open: an on-start hook
+    # runs twice after a dirty :e, and re-opening would silence the game.
+    snd_keep=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 100 3 ch-vol! 440 3000 3 tone-on 3 ch-playing? . 3 ch-vol@ . snd-open drop 3 ch-playing? . 3 ch-vol@ . .\" keep-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_keep" | grep -q -- '-1 100 -1 100 keep-ok'; then
+        printf "  ${GREEN}PASS${NC}  a redundant snd-open keeps audio and volume\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  redundant snd-open disturbs playback\n    Got: %q\n" "$snd_keep"; ((failed++))
+    fi
+
+    # Both idioms the ior exists for. `drop` runs on regardless; `abort"`
+    # stops only on failure — and on a working device must NOT fire, which is
+    # the half the old true-means-success flag got backwards.
+    snd_idiom=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open abort\" no audio device\" .\" survived-abort-idiom \" snd-open drop depth . snd-close .\" idiom-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_idiom" | grep -q 'survived-abort-idiom 0 idiom-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open abort\" does not fire on success\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-open abort\" idiom\n    Got: %q\n" "$snd_idiom"; ((failed++))
+    fi
+
     # Volume clamps to 0..snd-unity, and an out-of-range channel is inert
     # rather than a wild dictionary write.
-    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_vol" | grep -q '256 256 0 256 0 vol-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-vol clamps; out-of-range channels are inert\n"; ((passed++))
@@ -1243,7 +1296,7 @@ else
     # ch-put must hand the bytes over untouched: the same loaded sound can be
     # playing on several channels, and the queued byte count must not depend on
     # the volume either. 1000 and -1000 (65536-1000 = 64536 through w@).
-    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open? drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . 4 ch-vol@ . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . 4 ch-vol@ . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_scale" | grep -q '1000 64536 -1 64 scale-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-put passes samples through; volume is SDL gain\n"; ((passed++))
@@ -1255,7 +1308,7 @@ else
     # recorded volume alone so it can be restored -- and a hard stop mid-fade
     # must restore it too, or the next sound on that channel plays faint for
     # no visible reason.
-    ch_fade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 200 1 ch-vol! 440 3000 1 tone-on ;\n: b 60 1 ch-fade 1 ch-vol@ . 20 ms snd-pump 1 ch-playing? . ;\n: c 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: d 200 2 ch-vol! 440 3000 2 tone-on 60 2 ch-fade ;\n: e 20 ms snd-pump 2 ch-stop 2 ch-vol@ . .\" fade-ok\" snd-close ;\na b c d e\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_fade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 200 1 ch-vol! 440 3000 1 tone-on ;\n: b 60 1 ch-fade 1 ch-vol@ . 20 ms snd-pump 1 ch-playing? . ;\n: c 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: d 200 2 ch-vol! 440 3000 2 tone-on 60 2 ch-fade ;\n: e 20 ms snd-pump 2 ch-stop 2 ch-vol@ . .\" fade-ok\" snd-close ;\na b c d e\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_fade" | grep -q -- '200 -1 0 200 200 fade-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-fade stops the channel and restores the volume\n"; ((passed++))
@@ -1272,7 +1325,7 @@ else
     # The observable in every case is whether a NEW sound survives being pumped
     # past the old deadline -- ch-vol@ cannot see any of it, because a fade
     # moves the GAIN and never the recorded volume.
-    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open? drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f snd-alloc to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f snd-alloc to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_early" | grep -q -- '-1 -1 256 -1 256 early-ok'; then
         printf "  ${GREEN}PASS${NC}  a fade dies with its sound, not with its deadline\n"; ((passed++))
@@ -1284,7 +1337,7 @@ else
     # while fading must survive the fade ending. (Snapshotting the volume at
     # ch-fade time and writing it back on cancel silently undoes the change --
     # the setting reverts to whatever it was when the fade started.)
-    ch_volfade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 200 1 ch-vol! 440 3000 1 tone-on 400 1 ch-fade ;\n: b 50 ms snd-pump 100 1 ch-vol! 1 ch-vol@ . ;\n: c 440 3000 1 tone-on 1 ch-vol@ . ;\n: d 180 2 ch-vol! 440 3000 2 tone-on 100 2 ch-fade 20 ms snd-pump 90 2 ch-vol! 200 ms snd-pump 2 ch-vol@ . .\" volfade-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_volfade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 200 1 ch-vol! 440 3000 1 tone-on 400 1 ch-fade ;\n: b 50 ms snd-pump 100 1 ch-vol! 1 ch-vol@ . ;\n: c 440 3000 1 tone-on 1 ch-vol@ . ;\n: d 180 2 ch-vol! 440 3000 2 tone-on 100 2 ch-fade 20 ms snd-pump 90 2 ch-vol! 200 ms snd-pump 2 ch-vol@ . .\" volfade-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_volfade" | grep -q '100 100 90 volfade-ok'; then
         printf "  ${GREEN}PASS${NC}  a volume set during a fade survives the fade ending\n"; ((passed++))
@@ -1298,7 +1351,7 @@ else
     # is an audible blip in the middle of a fade. Setting the SAME volume
     # half-way through a fade must leave the gain exactly where it was.
     # (0.5 = 1056964608, 1.0 = 1065353216.)
-    ch_jump=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value G\n: a snd-open? drop 256 1 ch-vol! 440 9000 1 tone-on 1000 1 ch-fade ;\n: b 500 ms snd-pump 1 (ch-gain@) to G G 1065353216 < . ;\n: c 256 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . ;\n: d 120 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . .\" jump-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_jump=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value G\n: a snd-open drop 256 1 ch-vol! 440 9000 1 tone-on 1000 1 ch-fade ;\n: b 500 ms snd-pump 1 (ch-gain@) to G G 1065353216 < . ;\n: c 256 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . ;\n: d 120 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . .\" jump-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_jump" | grep -q -- '-1 -1 256 -1 120 jump-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-vol! during a fade records without jumping the gain\n"; ((passed++))
@@ -1314,7 +1367,7 @@ else
     # values order exactly as the values do).
     # A 10-second fade decays only ~0.2% over the 20 ms here, so a gain that
     # has fallen below 0.5 can only have come from the volume change.
-    ch_ramp=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 256 1 ch-vol! 440 9000 1 tone-on 10000 1 ch-fade ;\n: b 20 ms snd-pump 1 (ch-gain@) 1063675494 > . ;\n: c 38 1 ch-vol! 20 ms snd-pump 1 (ch-gain@) 1056964608 < . .\" ramp-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_ramp=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 256 1 ch-vol! 440 9000 1 tone-on 10000 1 ch-fade ;\n: b 20 ms snd-pump 1 (ch-gain@) 1063675494 > . ;\n: c 38 1 ch-vol! 20 ms snd-pump 1 (ch-gain@) 1056964608 < . .\" ramp-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_ramp" | grep -q -- '-1 -1 ramp-ok'; then
         printf "  ${GREEN}PASS${NC}  a fade ramps from the live volume, not a stale one\n"; ((passed++))
@@ -1327,7 +1380,7 @@ else
     # notice) must cancel that fade, or the deadline arrives and takes both
     # sounds with it -- and the gain must go back to full (1.0 = 1065353216),
     # or the surviving sound plays at whatever level the fade had reached.
-    ch_overlap=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 440 3000 1 tone-on 200 1 ch-fade ;\n: b 20 ms snd-pump 1 ch-playing? . ;\n: c 660 3000 1 tone-on ;\n: d 300 ms snd-pump 1 ch-playing? . 1 ch-vol@ . 1 (ch-gain@) 1065353216 = . .\" over-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_overlap=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 440 3000 1 tone-on 200 1 ch-fade ;\n: b 20 ms snd-pump 1 ch-playing? . ;\n: c 660 3000 1 tone-on ;\n: d 300 ms snd-pump 1 ch-playing? . 1 ch-vol@ . 1 (ch-gain@) 1065353216 = . .\" over-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_overlap" | grep -q -- '-1 -1 256 -1 over-ok'; then
         printf "  ${GREEN}PASS${NC}  queueing during a fade cancels it, keeping both sounds\n"; ((passed++))
@@ -1340,7 +1393,7 @@ else
     # cannot see this -- a fade moves the GAIN, never the recorded volume -- so
     # the observable is whether a NEW sound survives being pumped past the old
     # fade's deadline.
-    ch_stale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 440 3000 1 tone-on 40 1 ch-fade ;\n: b 10 ms snd-pump 1 ch-stop ;\n: c 440 3000 1 tone-on ;\n: d 100 ms snd-pump 1 ch-playing? . .\" stale-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_stale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 440 3000 1 tone-on 40 1 ch-fade ;\n: b 10 ms snd-pump 1 ch-stop ;\n: c 440 3000 1 tone-on ;\n: d 100 ms snd-pump 1 ch-playing? . .\" stale-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_stale" | grep -q -- '-1 stale-ok'; then
         printf "  ${GREEN}PASS${NC}  a stopped fade does not stop the next sound too\n"; ((passed++))
@@ -1363,7 +1416,7 @@ else
     # The second half is the one that matters -- a resampling stream holds a
     # little input back, so a channel measured by ch-queued would never report
     # empty, snd-wait would spin on it and snd-alloc would never see it free.
-    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open? drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . snd-alloc 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . snd-alloc 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_flush" | grep -q -- '-1 0 -1 flush-ok'; then
         printf "  ${GREEN}PASS${NC}  a resampled channel finishes instead of hanging forever\n"; ((passed++))
@@ -1380,7 +1433,7 @@ else
     # non-zero residue after playout is the tripwire. Note the obvious test
     # (comparing ch-queued after two tones) detects nothing: it reads 17640
     # either way, because flushing converts data without unqueueing it.
-    ch_noflush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop AUDIO_S16LE 1 16000 4 ch-format! pad 400 4 ch-put ;\n: b 300 ms 4 ch-queued 0 > . 4 ch-playing? . .\" noflush-ok\" snd-close ;\na b\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_noflush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop AUDIO_S16LE 1 16000 4 ch-format! pad 400 4 ch-put ;\n: b 300 ms 4 ch-queued 0 > . 4 ch-playing? . .\" noflush-ok\" snd-close ;\na b\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_noflush" | grep -q -- '-1 0 noflush-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-put leaves the stream open, so sounds join seamlessly\n"; ((passed++))
@@ -1392,7 +1445,7 @@ else
     # A wav plays on a channel; two plays land on different channels and both
     # sound at once; the queued byte count is the sample's own size, which is
     # what proves nothing was converted or copied on the way in.
-    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open? drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_play" | grep -q -- '-1 -1 -1 -1 768 play-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play mixes two sounds, queueing the sample untouched\n"; ((passed++))
@@ -1403,7 +1456,7 @@ else
     # 16-bit (format 32784 = 0x8010), against a device side of 44100. Reading
     # the format back is the direct check -- the queued byte count is identical
     # whether or not the format was set, so it cannot catch this.
-    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open? drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_fmt" | grep -q '44100 1 32784 16000 1 32784 44100 1 32784 fmt-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play sets the channel format; tone-on sets it back\n"; ((passed++))
@@ -1413,7 +1466,7 @@ else
 
     # A sample that failed to load must not be playable, and must not be
     # mistaken for channel 0.
-    wav_null=$(printf 'include %s/wav.fs\n: t snd-open? drop 0 wav-play . 0 5 wav-play-on 5 ch-queued . .\" null-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" \
+    wav_null=$(printf 'include %s/wav.fs\n: t snd-open drop 0 wav-play . 0 5 wav-play-on 5 ch-queued . .\" null-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_null" | grep -q -- '-1 0 null-ok'; then
         printf "  ${GREEN}PASS${NC}  playing a failed load is inert, and is not channel 0\n"; ((passed++))

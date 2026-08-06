@@ -8,7 +8,7 @@
 \   require sound.fs
 \
 \ Independent of graphics.fs/sdl3.fs -- terminal programs can beep too.
-\ Usage:  snd-open   440 200 tone   beep   snd-wait   snd-close
+\ Usage:  snd-open drop   440 200 tone   beep   snd-wait   snd-close
 \
 \ CHANNELS. The device holds snd-channels streams, and SDL mixes everything
 \ bound to it, so sounds on DIFFERENT channels play at the same time. Sounds
@@ -20,17 +20,30 @@
 \ busy: a game firing more sounds than it has channels loses its stalest sound
 \ rather than its newest.
 \
-\ Set snd-channels BEFORE snd-open (it is read once, when the device opens):
+\ There are snd-channels of them, 64 by default -- enough that snd-alloc
+\ never has to steal in practice. Shrinking it is the rare case (forcing
+\ channel reuse in a test, or trimming streams on a small target), and it is
+\ read ONCE, when the device opens, so a change needs an explicit close first
+\ -- and the close comes BEFORE the change, so the channels being closed are
+\ still the ones that are open:
 \
-\   32 to snd-channels  snd-open
+\   snd-close  4 to snd-channels  snd-open drop
 \
 \ tone queues samples and returns at once (SDL's audio thread drains the
 \ queue), so game loops keep running while a sound plays. snd-wait blocks
 \ until every channel is empty -- use it before bye in a script.
 \
-\ With no device open, tone/beep/snd-wait are silent no-ops. snd-open aborts
-\ if audio is unavailable; games use  snd-open? drop  instead, so they run
-\ soundless on a system with no audio rather than abort.
+\ With no device open, tone/beep/snd-wait are silent no-ops, so a program runs
+\ soundless rather than failing. snd-open returns an IOR -- 0 for success, like
+\ allocate and open-file -- which is what lets one word serve both callers:
+\
+\   snd-open drop                     \ don't care; soundless is fine
+\   snd-open abort" no audio device"  \ sound is a requirement
+\   snd-open if snd-why type cr then  \ handle it, with SDL's own reason
+\
+\ It is idempotent: opening an already-open device succeeds and changes
+\ nothing. That matters in an on-start hook, which a dirty :e runs twice --
+\ and re-opening for real would silence whatever was playing.
 \
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
@@ -88,7 +101,7 @@ $ffffffff constant (AUDIO_DEFAULT)      \ SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK
 \ small, and a fixed ceiling means snd-close can always clear every slot even
 \ when snd-open failed halfway through building them.
 64 constant snd-max-channels           \ hard ceiling on snd-channels
-16 value   snd-channels                \ set BEFORE snd-open; clamped at open
+64 value   snd-channels                \ set BEFORE snd-open; clamped at open
 0  constant tone-ch                    \ channel 0 is reserved for tone
 
 create (ch-streams) snd-max-channels cells allot   \ SDL_AudioStream* per channel
@@ -109,6 +122,24 @@ create (snd-spec) 12 allot             \ SDL_AudioSpec: format l, channels l, fr
 : (c-bool) ( raw -- flag )  $FF and 0<> ;
 
 : (snd-error) ( -- )  ." snd: " 0 (SDL_GetError) (ccall) ztype cr abort ;
+
+\ --- why the last open failed ---
+\ SDL_GetError's string is only good until the next SDL call, and every open
+\ failure path runs snd-close (which calls SDL_QuitSubSystem) on its way out.
+\ So the message is COPIED here at the moment of failure, before any cleanup;
+\ reading it lazily would hand back whatever SDL last had to say instead.
+128 constant (snd-why-max)
+create (snd-why-buf) (snd-why-max) allot
+variable (snd-why-len)
+: (snd-why!) ( -- )                    \ snapshot SDL's error, truncating
+    0 (snd-why-len) !
+    0 (SDL_GetError) (ccall) ?dup 0= if exit then      ( zaddr )
+    (snd-why-max) 0 ?do
+        dup c@ 0= if unloop drop exit then             \ NUL ends it
+        dup c@ (snd-why-buf) i + c!                    ( zaddr )
+        1+  i 1+ (snd-why-len) !
+    loop drop ;
+: snd-why ( -- c-addr u )  (snd-why-buf) (snd-why-len) @ ;
 
 \ --- channel tables ---
 : (ch-ok?) ( ch -- flag )  0 snd-channels within ;
@@ -228,8 +259,20 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ opened the convenient way is welded to the one stream it returns, and any
 \ later bind fails with "Cannot change stream bindings on device opened with
 \ SDL_OpenAudioDeviceStream". Mixing requires the plain device API.
+\ Walks every slot to snd-max-channels, NOT to snd-channels: snd-channels is a
+\ user-writable value, and shrinking it while open hides the tail from its own
+\ cleanup. `snd-open drop  4 to snd-channels  snd-close` destroyed 4 streams
+\ and left the other 60 handles in the table.
+\
+\ Not a memory leak -- the SDL_QuitSubSystem below frees every remaining audio
+\ object, and 50 such cycles move RSS by nothing. What it leaves is 60
+\ DANGLING handles in a table this word promises to empty, and today SDL
+\ happens to reject them (ch-queued reads 0 rather than faulting), which is
+\ SDL being defensive about freed memory rather than anything we are owed.
+\ The table is fixed-size precisely so this loop can always clear it; the
+\ bound has to be the table's, not the caller's.
 : snd-close ( -- )
-    snd-channels 0 ?do
+    snd-max-channels 0 ?do
         i cells (ch-streams) + dup @ ?dup if
             1 (SDL_DestroyAudioStream) (ccall) drop  0 swap !
         else drop then
@@ -250,28 +293,44 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
         i cells (ch-streams) + !
     loop true ;
 
-\ Try to open the default playback device; false (and no device, so the
-\ other words stay no-ops) if the system has no working audio. Games use
-\ this so they run soundless rather than abort.
+\ Is a device open right now? The genuine predicate -- snd-open is the verb.
+: snd-ready? ( -- flag )  (snd-dev) 0<> ;
+
+\ Every failure path takes this route: snapshot SDL's reason FIRST, then let
+\ snd-close undo whatever got as far as being built (including balancing a
+\ successful SDL_Init when the device itself never opened).
+: (snd-failed) ( -- ior )  (snd-why!) snd-close 1 ;
+
+\ Open the default playback device. 0 on success, non-zero if the system has
+\ no working audio -- an ior, so `snd-open drop` runs soundless and
+\ `snd-open abort" ..."` insists, with no 0= in either. The magnitude is
+\ opaque (test zero/non-zero); snd-why carries the detail.
+\
+\ Already open is SUCCESS and does nothing. Re-opening for real would clear
+\ every queue, reset every volume and pop the device -- so the accidental
+\ second call is free, and the deliberate reopen is spelled snd-close snd-open.
+\
 \ Two channels is the floor: snd-alloc needs at least one channel that is not
 \ the tone channel, and below that its steal scan would count backwards.
-: snd-open? ( -- flag )
+: snd-open ( -- ior )
+    snd-ready? if 0 exit then
     snd-channels 2 max snd-max-channels min to snd-channels
     (ch-reset)
-    (SDL_INIT_AUDIO) 1 (SDL_Init) (ccall) (c-bool) 0= if false exit then
+    \ Init failing is the one exit that must NOT run (snd-failed): there is no
+    \ subsystem to quit, and nothing was built. Every later failure has both.
+    (SDL_INIT_AUDIO) 1 (SDL_Init) (ccall) (c-bool) 0= if (snd-why!) 1 exit then
     AUDIO_S16LE (snd-spec) l!            \ format: signed 16-bit LE
     1           (snd-spec) 4 + l!        \ channels: mono
     snd-rate    (snd-spec) 8 + l!        \ freq
     (AUDIO_DEFAULT) (snd-spec) 2 (SDL_OpenAudioDevice) (ccall) to (snd-dev)
-    (snd-dev) 0= if snd-close false exit then
-    (ch-build) 0= if snd-close false exit then
+    (snd-dev) 0= if (snd-failed) exit then
+    (ch-build) 0= if (snd-failed) exit then
     (ch-streams) @ to (snd-stream)         \ channel 0 = the tone channel
     \ Resume unconditionally: whether a freshly opened device starts paused is
     \ not documented, and resuming an already-playing device is harmless.
-    (snd-dev) 1 (SDL_ResumeAudioDevice) (ccall) (c-bool) 0= if snd-close false exit then
-    true ;
-
-: snd-open ( -- )  snd-open? 0= if (snd-error) then ;
+    (snd-dev) 1 (SDL_ResumeAudioDevice) (ccall) (c-bool) 0= if (snd-failed) exit then
+    0 (snd-why-len) !                      \ success leaves no stale reason
+    0 ;
 
 \ --- channel allocation ---
 \ A free channel if there is one, otherwise the least recently allocated.
