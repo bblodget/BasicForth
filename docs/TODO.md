@@ -949,6 +949,18 @@ docs/Graphics.md for the API.
     communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
     nicer report now that fences make the failure loud); per-thread locals
     stack; stack sizing (fixed constants today)
+  - [ ] **`seed` should be thread-local — `random`/`rnd` are unusable from
+    workers today.** Both read-modify-write one global `seed` cell, so N
+    threads calling `rnd` fight over a single cache line: measured 2026-08-06,
+    4 threads ran **4x slower** than 1, and no lock is involved — a line simply
+    cannot be written by two cores at once. The results are also wrong, since
+    the RMW is not atomic and the threads share one stream instead of running
+    independent ones. Step 0's TLS machinery makes the cell itself a one-line
+    change; the real design question is **seeding**: `.tdata` supplies a
+    constant initial image, so every worker would start from the same seed and
+    replay the same sequence unless the trampoline mixes in something
+    per-thread. `examples/dice.fs` works around it by giving each worker a seed
+    in memory it allocated itself.
 
 ---
 
