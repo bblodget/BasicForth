@@ -172,12 +172,8 @@
         r> 1+ r> 1-                 ( new-ud-lo new-ud-hi c-addr+1 u-1 )
     repeat ;
 
-\ ABORT" ( flag "ccc" -- )  IMMEDIATE, COMPILE_ONLY
-\ If flag is true at runtime, print message and -2 throw (the standard
-\ ABORT" code, distinguishable from plain abort's -1 in a catch handler).
-\ Deviation: the message prints at throw time, not via the handler.
-: ABORT"  postpone if  postpone s"  postpone type
-    -2 postpone literal  postpone throw  postpone then ; immediate
+\ ABORT" is defined further down, with S" and ." — its interpreting half needs
+\ the same parser they do, and it cannot be used above that point.
 
 \ WORD ( char "<chars>ccc<char>" -- c-addr )
 \ Parse delimited string, return counted string at HERE.
@@ -268,8 +264,10 @@ variable (s"flip)
 : (s"buf)   ( -- a )  \ alternate halves of (s"bufs) on each use
     (s"flip) @ dup 0= (s"flip) !
     if (s"bufs) (s"max) + else (s"bufs) then ;
+\ The guard is written longhand because ABORT" is not defined yet: it is
+\ defined below these words, since its interpreting half needs (s"parse).
 : (s"copy)  ( c-addr u -- buf u )  \ copy string into a transient buffer
-    dup (s"max) > abort" interpreted string too long"
+    dup (s"max) > if ." interpreted string too long" cr -2 throw then
     (s"buf) swap                ( c-addr buf u )
     dup >r over >r cmove r> r> ;
 \ The tokenizer leaves >IN pointing at the space after the S" token itself;
@@ -282,6 +280,29 @@ variable (s"flip)
     state @ if (s"prim) execute else (s"parse) (s"copy) then ; immediate
 : ."    ( Compiling: append inline string + TYPE. Interpreting: type now )
     state @ if (."prim) execute else (s"parse) type then ; immediate
+
+\ ABORT" ( flag "ccc" -- )  IMMEDIATE
+\ If flag is true, print the message and -2 THROW (the standard ABORT" code,
+\ distinguishable from plain abort's -1 in a catch handler).
+\ Deviation: the message prints at throw time, not via the handler.
+\
+\ STATE-smart for the same reason S" and ." are, and defined here rather than
+\ with the other core words because the interpreting branch needs (s"parse).
+\ Being merely IMMEDIATE with no interpreting branch, it used to be a silent
+\ no-op outside a definition: it ran, POSTPONEd its code into the dictionary
+\ where nothing would ever call it, and returned without even consuming its
+\ flag. `addr ior` from ALLOCATE then reached the next word intact, so the
+\ everyday `allocate abort" out of memory" value buf` at the top of a file
+\ bound the IOR and orphaned the address.
+\
+\ Both branches parse the string, so the rest of the line is consumed whether
+\ the flag was true or not.
+: ABORT"  state @ if
+        postpone if  postpone s"  postpone type  postpone cr
+        -2 postpone literal  postpone throw  postpone then
+    else
+        (s"parse) rot if type cr -2 throw else 2drop then
+    then ; immediate
 
 \ Programming-Tools words (15)
 : ?     ( a-addr -- ) @ . ;
