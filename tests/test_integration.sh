@@ -245,6 +245,36 @@ assert_output "xor"         ': test $FF00 $0FF0 xor . ; test'   "61680  ok"
 assert_output "invert 0"           "0 invert ."          "-1  ok"
 assert_output "invert -1"          "-1 invert ."         "0  ok"
 
+assert_output "popcount 0"         "0 popcount ."        "0  ok"
+assert_output "popcount 7"         "7 popcount ."        "3  ok"
+assert_output "popcount 255"       "255 popcount ."      "8  ok"
+assert_output "popcount -1"        "-1 popcount ."       "64  ok"
+assert_output "popcount top bit"   "1 63 lshift popcount ."   "1  ok"
+assert_output "popcount alternating" ': test $5555555555555555 popcount . ; test' "32  ok"
+# the mask idiom documented on this word must not disturb the caller's BASE:
+# `[ hex ] .. [ decimal ]` would leave BASE decimal for whoever loaded it
+assert_output "\$-prefix literal leaves BASE alone" \
+    'hex : m $5555555555555555 ; base @ decimal .'  "16  ok"
+
+# ...and run the `zero-fields` definition EXACTLY as the reference page writes
+# it, so the page is what is under test rather than a copy of it that can
+# drift. A bracket-form mask computes the same answer and still fails here.
+doc_zf=$(sed -n '/^## popcount/,/^## There is no/p' \
+             "$REPO_ROOT/docs/Language-Reference/Comparison.md" \
+         | sed -n '/: zero-fields/,/;$/p' | sed 's/^    //' | tr '\n' ' ')
+if [[ -z "$doc_zf" ]]; then
+    printf "  ${RED}FAIL${NC}  documented zero-fields: snippet not found in Comparison.md\n"; ((failed++))
+else
+    assert_output "documented zero-fields works and leaves BASE alone" \
+        "hex $doc_zf base @ decimal . -1 zero-fields . 0 zero-fields ." "16 0 32  ok"
+fi
+# every bit position, checked against a counting loop — catches a shift or
+# mask that is right for small values and wrong at the top of the cell
+assert_output "popcount vs loop, all 64 bit positions" \
+    ': ref ( x -- n ) 0 swap 64 0 do dup 1 and rot + swap 1 rshift loop drop ;
+     : chk 0 64 0 do 1 i lshift dup popcount swap ref <> if 1+ then loop . ;
+     chk' "0  ok"
+
 # =========================================================================
 section "Memory Access"
 # =========================================================================
@@ -1600,10 +1630,16 @@ assert_output "ALLOCATE failure → a-addr 0" \
     ": t 1000000000000000 allocate swap .\" a=\" . 0<> .\" bad=\" . ; t" \
     "a=0 bad=-1"
 # FREE / RESIZE of a null pointer (e.g. a failed ALLOCATE's result) must not
-# dereference it — return a non-zero ior instead of faulting.
-assert_output "FREE null → non-zero ior" \
+# dereference it. FREE reports success (C's free(NULL); lets "free then zero"
+# run twice); RESIZE still reports a non-zero ior.
+assert_output "FREE null → success, no fault" \
     ": t 0 free .\" fz=\" . ; t" \
-    "fz=22"
+    "fz=0"
+# The idiom the above exists for: a cleanup path that runs twice must not fault
+# or report an error the second time round.
+assert_output "FREE twice with zeroing → both succeed" \
+    "variable p 64 allocate drop p ! : t p @ free .\" a=\" . 0 p ! p @ free .\" b=\" . ; t" \
+    "a=0 b=0"
 assert_output "RESIZE null → a-addr 0, non-zero ior" \
     ": t 0 64 resize .\" rz=\" . .\" ra=\" . ; t" \
     "rz=22 ra=0"
