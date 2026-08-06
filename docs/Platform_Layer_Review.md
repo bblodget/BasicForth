@@ -106,6 +106,13 @@ null-pointer rejects:
     over 0= if  drop 22 exit  then    ( 0 ior )  \ reject null a-addr1
 ```
 
+> **Since this was written** (2026-08-05): the literals are now a named
+> `EINVAL` constant, and `FREE` no longer rejects a null at all — it reports
+> success, matching C and gforth, so that "free then zero the variable"
+> survives a cleanup path running twice. `ALLOCATE`'s zero-size case and
+> `RESIZE`'s null case still return `EINVAL`. The snippets below are the code
+> as it stood at the time of the audit.
+
 `22` is Linux's `EINVAL`. ANS Forth defines `ior` as system-dependent, so any
 non-zero value is *legal* — this is not a correctness bug. But three copies
 of a raw Linux errno constant hardcoded in backend-neutral code is a smell,

@@ -217,6 +217,17 @@ Release a block obtained from `allocate`/`resize`.
 
     16 allocate drop free .   \ 0
 
+**Freeing address 0 succeeds and does nothing**, the same as C's `free(NULL)`.
+That is what lets a cleanup path be written once and run twice:
+
+    \ : on-stop   buf free drop  0 to buf ;
+
+Zero the variable after freeing, and a second `on-stop` frees a null — a
+no-op — instead of freeing the block again. Free a *live* block twice and the
+memory goes back to the system while something else may already own it, which
+is not an error you get a chance to handle. `resize` is stricter: a null there
+is a mistake rather than an idiom, so it returns a non-zero ior.
+
 ## resize ( a-addr1 u -- a-addr2 ior )
 Grow or shrink a block to `u` bytes, preserving its contents; `a-addr2` may
 differ from `a-addr1`.

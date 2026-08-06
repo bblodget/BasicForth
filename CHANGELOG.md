@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed: `free` on a null address now succeeds
+
+- **`0 free` returned ior 22 and now returns 0**, doing nothing — the same as
+  C's `free(NULL)` and gforth. It was never a dereference either way; only the
+  reported result changes.
+- The reason is the idiom it was blocking. Freeing a *live* block twice hands
+  the memory back while something else may already own it, and that is fatal
+  rather than an ior you get to inspect. What prevents it is "free, then zero
+  the variable" — after which a second cleanup pass frees a null. With the old
+  result that second pass reported an error, so the contract punished the one
+  habit that avoids the fatal case. Found writing an `on-stop` hook that a
+  dirty `:e` reloads twice.
+- `resize` is deliberately left strict. A null there is a mistake rather than
+  an idiom, and quietly turning it into a fresh allocation would hide one.
+- `help memory` now states the null contract for both, which it never did in
+  either direction.
+
 ### Added: `popcount` — how many bits of a cell are set
 
 - `popcount ( x -- n )`, 0 to 64. The reason to want it is packing: thirty-two
