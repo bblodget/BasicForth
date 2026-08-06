@@ -448,10 +448,19 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
     cell+ 0 ;                         ( a-addr 0 )
 
 \ FREE ( a-addr -- ior )  return a block from ALLOCATE/RESIZE to the system.
-\ A null a-addr (e.g. a failed ALLOCATE's result) is rejected with a non-zero
-\ ior instead of dereferencing the header at a-addr - cell.
+\ Freeing a null a-addr SUCCEEDS and does nothing -- matching C's free(NULL)
+\ and gforth. It is never a dereference: the header at a-addr - cell is only
+\ read once the address is known non-null.
+\ Why success rather than an error: a second FREE of a live block is fatal
+\ (munmap unmaps a region something else may now own), and the idiom that
+\ prevents it is "free, then zero the variable". Erroring on null would make
+\ that idiom fail the moment cleanup runs twice -- a module stopped twice, a
+\ teardown after a failed startup -- so the error would punish the one habit
+\ that avoids the fatal bug. RESIZE keeps its null rejection: there is no
+\ equivalent idiom asking for it, and a null that quietly becomes a fresh
+\ block hides a real mistake.
 : free ( a-addr -- ior )
-    dup 0= if  drop EINVAL exit  then \ reject null; don't deref
+    dup 0= if  drop 0 exit  then      \ free(NULL) succeeds; never deref
     1 cells -                         ( base )  \ step back to the header
     dup @ (munmap)                    ( n )    \ unmap base for its stored length
     negate ;                          \ 0 stays 0; -errno → positive ior

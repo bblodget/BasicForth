@@ -1629,10 +1629,16 @@ assert_output "ALLOCATE failure → a-addr 0" \
     ": t 1000000000000000 allocate swap .\" a=\" . 0<> .\" bad=\" . ; t" \
     "a=0 bad=-1"
 # FREE / RESIZE of a null pointer (e.g. a failed ALLOCATE's result) must not
-# dereference it — return a non-zero ior instead of faulting.
-assert_output "FREE null → non-zero ior" \
+# dereference it. FREE reports success (C's free(NULL); lets "free then zero"
+# run twice); RESIZE still reports a non-zero ior.
+assert_output "FREE null → success, no fault" \
     ": t 0 free .\" fz=\" . ; t" \
-    "fz=22"
+    "fz=0"
+# The idiom the above exists for: a cleanup path that runs twice must not fault
+# or report an error the second time round.
+assert_output "FREE twice with zeroing → both succeed" \
+    "variable p 64 allocate drop p ! : t p @ free .\" a=\" . 0 p ! p @ free .\" b=\" . ; t" \
+    "a=0 b=0"
 assert_output "RESIZE null → a-addr 0, non-zero ior" \
     ": t 0 64 resize .\" rz=\" . .\" ra=\" . ; t" \
     "rz=22 ra=0"
