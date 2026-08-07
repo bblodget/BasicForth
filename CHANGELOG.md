@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added: `pad.fs` — game controllers
+
+- `require pad.fs` reads game controllers through SDL's *gamepad* layer, so
+  hundreds of pads — Xbox, DualShock/DualSense, Switch Pro, Steam and anything
+  in SDL's mapping database — all answer the same words.
+- Buttons are named by **position**, not by letter: the bottom face button is
+  `pad-south` on every controller, where it is printed A on an Xbox pad, B on a
+  Nintendo one and ✕ on a PlayStation one. No letter is true of all three.
+- Held state rather than events: `pad-held? ( button -- flag )`,
+  `pad-axis ( axis -- -32768..32767 )`. Events still arrive through `sdl-poll`
+  (`ev-pad-down`, `ev-pad-added`, …) for programs that want edges.
+- `pad-dx` / `pad-dy` fold the d-pad and the left stick into one −1/0/1 answer,
+  which is what a grid game actually wants. **When the two disagree the d-pad
+  wins** — a worn stick resting off centre must never cancel a deliberate
+  press. `pad-dead` (default 8000) is the dead zone, and a value, so a tired
+  pad can be tuned at the prompt. `pad-dir` applies the same treatment to any
+  axis, for the right stick and the triggers.
+- Up to four controllers open at once: `pad-open` opens one, `pad` selects
+  which the queries act on, so a two-player loop is `0 pad … 1 pad …`.
+- With nothing plugged in every query answers 0 or false, so a game runs
+  keyboard-only on a machine with no controller.
+- `pad-has?` / `pad-hasaxis?` ask whether a pad even has a control, since not
+  all of them do; `pad-map` teaches SDL a controller it does not recognise.
+- Hotplug works: `pad-update` (and `pads`) pump the event queue, which is where
+  SDL detects devices arriving and leaving, and `pad?` reports whether a
+  controller is still *attached* rather than merely opened. Re-opening a slot
+  closes the stale handle first, so recovering from an unplug is `0 pad-open`.
+- `examples/gamepad.fs` is a live readout of every control — the quickest way
+  to check a new pad is mapped as expected. Full reference in `help pad`.
+
 ### Changed: `free` on a null address now succeeds
 
 - **`0 free` returned ior 22 and now returns 0**, doing nothing — the same as
