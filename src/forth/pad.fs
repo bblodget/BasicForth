@@ -19,14 +19,19 @@
 \ Nintendo one and X on a PlayStation one. Naming it pad-a would be a lie on
 \ two pads out of three.
 \
-\ Up to #pads controllers can be open at once. Queries act on the SELECTED
-\ slot, so a two-player loop reads:
+\ Up to #pads controllers can be open at once, in slots 0 to #pads-1 (four
+\ slots as shipped). Queries act on the SELECTED slot, so a two-player loop
+\ reads:
 \
 \   0 pad  pad-dx p1-move
 \   1 pad  pad-dx p2-move
 \
 \ With no pad open every query answers 0 or false rather than failing, so a
-\ game runs keyboard-only on a machine with no controller attached.
+\ game runs keyboard-only on a machine with no controller attached. Open with
+\ pad-open? rather than pad-open to keep it that way -- pad-open aborts when
+\ nothing is plugged in, which is a normal state of the world, not an error:
+\
+\   0 pad-open? to using-pad?
 \
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
@@ -194,17 +199,42 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 \ The old one is closed only AFTER the new open succeeds, so a re-open that
 \ fails -- the pad was pulled out again between the two calls -- leaves the
 \ working controller in place instead of emptying the slot on the way past.
-: pad-open ( n -- )
-    dup 0 #pads within 0= abort" pad-open: slot out of range"
+\
+\ The reason code is the only thing the two spellings below disagree about:
+\ pad-open names which failure it hit, pad-open? collapses both to false.
+: (pad-try) ( n -- 0|1|2 )   \ 0 opened, 1 nothing there, 2 SDL refused it
     (pad-init!)
-    dup (pad-id)  dup 0= abort" pad-open: no controller at that index"
+    \ Pump first: SDL notices a plugged-in controller in the event queue, not
+    \ in SDL_GetGamepads, so opening without this can miss a pad that is
+    \ physically attached. Opening is not a per-frame operation -- the cost of
+    \ being right here is nothing.
+    pad-update
+    dup (pad-id)  dup 0= if  2drop 1 exit  then
     1 (SDL_OpenGamepad) (ccall)         ( n handle )
     \ A controller SDL has no mapping for opens as a joystick but not as a
     \ gamepad. pad-map is the way back in -- see help pad.
-    dup 0= abort" pad-open: cannot open (unmapped controller?)"
+    dup 0= if  2drop 2 exit  then
     over (pad-shut)                     ( n handle )
     over cells (pad-tab) + !            ( n )
-    to (pad-cur) ;
+    to (pad-cur)  0 ;
+
+\ Try to open, and say whether it worked -- the form a game uses when a
+\ missing controller should fall back to the keyboard rather than stop the
+\ program. Same split as sound.fs (snd-open? / snd-open), for the same reason.
+\
+\ A bad SLOT still aborts here, because it is not the same kind of failure: no
+\ controller at slot 1 is the everyday case this word exists to report, while
+\ slot 9 does not exist on any machine and never will. Returning false for both
+\ would bury a caller's bug in the branch written to shrug false off.
+: pad-open? ( n -- flag )
+    dup 0 #pads within 0= abort" pad-open?: slot out of range"
+    (pad-try) 0= ;
+
+: pad-open ( n -- )
+    dup 0 #pads within 0= abort" pad-open: slot out of range"
+    (pad-try)
+    dup 1 = abort" pad-open: no controller at that index"
+        2 = abort" pad-open: cannot open (unmapped controller?)" ;
 
 : pad ( n -- )
     dup 0 #pads within 0= abort" pad: slot out of range"
@@ -222,7 +252,11 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 \ The guard the queries below use: do we hold a handle at all. Cheaper than
 \ pad? (no FFI call) and the right question for them -- reading a disconnected
 \ pad is harmless and answers 0, where reading a null one is not.
-: (pad-open?) ( -- flag )  (pad@) 0<> ;
+\
+\ Three near-identical names, kept apart on purpose: pad? asks SDL whether a
+\ controller is attached, pad-open? OPENS one and reports whether it worked,
+\ and this one only inspects the slot table.
+: (pad-have?) ( -- flag )  (pad@) 0<> ;
 
 : pad-close ( -- )  (pad-cur) (pad-shut) ;
 
@@ -241,27 +275,27 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 : (zlen) ( zaddr -- u )  dup begin dup c@ while 1+ repeat swap - ;
 
 : pad-name ( -- c-addr u )
-    (pad-open?) 0= if 0 0 exit then
+    (pad-have?) 0= if 0 0 exit then
     (pad@) 1 (SDL_GetGamepadName) (ccall)
     dup 0= if drop 0 0 exit then
     dup (zlen) ;
 
 : pad-held? ( button -- flag )
-    (pad-open?) 0= if drop false exit then
+    (pad-have?) 0= if drop false exit then
     (pad@) swap 2 (SDL_GetGamepadButton) (ccall) (c-bool) ;
 
 \ Not every pad has every control -- no guide button, no right stick, no
 \ analog triggers. Ask, rather than reading a phantom 0.
 : pad-has? ( button -- flag )
-    (pad-open?) 0= if drop false exit then
+    (pad-have?) 0= if drop false exit then
     (pad@) swap 2 (SDL_GamepadHasButton) (ccall) (c-bool) ;
 
 : pad-hasaxis? ( axis -- flag )
-    (pad-open?) 0= if drop false exit then
+    (pad-have?) 0= if drop false exit then
     (pad@) swap 2 (SDL_GamepadHasAxis) (ccall) (c-bool) ;
 
 : pad-axis ( axis -- n )
-    (pad-open?) 0= if drop 0 exit then
+    (pad-have?) 0= if drop 0 exit then
     (pad@) swap 2 (SDL_GetGamepadAxis) (ccall) (s16) ;
 
 \ --- directions ---
