@@ -146,6 +146,7 @@ reach by name or by number.
 ## See Also
 
 - `help graphics` — the drawing words used between `sdl-frame` and `sdl-show`.
+- `help pad` — game controllers; their events arrive through `sdl-poll` too.
 - `help sound` — SDL3 audio (`snd-open`, `tone`); one library, no extra setup.
 - examples/bounce.fs — a complete game loop with events and sound.
 - docs/Graphics.md — how the surface and the window fit together.
