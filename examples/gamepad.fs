@@ -61,8 +61,9 @@ here (btns) - constant #btns
     ." press a keyboard key to stop" cr ;
 
 : gamepad ( -- )
-    pads 0= if ." no controller found -- plug one in and try again" cr exit then
-    0 pad-open
+    0 pad-open? 0= if
+        ." no controller found -- plug one in and try again" cr exit
+    then
     page
     begin  (frame)  20 ms  key? until
     key drop
