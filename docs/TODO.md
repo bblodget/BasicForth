@@ -882,6 +882,30 @@ docs/Graphics.md for the API.
   `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
   soundless via `snd-open? drop`); wall blips in bounce.fs; dummy-driver
   integration tests; docs/Sound.md + `man sound`
+- [x] Game controllers via SDL3's gamepad API: `pad.fs` — `pads`/`pad-open`/
+  `pad` (four slots, so two players work), `pad-held?`/`pad-axis`,
+  `pad-dx`/`pad-dy` (d-pad + left stick merged to -1/0/1, d-pad wins on
+  disagreement), `pad-dead`, `pad-has?`, `pad-map`; buttons named by position
+  (`pad-south`, not `pad-a`); answers 0/false with nothing plugged in so games
+  still run keyboard-only; `examples/gamepad.fs` readout; `help pad`
+- [ ] **Rumble — `SDL_RumbleGamepad`.** Deliberately left out of the first
+  `pad.fs`; the two-player karate port will want it, and it is easier to land
+  BEFORE the Gamepad tutorial is written than to retrofit the lesson after.
+  Low/high-frequency intensities plus a duration in ms; a no-op on pads
+  without motors. Note SDL3 has **no** `SDL_GamepadHasRumble` (that was SDL2):
+  capability is a property now — `SDL_GetGamepadProperties` then
+  `SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN`, with a separate
+  `..._TRIGGER_RUMBLE_BOOLEAN` for the trigger motors. Verify offsets and
+  names with tools/sdl3off.c as `pad.fs` did, rather than porting SDL2 habits.
+- [ ] **Hotplug auto-reopen.** Today a game must notice `pad?` went false and
+  call `pad-open` itself (documented under Hotplug in `help pad`). An
+  opt-in "reclaim slot n when a controller reappears" would remove that
+  boilerplate — but it needs a policy for which slot a returning pad belongs
+  to, which is why it is not in the first cut.
+- [ ] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`. Teach the substrate
+  before the sugar: `pad-axis` and the dead-zone problem first, so `pad-dx`
+  reads as a solution rather than magic. Needs a controller, so the lesson
+  must skip cleanly without one (`tests/test_lessons.py` replays every step).
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
