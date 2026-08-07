@@ -1192,6 +1192,32 @@ else
         printf "  ${RED}FAIL${NC}  pad slot error handling\n    Got: %q\n" "$pad_er"; ((failed++))
     fi
 
+    # pad-open? is the form a game uses to degrade to the keyboard, so the one
+    # thing it must never do is abort when nothing is plugged in. Slot 3 is the
+    # last one; asserting "no abort message, session alive, answer is a proper
+    # flag" holds whether or not hardware is attached, where asserting false
+    # would only hold on a machine with fewer than four controllers.
+    pad_of=$(printf 'require pad.fs\n3 pad-open? dup 0= swap -1 = or . ." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_of" | grep -q -- '-1 alive0' \
+       && ! printf '%s' "$pad_of" | grep -q 'no controller at that index'; then
+        printf "  ${GREEN}PASS${NC}  pad-open? reports a flag instead of aborting\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-open? non-aborting open\n    Got: %q\n" "$pad_of"; ((failed++))
+    fi
+
+    # ...but a slot that cannot exist is still an abort, in BOTH spellings. A
+    # caller looping over slots wants false for the empty ones and a loud error
+    # for slot 9, not the same false it already ignores.
+    pad_ob=$(printf 'require pad.fs\n9 pad-open?\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ob" | grep -q 'pad-open?: slot out of range' \
+       && printf '%s' "$pad_ob" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-open? still aborts on an impossible slot\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-open? bad slot\n    Got: %q\n" "$pad_ob"; ((failed++))
+    fi
+
     # Button and axis constants must equal the SDL_GAMEPAD_* enum values in
     # SDL_gamepad.h. A wrong one fails silently at run time — a button that is
     # simply never pressed — which is exactly the bug nobody finds.
