@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Added: `voice.fs` — rendering speech to WAV files
+
+- `voice-render ( text u path u -- ior )` speaks text into a WAV file by
+  driving an external text-to-speech program. The result is an ordinary
+  sample: `wav-load` it and play it like any other sound.
+- **The engine is not baked in.** `voice-cmd!` takes a command template with
+  two placeholders — `%t` for the text, `%o` for the output path — and
+  everything else passes through as shell syntax. That is what lets one word
+  drive engines whose flags disagree (`piper … -f %o -- %t`, `espeak-ng -w %o
+  -- %t`, or `printf '%s' %t | engine --out %o` for the ones reading stdin),
+  and it means **nothing in this repo binds to a TTS engine**. Only `%o` and
+  `%t` expand, so a literal `printf %s` survives.
+- Both substitutions are quoted through `shellutil.fs`, so a phrase
+  containing an apostrophe, a `$`, a backtick or a semicolon is data and
+  never syntax. Tested with a canary payload; the test fails if the quoting
+  is swapped for a plain append.
+- **Rendering is deliberately an offline step.** Measured with flite's `slt`
+  voice: 8.7 ms of work for 0.72 s of audio, 35.8 ms for 2.97 s — about 80×
+  real time, and still one to two dropped frames at 60 Hz. A neural engine
+  loads a model first and is heavier again. So a game renders its vocabulary
+  once and plays samples at run time, which is what the TI-99/4A's
+  fixed-vocabulary speech ROM amounted to as well.
+- `voice.fs` requires only `shellutil.fs` — no FFI, no SDL, no WAV decoder —
+  so it works on a machine with no audio hardware, including the board and
+  the QEMU aarch64 run. Same reasoning that keeps `wavcore.fs` dependency-free.
+  Its tests drive a stand-in shell script rather than requiring a TTS engine,
+  so every one of them runs on both architectures. The one question a
+  stand-in cannot answer — does a *real* engine's WAV decode? — is a separate
+  check gated on `VOICE_ENGINE_CMD` (exported from `setup.sh`), skipping with
+  a reason when no engine is configured. Verified against piper: 22050 Hz
+  mono, decoded by `wavcore.fs` and played.
+- **An engine that exits 0 having written nothing is its own failure code.**
+  piper does exactly that when its voice model is missing, and a caller
+  trusting the exit status would go on to `wav-load` an empty file — so
+  `voice-render` checks the output file itself. `voice-why` names every
+  failure by hand; an overlong command is refused rather than run truncated,
+  since a truncated command could have lost the flag naming its output file.
+- The output file is **removed before the engine runs**, so that check is
+  about this render rather than about whatever was at the path already.
+  Without it the worst version of the same failure survives: re-rendering a
+  vocabulary whose voice model has gone missing reports success for every
+  phrase while leaving the previous take on disk, and nothing looks wrong
+  until you listen. The command is composed twice to get the ordering right —
+  once to learn whether it fits, again after the removal, since removing runs
+  through the same shared command buffer — so a render that *cannot* run
+  never destroys the previous take.
+- The removal is then **verified**, because it can fail silently: `rm` cannot
+  unlink from a read-only directory, and `(sh-rm)` drops the shell's status.
+  A stale file surviving removal would answer "yes, there is audio here" for a
+  render that produced none, so `voice-render` asks whether the path is
+  actually clear and reports ior 5 if not. This also catches a `path` naming a
+  directory — `open-file` succeeds on one, so a size-based check would read it
+  as 4096 bytes of existing audio.
+- New docs: `help voice`, `docs/Speech.md` (which tier to reach for, and how
+  to install an engine).
+
 ### Changed: `snd-alloc` is now `next-ch`
 
 - `alloc` promised two things it never delivered: memory, and a matching

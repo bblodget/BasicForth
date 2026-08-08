@@ -151,12 +151,15 @@ qemu sysroot); on the board, SDL3 must be in the Pumpkian image.
 
 ## Scope and what's next
 
-Current state: square waves on mixing channels. Possible next steps: other
-waveforms (triangle/noise), a note/duration music word (`PLAY "CDE"` style),
-and **sampled sound**. `wavcore.fs` is the first half of that: it decodes
-16-bit PCM WAV files into sample handles (`help samples`). A `wav.fs` on top
-will play one through `ch-put`, which is what the channel layer was built for.
-Speech synthesis then sits above that as one more source of samples.
+Current state: square waves and sampled sound on mixing channels.
+`wavcore.fs` decodes WAV files into sample handles — 8, 16, 24 and 32-bit,
+integer and float (`help samples`) — and `wav.fs` plays one through `ch-put`,
+which is what the channel layer was built for. Speech sits above that as one
+more source of samples: `voice.fs` renders phrases to WAV files with an
+external engine (`help voice`, [Speech.md](Speech.md)).
+
+Possible next steps: other waveforms (triangle/noise) and a note/duration
+music word (`PLAY "CDE"` style).
 
 `wavcore.fs` deliberately requires **nothing** — no FFI, no SDL. That is not
 tidiness: `require sound.fs` aborts on a machine with no libSDL3, which
