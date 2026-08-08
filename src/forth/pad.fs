@@ -11,7 +11,7 @@
 \
 \   require pad.fs
 \   pads .                     \ how many are plugged in
-\   0 pad-open                 \ open the first one
+\   0 pad-open drop            \ open the first one (drop the ior)
 \   begin  pad-update  pad-dx . pad-dy . cr  key? until
 \
 \ Buttons are named by POSITION, not by letter: the bottom face button is
@@ -27,11 +27,11 @@
 \   1 pad  pad-dx p2-move
 \
 \ With no pad open every query answers 0 or false rather than failing, so a
-\ game runs keyboard-only on a machine with no controller attached. Open with
-\ pad-open? rather than pad-open to keep it that way -- pad-open aborts when
-\ nothing is plugged in, which is a normal state of the world, not an error:
+\ game runs keyboard-only on a machine with no controller attached. pad-open
+\ returns an IOR (0 = opened) rather than aborting, because nothing plugged in
+\ is a normal state of the world:
 \
-\   0 pad-open? to using-pad?
+\   0 pad-open drop  pad? to using-pad?
 \
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
@@ -48,7 +48,7 @@ require sdl3.fs
 0 value (SDL_GamepadHasButton)  0 value (SDL_GamepadHasAxis)
 0 value (SDL_UpdateGamepads)  0 value (SDL_AddGamepadMapping)
 0 value (SDL_GamepadConnected)  0 value (SDL_WasInit)
-0 value (SDL_free)
+0 value (SDL_free)          0 value (SDL_ClearError)
 
 : (pad-bind) ( -- )
     (sdl3) s" SDL_GetGamepads"      dlsym to (SDL_GetGamepads)
@@ -63,7 +63,8 @@ require sdl3.fs
     (sdl3) s" SDL_AddGamepadMapping" dlsym to (SDL_AddGamepadMapping)
     (sdl3) s" SDL_GamepadConnected" dlsym to (SDL_GamepadConnected)
     (sdl3) s" SDL_WasInit"          dlsym to (SDL_WasInit)
-    (sdl3) s" SDL_free"             dlsym to (SDL_free) ;
+    (sdl3) s" SDL_free"             dlsym to (SDL_free)
+    (sdl3) s" SDL_ClearError"       dlsym to (SDL_ClearError) ;
 (pad-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
@@ -123,13 +124,64 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 : (s16) ( u -- n )  $FFFF and  dup $8000 and if $10000 - then ;
 : (s32) ( u -- n )  $FFFFFFFF and  dup $80000000 and if $100000000 - then ;
 
+\ --- why the last open failed ---
+\ pad-open's ior says THAT it failed; this says why, the same way snd-why does.
+\ The two failures want different responses -- nothing plugged in is worth
+\ retrying next frame, an unmapped controller never will be until pad-map runs
+\ -- so the detail has to survive somewhere, and a string beats a magic number.
+\
+\ Recorded at the moment of failure. SDL_GetError's string is only good until
+\ the next SDL call, so reading it lazily would hand back whatever SDL last had
+\ to say rather than what went wrong here.
+128 constant (pad-why-max)
+create (pad-why-buf) (pad-why-max) allot
+variable (pad-why-len)
+
+: (pad-why$) ( c-addr u -- )           \ record a reason of our own, truncating
+    (pad-why-max) min  dup (pad-why-len) !
+    (pad-why-buf) swap cmove ;
+
+: (pad-why!) ( -- )                    \ snapshot SDL's error, truncating
+    0 (pad-why-len) !
+    0 (SDL_GetError) (ccall) ?dup 0= if exit then      ( zaddr )
+    (pad-why-max) 0 ?do
+        dup c@ 0= if unloop drop exit then             \ NUL ends it
+        dup c@ (pad-why-buf) i + c!                    ( zaddr )
+        1+  i 1+ (pad-why-len) !
+    loop drop ;
+
+\ Wipe SDL's error slate, so that whatever is read after the next call was
+\ set BY that call. SDL_GetError is not cleared by success -- its own header
+\ says so, and warns against using it to decide whether anything went wrong.
+\ Without this, an unrelated failure the program already handled (a texture
+\ op, an audio device) is still sitting there, and pad-why would report it as
+\ the reason a controller would not open.
+: (pad-err-clear) ( -- )  0 (SDL_ClearError) (ccall) drop ;
+
+\ SDL's own reason, falling back to a literal when it has nothing to say.
+\ Every failure has to leave SOMETHING here: a non-zero ior and an empty
+\ pad-why would send a caller looking for a reason that never arrives.
+: (pad-why-sdl) ( c-addr u -- )
+    (pad-why!)
+    (pad-why-len) @ 0= if  (pad-why$)  else  2drop  then ;
+
+\ Empty after a successful open, so it never reports a stale reason.
+: pad-why ( -- c-addr u )  (pad-why-buf) (pad-why-len) @ ;
+
 \ Start the gamepad subsystem the first time it is needed. SDL_INIT_GAMEPAD
 \ implies JOYSTICK and EVENTS, so this is all a controller-only program needs
 \ -- no window required.
-: (pad-init!) ( -- )
-    (pad-init) if exit then
-    SDL_INIT_GAMEPAD 1 (SDL_Init) (ccall) (c-bool) 0= if sdl-error then
-    true to (pad-init) ;
+\ Two spellings, because the callers differ in what they can say. A word that
+\ returns an ior has to be able to REPORT a subsystem that would not start;
+\ only a word with nothing to return may abort over it.
+: (pad-init?) ( -- ok? )
+    (pad-init) if true exit then
+    (pad-err-clear)
+    SDL_INIT_GAMEPAD 1 (SDL_Init) (ccall) (c-bool)
+    dup if true to (pad-init) then ;
+
+: (pad-init!) ( -- )                   \ ...the aborting form
+    (pad-init?) 0= if sdl-error then ;
 
 \ Is the gamepad subsystem up, as SDL sees it -- not merely as our own
 \ (pad-init) flag believes. The two can disagree: anything calling SDL_Quit()
@@ -184,8 +236,11 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
     0 (SDL_PumpEvents) (ccall) drop
     0 (SDL_UpdateGamepads) (ccall) drop ;
 
+\ 0 rather than an abort when the subsystem will not start: a game that asks
+\ how many controllers are attached should hear "none" and carry on, the same
+\ way every other query answers 0 with no pad open.
 : pads ( -- n )
-    (pad-init!)
+    (pad-init?) 0= if 0 exit then
     pad-update                  \ else a replugged controller is never noticed
     0 (pad-n) !
     (pad-n) 1 (SDL_GetGamepads) (ccall) (pad-list) !
@@ -200,49 +255,55 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 \ fails -- the pad was pulled out again between the two calls -- leaves the
 \ working controller in place instead of emptying the slot on the way past.
 \
-\ The reason code is the only thing the two spellings below disagree about:
-\ pad-open names which failure it hit, pad-open? collapses both to false.
-: (pad-try) ( n -- 0|1|2 )   \ 0 opened, 1 nothing there, 2 SDL refused it
-    (pad-init!)
+\ An IOR, not a flag, and not an abort. 0 is success, like every other ior, so
+\ the three things a caller might want all read straight with no 0= anywhere:
+\
+\   0 pad-open drop                     \ don't care; run keyboard-only
+\   0 pad-open abort" no controller"    \ a pad is required
+\   0 pad-open if pad-why type cr then  \ handle it, with the reason
+\
+\ A flag would invert one of those: with true meaning success,
+\ `abort" no controller"` fires exactly when the pad opens. sound.fs shipped
+\ that shape as snd-open? and it bit us, which is why both libraries now
+\ return an ior and neither spells an opener with a `?`.
+\
+\ The magnitude is opaque -- test zero/non-zero and read pad-why for detail.
+\
+\ A bad SLOT aborts rather than returning an ior, because it is a different
+\ kind of failure: no controller at slot 1 is the everyday case this word
+\ exists to report, while slot 9 does not exist on any machine and never will.
+\ Folding it into the same non-zero would bury a caller's bug in the branch
+\ written to shrug failure off.
+\
+\ Unlike snd-open, this is NOT idempotent: re-opening a live slot re-opens it,
+\ because that is the documented way to recover from a hotplug.
+: pad-open ( n -- ior )
+    dup 0 #pads within 0= abort" pad-open: slot out of range"
+    \ A subsystem that will not start is a failure to REPORT, not to abort on:
+    \ this word promises an ior, and sdl-error would break that promise.
+    (pad-init?) 0= if
+        drop  s" gamepad subsystem would not start" (pad-why-sdl)  3 exit
+    then
     \ Pump first: SDL notices a plugged-in controller in the event queue, not
     \ in SDL_GetGamepads, so opening without this can miss a pad that is
     \ physically attached. Opening is not a per-frame operation -- the cost of
     \ being right here is nothing.
     pad-update
-    dup (pad-id)  dup 0= if  2drop 1 exit  then
+    dup (pad-id)  dup 0= if
+        2drop  s" no controller at that index" (pad-why$)  1 exit
+    then
+    (pad-err-clear)
     1 (SDL_OpenGamepad) (ccall)         ( n handle )
     \ A controller SDL has no mapping for opens as a joystick but not as a
     \ gamepad. pad-map is the way back in -- see help pad.
-    dup 0= if  2drop 2 exit  then
+    dup 0= if
+        2drop  s" unmapped controller -- see pad-map" (pad-why-sdl)  2 exit
+    then
     over (pad-shut)                     ( n handle )
     over cells (pad-tab) + !            ( n )
-    to (pad-cur)  0 ;
-
-\ Try to open, and say whether it worked -- the form a game uses when a
-\ missing controller should fall back to the keyboard rather than stop the
-\ program.
-\
-\ NOTE (2026-08-07): sound.fs used to carry the same split and has RETIRED it.
-\ snd-open? is gone; snd-open returns an ior (0 = success) and snd-ready? is
-\ the predicate. Two reasons, both of which apply here: the `?` reads as a
-\ question when the word actually opens, and a true-means-success flag fights
-\ abort", which fires on true -- so `n pad-open? abort" no pad"` aborts when
-\ the pad opens FINE. (pad-try) already returns 0/1/2, so pad-open returning
-\ it directly is most of the work. See docs/TODO.md.
-\
-\ A bad SLOT still aborts here, because it is not the same kind of failure: no
-\ controller at slot 1 is the everyday case this word exists to report, while
-\ slot 9 does not exist on any machine and never will. Returning false for both
-\ would bury a caller's bug in the branch written to shrug false off.
-: pad-open? ( n -- flag )
-    dup 0 #pads within 0= abort" pad-open?: slot out of range"
-    (pad-try) 0= ;
-
-: pad-open ( n -- )
-    dup 0 #pads within 0= abort" pad-open: slot out of range"
-    (pad-try)
-    dup 1 = abort" pad-open: no controller at that index"
-        2 = abort" pad-open: cannot open (unmapped controller?)" ;
+    to (pad-cur)
+    0 (pad-why-len) !                   \ success leaves no stale reason
+    0 ;
 
 : pad ( n -- )
     dup 0 #pads within 0= abort" pad: slot out of range"
@@ -261,9 +322,10 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 \ pad? (no FFI call) and the right question for them -- reading a disconnected
 \ pad is harmless and answers 0, where reading a null one is not.
 \
-\ Three near-identical names, kept apart on purpose: pad? asks SDL whether a
-\ controller is attached, pad-open? OPENS one and reports whether it worked,
-\ and this one only inspects the slot table.
+\ Two questions, kept apart on purpose: pad? asks SDL whether a controller is
+\ attached, this one only inspects the slot table. There is deliberately no
+\ third, public, handle predicate -- pad? is the one a game wants, and a second
+\ near-identical name is what this library just spent a rename getting rid of.
 : (pad-have?) ( -- flag )  (pad@) 0<> ;
 
 : pad-close ( -- )  (pad-cur) (pad-shut) ;

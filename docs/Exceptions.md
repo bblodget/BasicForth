@@ -100,6 +100,9 @@ caught `evaluate` leaving the outer handler armed.
   open worked. It is now one word, `snd-open ( -- ior )`, 0 for success like
   `allocate` and `open-file`, so `drop` and `abort"` both read straight. The
   question it was mistaken for is `snd-ready?`.
+- **`pad-open?` went the same way** (2026-08-07), for the same two reasons —
+  `pad-open ( n -- ior )` with `pad-why` for the detail, and `pad?` as the
+  predicate it was mistaken for. No `?`-spelled opener remains.
 - Whether `catch` should replace the remaining fallible-open pattern outright
   is still open; the ior convention is the smaller change and matches the
   rest of the system.

@@ -904,15 +904,33 @@ docs/Graphics.md for the API.
   `SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN`, with a separate
   `..._TRIGGER_RUMBLE_BOOLEAN` for the trigger motors. Verify offsets and
   names with tools/sdl3off.c as `pad.fs` did, rather than porting SDL2 habits.
+
+  **The capability property LIES on the F310** (measured 2026-08-07): SDL
+  reports `CAP_RUMBLE=1` and `SDL_RumbleGamepad` returns success for low, high
+  and both motors — and the pad, which has no motors at all, does nothing. The
+  flag comes from the kernel `xpad` driver advertising force-feedback for the
+  XInput protocol generically, so it describes the DRIVER, not the device.
+  Consequences: (a) a `pad-rumble?` predicate built on that property would
+  confidently tell F310 owners their pad rumbles — either find better grounding
+  or document it as "the driver claims it can"; (b) a test asserting the call
+  succeeds passes on hardware with no motors, so it proves nothing —
+  see [[verify-fixes-against-broken-build]]; (c) **the dev hardware cannot
+  verify this feature at all**, which is why the tutorial was written first,
+  reversing the note above.
 - [ ] **Hotplug auto-reopen.** Today a game must notice `pad?` went false and
   call `pad-open` itself (documented under Hotplug in `help pad`). An
   opt-in "reclaim slot n when a controller reappears" would remove that
   boilerplate — but it needs a policy for which slot a returning pad belongs
   to, which is why it is not in the first cut.
-- [ ] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`. Teach the substrate
-  before the sugar: `pad-axis` and the dead-zone problem first, so `pad-dx`
-  reads as a solution rather than magic. Needs a controller, so the lesson
-  must skip cleanly without one (`tests/test_lessons.py` replays every step).
+- [x] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`, 20 steps, shipped
+  2026-08-07. Substrate before sugar: the stick's resting offset and a
+  deliberately-too-small dead zone come before `pad-dx`, so the merged word
+  reads as a fix rather than magic. "The reader may have no controller" became
+  a SUBJECT of the lesson (`pad-open`'s ior, the one-word input dispatcher) instead
+  of a hole worked around — which also makes the headless replay in
+  `tests/test_lessons.py` simply the no-controller path, verified by hiding
+  /dev/input under `bwrap`. No window is needed, so every step is a single-shot
+  query at the prompt and the lesson needs no skip entries.
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
