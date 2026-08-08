@@ -2,6 +2,125 @@
 
 ## Unreleased
 
+### Changed: `snd-alloc` is now `next-ch`
+
+- `alloc` promised two things it never delivered: memory, and a matching
+  release. Nothing is allocated — the channels are a fixed set — and there is
+  no `free`, because a channel returns to the rotation by itself once it falls
+  silent. The name described a lifecycle that does not exist.
+- Worse in this language than it would be elsewhere. "Allocate a channel" is
+  ordinary usage for pooled resources generally, but `allocate` here is the
+  heap word, and the Sound lesson has the reader call it for real a few steps
+  after meeting `snd-alloc`.
+- `next-ch` is shaped like `tone-ch`, which answers the same kind of question:
+  that is the channel `tone` uses, this is the next channel to use. It also
+  moves the word out of the `snd-` group (the device: open, close, wait) where
+  it never belonged, since it returns a channel.
+- 31 call sites — `sound.fs`, `wav.fs`, four doc pages, the lesson, and ten
+  integration tests. No alias; the old name is gone.
+
+### Changed: `snd-vol` is now `tone-amp`
+
+- Both halves of the old name misled. `snd-` reads as device-wide, like its
+  neighbours `snd-open`, `snd-close`, `snd-wait`, `snd-channels` — but it
+  touches nothing except `tone` and `beep`. And `-vol` collided with the actual
+  volume system, `ch-vol!` / `ch-vol@` / `snd-unity`, which is a *different
+  quantity*: a gain of 0..256 applied to any audio on its way out, versus a
+  sample height of 0..32767 baked in at generation time.
+- `tone-amp` says both things. It is named for `tone` exactly as `tone-ch` is —
+  the channel `tone` uses, the amplitude `tone` uses — and calling it an
+  amplitude rather than a volume is the point, since that is what distinguishes
+  it from the gain.
+- No alias; the old name is gone. Callers: two lines in `sound.fs`, the
+  reference pages, and the lesson. Nothing in `examples/` or the suites used it.
+- The reference entry was also wrong in a second way, fixed here: it claimed
+  `snd-vol ( -- a-addr )`, "volume variable". It has been a `value` returning a
+  number, not an address, for some time — `a-addr` would have sent a reader to
+  `@` and `!` on it.
+
+### Documented: `>body` is for `create`d words only
+
+- No behaviour change — the reference page was wrong and the trap was
+  undocumented. It said `>body` worked for "`create`d (or `variable`/
+  `constant`)" words; **`constant` was never true**. A created word stores a
+  *pointer* to its data field and `>body` follows it, but a `value`, `constant`
+  or colon word keeps something else in that slot, so `>body` returns whatever
+  is there — `' val >body` on `99 value val` gives **99**, and `@` on it faults.
+- The standard leaves those cases undefined, so this is a legal reading, but a
+  plausible-looking number is a poor way to say "undefined". The page now names
+  each case that misbehaves, and four tests pin them so the answers can't drift
+  silently.
+- Gforth returns a real address for *every* word type, which it can because its
+  bodies sit at a fixed offset from the xt. Ours don't — `create` compiles a
+  literal pointing at a data field stored elsewhere — so matching it would mean
+  changing `create`'s layout. Recorded as a deliberate divergence rather than
+  something to fix.
+
+### Changed: `snd-open` returns an ior, and `snd-open?` is gone
+
+- **`snd-open ( -- ior )`** — 0 for success, like `allocate` and `open-file`.
+  One word now serves both callers, with no `0=` in either:
+
+      snd-open drop                     \ don't care; soundless is fine
+      snd-open abort" no audio device"  \ sound is a requirement
+      snd-open if snd-why type cr then  \ handle it, with SDL's own reason
+
+- **`snd-open?` is deleted.** Its `?` read as a question while the word
+  actually *opened*, and both halves of that mistake drew blood. Calling it to
+  ask "is sound on?" opened a **second device and leaked the first** —
+  measured at 21, 25, 29 across three calls, with `snd-close` reclaiming only
+  the last. And its true-means-success flag fought `abort"`, which fires on
+  true: `snd-open? abort" no sound"` aborted precisely when the open
+  *succeeded*, and let a real failure through silently. An ior gets both right
+  because the interesting case is non-zero either way.
+- **`snd-ready? ( -- flag )`** is the question it was mistaken for.
+- **`snd-why ( -- c-addr u )`** gives SDL's reason for the last failure, the
+  detail an opaque ior cannot carry — the same shape as `wav-load`/`wav-why`.
+  The message is *copied* at the moment of failure: `SDL_GetError` is only
+  valid until the next SDL call, and every failure path runs `snd-close`,
+  whose `SDL_QuitSubSystem` would replace it.
+- **Opening an already-open device succeeds and does nothing.** A redundant
+  call is now free — an `on-start` hook runs twice after a dirty `:e` — where
+  before it leaked. Deliberately a guard rather than a close-then-open, which
+  would clear every queue, reset every volume and pop the device; the real
+  reopen is spelled `snd-close snd-open drop`.
+- Closes a decision `docs/Exceptions.md` had recorded as deferred on the
+  grounds that `?`-variants "cost nothing".
+
+### Fixed: `snd-close` left dangling stream handles after a `snd-channels` shrink
+
+- `snd-close` walked `snd-channels` slots, but `snd-channels` is a *value* the
+  caller can write. Shrink it while a device is open and the tail of the table
+  falls outside its own cleanup: `snd-open drop  4 to snd-channels  snd-close`
+  destroyed 4 streams and left **60 stale handles** in a table this word
+  promises to empty.
+- Scope, measured rather than assumed: it is **not** a memory leak — the
+  `SDL_QuitSubSystem` at the end of `snd-close` frees every remaining audio
+  object, and 50 open/shrink/close cycles move RSS by nothing. Nor does
+  touching one fault today: SDL rejects the freed pointer and `ch-queued`
+  reads 0. What is left is 60 dangling handles and a broken invariant, with
+  the not-faulting part being SDL's defensiveness rather than a contract.
+- It now walks `snd-max-channels` — what the table is sized to, and what the
+  comment above it already claimed ("a fixed ceiling means snd-close can
+  always clear every slot"). `(ch-reset)` had it right; only the close path
+  used the mutable bound.
+- Found reviewing the `snd-channels` default change — and the shrink-then-close
+  order was the one this changelog's own first draft recommended. The docs now
+  put `snd-close` **before** the change, which also avoids orphaning anything
+  still playing above the new count.
+
+### Changed: `snd-channels` now defaults to 64, the ceiling
+
+- Measured rather than assumed. Against 16: **+104 KB** peak RSS, identical
+  open time and CPU over three seconds of playback, and `snd-pump` at 0.94 µs
+  instead of 0.25 µs — 3.8× on a ratio, 0.006% of a frame at 60 fps. The
+  per-channel Forth tables were already sized at `snd-max-channels`, so the
+  only real cost is the extra SDL streams.
+- `next-ch` therefore never has to steal in practice, and nobody has to know
+  the knob exists. It survives for the case that actually wants it: shrinking
+  to force channel reuse in a test costs 10 ms at 4 channels against 218 ms
+  at 64.
+
 ### Added: `pad.fs` — game controllers
 
 - `require pad.fs` reads game controllers through SDL's *gamepad* layer, so
@@ -19,17 +138,23 @@
   press. `pad-dead` (default 8000) is the dead zone, and a value, so a tired
   pad can be tuned at the prompt. `pad-dir` applies the same treatment to any
   axis, for the right stick and the triggers.
-- Up to four controllers open at once, in slots 0–3: `pad-open?` opens one,
+- Up to four controllers open at once, in slots 0–3: `pad-open` opens one,
   `pad` selects which the queries act on, so a two-player loop is
   `0 pad … 1 pad …`.
-- Two spellings of open, the same split `sound.fs` uses: **`pad-open?`
-  ( n -- flag )** answers false when nothing is plugged in, which is what a
-  game wants — a missing controller is an ordinary state of the world, and the
-  flag is the "am I on the keyboard today?" answer. `pad-open` aborts instead,
-  naming which failure it hit. Both still abort on a slot that cannot exist:
-  no controller at slot 1 is the everyday case, slot 9 is a caller bug, and
-  folding the two into one false would bury it in the branch written to ignore
-  false.
+- **`pad-open ( n -- ior )`** answers `0` for success rather than aborting,
+  because a missing controller is an ordinary state of the world. All three
+  reactions read straight, with no `0=` anywhere: `0 pad-open drop` to run
+  keyboard-only, `0 pad-open abort" no controller"` to insist, `0 pad-open if
+  … then` to handle it. A flag would invert one of those — with true meaning
+  success, `abort"` fires exactly when the pad opens — which is the mistake
+  `sound.fs` shipped as `snd-open?`, so neither library now spells an opener
+  with a `?`. **`pad-why ( -- c-addr u )`** carries the detail, since "nothing
+  plugged in" is worth retrying next frame and "no mapping for this device"
+  never will be until `pad-map` runs; it is emptied by a successful open, so
+  it never reports a stale reason.
+- A slot that cannot exist still aborts: no controller at slot 1 is the
+  everyday case `pad-open` reports, slot 9 is a caller bug, and one shared
+  non-zero would bury it in the branch written to ignore failure.
 - With nothing plugged in every query answers 0 or false, so a game runs
   keyboard-only on a machine with no controller.
 - `pad-has?` / `pad-hasaxis?` ask whether a pad even has a control, since not
@@ -38,9 +163,15 @@
   SDL detects devices arriving and leaving, and `pad?` reports whether a
   controller is still *attached* rather than merely opened. Re-opening a slot
   closes the stale handle first, so recovering from an unplug is one line:
-  `0 pad-open? drop`, retried each frame until it takes.
+  `0 pad-open drop`, retried each frame until it takes.
 - `examples/gamepad.fs` is a live readout of every control — the quickest way
   to check a new pad is mapped as expected. Full reference in `help pad`.
+- **`tutorial Gamepad`** teaches it hands-on, in 20 steps at the prompt with no
+  window: open a pad, watch a stick that reads 128 with nobody touching it,
+  find out what too small a dead zone does to a game, and end at `pad-dx`. A
+  reader with no controller can still do the whole lesson — every reading is
+  `0`, and "there might not be a pad" is one of the things being taught rather
+  than a gap being worked around.
 
 ### Changed: `free` on a null address now succeeds
 
@@ -120,6 +251,40 @@
   `+!`: both are read-modify-write, and the sugar hides the race rather than
   removing it.
 
+### Added: `tutorial Sound`
+
+- Twenty-eight steps on the one thing a single stream of Forth words cannot
+  express: two sounds at the same time. The spine is measured rather than
+  asserted — `time` on two tones is about 0.65 s, the same two on separate
+  channels about 0.35 s — because "they queue" and "they mix" look identical
+  in source.
+- Covers channels, `next-ch`, per-channel volume, `ch-stop`, and `ch-fade`
+  with the point that made it worth a step of its own: a fade sets a
+  **deadline** and only `snd-pump` applies it, so 500 ms spent not pumping is
+  500 ms of the fade gone.
+- The second half goes down a level. Fill a buffer with a square wave, hand it
+  over with `ch-format!` and `ch-put` — the machinery `tone` was using all
+  along — then wrap those same bytes in a 44-byte RIFF header and give them to
+  `wav-from`. So the lesson ships no binary asset, builds the file it decodes,
+  and `wav-from` earns its keep rather than being asserted useful.
+- It ends by giving everything back, and then by making that safe: `free`
+  alone leaves the `value` naming the buffer pointing at released memory, and
+  the lesson explicitly leaves your definitions behind. So `square` and `riff`
+  are written with a null guard from the start and the cleanup zeroes what it
+  frees — which turns a word that would have written 4410 samples through a
+  null pointer into one that does nothing, and makes the whole step repeatable.
+- Replayed by `make run-lessons` under the dummy audio driver, which consumes
+  audio in real time, so `snd-wait` and the fade loop terminate. Nothing can be
+  heard there, so almost every step also *shows* something — a channel count, a
+  byte count, a duration. The exception is the step contrasting `tone` with
+  `snd-wait`, where the observation is **when** a message appears (3 ms against
+  2059 ms) rather than what it says; that one is for a reader at a terminal.
+- Steps with a clock in them are single words (`cut`, `fading`, `fade-out`)
+  rather than lines typed in sequence. A `200 ms` between two typed lines is
+  lost in how long the reader takes to read the second — and the harness types
+  infinitely fast, so it can never notice. Verified by replaying with seconds
+  injected between every line, not just at native speed.
+
 ### Fixed: `abort"` did nothing outside a definition
 
 - `-1 abort" boom"` at the prompt, or at the top level of a `.fs` file, printed
@@ -142,6 +307,10 @@
   consumed whether the flag was true or not.
 - The message now ends its own line. It never paid the owed newline, so an
   `abort"` firing at the prompt ran straight into the next one (`went boom> `).
+  Four pages showed the old run-together form and have been corrected — the
+  manual, the `Interpreter` and `String_Words` references, and the `Exceptions`
+  lesson, whose replay stayed green because the harness checks for errors, not
+  for the values a lesson claims.
 - Nothing shipped was affected: every `abort"` in `core.fs` and the libraries
   is inside a definition, where it always compiled correctly. That is also why
   no suite caught it — found while writing a lesson that used the idiom.

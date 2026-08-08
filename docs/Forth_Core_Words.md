@@ -190,7 +190,7 @@ two things it used to mean. See `docs/Language-Reference/Comparison.md`.
 | ]         | ( -- )                                        | asm   | (x)    | Switch to compile        |
 | [CHAR]    | ( "name" -- )                                 | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
 | FIND      | ( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )  | asm   | (x)    | Dictionary lookup        |
-| >BODY     | ( xt -- a-addr )                              | asm   | (x)    | xt to data field         |
+| >BODY     | ( xt -- a-addr )                              | asm   | (x)    | `create`d words ONLY; other types return non-addresses |
 | DECIMAL   | ( -- )                                        | forth | (x)    | core.fs: #10 BASE !     |
 | WORD      | ( char -- c-addr )                            | forth | (x)    | core.fs                  |
 | >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | (x)    | core.fs                  |

@@ -7,21 +7,24 @@
 \ runs, including under qemu where there is no libSDL3 to load.
 \
 \   require wavcore.fs
-\   s" blip.wav" wav-load   ( -- sample | 0 )
+\   s" blip.wav" wav-load   ( -- sample | 0 )      from a file
+\   image len   wav-from    ( -- sample | 0 )      from bytes already in memory
 \
 \ A sample is an opaque handle; ask it things:
 \
 \   dup wav-frames .        \ how many sample frames
-\   dup wav-rate .          \ samples per second, as recorded in the file
+\   dup wav-rate .          \ FRAMES per second, as recorded in the file
 \   dup wav-loop? .         \ does it carry loop points?
 \   wav-free
 \
 \ On failure wav-load returns 0 and wav-why says what was wrong, so a program
 \ can carry on without its sound effect rather than abort.
 \
-\ Accepts uncompressed 16-bit PCM, mono or stereo -- the format every tool
-\ writes by default, and the one that needs no conversion to play. Anything
-\ else is refused by name rather than mis-decoded into noise.
+\ Accepts uncompressed PCM at 8, 16, 24 or 32 bits and 32-bit IEEE float, mono
+\ or stereo, at any rate. Only 24-bit is rewritten (widened to 32-bit integer,
+\ losslessly), because it is the one depth SDL has no format for; everything
+\ else goes to the device as it lies. Anything we cannot take is refused by
+\ name rather than mis-decoded into noise.
 \
 \ See wav.fs for playing one.
 

@@ -9,7 +9,7 @@ answer the same words. It pulls in its own dependencies:
     require pad.fs
 
     pads .              \ how many are plugged in
-    0 pad-open          \ open the first one
+    0 pad-open drop     \ open the first one
     pad-name type       \ Logitech Gamepad F310
 
 A game loop asks what is held right now, rather than waiting for events:
@@ -27,8 +27,8 @@ runs keyboard-only on a machine with no pad.
 At a glance:
 
     pads         ( -- n )          controllers currently connected
-    pad-open?    ( n -- flag )     open the nth connected one; false if none
-    pad-open     ( n -- )          ...same, but abort rather than answer false
+    pad-open     ( n -- ior )      open the nth connected one; 0 = opened
+    pad-why      ( -- c-addr u )   why the last pad-open failed
     pad          ( n -- )          select which open slot queries act on
     pad?         ( -- flag )       is a controller attached to this slot
     pad-name     ( -- c-addr u )   its name ("" if none)
@@ -75,30 +75,33 @@ How many controllers are connected right now. Starts SDL's gamepad subsystem
 on first use; no window is needed, so a controller-only program works fine.
 Recount whenever you like — it is a fresh query, not a cached number.
 
-## pad-open? ( n -- flag )
+Answers `0` rather than failing if the subsystem will not start at all. A game
+asking how many controllers are attached should hear "none" and carry on, the
+same way every other query answers 0 with no pad open.
+
+## pad-open ( n -- ior )
 Open the nth *connected* controller (0 is the first) into slot n and select
-it, answering true if that worked and false if it did not. This is the form a
-game wants: a missing controller is an ordinary state of the world, not an
-error, and the flag is exactly the "am I on the keyboard today?" answer.
+it. Returns an **ior**: `0` if it worked, non-zero if it did not. A missing
+controller is an ordinary state of the world, not an error, so nothing aborts
+and the caller decides what it means:
 
-    0 pad-open? to using-pad?
-    ...
-    using-pad? if pad-dx else key-dx then
+    0 pad-open drop                     \ don't care; run keyboard-only
+    0 pad-open abort" no controller"    \ a pad is required
+    0 pad-open if pad-why type cr then  \ handle it, with the reason
 
-The same split as `snd-open?` / `snd-open` in `sound.fs`, for the same reason.
+Note there is no `0=` in any of those. That is the point of an ior rather than
+a flag: with true meaning success, `abort"` would fire exactly when the pad
+opened. `sound.fs` shipped that shape once, as `snd-open?`, and it bit us —
+both libraries now return an ior, and neither spells an opener with a `?`.
 
-One failure it does *not* answer false to: a slot number that cannot exist.
-Slots run 0 to `#pads`-1 (0–3 as shipped), and `4 pad-open?` aborts. Nothing
-false is being reported there — no controller at slot 1 is the everyday case
-this word exists for, while slot 9 is a bug in the caller, and the branch
-written to shrug false off is the last place you want it buried.
+The magnitude is opaque; test zero versus non-zero and read `pad-why` for the
+detail. `pad?` is the separate question of whether a controller is *attached*.
 
-## pad-open ( n -- )
-The aborting spelling: same open, but a failure stops the program with a
-message naming which failure it was — slot out of range, no controller at that
-index, or SDL knows the device but has no gamepad mapping for it (see
-`pad-map`). Use it at the prompt and in code that genuinely requires a
-controller; use `pad-open?` in anything that should still run without one.
+One failure does **not** come back as an ior: a slot that cannot exist. Slots
+run 0 to `#pads`-1 (0–3 as shipped), and `4 pad-open` aborts. No controller at
+slot 1 is the everyday case this word reports; slot 9 is a bug in your code,
+and the branch written to shrug failure off is the last place you want it
+buried.
 
 Re-opening a slot is fine, and is how you recover after a controller is
 unplugged and pushed back in: whatever was in the slot is closed first, so its
@@ -106,11 +109,24 @@ handle is never stranded. The old one is closed only *after* the new open
 succeeds, so a re-open that fails — the pad was pulled out again — leaves the
 working controller in place rather than emptying the slot on the way past.
 
+## pad-why ( -- c-addr u )
+Why the last `pad-open` failed — "no controller at that index", SDL's own
+message for a device it has no gamepad mapping for, or a subsystem that would
+not start. Never empty when the ior is non-zero, and always empty after a
+successful open, so it never reports a stale reason.
+
+The two failures want different responses, which is why the detail is kept:
+nothing plugged in is worth retrying next frame, an unmapped controller never
+will be until `pad-map` runs. Recorded at the moment of failure, because
+SDL's error string is only good until the next SDL call.
+
+    \ 0 pad-open if  ." cannot use a pad: " pad-why type cr  then
+
 ## pad ( n -- )
 Choose which open slot the queries act on. Slots are numbered 0 to `#pads`-1.
 This is what makes two players work:
 
-    0 pad-open  1 pad-open          \ two controllers
+    0 pad-open drop  1 pad-open drop    \ two controllers
 
     0 pad  pad-dx p1-walk
     1 pad  pad-dx p2-walk
@@ -157,16 +173,16 @@ not from the device list — so nothing notices an unplug until something pumps.
 `pads` and `pad-update` both pump; `sdl-show` does too. Without one of them a
 controller pulled out and pushed back in is never seen again.
 
-Recovering is `pad-open?` on the same slot — one line, because a retry that
-finds nothing is a false rather than an abort:
+Recovering is `pad-open` on the same slot — one line, because a retry that
+finds nothing is an ior rather than an abort:
 
     pad? 0= if                    \ after a pad-update
-        0 pad-open? drop          \ still nothing? try again next frame
+        0 pad-open drop           \ still nothing? try again next frame
     then
 
 A replugged controller gets a *new* instance id, so this really is a fresh
 open — but the stale handle in that slot is closed first, so nothing is
-stranded. See `pad-open?`.
+stranded. See `pad-open`.
 
 `ev-pad-added` and `ev-pad-removed` arrive through `sdl-poll` if you would
 rather react to the moment than poll for it. Neither opens or closes anything
@@ -244,7 +260,7 @@ at a layout. A mapping line — the community `gamecontrollerdb.txt` format —
 fixes that:
 
     s" 030000005e040000e002000003090000,Xbox Wireless,a:b0,b:b1,..." pad-map
-    0 pad-open
+    0 pad-open drop
 
 Aborts if the mapping string is malformed.
 
@@ -261,6 +277,8 @@ is one more reason to reach for the merged words in a game that only needs
 directions.
 
 ## See also
+- `tutorial Gamepad` — the hands-on version of this page: open a pad, watch a
+  stick's resting offset, and see why `pad-dx` exists.
 - `help sdl3` — the window these controls usually drive, and the event loop
   gamepad events share.
 - `help graphics` — drawing the game they play.

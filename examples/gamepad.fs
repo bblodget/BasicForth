@@ -61,7 +61,7 @@ here (btns) - constant #btns
     ." press a keyboard key to stop" cr ;
 
 : gamepad ( -- )
-    0 pad-open? 0= if
+    0 pad-open if
         ." no controller found -- plug one in and try again" cr exit
     then
     page
