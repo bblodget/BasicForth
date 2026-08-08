@@ -65,3 +65,36 @@ export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOM
 # SDL_Init (see docs/Graphics.md "Troubleshooting"). Costs nothing for
 # BasicForth — SDL key events don't use XIM.
 export XMODIFIERS=@im=none
+
+# The text-to-speech engine voice.fs renders with (docs/Speech.md). Found, not
+# hardcoded, for the same reason the root above is derived: several worktrees
+# source this file, and an absolute path would send every one of them to a
+# single checkout's venv. Looked for in the venv beside THIS checkout, then a
+# shared one, then whatever is on PATH.
+#
+# Left unset when there is no engine, which is what makes the suite's
+# real-engine test skip with a reason instead of failing. Must be EXPORTED:
+# that test reads it from a child process.
+#
+# Override either half before sourcing, for a different install or voice:
+#   PIPER_VOICES=/srv/voices PIPER_VOICE=en_GB-alba-medium . ./setup.sh
+for _bf_piper in "$BASICFORTH_HOME/venv/bin/piper" "$HOME/.venv/piper/bin/piper"; do
+    [ -x "$_bf_piper" ] && break
+    _bf_piper=""
+done
+[ -n "$_bf_piper" ] || _bf_piper="$(command -v piper 2>/dev/null)"
+if [ -n "$_bf_piper" ]; then
+    # %o/%t are voice.fs placeholders, not shell syntax — and the whole
+    # template must avoid double quotes, which would end voice-cmd!'s s".
+    export VOICE_ENGINE_CMD="$_bf_piper --data-dir ${PIPER_VOICES:-$HOME/.local/share/piper-voices} -m ${PIPER_VOICE:-en_US-lessac-medium} -f %o -- %t"
+else
+    # Nothing here — so CLEAR it rather than leaving it. Sourcing this file in
+    # a second checkout is routine, and a value inherited from the first would
+    # outlive it and keep pointing at that checkout's venv: the same
+    # cross-worktree leak the search above exists to prevent, arriving by the
+    # back door. setup.sh owns this variable, as it owns BASICFORTH_PATH; set
+    # your own template for another engine AFTER sourcing.
+    unset VOICE_ENGINE_CMD
+fi
+unset _bf_piper
+

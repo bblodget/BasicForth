@@ -5832,6 +5832,187 @@ fi
 rm -rf "$shu_tmp"
 
 # =========================================================================
+section "VOICE (rendering speech to WAV)"
+# =========================================================================
+# voice.fs drives an external text-to-speech engine, and the engine is a
+# settable command template — which is exactly what lets these tests run
+# everywhere. Three-line shell scripts stand in for the engine, so the
+# plumbing (substitution, quoting, every failure ior) is covered on a machine
+# with no TTS installed at all, on both architectures. What a stand-in cannot
+# tell us is whether a REAL engine's WAV loads; that check needs a real
+# engine present and is not faked here.
+vc_pre="include $FORTH_LIB/voice.fs"
+vc_forth="${FORTH/.\//$PWD/}"        # absolute, so it survives a cd
+vc_dir="$(mktemp -d)"
+cat > "$vc_dir/engine" <<'SH'
+#!/bin/sh
+printf '%s' "$1" > "$2"              # $1 = the text, $2 = the output path
+SH
+cat > "$vc_dir/fails" <<'SH'
+#!/bin/sh
+exit 7
+SH
+cat > "$vc_dir/silent" <<'SH'
+#!/bin/sh
+exit 0                               # exits clean, writes nothing
+SH
+chmod +x "$vc_dir/engine" "$vc_dir/fails" "$vc_dir/silent"
+
+vc_run() {                           # run Forth lines inside the fixture dir
+    ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$1" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $vc_forth 2>&1 )
+}
+vc_check() {                         # name, output, pattern
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+
+# Both placeholders expand, and the text reaches the engine VERBATIM however
+# much shell syntax it contains. The payload is a harmless canary: if the
+# quoting ever regresses the evidence is a file appearing in a temp
+# directory, never a destructive command.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" it'"'"'s $(touch pwn) and `touch pwn2`" s" out.txt" voice-render .
+." [" voice-why type ." ]"')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && [ "$(cat "$vc_dir/out.txt" 2>/dev/null)" = 'it'"'"'s $(touch pwn) and `touch pwn2`' ] \
+   && [ ! -e "$vc_dir/pwn" ] && [ ! -e "$vc_dir/pwn2" ] \
+   && printf '%s' "$vc_o" | grep -q '\[\]'; then
+    printf "  ${GREEN}PASS${NC}  voice-render substitutes %%t/%%o and quotes shell syntax\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  voice-render substitution/quoting\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# A literal printf %s must survive: only %o and %t expand.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" 100%s sure" s" pct.txt" voice-render .')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && [ "$(cat "$vc_dir/pct.txt" 2>/dev/null)" = "100%s sure" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render leaves a literal %%s alone\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  literal %%s\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# The four failure iors, each with the reason voice-why gives for it.
+vc_check "voice-render: no engine command set (ior 1)" \
+    "$(vc_run 's" " voice-cmd! s" hi" s" a.wav" voice-render . voice-why type')" \
+    "^1 no engine command set"
+vc_check "voice-render: engine exits non-zero (ior 3)" \
+    "$(vc_run 's" ./fails %t %o" voice-cmd! s" hi" s" b.wav" voice-render . voice-why type')" \
+    "^3 engine exited with an error"
+vc_check "voice-render: engine writes nothing (ior 4)" \
+    "$(vc_run 's" ./silent %t %o" voice-cmd! s" hi" s" c.wav" voice-render . voice-why type')" \
+    "^4 engine wrote no audio"
+
+# A STALE output file must not be mistaken for this render's work. Render
+# once for real, then point a silent engine at the same path: the answer must
+# be "wrote no audio", not the previous take reported as success. Re-rendering
+# a vocabulary after a voice model goes missing is exactly this case, and it
+# is the worst kind of failure — nothing looks wrong until you listen.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" first take" s" stale.txt" voice-render .
+s" ./silent %t %o" voice-cmd!
+s" second take" s" stale.txt" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && printf '%s' "$vc_o" | grep -q "^4 engine wrote no audio" \
+   && [ ! -e "$vc_dir/stale.txt" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render will not pass off a stale file as success\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stale output detection\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# Clearing the old output can itself FAIL — a read-only directory, or a path
+# that is a directory — and (sh-rm) drops the shell's status, so nothing says
+# so. A surviving stale file must not then be counted as this render's work.
+mkdir -p "$vc_dir/ro" && printf 'previous take' > "$vc_dir/ro/old.txt"
+chmod 555 "$vc_dir/ro"
+vc_o=$(vc_run 's" ./silent %t %o" voice-cmd!
+s" new phrase" s" ro/old.txt" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^5 could not clear the previous output" \
+   && [ "$(cat "$vc_dir/ro/old.txt" 2>/dev/null)" = "previous take" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render reports a clearance it could not make\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  undeletable stale output\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+# A directory at the output path is the same hazard by another route:
+# open-file SUCCEEDS on a directory here, so a size check would call it 4096
+# bytes of existing audio. Both checks catch it; the existence one names the
+# right culprit instead of blaming the engine.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" hello" s" ro" voice-render . voice-why type')
+vc_check "voice-render refuses a directory as the output path" \
+    "$vc_o" "^5 could not clear the previous output"
+chmod 755 "$vc_dir/ro"
+
+# ...but a render that CANNOT run must not destroy the previous take either:
+# the removal happens only once the command is known to fit.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" keep me" s" keep.txt" voice-render .
+here 4200 char a fill
+here 4200 s" keep.txt" voice-render .')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && printf '%s' "$vc_o" | grep -q "^2  ok" \
+   && [ "$(cat "$vc_dir/keep.txt" 2>/dev/null)" = "keep me" ]; then
+    printf "  ${GREEN}PASS${NC}  a refused render leaves the previous file intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused render kept the old file\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# An overlong command must be REFUSED, not run truncated — a truncated
+# command could have lost the flag naming its output file. Same canary rule.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+here 4200 char a fill
+here 4200 s" $(touch pwn3)" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^2 engine command too long" \
+   && [ ! -e "$vc_dir/pwn3" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render refuses an overlong command\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  overlong command refusal\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# A template too long to hold is stored as NOTHING, not truncated: the
+# render that follows must report "no engine command set", never run a
+# half-command that lost its output flag.
+vc_check "voice-cmd! stores nothing rather than truncating" \
+    "$(vc_run 'here 600 char x fill  here 600 voice-cmd!
+voice-cmd nip .  s" hi" s" d.wav" voice-render .')" \
+    "^0 1  ok"
+
+# The one question a stand-in engine cannot answer: does a REAL engine's WAV
+# survive wav-load? Export VOICE_ENGINE_CMD with a template (setup.sh has one)
+# and this runs; leave it unset and it skips, saying so. wavcore.fs rather
+# than wav.fs on purpose — decoding needs no SDL, so this works on a machine
+# with no audio device, and under qemu if an engine is installed there.
+if [ -n "$VOICE_ENGINE_CMD" ] && [ "${VOICE_ENGINE_CMD//\"/}" != "$VOICE_ENGINE_CMD" ]; then
+    # A template is handed to voice-cmd! through s", which ends at the first
+    # double quote — so one here would silently leave the DEFAULT template in
+    # force and fail this test for a reason that looks nothing like the cause.
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD contains a \" — use single quotes)\n"
+elif [ -n "$VOICE_ENGINE_CMD" ]; then
+    vc_real=$(printf 's" %s" voice-cmd!\ninclude %s/wavcore.fs\ns" you win" s" real.wav" voice-render .\n: t s" real.wav" wav-load dup 0= if drop ." LOADFAIL " wav-why type exit then\n  dup wav-frames 0> . dup wav-chans 0> . dup wav-rate . wav-free ;\nt\n' \
+        "$VOICE_ENGINE_CMD" "$FORTH_LIB")
+    # a neural engine loads its model before it says anything: seconds, not ms
+    vc_o=$( cd "$vc_dir" && printf '%s\n' "$vc_pre" "$vc_real" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $vc_forth 2>&1 )
+    if printf '%s' "$vc_o" | grep -q "^0  ok" \
+       && printf '%s' "$vc_o" | grep -q "^-1 -1 "; then
+        printf "  ${GREEN}PASS${NC}  a real engine's WAV renders and decodes (%s)\n" \
+            "$(printf '%s' "$vc_o" | sed -n 's/^-1 -1 \([0-9]*\).*/\1 Hz/p' | head -1)"
+        ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  real engine render+decode\n    Got: %q\n" "$vc_o"; ((failed++))
+    fi
+else
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD not set)\n"
+fi
+
+chmod -R u+w "$vc_dir" 2>/dev/null
+rm -rf "$vc_dir"
+
+# =========================================================================
 section "DIS (disassembler)"
 # =========================================================================
 # dis shells out to objdump, so it needs binutils; under qemu the child

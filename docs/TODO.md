@@ -931,6 +931,30 @@ docs/Graphics.md for the API.
   `tests/test_lessons.py` simply the no-controller path, verified by hiding
   /dev/input under `bwrap`. No window is needed, so every step is a single-shot
   query at the prompt and the lesson needs no skip entries.
+- [x] **Speech, tier 1: rendering** — `voice.fs`, `voice-render ( text u path u
+  -- ior )` drives an external TTS engine to write a WAV, which `wav-load`
+  then plays like any other sample. The engine is a settable command template
+  (`voice-cmd!`) with `%t`/`%o` placeholders, both shell-quoted, so switching
+  engines is one line and **nothing in the repo binds to a TTS engine**.
+  Requires only `shellutil.fs` — no FFI, no SDL, no decoder — so it runs on
+  the board and under QEMU, and its tests use a stand-in shell script rather
+  than needing a TTS installed. `help voice`, `docs/Speech.md`.
+- [ ] **Speech, tier 2: speaking** — `speech.fs` with `say ( c-addr u -- )`,
+  synthesizing into memory through flite and playing on a `sound.fs` channel;
+  `talking?` is the channel's own `ch-playing?`. Verified viable before
+  planning: `flite_text_to_wave` takes **2 arguments** and returns a
+  `cst_wave*` (`rate@8 num_samples@12 channels@16 samples*@24`), which fits
+  `(ccall)` as it stands — no callback, no floats, and `RTLD_NOW` alone
+  resolves the voice library. Bind lazily from `speech-open ( -- ior )` using
+  `(dlopen)`/`(dlsym)` so a machine without libflite gets an ior rather than
+  an abort at `require` time. Freeing flite's buffer straight after `ch-put`
+  is safe — `SDL_PutAudioStreamData` copies.
+- [ ] **Dark Star phrases** — render the ~11 phrases of the original's
+  vocabulary into a `voice/` directory beside the game, restore `Speech?`,
+  and wire `SayEnd`'s random win/lose pick and `GoGoGo`'s "don't talk over
+  yourself" gate to `ch-playing?`. Costs the game **no new runtime
+  dependency** (it already has `wav.fs`), and self-rendered phrases avoid the
+  rights question hanging over the original's art.
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
