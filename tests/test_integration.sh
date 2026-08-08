@@ -1276,7 +1276,10 @@ else
     # Closing the pad must leave the window drawable and the audio playable.
     # `pads drop` is what STARTS the gamepad subsystem -- without it
     # pad-closeall's quit branch never runs and this test proves nothing.
-    pad_td=$(printf 'require pad.fs\nrequire sound.fs\n64 32 sdl-open snd-open drop\npads drop\npad-closeall\nsdl-frame red clear gr-base @ l@ u. sdl-show\n440 20 tone\n." survived" sdl-close snd-close depth .\nbye\n' \
+    # snd-open is spelled with abort", not drop: it used to abort by itself and
+    # the test leaned on that, so a bare `drop` here would let a FAILED open
+    # through and still report success with tone silently a no-op.
+    pad_td=$(printf 'require pad.fs\nrequire sound.fs\n64 32 sdl-open snd-open abort\" teardown: no audio device\"\npads drop\npad-closeall\nsdl-frame red clear gr-base @ l@ u. sdl-show\n440 20 tone\n." survived" sdl-close snd-close depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 15 $FORTH 2>&1)
     if printf '%s' "$pad_td" | grep -q '16711680' \
        && printf '%s' "$pad_td" | grep -q 'survived0'; then
