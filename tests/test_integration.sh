@@ -1124,6 +1124,190 @@ else
     fi
 fi
 
+# Gamepads (pad.fs) — same skip rules; pad.fs dlopens libSDL3 at include time.
+#
+# These are NOT controller tests: no controller is assumed, and they pass
+# identically whether or not one is plugged in. Two things are under test.
+#
+# First, the direction logic — the dead zone and the d-pad-wins merge — which
+# lives in (dz) and (merge) precisely so it can be fed exact numbers. A real
+# stick tests this WORSE than a test does: you cannot hold one at exactly
+# pad-dead and check both sides of the threshold.
+#
+# Second, the no-pad-open guards. Those matter because the absent controller
+# is real: someone loads pad.fs with nothing attached and calls pad-dx, and it
+# must answer 0 rather than dereference a null handle. Every guard below is
+# deterministic with hardware present, because no pad is ever opened.
+#
+# What these CANNOT check is whether pad-south is really the bottom button or
+# whether the event offsets are right. Only a physical controller shows that
+# (examples/gamepad.fs is the readout for it).
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (no libSDL3 in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (libSDL3 not installed)\n"
+else
+    # Dead zone: |n| < pad-dead is centre, |n| >= pad-dead is a direction. The
+    # boundary pair 7999/8000 is the whole point — an off-by-one here makes a
+    # pad feel subtly dead or subtly twitchy and no other test would notice.
+    pad_dz=$(printf 'require pad.fs\n-32768 (dz) . -8001 (dz) . -8000 (dz) . -7999 (dz) . 0 (dz) . 7999 (dz) . 8000 (dz) . 32767 (dz) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_dz" | grep -q -- '-1 -1 -1 0 0 0 1 1'; then
+        printf "  ${GREEN}PASS${NC}  (dz) dead zone, both sides of the 7999/8000 boundary\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (dz) dead zone\n    Got: %q\n" "$pad_dz"; ((failed++))
+    fi
+
+    # The d-pad wins over a contradicting stick. Order: dpad-left + stick hard
+    # right must be -1, NOT 0 and NOT +1 — a worn stick resting off centre must
+    # never cancel a deliberate d-pad press. Both d-pad buttons down is 0.
+    pad_mg=$(printf 'require pad.fs\n-1 0 30000 (merge) . 0 -1 -30000 (merge) . -1 -1 0 (merge) . 0 0 -30000 (merge) . 0 0 30000 (merge) . 0 0 100 (merge) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_mg" | grep -q -- '-1 1 0 -1 1 0'; then
+        printf "  ${GREEN}PASS${NC}  (merge) d-pad beats a contradicting stick; both d-pad = 0\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (merge) d-pad/stick merge\n    Got: %q\n" "$pad_mg"; ((failed++))
+    fi
+
+    # Every query with no pad open answers 0/false and leaves the stack clean.
+    # pad-name returns a zero-length string rather than a null pointer, so a
+    # caller can `type` it without checking.
+    pad_gd=$(printf 'require pad.fs\npad? . pad-dx . pad-dy . pad-leftx pad-axis . pad-leftx pad-dir . pad-south pad-held? . pad-south pad-has? . pad-name nip . pad-update pad-close depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_gd" | grep -q '0 0 0 0 0 0 0 0 0'; then
+        printf "  ${GREEN}PASS${NC}  no pad open: every query answers 0, stack stays clean\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  no-pad-open guards\n    Got: %q\n" "$pad_gd"; ((failed++))
+    fi
+
+    # A bad slot and a missing controller are different errors, and neither may
+    # crash: the interpreter has to come back and keep working afterwards.
+    pad_er=$(printf 'require pad.fs\n9 pad-open\n99 pad\n1000 pad-open\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_er" | grep -q 'pad-open: slot out of range' \
+       && printf '%s' "$pad_er" | grep -q 'pad: slot out of range' \
+       && printf '%s' "$pad_er" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-open/pad reject bad slots and the session survives\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad slot error handling\n    Got: %q\n" "$pad_er"; ((failed++))
+    fi
+
+    # pad-open? is the form a game uses to degrade to the keyboard, so the one
+    # thing it must never do is abort when nothing is plugged in. Slot 3 is the
+    # last one; asserting "no abort message, session alive, answer is a proper
+    # flag" holds whether or not hardware is attached, where asserting false
+    # would only hold on a machine with fewer than four controllers.
+    pad_of=$(printf 'require pad.fs\n3 pad-open? dup 0= swap -1 = or . ." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_of" | grep -q -- '-1 alive0' \
+       && ! printf '%s' "$pad_of" | grep -q 'no controller at that index'; then
+        printf "  ${GREEN}PASS${NC}  pad-open? reports a flag instead of aborting\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-open? non-aborting open\n    Got: %q\n" "$pad_of"; ((failed++))
+    fi
+
+    # ...but a slot that cannot exist is still an abort, in BOTH spellings. A
+    # caller looping over slots wants false for the empty ones and a loud error
+    # for slot 9, not the same false it already ignores.
+    pad_ob=$(printf 'require pad.fs\n9 pad-open?\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ob" | grep -q 'pad-open?: slot out of range' \
+       && printf '%s' "$pad_ob" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-open? still aborts on an impossible slot\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-open? bad slot\n    Got: %q\n" "$pad_ob"; ((failed++))
+    fi
+
+    # Button and axis constants must equal the SDL_GAMEPAD_* enum values in
+    # SDL_gamepad.h. A wrong one fails silently at run time — a button that is
+    # simply never pressed — which is exactly the bug nobody finds.
+    pad_ct=$(printf 'require pad.fs\npad-south . pad-east . pad-west . pad-north . pad-back . pad-guide . pad-start .\npad-lstick . pad-rstick . pad-lshoulder . pad-rshoulder .\npad-up . pad-down . pad-left . pad-right .\npad-leftx . pad-lefty . pad-rightx . pad-righty . pad-ltrigger . pad-rtrigger .\nev-pad-axis . ev-pad-down . ev-pad-up . ev-pad-added . ev-pad-removed .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ct" | grep -q '0 1 2 3 4 5 6' \
+       && printf '%s' "$pad_ct" | grep -q '7 8 9 10' \
+       && printf '%s' "$pad_ct" | grep -q '11 12 13 14' \
+       && printf '%s' "$pad_ct" | grep -q '0 1 2 3 4 5' \
+       && printf '%s' "$pad_ct" | grep -q '1616 1617 1618 1619 1620'; then
+        printf "  ${GREEN}PASS${NC}  gamepad button/axis/event constants match SDL_gamepad.h\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  gamepad constants\n    Got: %q\n" "$pad_ct"; ((failed++))
+    fi
+
+    # C returns narrower than a cell arrive with the high bits undefined, so
+    # pad-axis sign-extends by hand. Getting this wrong turns a stick pushed
+    # left (-32768) into +65535 -- full deflection the WRONG WAY.
+    pad_sx=$(printf 'require pad.fs\n$FFFF (s16) . $8000 (s16) . $7FFF (s16) . 0 (s16) . $FFFFFFFF (s32) . $80000000 (s32) . 1 (s32) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_sx" | grep -q -- '-1 -32768 32767 0 -1 -2147483648 1'; then
+        printf "  ${GREEN}PASS${NC}  (s16)/(s32) sign-extend narrow C returns\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  narrow C return sign extension\n    Got: %q\n" "$pad_sx"; ((failed++))
+    fi
+
+    # pads must answer a non-negative count without a window, and without
+    # leaving SDL's malloc'd id array behind. Value depends on what is plugged
+    # in, so assert the contract, not the number.
+    pad_ps=$(printf 'require pad.fs\npads 0< 0= . depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ps" | grep -q -- '-1 0'; then
+        printf "  ${GREEN}PASS${NC}  pads counts controllers with no window open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pads with no window\n    Got: %q\n" "$pad_ps"; ((failed++))
+    fi
+
+    # (pad-id) bounds-checks the index against the SAME SDL_GetGamepads call it
+    # then indexes, and answers 0 rather than reading off the end of the array.
+    # An earlier version took the count from `pads` and indexed a SECOND call's
+    # array -- unplug a controller in between and the index runs past it. This
+    # passes with or without hardware: an index of 999 is out of range either
+    # way, and 0 is not a valid SDL instance id.
+    pad_id=$(printf 'require pad.fs\npads drop\n999 (pad-id) . 5000 (pad-id) . depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_id" | grep -q '0 0 0'; then
+        printf "  ${GREEN}PASS${NC}  (pad-id) refuses an out-of-range index (no read past the list)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (pad-id) bounds check\n    Got: %q\n" "$pad_id"; ((failed++))
+    fi
+
+    # Subsystem teardown must not be contagious. SDL_Quit() ends EVERY
+    # subsystem, so pad-closeall calls SDL_QuitSubSystem(GAMEPAD) instead --
+    # the same care sdl-close already takes, and for the same reason: closing
+    # one thing here used to leave sound.fs's streams pointing at freed memory.
+    # Closing the pad must leave the window drawable and the audio playable.
+    # `pads drop` is what STARTS the gamepad subsystem -- without it
+    # pad-closeall's quit branch never runs and this test proves nothing.
+    pad_td=$(printf 'require pad.fs\nrequire sound.fs\n64 32 sdl-open snd-open drop\npads drop\npad-closeall\nsdl-frame red clear gr-base @ l@ u. sdl-show\n440 20 tone\n." survived" sdl-close snd-close depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 15 $FORTH 2>&1)
+    if printf '%s' "$pad_td" | grep -q '16711680' \
+       && printf '%s' "$pad_td" | grep -q 'survived0'; then
+        printf "  ${GREEN}PASS${NC}  pad-closeall leaves the window and audio alive\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-closeall subsystem teardown\n    Got: %q\n" "$pad_td"; ((failed++))
+    fi
+
+    # ...and the other way round: closing the window must not kill the gamepad
+    # subsystem either.
+    # Asks SDL whether the subsystem is up, via SDL_WasInit. An earlier version
+    # asserted `pads 0< 0=`, which is ALSO true when the subsystem is dead and
+    # pads answers 0 -- it passed against a deliberately broken sdl-close.
+    pad_tw=$(printf 'require pad.fs\n64 32 sdl-open\npads drop (pad-up?) sdl-close (pad-up?) . .\n." survived" pad-closeall depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 15 $FORTH 2>&1)
+    if printf '%s' "$pad_tw" | grep -q -- '-1 -1' && printf '%s' "$pad_tw" | grep -q 'survived0'; then
+        printf "  ${GREEN}PASS${NC}  sdl-close leaves the gamepad subsystem alive\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-close vs gamepad subsystem\n    Got: %q\n" "$pad_tw"; ((failed++))
+    fi
+
+    # require pad.fs pulls sdl3.fs (and through it ffi/graphics) on its own.
+    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open sdl-win 0<> . sdl-close pad-closeall depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_rq" | grep -q -- '-1 0'; then
+        printf "  ${GREEN}PASS${NC}  require pad.fs pulls sdl3 deps; pad-closeall keeps SDL usable\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  require pad.fs deps\n    Got: %q\n" "$pad_rq"; ((failed++))
+    fi
+fi
+
 # SDL3 audio — same skip rules, dummy audio driver so no sound hardware is
 # required. tone before snd-open must be a silent no-op (depth unchanged);
 # after snd-open the stream is live and tone queues PCM (tone aborts via

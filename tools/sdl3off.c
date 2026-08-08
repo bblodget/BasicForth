@@ -47,5 +47,56 @@ int main(void) {
   printf("SDLK_LEFT=0x%x SDLK_RIGHT=0x%x SDLK_UP=0x%x SDLK_DOWN=0x%x\n",
          (unsigned)SDLK_LEFT, (unsigned)SDLK_RIGHT,
          (unsigned)SDLK_UP, (unsigned)SDLK_DOWN);
+
+  printf("\n-- gamepad --\n");
+  printf("SDL_INIT_GAMEPAD=0x%x\n", (unsigned)SDL_INIT_GAMEPAD);
+
+  printf("\n-- gamepad buttons --\n");
+  printf("SOUTH=%d EAST=%d WEST=%d NORTH=%d\n",
+         (int)SDL_GAMEPAD_BUTTON_SOUTH, (int)SDL_GAMEPAD_BUTTON_EAST,
+         (int)SDL_GAMEPAD_BUTTON_WEST,  (int)SDL_GAMEPAD_BUTTON_NORTH);
+  printf("BACK=%d GUIDE=%d START=%d\n",
+         (int)SDL_GAMEPAD_BUTTON_BACK, (int)SDL_GAMEPAD_BUTTON_GUIDE,
+         (int)SDL_GAMEPAD_BUTTON_START);
+  printf("LEFT_STICK=%d RIGHT_STICK=%d LEFT_SHOULDER=%d RIGHT_SHOULDER=%d\n",
+         (int)SDL_GAMEPAD_BUTTON_LEFT_STICK,
+         (int)SDL_GAMEPAD_BUTTON_RIGHT_STICK,
+         (int)SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
+         (int)SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+  printf("DPAD_UP=%d DPAD_DOWN=%d DPAD_LEFT=%d DPAD_RIGHT=%d\n",
+         (int)SDL_GAMEPAD_BUTTON_DPAD_UP, (int)SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+         (int)SDL_GAMEPAD_BUTTON_DPAD_LEFT,
+         (int)SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+  printf("BUTTON_COUNT=%d\n", (int)SDL_GAMEPAD_BUTTON_COUNT);
+
+  printf("\n-- gamepad axes --\n");
+  printf("LEFTX=%d LEFTY=%d RIGHTX=%d RIGHTY=%d\n",
+         (int)SDL_GAMEPAD_AXIS_LEFTX, (int)SDL_GAMEPAD_AXIS_LEFTY,
+         (int)SDL_GAMEPAD_AXIS_RIGHTX, (int)SDL_GAMEPAD_AXIS_RIGHTY);
+  printf("LEFT_TRIGGER=%d RIGHT_TRIGGER=%d AXIS_COUNT=%d\n",
+         (int)SDL_GAMEPAD_AXIS_LEFT_TRIGGER,
+         (int)SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,
+         (int)SDL_GAMEPAD_AXIS_COUNT);
+
+  printf("\n-- gamepad events --\n");
+  printf("AXIS_MOTION=0x%x BUTTON_DOWN=0x%x BUTTON_UP=0x%x\n",
+         (unsigned)SDL_EVENT_GAMEPAD_AXIS_MOTION,
+         (unsigned)SDL_EVENT_GAMEPAD_BUTTON_DOWN,
+         (unsigned)SDL_EVENT_GAMEPAD_BUTTON_UP);
+  printf("ADDED=0x%x REMOVED=0x%x REMAPPED=0x%x\n",
+         (unsigned)SDL_EVENT_GAMEPAD_ADDED,
+         (unsigned)SDL_EVENT_GAMEPAD_REMOVED,
+         (unsigned)SDL_EVENT_GAMEPAD_REMAPPED);
+  printf("gbutton.which offset=%zu\n",
+         offsetof(SDL_GamepadButtonEvent, which));
+  printf("gbutton.button offset=%zu\n",
+         offsetof(SDL_GamepadButtonEvent, button));
+  printf("gbutton.down offset=%zu\n",
+         offsetof(SDL_GamepadButtonEvent, down));
+  printf("gaxis.which offset=%zu\n", offsetof(SDL_GamepadAxisEvent, which));
+  printf("gaxis.axis offset=%zu\n", offsetof(SDL_GamepadAxisEvent, axis));
+  printf("gaxis.value offset=%zu\n", offsetof(SDL_GamepadAxisEvent, value));
+  printf("gdevice.which offset=%zu\n", offsetof(SDL_GamepadDeviceEvent, which));
+  printf("sizeof(SDL_JoystickID)=%zu\n", sizeof(SDL_JoystickID));
   return 0;
 }

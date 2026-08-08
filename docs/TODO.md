@@ -889,6 +889,30 @@ docs/Graphics.md for the API.
   true-means-success flag fought `abort"`, which fires on true. Default
   `snd-channels` 16 → 64 at the same time; measured cost of the extra 48
   streams is ~100 KB and <1 µs per `snd-pump`.
+- [x] Game controllers via SDL3's gamepad API: `pad.fs` — `pads`/`pad-open`/
+  `pad` (four slots, so two players work), `pad-held?`/`pad-axis`,
+  `pad-dx`/`pad-dy` (d-pad + left stick merged to -1/0/1, d-pad wins on
+  disagreement), `pad-dead`, `pad-has?`, `pad-map`; buttons named by position
+  (`pad-south`, not `pad-a`); answers 0/false with nothing plugged in so games
+  still run keyboard-only; `examples/gamepad.fs` readout; `help pad`
+- [ ] **Rumble — `SDL_RumbleGamepad`.** Deliberately left out of the first
+  `pad.fs`; the two-player karate port will want it, and it is easier to land
+  BEFORE the Gamepad tutorial is written than to retrofit the lesson after.
+  Low/high-frequency intensities plus a duration in ms; a no-op on pads
+  without motors. Note SDL3 has **no** `SDL_GamepadHasRumble` (that was SDL2):
+  capability is a property now — `SDL_GetGamepadProperties` then
+  `SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN`, with a separate
+  `..._TRIGGER_RUMBLE_BOOLEAN` for the trigger motors. Verify offsets and
+  names with tools/sdl3off.c as `pad.fs` did, rather than porting SDL2 habits.
+- [ ] **Hotplug auto-reopen.** Today a game must notice `pad?` went false and
+  call `pad-open` itself (documented under Hotplug in `help pad`). An
+  opt-in "reclaim slot n when a controller reappears" would remove that
+  boilerplate — but it needs a policy for which slot a returning pad belongs
+  to, which is why it is not in the first cut.
+- [ ] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`. Teach the substrate
+  before the sugar: `pad-axis` and the dead-zone problem first, so `pad-dx`
+  reads as a solution rather than magic. Needs a controller, so the lesson
+  must skip cleanly without one (`tests/test_lessons.py` replays every step).
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
@@ -956,6 +980,18 @@ docs/Graphics.md for the API.
     communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
     nicer report now that fences make the failure loud); per-thread locals
     stack; stack sizing (fixed constants today)
+  - [ ] **`seed` should be thread-local — `random`/`rnd` are unusable from
+    workers today.** Both read-modify-write one global `seed` cell, so N
+    threads calling `rnd` fight over a single cache line: measured 2026-08-06,
+    4 threads ran **4x slower** than 1, and no lock is involved — a line simply
+    cannot be written by two cores at once. The results are also wrong, since
+    the RMW is not atomic and the threads share one stream instead of running
+    independent ones. Step 0's TLS machinery makes the cell itself a one-line
+    change; the real design question is **seeding**: `.tdata` supplies a
+    constant initial image, so every worker would start from the same seed and
+    replay the same sequence unless the trampoline mixes in something
+    per-thread. `examples/dice.fs` works around it by giving each worker a seed
+    in memory it allocated itself.
 
 ---
 
@@ -1929,7 +1965,7 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   **`[char]` is compile-only**, so the prompt-level examples need plain
   `char` — which turned into a teaching point, since the lesson already
   contrasts the two inside a definition.
-  **`tutorial Sound` DONE 2026-08-02** (branch sound-lesson): 24 steps built
+  **`tutorial Sound` DONE 2026-08-07** (branch sound-lesson): 28 steps built
   on one idea — sounds on the *same* channel queue, sounds on *different*
   channels mix — measured rather than asserted (`time` on two tones is 0.65 s,
   on two channels 0.35 s). Then down a level: fill a buffer by hand, `ch-put`
@@ -1938,11 +1974,15 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   place. A lesson that hands memory back has to survive its own ending: the
   buffer words carry null guards and the cleanup zeroes what it frees, because
   "your definitions stay" plus a bare `free` is a dangling pointer waiting for
-  the reader. Found while writing it: **`abort"` did nothing outside a definition**
-  (fixed on its own branch), and `snd-open?` reads like a predicate but
-  *opens* — calling it as one leaks a device and 16 streams, and the reference
-  page's summary line said "is it open?". Remaining: files, defer/is,
-  FFI/graphics.
+  the reader. Writing it turned up more than it cost: **`abort"` did nothing
+  outside a definition** (fixed on its own branch); `snd-open?` read like a
+  predicate but *opened*, leaking a device and 16 streams when called as one
+  (retired — `snd-open ( -- ior )` with `snd-ready?` as the real predicate);
+  and two names that said the wrong thing, **`snd-vol` → `tone-amp`** and
+  **`snd-alloc` → `next-ch`**. Plus six documentation errors no suite could
+  see, including `>body` claiming `constant` worked and `docs/Sound.md` still
+  describing the pre-float-FFI volume implementation. Remaining: files,
+  defer/is, FFI/graphics.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows
