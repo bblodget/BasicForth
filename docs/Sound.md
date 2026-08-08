@@ -32,7 +32,7 @@ require sound.fs      \ the SDL3 audio backend (pulls in ffi.fs itself)
 | `beep` | ( -- ) | a short blip (880 Hz, 60 ms) |
 | `snd-wait` | ( -- ) | block until everything queued has played |
 | `snd-close` | ( -- ) | close the device |
-| `snd-vol` | value | amplitude 0..32767 (default 8000); `to snd-vol` |
+| `tone-amp` | value | wave amplitude 0..32767 (default 8000); `to tone-amp` |
 
 ```
 > require sound.fs
@@ -67,10 +67,12 @@ synthesizes samples in Forth — integer-only, signed 16-bit mono at 44100 Hz
   `SDL_GetError` for `snd-why`, unwinds what came before, and returns a
   non-zero ior. The snapshot has to happen *before* the unwind: `snd-close`
   calls `SDL_QuitSubSystem`, which would replace the message.
-- `tone` → fills a heap buffer (`allocate`/`free`) with ±`snd-vol`, flipping
+- `tone` → fills a heap buffer (`allocate`/`free`) with ±`tone-amp`, flipping
   every `44100 / (2*freq)` samples, then `ch-put` on `tone-ch`.
-- `ch-put` → `SDL_PutAudioStreamData` on that channel's stream, scaling into
-  a copy first if the channel's volume is below `snd-unity`.
+- `ch-put` → `SDL_PutAudioStreamData` on that channel's stream. Nothing is
+  scaled or transformed on the way in; SDL copies the bytes into the stream,
+  so the caller's buffer is free again immediately (which is why `tone` frees
+  its own on the next line).
 - `ch-queued` / `snd-wait` → `SDL_GetAudioStreamQueued`, polled every 10 ms.
 - `ch-stop` → `SDL_ClearAudioStream`.
 - `snd-close` → `SDL_DestroyAudioStream` per channel, `SDL_CloseAudioDevice`,
@@ -99,7 +101,7 @@ one logical device, and **SDL mixes them** — there is no mixer code here.
 Sounds on different channels play together; sounds queued on one channel play
 in sequence.
 
-`snd-alloc` hands out channels round-robin and **steals the least recently
+`next-ch` hands out channels round-robin and **steals the least recently
 allocated** when all are busy, so a program that fires more sounds than it has
 channels loses its stalest rather than refusing the newest. It is round-robin
 rather than lowest-free because a channel only counts as busy once audio is
@@ -109,10 +111,15 @@ both return channel 1.
 Channel 0 is reserved for `tone`, which is what keeps a run of plain tones
 playing in sequence exactly as it did before channels existed.
 
-Per-channel volume is applied by **scaling samples as they are queued**, into
-a copy so shared sample data is never modified. It is not `SDL_SetAudioStreamGain`,
-which takes a `float` — the FFI passes integers only, and a float argument
-goes in a different register file entirely (see [FFI.md](FFI.md)).
+Per-channel volume is `SDL_SetAudioStreamGain`, applied by SDL **as it pulls
+the audio out**. So it costs nothing at queue time, needs no copy of anyone's
+samples, reaches audio already queued, and works whatever format the channel
+is carrying — none of which is true of scaling on the way in.
+
+That call takes a `float`, which is why the FFI grew float arguments
+(`(ccallf)`, see [FFI.md](FFI.md)); before that this was done by scaling
+samples into a copy at queue time, and the description above is what replaced
+it.
 
 Constants and the 12-byte `SDL_AudioSpec` layout are verified against the
 SDL3 headers by `tools/sdl3off.c`.

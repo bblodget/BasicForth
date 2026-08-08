@@ -68,6 +68,24 @@ CONFIG = {
         # The lesson deletes a word and then runs it, so the `?` IS the point.
         "expect": ["? hello"],
     },
+    # The dummy device consumes audio in real time, so snd-wait and the fade
+    # loop terminate here rather than hanging the suite.
+    #
+    # Two blind spots worth knowing, since neither shows up as a failure:
+    #
+    # 1. Nothing can be heard, so nearly every step prints something as well --
+    #    a channel count, a duration, a byte count. One step deliberately does
+    #    not: the `tone` vs `snd-wait` contrast, where the observation is WHEN a
+    #    message appears, not what it says. Replayed, it only proves both lines
+    #    run. If that step breaks, this suite will not be what tells you.
+    #
+    # 2. The lesson tells the reader to type `see tone-on`, but does NOT put it
+    #    in a code block -- deliberately. `see` prints the word's source, which
+    #    contains abort" tone: out of memory", and ERROR_RE cannot tell
+    #    displayed text from a raised abort. Suppressing it with an `expect`
+    #    would also suppress a real OOM here, so the instruction stays in prose
+    #    and this lesson keeps a clean error scan.
+    "Sound":   {"env": DUMMY},
     "Sprites": {"env": DUMMY},
     "Bitmaps": {"env": DUMMY},
     "Fonts":   {"env": DUMMY},

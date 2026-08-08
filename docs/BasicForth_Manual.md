@@ -704,7 +704,7 @@ keeps running while they play:
 ```
 > require sound.fs
  ok
-> snd-open  440 200 tone  beep  snd-wait  snd-close
+> snd-open drop  440 200 tone  beep  snd-wait  snd-close
  ok
 ```
 
@@ -726,7 +726,8 @@ them open:
 > : risky  true abort" went boom" ;
  ok
 > ' risky catch .
-went boom-2  ok
+went boom
+-2  ok
 > : game  ['] play catch  snd-close sdl-close  throw ;
 ```
 

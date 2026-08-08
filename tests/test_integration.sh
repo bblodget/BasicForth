@@ -1155,7 +1155,7 @@ else
     # spawns threads, so a plain SYS_exit (only the calling thread) leaves a
     # zombie main thread + live SDL threads and the parent waits forever;
     # platform_exit uses SYS_exit_group. timeout kills a hang -> status 124.
-    printf 'include %s/ffi.fs\ninclude %s/sound.fs\nsnd-open beep\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    printf 'include %s/ffi.fs\ninclude %s/sound.fs\nsnd-open drop beep\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH >/dev/null 2>&1
     if [[ $? -eq 0 ]]; then
         printf "  ${GREEN}PASS${NC}  bye exits with audio open (exit_group ends SDL threads)\n"; ((passed++))
@@ -1211,15 +1211,15 @@ else
         printf "  ${RED}FAIL${NC}  tone sequencing on tone-ch\n    Got: %q\n" "$ch_seq"; ((failed++))
     fi
 
-    # snd-alloc is round-robin, never hands back tone-ch, and steals the OLDEST
+    # next-ch is round-robin, never hands back tone-ch, and steals the OLDEST
     # channel once they are all busy. Filling every channel with a long tone
     # and allocating twice must give 1 then 2 -- the two least recently used.
-    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open drop next-ch . next-ch . next-ch . fill next-ch . next-ch . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_alloc" | grep -q '1 2 3 1 2 alloc-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-alloc round-robins, then steals the oldest\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  next-ch round-robins, then steals the oldest\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  snd-alloc round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
+        printf "  ${RED}FAIL${NC}  next-ch round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
     fi
 
     # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
@@ -1321,11 +1321,11 @@ else
     # unrelated sound on the same channel:
     #   1. ch-stop cancels it explicitly
     #   2. the faded sound simply finishes before the fade does
-    #   3. snd-alloc hands the channel out again once it fell silent
+    #   3. next-ch hands the channel out again once it fell silent
     # The observable in every case is whether a NEW sound survives being pumped
     # past the old deadline -- ch-vol@ cannot see any of it, because a fade
     # moves the GAIN and never the recorded volume.
-    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f snd-alloc to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f next-ch to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_early" | grep -q -- '-1 -1 256 -1 256 early-ok'; then
         printf "  ${GREEN}PASS${NC}  a fade dies with its sound, not with its deadline\n"; ((passed++))
@@ -1405,7 +1405,7 @@ else
     # holds a few input bytes back waiting for more input that never arrives,
     # so ch-queued sits at a small non-zero number forever. ch-playing? asks
     # the OUTPUT side instead, which does reach zero -- otherwise snd-wait
-    # spins on that channel and snd-alloc never sees it free again.
+    # spins on that channel and next-ch never sees it free again.
     # Flushing the stream would also release those bytes, but it means
     # declaring end-of-input after every sound, and SDL warns of a gap at the
     # join -- which would gap consecutive tones, the sequencing tone has
@@ -1415,8 +1415,8 @@ else
     # unambiguously PLAYING 30 ms in and unambiguously finished 600 ms later.
     # The second half is the one that matters -- a resampling stream holds a
     # little input back, so a channel measured by ch-queued would never report
-    # empty, snd-wait would spin on it and snd-alloc would never see it free.
-    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . snd-alloc 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # empty, snd-wait would spin on it and next-ch would never see it free.
+    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . next-ch 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_flush" | grep -q -- '-1 0 -1 flush-ok'; then
         printf "  ${GREEN}PASS${NC}  a resampled channel finishes instead of hanging forever\n"; ((passed++))
@@ -1476,7 +1476,7 @@ else
 
     # Every channel word must be a silent no-op with no device open, the same
     # contract tone already had, so a soundless system never aborts.
-    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . snd-alloc . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . next-ch . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
         printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
@@ -1878,8 +1878,22 @@ assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-d
 section "System Words"
 # =========================================================================
 
-# >BODY
+# >BODY — meaningful for CREATEd words only.  A created word stores a POINTER
+# to its data field and >body follows it; a value/constant/colon word keeps
+# something else in that slot, so >body hands back a plausible NUMBER that is
+# not an address (@ on it faults).  The standard leaves those cases undefined
+# and gforth answers differently — it returns a real address for every word,
+# which it can because its bodies sit at a fixed offset from the xt and ours
+# do not.  Pinned here so the divergence is a decision, not a surprise.
 assert_output ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
+assert_result ">body: create follows the pointer" \
+    "create cx 5 , ' cx >body @ ."                       "5"
+assert_result ">body: variable is its own data field" \
+    "variable vv ' vv >body vv = ."                      "-1"
+assert_result ">body: a value yields its CONTENTS, not an address" \
+    "99 value val ' val >body ."                         "99"
+assert_result ">body: a constant likewise" \
+    "42 constant kk ' kk >body ."                        "42"
 
 # >IN — reflects the parse offset into the current line. For the fixed input
 # ">in @ .", >in has advanced past ">in @" (to column 5) when @ runs.

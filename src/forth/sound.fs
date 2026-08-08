@@ -16,11 +16,11 @@
 \ tone, which is why a run of tones still plays in sequence exactly as it
 \ always has -- put a tone on another channel if you want it to overlap.
 \
-\ snd-alloc hands out a free channel, or steals the oldest if they are all
+\ next-ch hands out a free channel, or steals the oldest if they are all
 \ busy: a game firing more sounds than it has channels loses its stalest sound
 \ rather than its newest.
 \
-\ There are snd-channels of them, 64 by default -- enough that snd-alloc
+\ There are snd-channels of them, 64 by default -- enough that next-ch
 \ never has to steal in practice. Shrinking it is the rare case (forcing
 \ channel reuse in a test, or trimming streams on a small target), and it is
 \ read ONCE, when the device opens, so a change needs an explicit close first
@@ -105,16 +105,21 @@ $ffffffff constant (AUDIO_DEFAULT)      \ SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK
 0  constant tone-ch                    \ channel 0 is reserved for tone
 
 create (ch-streams) snd-max-channels cells allot   \ SDL_AudioStream* per channel
-create (ch-ages)    snd-max-channels cells allot   \ tick when last allocated
+create (ch-ages)    snd-max-channels cells allot   \ tick when last handed out
 create (ch-vols)    snd-max-channels cells allot   \ 0..snd-unity
 create (ch-fade-t0) snd-max-channels cells allot   \ fade start, ms@
 create (ch-fade-ms) snd-max-channels cells allot   \ fade length; 0 = not fading
-variable (ch-tick)                                 \ monotonic allocation counter
-variable (ch-next)                                 \ round-robin allocation cursor
+variable (ch-tick)                                 \ monotonic hand-out counter
+variable (ch-next)                                 \ round-robin hand-out cursor
 
 0 value (snd-stream)                     \ channel 0's stream (also owns the device)
 0 value (snd-dev)                        \ logical device the channels bind to
-8000 value snd-vol                     \ square-wave amplitude, 0..32767
+\ How TALL the wave tone builds is, as a sample value -- not a volume. The
+\ channel gain (ch-vol!, 0..snd-unity) is the volume: it scales any audio on
+\ its way out, whoever made it. This is baked into the samples as they are
+\ generated, and only tone/beep generate any. Named for tone the way tone-ch
+\ is: the amplitude tone uses.
+8000 value tone-amp                    \ square-wave amplitude, 0..32767
 create (snd-spec) 12 allot             \ SDL_AudioSpec: format l, channels l, freq l
 
 \ C bool comes back in the low 8 bits of the return register; the rest is
@@ -308,9 +313,10 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \
 \ Already open is SUCCESS and does nothing. Re-opening for real would clear
 \ every queue, reset every volume and pop the device -- so the accidental
-\ second call is free, and the deliberate reopen is spelled snd-close snd-open.
+\ second call is free, and the deliberate reopen is spelled
+\ snd-close snd-open drop.
 \
-\ Two channels is the floor: snd-alloc needs at least one channel that is not
+\ Two channels is the floor: next-ch needs at least one channel that is not
 \ the tone channel, and below that its steal scan would count backwards.
 : snd-open ( -- ior )
     snd-ready? if 0 exit then
@@ -332,18 +338,23 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
     0 (snd-why-len) !                      \ success leaves no stale reason
     0 ;
 
-\ --- channel allocation ---
-\ A free channel if there is one, otherwise the least recently allocated.
+\ --- handing out a channel ---
+\ NOTE: nothing is allocated here, in the `allocate` sense -- next-ch reserves
+\ one of the fixed channels, and there is no matching release: a channel comes
+\ back into rotation on its own. (It was called snd-alloc until 2026-08-07,
+\ which promised both a heap and a free that never existed.)
+\
+\ A free channel if there is one, otherwise the least recently handed out.
 \ Never returns tone-ch, so sound effects cannot cut a game's tones short.
 \
 \ The search is round-robin rather than lowest-free, because a channel only
-\ becomes busy once audio is queued on it: two snd-alloc calls in a row, before
+\ becomes busy once audio is queued on it: two next-ch calls in a row, before
 \ either has been given samples, would otherwise both hand back channel 1 and
 \ the second sound would land on top of the first.
 : (ch-cycle) ( -- ch )                 \ next channel in 1..snd-channels-1
     (ch-next) @ 1+  dup snd-channels >= if drop 1 then  dup (ch-next) ! ;
 
-: snd-alloc ( -- ch )
+: next-ch ( -- ch )
     (snd-stream) 0= if tone-ch exit then
     snd-channels 1- 0 ?do
         (ch-cycle)
@@ -397,8 +408,10 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ Queue raw samples on a channel, in whatever format the channel was told to
 \ expect (ch-format!). Sounds queued on the SAME channel play in sequence;
 \ different channels mix. Volume is NOT applied here -- SDL applies the
-\ channel's gain as it pulls the audio out, so the bytes go straight through
-\ and a sound shared between channels is never copied or modified.
+\ channel's gain as it pulls the audio out -- so WE neither scale nor
+\ duplicate the caller's samples, and one sample can go to several channels
+\ without a copy per channel. SDL does copy them into the stream, though,
+\ which is why tone-on frees its buffer on the line after the ch-put.
 : ch-put ( c-addr u ch -- )
     dup (ch-stream) 0= if drop 2drop exit then
     \ A new sound is not the one being faded, so the fade is over. This is the
@@ -430,7 +443,7 @@ variable (t-buf)    \ heap sample buffer (16-bit samples)
     1 max (t-half) !
     (t-n) @ 2* allocate abort" tone: out of memory" (t-buf) !
     (t-n) @ 0 ?do
-        i (t-half) @ / 1 and if snd-vol negate else snd-vol then
+        i (t-half) @ / 1 and if tone-amp negate else tone-amp then
         (t-buf) @ i 2* + w!
     loop
     (t-buf) @ (t-n) @ 2* r> ch-put

@@ -19,7 +19,7 @@ At a glance:
     beep       ( -- )             a short default blip
     snd-wait   ( -- )             block until the queue drains
     snd-close  ( -- )             close the device
-    snd-vol    ( -- a-addr )      volume variable (0..32767)
+    tone-amp   ( -- n )           tone amplitude, 0..32767 (set with to)
 
 Sounds queued here play one after another. To play sounds **at the same
 time**, put them on different channels — see `help channels`.
@@ -78,11 +78,18 @@ hardware wants, so this is our side of the conversation, not the device's.
 It is also the rate `tone-on` declares on a channel, which is why a tone after
 a wav sounds right rather than inheriting the file's rate.
 
-## snd-vol ( value: 0..32767 )
-Square-wave amplitude, default 8000. Set with `to`:
+## tone-amp ( -- n )
+How **tall** the square wave `tone` builds is — a sample value, default 8000,
+against the 32767 a 16-bit sample could hold. A `value`, so it reads without
+`@` and is set with `to`:
 
-    2000 to snd-vol   \ quiet
+    2000 to tone-amp   \ quiet
     beep
+
+Named for `tone` the way `tone-ch` is, and deliberately not called a volume.
+`ch-vol!` (`help channels`) is the volume: it scales *any* audio on its way
+out, whoever made it, 0..`snd-unity`. `tone-amp` is baked into the samples as
+they are generated, and only `tone` and `beep` generate any.
 
 See `help channels` for playing several sounds at once, `docs/Sound.md` for
 how the backend works, and `help ffi` for the calling mechanism.

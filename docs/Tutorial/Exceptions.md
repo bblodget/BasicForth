@@ -121,8 +121,8 @@ by a crash.
 The old bluntness and the new wordset are one mechanism: `abort` *is*
 `-1 throw`, and `abort"` prints, then throws -2. So `catch` traps both:
 
-    : risky ( -- )  true abort" went boom " ;
-    ' risky catch .    \ went boom -2
+    : risky ( -- )  true abort" went boom" ;
+    ' risky catch .    \ went boom, then -2 on its own line
     ' abort catch .    \ -1
 
 That's why an uncaught -1 or -2 prints no "uncaught exception" line —
