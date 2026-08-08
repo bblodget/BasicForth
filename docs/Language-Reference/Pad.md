@@ -261,6 +261,8 @@ is one more reason to reach for the merged words in a game that only needs
 directions.
 
 ## See also
+- `tutorial Gamepad` — the hands-on version of this page: open a pad, watch a
+  stick's resting offset, and see why `pad-dx` exists.
 - `help sdl3` — the window these controls usually drive, and the event loop
   gamepad events share.
 - `help graphics` — drawing the game they play.

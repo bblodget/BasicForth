@@ -41,6 +41,12 @@
   `0 pad-open? drop`, retried each frame until it takes.
 - `examples/gamepad.fs` is a live readout of every control — the quickest way
   to check a new pad is mapped as expected. Full reference in `help pad`.
+- **`tutorial Gamepad`** teaches it hands-on, in 19 steps at the prompt with no
+  window: open a pad, watch a stick that reads 128 with nobody touching it,
+  find out what too small a dead zone does to a game, and end at `pad-dx`. A
+  reader with no controller can still do the whole lesson — every reading is
+  `0`, and "there might not be a pad" is one of the things being taught rather
+  than a gap being worked around.
 
 ### Changed: `free` on a null address now succeeds
 
