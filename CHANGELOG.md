@@ -19,17 +19,23 @@
   press. `pad-dead` (default 8000) is the dead zone, and a value, so a tired
   pad can be tuned at the prompt. `pad-dir` applies the same treatment to any
   axis, for the right stick and the triggers.
-- Up to four controllers open at once, in slots 0–3: `pad-open?` opens one,
+- Up to four controllers open at once, in slots 0–3: `pad-open` opens one,
   `pad` selects which the queries act on, so a two-player loop is
   `0 pad … 1 pad …`.
-- Two spellings of open, the same split `sound.fs` uses: **`pad-open?`
-  ( n -- flag )** answers false when nothing is plugged in, which is what a
-  game wants — a missing controller is an ordinary state of the world, and the
-  flag is the "am I on the keyboard today?" answer. `pad-open` aborts instead,
-  naming which failure it hit. Both still abort on a slot that cannot exist:
-  no controller at slot 1 is the everyday case, slot 9 is a caller bug, and
-  folding the two into one false would bury it in the branch written to ignore
-  false.
+- **`pad-open ( n -- ior )`** answers `0` for success rather than aborting,
+  because a missing controller is an ordinary state of the world. All three
+  reactions read straight, with no `0=` anywhere: `0 pad-open drop` to run
+  keyboard-only, `0 pad-open abort" no controller"` to insist, `0 pad-open if
+  … then` to handle it. A flag would invert one of those — with true meaning
+  success, `abort"` fires exactly when the pad opens — which is the mistake
+  `sound.fs` shipped as `snd-open?`, so neither library now spells an opener
+  with a `?`. **`pad-why ( -- c-addr u )`** carries the detail, since "nothing
+  plugged in" is worth retrying next frame and "no mapping for this device"
+  never will be until `pad-map` runs; it is emptied by a successful open, so
+  it never reports a stale reason.
+- A slot that cannot exist still aborts: no controller at slot 1 is the
+  everyday case `pad-open` reports, slot 9 is a caller bug, and one shared
+  non-zero would bury it in the branch written to ignore failure.
 - With nothing plugged in every query answers 0 or false, so a game runs
   keyboard-only on a machine with no controller.
 - `pad-has?` / `pad-hasaxis?` ask whether a pad even has a control, since not
@@ -38,10 +44,10 @@
   SDL detects devices arriving and leaving, and `pad?` reports whether a
   controller is still *attached* rather than merely opened. Re-opening a slot
   closes the stale handle first, so recovering from an unplug is one line:
-  `0 pad-open? drop`, retried each frame until it takes.
+  `0 pad-open drop`, retried each frame until it takes.
 - `examples/gamepad.fs` is a live readout of every control — the quickest way
   to check a new pad is mapped as expected. Full reference in `help pad`.
-- **`tutorial Gamepad`** teaches it hands-on, in 19 steps at the prompt with no
+- **`tutorial Gamepad`** teaches it hands-on, in 20 steps at the prompt with no
   window: open a pad, watch a stick that reads 128 with nobody touching it,
   find out what too small a dead zone does to a game, and end at `pad-dx`. A
   reader with no controller can still do the whole lesson — every reading is

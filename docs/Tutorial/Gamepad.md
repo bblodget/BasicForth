@@ -5,8 +5,9 @@ right now. You'll open a controller, watch a stick lie about being centred,
 and end with the one word that turns all of it into "left, right, or neither".
 
 **Plug a controller in now if you have one.** If you haven't, keep going: every
-reading below will be zero, which is exactly what your game gets on a machine
-with no pad — and handling that is half of what this lesson teaches.
+*query* below answers zero, and every *open* reports a failure you can read.
+That is exactly what your game gets on a machine with no pad, and handling it
+is half of what this lesson teaches.
 
 No window needed, unlike the graphics lessons. Everything happens at the
 prompt.
@@ -23,12 +24,11 @@ reading a pad has nothing to do with having a window.
 
 Open the first one:
 
-    0 pad-open? .
+    0 pad-open .
 
-`-1` worked, `0` means there was nothing to open. The `?` is the BasicForth
-convention for *asks a question, answers a flag*, and the question matters:
-"no controller" is an ordinary state of the world, not a failure. `sound.fs`
-does the same with `snd-open?`.
+`0` means it worked. Anything else means it didn't, and nothing stopped: "no
+controller" is an ordinary state of the world, not a failure. That `0`-is-good
+convention is an **ior**, the same answer `snd-open` and `allocate` give.
 
     pad-name type
 
@@ -172,31 +172,51 @@ than swinging both ways.
 
 ## When there is no controller
 
-There's a second way to open a pad, and it doesn't answer a flag:
+Try a slot with nothing in it — slot 3, the fourth one, almost certainly
+empty:
 
-    3 pad-open
+    3 pad-open .
+    pad-why type
 
-Slot 3 is the fourth one, almost certainly empty, and `pad-open` stopped the
-program to say so. Right for typing at the prompt, where you want to know at
-once; wrong inside a game, which should shrug and use the keyboard.
+Unless you have four or more controllers plugged in, slot 3 is empty, so you
+got a non-zero number and a reason printed after it.
+
+Don't read the number itself. It only says *whether* the open failed — test it
+as zero or non-zero, never for a particular value — and `pad-why` says why.
+Here that's "no controller at that index"; for a pad SDL has no mapping for
+it's SDL's own complaint, and `pad-map` is the way in.
+
+## Three ways to care
+
+Because `0` means success, each way of reacting reads straight:
+
+    3 pad-open drop
+    : warn 3 pad-open if ." no pad" cr then ;   warn
+    3 pad-open abort" no controller in slot 3"
+
+Ignore it, handle it, or refuse to continue — and not one `0=` between them.
+That is why this is an ior and not a flag: with true meaning success,
+`abort"` would fire exactly when the pad opened *fine*. `sound.fs` shipped
+that mistake once, which is why neither library now spells an opener with `?`.
 
 ## One place decides where input comes from
 
-A game opens with the question form and remembers the answer:
+A game opens once and remembers what it got:
 
     0 value using-pad?
-    0 pad-open? to using-pad?
+    0 pad-open drop  pad? to using-pad?
     using-pad? .
 
-then has exactly one word that knows where input comes from:
+`drop` because here we don't care *why* it failed; `pad?` then asks the real
+question — is a controller actually attached. After that, one word decides:
 
     \ : dx ( -- -1|0|1 )
     \     using-pad? if  pad-update pad-dx  else  key-dx  then ;
 
 Everything else calls `dx` and never learns which it was.
 
-Both forms still stop the program for a slot that cannot exist: `9 pad-open?`
-isn't a missing controller, it's a bug in your code.
+A slot that cannot exist is still different: `9 pad-open` stops the program,
+because that isn't a missing controller, it's a bug in your code.
 
 ## Pulling the plug
 
@@ -214,7 +234,7 @@ If you have a pad plugged in, **unplug it now** and run that line again.
 
 Plug it back in, then:
 
-    0 pad-open? drop
+    0 pad-open drop
     pad-update  pad? .
 
 A returning controller is a *new* device as far as the system is concerned, so
@@ -227,9 +247,10 @@ window, `sdl-show` does it for you.
 
 ## Two players
 
-Four controllers can be open at once, in slots 0 to 3:
+Four controllers can be open at once, in slots 0 to 3. Two `0`s means two pads
+opened; a `1` is a slot with nothing in it:
 
-    0 pad-open? .  1 pad-open? .
+    0 pad-open .  1 pad-open .
 
 `pad` chooses which slot every question is about:
 

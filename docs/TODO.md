@@ -915,11 +915,11 @@ docs/Graphics.md for the API.
   opt-in "reclaim slot n when a controller reappears" would remove that
   boilerplate — but it needs a policy for which slot a returning pad belongs
   to, which is why it is not in the first cut.
-- [x] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`, 19 steps, shipped
+- [x] **Gamepad tutorial** — `docs/Tutorial/Gamepad.md`, 20 steps, shipped
   2026-08-07. Substrate before sugar: the stick's resting offset and a
   deliberately-too-small dead zone come before `pad-dx`, so the merged word
   reads as a fix rather than magic. "The reader may have no controller" became
-  a SUBJECT of the lesson (`pad-open?`, the one-word input dispatcher) instead
+  a SUBJECT of the lesson (`pad-open`'s ior, the one-word input dispatcher) instead
   of a hole worked around — which also makes the headless replay in
   `tests/test_lessons.py` simply the no-controller path, verified by hiding
   /dev/input under `bwrap`. No window is needed, so every step is a single-shot

@@ -1192,30 +1192,51 @@ else
         printf "  ${RED}FAIL${NC}  pad slot error handling\n    Got: %q\n" "$pad_er"; ((failed++))
     fi
 
-    # pad-open? is the form a game uses to degrade to the keyboard, so the one
-    # thing it must never do is abort when nothing is plugged in. Slot 3 is the
-    # last one; asserting "no abort message, session alive, answer is a proper
-    # flag" holds whether or not hardware is attached, where asserting false
-    # would only hold on a machine with fewer than four controllers.
-    pad_of=$(printf 'require pad.fs\n3 pad-open? dup 0= swap -1 = or . ." alive" depth .\nbye\n' \
+    # pad-open answers an IOR so a game can degrade to the keyboard, so the one
+    # thing it must never do is abort when nothing is plugged in. Both lines
+    # hold with or without hardware: the first says a reason is recorded
+    # exactly when the ior is non-zero, the second says an attached pad really
+    # does open (and is vacuously true on a machine with none).
+    pad_of=$(printf 'require pad.fs\n: (t-ok) pads 0> if 0 pad-open 0= else true then ;\n3 pad-open 0<> pad-why nip 0<> = .  (t-ok) .\n." alive" depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$pad_of" | grep -q -- '-1 alive0' \
-       && ! printf '%s' "$pad_of" | grep -q 'no controller at that index'; then
-        printf "  ${GREEN}PASS${NC}  pad-open? reports a flag instead of aborting\n"; ((passed++))
+    if printf '%s' "$pad_of" | grep -q -- '-1 -1' \
+       && printf '%s' "$pad_of" | grep -q 'alive0' \
+       && ! printf '%s' "$pad_of" | grep -q 'pad-open:'; then
+        printf "  ${GREEN}PASS${NC}  pad-open answers an ior and sets pad-why only on failure\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  pad-open? non-aborting open\n    Got: %q\n" "$pad_of"; ((failed++))
+        printf "  ${RED}FAIL${NC}  pad-open ior contract\n    Got: %q\n" "$pad_of"; ((failed++))
     fi
 
-    # ...but a slot that cannot exist is still an abort, in BOTH spellings. A
-    # caller looping over slots wants false for the empty ones and a loud error
-    # for slot 9, not the same false it already ignores.
-    pad_ob=$(printf 'require pad.fs\n9 pad-open?\n." alive" depth .\nbye\n' \
+    # pad-why must never hand back an unrelated SDL error. SDL_GetError is NOT
+    # cleared by success -- its own header warns against reading it to decide
+    # whether anything failed -- so a failure the program already handled sits
+    # there until something clears it. Plant one, then fail an open: the reason
+    # must be about the controller, not the planted text.
+    pad_st=$(printf 'require pad.fs\npads drop\n: plant 0 99 2 (SDL_GamepadHasButton) (ccall) drop ;\n: (t-why) pads #pads < if pads pad-open drop pad-why type else .\" SKIP4\" then ;\nplant (t-why)\n." alive" depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$pad_ob" | grep -q 'pad-open?: slot out of range' \
-       && printf '%s' "$pad_ob" | grep -q 'alive0'; then
-        printf "  ${GREEN}PASS${NC}  pad-open? still aborts on an impossible slot\n"; ((passed++))
+    if { printf '%s' "$pad_st" | grep -q 'no controller at that index' \
+         || printf '%s' "$pad_st" | grep -q '^SKIP4'; } \
+       && ! printf '%s' "$pad_st" | grep -q "Parameter 'gamepad'" \
+       && printf '%s' "$pad_st" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-why never reports an unrelated stale SDL error\n"; ((passed++))
+        printf '%s' "$pad_st" | grep -q '^SKIP4' && printf "        skipped: the empty-slot half — every slot has a controller\n"
     else
-        printf "  ${RED}FAIL${NC}  pad-open? bad slot\n    Got: %q\n" "$pad_ob"; ((failed++))
+        printf "  ${RED}FAIL${NC}  pad-why stale SDL error\n    Got: %q\n" "$pad_st"; ((failed++))
+    fi
+
+    # A stale reason is the failure mode a recorded string invites: pad-why
+    # must be emptied by a successful open, not left saying why the LAST one
+    # failed. Order matters — the failing open has to run first or the clear
+    # is never exercised. The success half needs a controller attached; with
+    # none, the second number is 0 by construction and only the first is real.
+    pad_ws=$(printf 'require pad.fs\n: (t-clr) pads 0> if 0 pad-open drop pad-why nip else 0 then ;\n: (t-fail) pads #pads < if pads pad-open drop pad-why nip 0> else .\" SKIP4 \" true then ;\n(t-fail) .  (t-clr) .\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ws" | grep -q -- '-1 0' \
+       && printf '%s' "$pad_ws" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-why records a failure and a later success clears it\n"; ((passed++))
+        printf '%s' "$pad_ws" | grep -q '^SKIP4' && printf "        skipped: the failure half — every slot has a controller\n"
+    else
+        printf "  ${RED}FAIL${NC}  pad-why lifecycle\n    Got: %q\n" "$pad_ws"; ((failed++))
     fi
 
     # Button and axis constants must equal the SDL_GAMEPAD_* enum values in
