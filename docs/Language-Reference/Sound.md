@@ -5,35 +5,53 @@ first: `require sound.fs` (it pulls in the FFI itself). Tones queue and play
 in the background; with no device open, the sound words are silent no-ops.
 
     require sound.fs
-    snd-open
+    snd-open drop
     440 200 tone      \ concert A, 200 ms
     beep
     snd-wait snd-close
 
 At a glance:
 
-    snd-open   ( -- )             open the audio device
-    snd-open?  ( -- flag )        is it open?
+    snd-open   ( -- ior )         open the audio device; 0 = success
+    snd-ready? ( -- flag )        is a device open right now?
+    snd-why    ( -- c-addr u )    why the last snd-open failed
     tone       ( freq ms -- )     queue a square-wave tone
     beep       ( -- )             a short default blip
     snd-wait   ( -- )             block until the queue drains
     snd-close  ( -- )             close the device
-    snd-vol    ( -- a-addr )      volume variable (0..32767)
+    tone-amp   ( -- n )           tone amplitude, 0..32767 (set with to)
 
 Sounds queued here play one after another. To play sounds **at the same
 time**, put them on different channels — see `help channels`.
 
-## snd-open ( -- )
+## snd-open ( -- ior )
 Open the default audio playback device (signed 16-bit mono, 44100 Hz; SDL
-resamples for the hardware) and start it. Aborts with the SDL error message
-if no device is available.
+resamples for the hardware) and start it. Returns **0 on success**, non-zero
+if the system has no working audio — an `ior`, like `allocate` and
+`open-file`. The magnitude is opaque; test zero/non-zero and ask `snd-why`
+for the reason.
 
-## snd-open? ( -- flag )
-Like `snd-open`, but returns false instead of aborting when the system has
-no working audio. A game opens sound with `snd-open? drop` so it runs
-soundless (every sound word a no-op) rather than abort:
+One word serves both kinds of caller, with no `0=` in either:
 
-    : game ( -- )  ... sdl-open  snd-open? drop  ... ;
+    snd-open drop                     \ don't care; soundless is fine
+    snd-open abort" no audio device"  \ sound is a requirement
+    snd-open if snd-why type cr then  \ handle it, with SDL's own reason
+
+Opening an **already-open device succeeds and does nothing**. That keeps a
+redundant call free — an `on-start` hook runs twice after a dirty `:e` — and
+a real re-open would clear every queue, reset every volume and pop the
+device. To genuinely reopen (the only reason being a changed
+`snd-channels`), say so: `snd-close snd-open drop`.
+
+## snd-ready? ( -- flag )
+True if a device is open. `snd-open` is the verb; this is the question.
+
+## snd-why ( -- c-addr u )
+SDL's reason for the last failed `snd-open`, empty after a successful one.
+The string is copied at the moment of failure, so it survives the cleanup
+that follows.
+
+    snd-open if  ." no sound: " snd-why type cr  then
 
 ## tone ( freq ms -- )
 Queue a square-wave tone of `freq` Hz for `ms` milliseconds and return
@@ -60,11 +78,18 @@ hardware wants, so this is our side of the conversation, not the device's.
 It is also the rate `tone-on` declares on a channel, which is why a tone after
 a wav sounds right rather than inheriting the file's rate.
 
-## snd-vol ( value: 0..32767 )
-Square-wave amplitude, default 8000. Set with `to`:
+## tone-amp ( -- n )
+How **tall** the square wave `tone` builds is — a sample value, default 8000,
+against the 32767 a 16-bit sample could hold. A `value`, so it reads without
+`@` and is set with `to`:
 
-    2000 to snd-vol   \ quiet
+    2000 to tone-amp   \ quiet
     beep
+
+Named for `tone` the way `tone-ch` is, and deliberately not called a volume.
+`ch-vol!` (`help channels`) is the volume: it scales *any* audio on its way
+out, whoever made it, 0..`snd-unity`. `tone-amp` is baked into the samples as
+they are generated, and only `tone` and `beep` generate any.
 
 See `help channels` for playing several sounds at once, `docs/Sound.md` for
 how the backend works, and `help ffi` for the calling mechanism.

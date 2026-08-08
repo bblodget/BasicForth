@@ -4,7 +4,8 @@ The Forth 2012 exception wordset: `catch ( xt -- 0 | n )` runs a word while
 trapping any `throw ( n -- )` raised inside it, restoring the stacks and
 returning the thrown code instead of losing control to the REPL. Before this,
 the only unwind was `abort` — "throw to top level" — so every library that
-could fail needed a non-aborting `?`-variant (`snd-open?`); `catch` is the
+could fail needed a non-aborting `?`-variant (`snd-open?`, since retired);
+`catch` is the
 general case, and `allocate throw` / cleanup-then-rethrow become natural
 idioms.
 
@@ -91,8 +92,17 @@ caught `evaluate` leaving the outer handler armed.
 
 ## Scope / next
 
-- Retiring `?`-variants (`snd-open?`) in favor of `catch` is deliberately
-  deferred — the lessons teach them and they cost nothing.
+- Retiring `?`-variants: **`snd-open?` is gone** (2026-08-06). The estimate
+  that they "cost nothing" was wrong twice over. The `?` read as a question
+  when the word actually *opens*, so calling it to ask opened a second device
+  and leaked the first; and its true-means-success flag fought `abort"`,
+  which fires on true — `snd-open? abort" ..."` aborted precisely when the
+  open worked. It is now one word, `snd-open ( -- ior )`, 0 for success like
+  `allocate` and `open-file`, so `drop` and `abort"` both read straight. The
+  question it was mistaken for is `snd-ready?`.
+- Whether `catch` should replace the remaining fallible-open pattern outright
+  is still open; the ior convention is the smaller change and matches the
+  rest of the system.
 - Converting interpreter errors and guard faults into standard throw codes
   (-4 stack underflow, -13 undefined word, ...) would let programs trap
   those too; revisit if a real need appears.

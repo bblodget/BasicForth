@@ -6,7 +6,7 @@
 \ owns the device and the channels, and this plays one on the other.
 \
 \   require wav.fs
-\   snd-open
+\   snd-open drop
 \   s" blip.wav" wav-load value blip
 \   blip wav-play drop            \ on a channel of its own choosing
 \   snd-wait  snd-close
@@ -17,8 +17,9 @@
 \ each to whatever the hardware wants.
 \
 \ Loading is separate from playing on purpose: load once, play many times.
-\ The same sample can be playing on several channels at once, because nothing
-\ here copies or modifies it.
+\ The same sample can be playing on several channels at once: none of these
+\ words copies or alters it, and SDL takes its own copy of the bytes as they
+\ are queued.
 
 require wavcore.fs
 require sound.fs
@@ -48,7 +49,7 @@ require sound.fs
 \ sample that failed to load, which every ch- word treats as no channel.
 : wav-play ( sample -- ch )
     dup 0= if drop -1 exit then
-    snd-alloc tuck wav-play-on ;
+    next-ch tuck wav-play-on ;
 
 \ How long a sample runs, in milliseconds -- useful for scheduling without
 \ polling ch-playing?.

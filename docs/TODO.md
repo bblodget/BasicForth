@@ -877,11 +877,18 @@ docs/Graphics.md for the API.
   at any scale above 1 (the first draft of the docs example had exactly that
   bug). Named for what it returns, not `gotoxy`: `at-xy` already moves the
   terminal cursor, and this moves nothing.
-- [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-open?`/
-  `snd-close`, `tone` (queued integer square wave, S16 mono 44100), `beep`,
-  `snd-wait`, `snd-vol`; no-ops when the device isn't open (games degrade to
-  soundless via `snd-open? drop`); wall blips in bounce.fs; dummy-driver
-  integration tests; docs/Sound.md + `man sound`
+- [x] Sound output via SDL3 audio: `sound.fs` — `snd-open`/`snd-close`,
+  `tone` (queued integer square wave, S16 mono 44100), `beep`, `snd-wait`,
+  `tone-amp`; no-ops when the device isn't open (games degrade to soundless
+  via `snd-open drop`); wall blips in bounce.fs; dummy-driver integration
+  tests; docs/Sound.md + `man sound`.
+  **`snd-open?` retired 2026-08-06** (branch sound-api): `snd-open ( -- ior )`
+  now, 0 = success, idempotent, with `snd-ready?` as the real predicate and
+  `snd-why` for SDL's reason. The `?` had read as a question while the word
+  opened — asking it opened a second device and leaked the first — and its
+  true-means-success flag fought `abort"`, which fires on true. Default
+  `snd-channels` 16 → 64 at the same time; measured cost of the extra 48
+  streams is ~100 KB and <1 µs per `snd-pump`.
 - [x] Game controllers via SDL3's gamepad API: `pad.fs` — `pads`/`pad-open`/
   `pad` (four slots, so two players work), `pad-held?`/`pad-axis`,
   `pad-dx`/`pad-dy` (d-pad + left stick merged to -1/0/1, d-pad wins on
@@ -1957,8 +1964,25 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
   `tutorial Strings`, bases to `help numbers`. Caught while replaying:
   **`[char]` is compile-only**, so the prompt-level examples need plain
   `char` — which turned into a teaching point, since the lesson already
-  contrasts the two inside a definition. Remaining: files, defer/is,
-  FFI/graphics.
+  contrasts the two inside a definition.
+  **`tutorial Sound` DONE 2026-08-07** (branch sound-lesson): 28 steps built
+  on one idea — sounds on the *same* channel queue, sounds on *different*
+  channels mix — measured rather than asserted (`time` on two tones is 0.65 s,
+  on two channels 0.35 s). Then down a level: fill a buffer by hand, `ch-put`
+  it, wrap the same bytes in a 44-byte RIFF header and hand them to
+  `wav-from`, so the lesson ships no binary asset and `wav-from` earns its
+  place. A lesson that hands memory back has to survive its own ending: the
+  buffer words carry null guards and the cleanup zeroes what it frees, because
+  "your definitions stay" plus a bare `free` is a dangling pointer waiting for
+  the reader. Writing it turned up more than it cost: **`abort"` did nothing
+  outside a definition** (fixed on its own branch); `snd-open?` read like a
+  predicate but *opened*, leaking a device and 16 streams when called as one
+  (retired — `snd-open ( -- ior )` with `snd-ready?` as the real predicate);
+  and two names that said the wrong thing, **`snd-vol` → `tone-amp`** and
+  **`snd-alloc` → `next-ch`**. Plus six documentation errors no suite could
+  see, including `>body` claiming `constant` worked and `docs/Sound.md` still
+  describing the pre-float-FFI volume implementation. Remaining: files,
+  defer/is, FFI/graphics.
 - [x] **`.s` ignores BASE** (found 2026-07-16 debugging 1d-life; fixed
   2026-07-19, branch markdown-pager): redefined base-aware in core.fs over
   `depth`/`pick`/`u.r`, same `<3> 1 2 3 ` format (the depth tag follows
@@ -1970,6 +1994,47 @@ accumulating redefinitions. The original Steps 2–4 were re-planned as the
 
 ### Open threads
 
+- [ ] **`(c-callback) ( xt -- fnptr )` — a Forth word C can call** (design note
+  in WildIdeas.md, 2026-08-07). The FFI calls outward; this is the missing
+  direction. **Not blocked on anything conceptual**: `forth_thread_tramp` is
+  already exactly this shape — pthread invokes it as a plain C function and it
+  installs a DSP, its own stacks, and a `CATCH` wrapper. What is missing is a
+  trampoline with a second signature, stacks that persist across many calls
+  rather than one per thread, and an FFI that can hand an address *out*.
+  **The reason to want it is a synthesiser, not fades.** Every sound today must
+  have a length known before it starts, because `tone` renders the whole thing
+  up front. `SDL_SetAudioStreamGetCallback` inverts that: SDL asks for bytes,
+  you supply them from one small reused buffer — which makes endless notes,
+  live parameter changes, and summed voices expressible at all. Measured
+  2026-08-07: Forth generates square-wave samples at **~833x real time**
+  (1.2 ms of CPU per second of audio), so the time budget is not the hard part;
+  the discipline is (no `allocate`, no blocking, no dictionary writes on
+  someone else's real-time thread).
+  For **fades specifically this buys nothing** over a plain pump thread — both
+  run `snd-pump` off the main thread with identical races. If fades ever do go
+  on a callback, use `SDL_AddTimer` rather than the audio callback: the audio
+  one holds the stream's lock while `snd-pump` wants to set gains (safety
+  unverified), is per-stream, and stops when the device pauses. Either way
+  **shutdown is the sharp edge**: `snd-close` destroys 64 streams, and a pump
+  already in flight is calling into them. `SDL_RemoveTimer` is not documented
+  to wait for a running callback; a Forth pump thread can be stopped and
+  `join`ed first, but `join` returns a status and can fail, and a failed join
+  means the pump may still be live — in which case `snd-close` must leave the
+  streams alone rather than tear down blind (`threads.fs`: "a leak is
+  recoverable; a use-after-free is not"). Neither route makes shutdown free;
+  the thread at least makes the failure testable.
+- [ ] **Heap library — allocation tracking and leak hunting** (design note in
+  WildIdeas.md, 2026-08-07). `heap-count` / `heap-bytes` / `.heap`, plus a
+  snapshot-run-compare idiom. Measured en route: **the kernel cannot be the
+  bookkeeper** — 20 separate 4096-byte `allocate`s add exactly *one* entry to
+  `/proc/self/maps`, because adjacent anonymous mappings coalesce, and freeing
+  one in the middle pushes the count back up. So tracking belongs with the
+  allocator, and the decision is a redefining library (misses everything
+  already compiled, including `wavcore`/`sound`) versus two `defer` hooks in
+  core (catches all of it for one indirect call). `allocate!`/`free!` were
+  considered and **left out** — gforth has neither, and the "use a `variable`
+  so `free!` applies" convention trades a once-per-cleanup mistake for a
+  once-per-use one.
 - [x] **Pipes / output capture** — `open-pipe ( c-addr u fam -- fileid ior )`
   / `close-pipe ( fileid -- wretval wior )` (gforth-compatible) run a command
   with a pipe over its stdout (`r/o`) or stdin (`w/o`); the fileid works with

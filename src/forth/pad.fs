@@ -220,7 +220,15 @@ variable (pad-list)   \ SDL_GetGamepads out: malloc'd SDL_JoystickID array
 
 \ Try to open, and say whether it worked -- the form a game uses when a
 \ missing controller should fall back to the keyboard rather than stop the
-\ program. Same split as sound.fs (snd-open? / snd-open), for the same reason.
+\ program.
+\
+\ NOTE (2026-08-07): sound.fs used to carry the same split and has RETIRED it.
+\ snd-open? is gone; snd-open returns an ior (0 = success) and snd-ready? is
+\ the predicate. Two reasons, both of which apply here: the `?` reads as a
+\ question when the word actually opens, and a true-means-success flag fights
+\ abort", which fires on true -- so `n pad-open? abort" no pad"` aborts when
+\ the pad opens FINE. (pad-try) already returns 0/1/2, so pad-open returning
+\ it directly is most of the work. See docs/TODO.md.
 \
 \ A bad SLOT still aborts here, because it is not the same kind of failure: no
 \ controller at slot 1 is the everyday case this word exists to report, while
