@@ -57,11 +57,12 @@ default: neural, offline, small, and permissively licensed.
     sudo apt install pipx                 # or your distribution's package
     pipx ensurepath                       # once: puts ~/.local/bin on PATH
     pipx install piper-tts
-    mkdir -p ~/.local/share/piper-voices
-    ~/.local/pipx/venvs/piper-tts/bin/python -m piper.download_voices \
-        --data-dir ~/.local/share/piper-voices en_US-lessac-medium
-
     command -v piper                      # check before going further
+
+    mkdir -p ~/.local/share/piper-voices
+    "$(dirname "$(readlink -f "$(command -v piper)")")/python" \
+        -m piper.download_voices \
+        --data-dir ~/.local/share/piper-voices en_US-lessac-medium
 
 **`pipx ensurepath` matters, and it needs a fresh shell.** It edits a shell
 profile (`~/.bashrc` or similar), so the change reaches the shell you are
@@ -80,9 +81,14 @@ venv — fine until you have several checkouts, none of which can see a venv
 belonging to another.
 
 Downloading voices is the one thing that needs the environment's own
-interpreter, as above: pipx links the `piper` **app** onto `PATH`, and
-`download_voices` is a module rather than an app. The voice is about 60 MB;
-`--data-dir` is what both commands call it.
+interpreter: pipx links the `piper` **app** onto `PATH`, and `download_voices`
+is a module rather than an app. Hence the incantation above — it follows the
+`piper` symlink back to the environment it lives in and uses the `python`
+beside it, rather than naming a pipx directory. That matters because pipx has
+moved its venvs (older versions used `~/.local/pipx/venvs`, newer ones
+`~/.local/share/pipx/venvs`), and a written-down path is right only for the
+version you happened to test. The voice is about 60 MB; `--data-dir` is what
+both commands call it.
 
 `setup.sh` builds the template from whatever `piper` is on `PATH` and exports
 it as `VOICE_ENGINE_CMD`, so there is no install path written down anywhere to
