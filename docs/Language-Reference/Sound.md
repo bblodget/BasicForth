@@ -17,7 +17,8 @@ At a glance:
     snd-why    ( -- c-addr u )    why the last snd-open failed
     tone       ( freq ms -- )     queue a square-wave tone
     beep       ( -- )             a short default blip
-    snd-wait   ( -- )             block until the queue drains
+    snd-wait   ( -- )             block until every channel drains
+    ch-wait    ( ch -- )          block until one channel drains
     snd-close  ( -- )             close the device
     tone-amp   ( -- n )           tone amplitude, 0..32767 (set with to)
 
@@ -68,6 +69,10 @@ A short blip: `880 60 tone`.
 ## snd-wait ( -- )
 Block until every channel has finished playing. Use before `bye` in a
 script, or the last tone is cut off.
+
+To wait on **one channel** while the others keep playing, use
+`ch-wait ( ch -- )` — `help channels`. It drains that channel, so several
+sounds queued there hold it until the last one ends.
 
 ## snd-close ( -- )
 Stop and close the audio device. Sound words become no-ops again.
