@@ -81,191 +81,76 @@ _start:
     B platform_exit
 .Lno_version_flag:
 
-    // Walk envp to find BASICFORTH_PATH=
-    LDR X0, [SP]                    // argc
-    ADD X0, X0, #2                  // skip argc + NULL terminator
-    LSL X0, X0, #3                  // *8
-    ADD X0, SP, X0                  // X0 = &envp[0]
-.Lenv_loop:
-    LDR X1, [X0]                    // X1 = envp[i]
-    CBZ X1, .Lenv_done              // NULL = end
-    // Compare prefix "BASICFORTH_PATH="
-    ADR X2, env_prefix
-    MOV X3, #env_prefix_len
-.Lenv_cmp:
-    CBZ X3, .Lenv_found             // prefix matched
-    LDRB W4, [X1], #1
-    LDRB W5, [X2], #1
-    CMP W4, W5
-    B.NE .Lenv_next
-    SUB X3, X3, #1
-    B .Lenv_cmp
-.Lenv_next:
-    ADD X0, X0, #8
-    B .Lenv_loop
-.Lenv_found:
-    // X1 now points past "BASICFORTH_PATH=" — the value
+    // The environment BasicForth reads for itself. platform_getenv walks
+    // start_envp (saved just above) and returns a pointer INTO the environment
+    // block plus its length — the strings live as long as the process, so
+    // nothing here is copied or owned. Each name matches only up to a following
+    // '=', so BASICFORTH_PATH cannot be answered by BASICFORTH_PATHOLOGICAL.
+    // Unset gives 0/0, which is what these already hold.
+    ADR X0, env_name
+    MOV X1, #env_name_len
+    BL platform_getenv
     ADR X9, basicforth_path
-    STR X1, [X9]
-    // Compute length
-    MOV X2, #0
-.Lenv_strlen:
-    LDRB W3, [X1, X2]
-    CBZ W3, .Lenv_strlen_done
-    ADD X2, X2, #1
-    B .Lenv_strlen
-.Lenv_strlen_done:
+    STR X0, [X9]
     ADR X9, basicforth_path_len
-    STR X2, [X9]
-.Lenv_done:
+    STR X1, [X9]
 
-    // Walk envp again for BASICFORTH_SESSION= (override the default isatty gate
-    // for the interactive session: =0 forces off, any other value forces on).
+    // BASICFORTH_SESSION — override the isatty gate for the interactive
+    // session: '0' forces off, any other value forces on, unset keeps the
+    // default. A value that is EMPTY counts as "any other value", since its
+    // first byte is the terminating NUL — which is what the hand-written walk
+    // did, and what the tests pin.
     ADR X9, session_env
     STR XZR, [X9]                   // 0 = unset (use default isatty gate)
-    LDR X0, [SP]                    // argc
-    ADD X0, X0, #2
-    LSL X0, X0, #3
-    ADD X0, SP, X0                  // &envp[0]
-.Lsenv_loop:
-    LDR X1, [X0]                    // envp[i]
-    CBZ X1, .Lsenv_done             // NULL = end of envp
-    ADR X2, sess_prefix
-    MOV X3, #sess_prefix_len
-.Lsenv_cmp:
-    CBZ X3, .Lsenv_found            // prefix matched
-    LDRB W4, [X1], #1
-    LDRB W5, [X2], #1
-    CMP W4, W5
-    B.NE .Lsenv_next
-    SUB X3, X3, #1
-    B .Lsenv_cmp
-.Lsenv_next:
-    ADD X0, X0, #8
-    B .Lsenv_loop
-.Lsenv_found:
-    LDRB W4, [X1]                   // first byte of the value
-    CMP W4, #'0'
-    B.EQ .Lsenv_off
-    MOV X9, #1                      // non-'0' → force on
-    ADR X10, session_env
-    STR X9, [X10]
-    B .Lsenv_done
-.Lsenv_off:
-    MOV X9, #2                      // '0' → force off
-    ADR X10, session_env
-    STR X9, [X10]
+    ADR X0, sess_name
+    MOV X1, #sess_name_len
+    BL platform_getenv
+    CBZ X0, .Lsenv_done
+    ADR X9, session_env
+    MOV X2, #1
+    STR X2, [X9]                    // set → force on...
+    LDRB W3, [X0]
+    CMP W3, #'0'
+    B.NE .Lsenv_done
+    MOV X2, #2
+    STR X2, [X9]                    // ...unless it starts with '0'
 .Lsenv_done:
 
-    // Walk envp again for BASICFORTH_EDITOR= (override the default isatty gate for
-    // the line editor: =0 forces off, any other value forces on). Same pattern.
+    // BASICFORTH_EDITOR — the same gate for the line editor.
     ADR X9, editor_env
     STR XZR, [X9]                   // 0 = unset (use default isatty gate)
-    LDR X0, [SP]                    // argc
-    ADD X0, X0, #2
-    LSL X0, X0, #3
-    ADD X0, SP, X0                  // &envp[0]
-.Leenv_loop:
-    LDR X1, [X0]                    // envp[i]
-    CBZ X1, .Leenv_done             // NULL = end of envp
-    ADR X2, edit_prefix
-    MOV X3, #edit_prefix_len
-.Leenv_cmp:
-    CBZ X3, .Leenv_found            // prefix matched
-    LDRB W4, [X1], #1
-    LDRB W5, [X2], #1
-    CMP W4, W5
-    B.NE .Leenv_next
-    SUB X3, X3, #1
-    B .Leenv_cmp
-.Leenv_next:
-    ADD X0, X0, #8
-    B .Leenv_loop
-.Leenv_found:
-    LDRB W4, [X1]                   // first byte of the value
-    CMP W4, #'0'
-    B.EQ .Leenv_off
-    MOV X9, #1                      // non-'0' → force on
-    ADR X10, editor_env
-    STR X9, [X10]
-    B .Leenv_done
-.Leenv_off:
-    MOV X9, #2                      // '0' → force off
-    ADR X10, editor_env
-    STR X9, [X10]
+    ADR X0, edit_name
+    MOV X1, #edit_name_len
+    BL platform_getenv
+    CBZ X0, .Leenv_done
+    ADR X9, editor_env
+    MOV X2, #1
+    STR X2, [X9]
+    LDRB W3, [X0]
+    CMP W3, #'0'
+    B.NE .Leenv_done
+    MOV X2, #2
+    STR X2, [X9]
 .Leenv_done:
 
-    // Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories for
-    // the help system: help / tutorials / apropos). Same pattern as the PATH walk.
-    LDR X0, [SP]
-    ADD X0, X0, #2
-    LSL X0, X0, #3
-    ADD X0, SP, X0                  // &envp[0]
-.Ldenv_loop:
-    LDR X1, [X0]
-    CBZ X1, .Ldenv_done
-    ADR X2, docs_prefix
-    MOV X3, #docs_prefix_len
-.Ldenv_cmp:
-    CBZ X3, .Ldenv_found
-    LDRB W4, [X1], #1
-    LDRB W5, [X2], #1
-    CMP W4, W5
-    B.NE .Ldenv_next
-    SUB X3, X3, #1
-    B .Ldenv_cmp
-.Ldenv_next:
-    ADD X0, X0, #8
-    B .Ldenv_loop
-.Ldenv_found:
+    // BASICFORTH_DOCS — colon-separated docs directories for help / tutorials
+    // / apropos.
+    ADR X0, docs_name
+    MOV X1, #docs_name_len
+    BL platform_getenv
     ADR X9, basicforth_docs
-    STR X1, [X9]                    // value (past "BASICFORTH_DOCS=")
-    MOV X2, #0
-.Ldenv_strlen:
-    LDRB W3, [X1, X2]
-    CBZ W3, .Ldenv_strlen_done
-    ADD X2, X2, #1
-    B .Ldenv_strlen
-.Ldenv_strlen_done:
+    STR X0, [X9]
     ADR X9, basicforth_docs_len
-    STR X2, [X9]
-.Ldenv_done:
+    STR X1, [X9]
 
-    // Walk envp again for HOME= (used by `cd ~`). Same pattern as the DOCS walk;
-    // home_ptr points into the env string (valid for the process lifetime).
-    LDR X0, [SP]
-    ADD X0, X0, #2
-    LSL X0, X0, #3
-    ADD X0, SP, X0                  // &envp[0]
-.Lhenv_loop:
-    LDR X1, [X0]
-    CBZ X1, .Lhenv_done
-    ADR X2, home_prefix
-    MOV X3, #home_prefix_len
-.Lhenv_cmp:
-    CBZ X3, .Lhenv_found
-    LDRB W4, [X1], #1
-    LDRB W5, [X2], #1
-    CMP W4, W5
-    B.NE .Lhenv_next
-    SUB X3, X3, #1
-    B .Lhenv_cmp
-.Lhenv_next:
-    ADD X0, X0, #8
-    B .Lhenv_loop
-.Lhenv_found:
+    // HOME — used by `cd ~`.
+    ADR X0, home_name
+    MOV X1, #home_name_len
+    BL platform_getenv
     ADR X9, home_ptr
-    STR X1, [X9]                    // value (past "HOME=")
-    MOV X2, #0
-.Lhenv_strlen:
-    LDRB W3, [X1, X2]
-    CBZ W3, .Lhenv_strlen_done
-    ADD X2, X2, #1
-    B .Lhenv_strlen
-.Lhenv_strlen_done:
+    STR X0, [X9]
     ADR X9, home_len
-    STR X2, [X9]
-.Lhenv_done:
+    STR X1, [X9]
 
     // Capture the absolute startup directory, so `cd` with no argument can return
     // here and session.fs stays pinned to it no matter where a later `cd` goes.
@@ -722,16 +607,18 @@ warn_no_core:   .ascii "basicforth: core.fs not found - only built-in primitives
 .equ warn_no_core_len, . - warn_no_core
 session_fs_name: .ascii "session.fs"
 .equ session_fs_len, . - session_fs_name
-env_prefix:     .ascii "BASICFORTH_PATH="
-.equ env_prefix_len, . - env_prefix
-sess_prefix:    .ascii "BASICFORTH_SESSION="
-.equ sess_prefix_len, . - sess_prefix
-edit_prefix:    .ascii "BASICFORTH_EDITOR="
-.equ edit_prefix_len, . - edit_prefix
-docs_prefix:    .ascii "BASICFORTH_DOCS="
-.equ docs_prefix_len, . - docs_prefix
-home_prefix:    .ascii "HOME="
-.equ home_prefix_len, . - home_prefix
+// Variable NAMES, without the '=' — platform_getenv matches the name and
+// requires the '=' itself, so spelling it here would look for "NAME==".
+env_name:       .ascii "BASICFORTH_PATH"
+.equ env_name_len, . - env_name
+sess_name:      .ascii "BASICFORTH_SESSION"
+.equ sess_name_len, . - sess_name
+edit_name:      .ascii "BASICFORTH_EDITOR"
+.equ edit_name_len, . - edit_name
+docs_name:      .ascii "BASICFORTH_DOCS"
+.equ docs_name_len, . - docs_name
+home_name:      .ascii "HOME"
+.equ home_name_len, . - home_name
 opt_v:          .asciz "-v"
 opt_version:    .asciz "--version"
 

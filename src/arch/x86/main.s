@@ -63,186 +63,62 @@ _start:
     jmp platform_exit
 .Lno_version_flag:
 
-    # Walk envp to find BASICFORTH_PATH=
-    mov start_argc(%rip), %rcx
-    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
-.Lenv_loop:
-    mov (%rdi), %rsi                # RSI = envp[i]
-    test %rsi, %rsi
-    jz .Lenv_done                   # NULL = end of envp
-    # Compare prefix "BASICFORTH_PATH="
-    lea env_prefix(%rip), %rdx
-    mov $env_prefix_len, %ecx
-.Lenv_cmp:
-    test %ecx, %ecx
-    jz .Lenv_found                  # prefix matched
-    movzbl (%rsi), %eax
-    cmpb (%rdx), %al
-    jne .Lenv_next
-    inc %rsi
-    inc %rdx
-    dec %ecx
-    jmp .Lenv_cmp
-.Lenv_next:
-    add $8, %rdi
-    jmp .Lenv_loop
-.Lenv_found:
-    # RSI now points past "BASICFORTH_PATH=" — the value
-    mov %rsi, basicforth_path(%rip)
-    # Compute length
-    mov %rsi, %rdi
-    xor %ecx, %ecx
-.Lenv_strlen:
-    cmpb $0, (%rdi,%rcx)
-    je .Lenv_strlen_done
-    inc %ecx
-    jmp .Lenv_strlen
-.Lenv_strlen_done:
-    movslq %ecx, %rax
-    mov %rax, basicforth_path_len(%rip)
-.Lenv_done:
+    # The environment BasicForth reads for itself. platform_getenv walks
+    # start_envp (saved just above) and returns a pointer INTO the environment
+    # block plus its length — the strings live as long as the process, so
+    # nothing here is copied or owned. Each name matches only up to a following
+    # '=', so BASICFORTH_PATH cannot be answered by BASICFORTH_PATHOLOGICAL.
+    # Unset gives 0/0, which is what these already hold.
+    lea env_name(%rip), %rdi
+    mov $env_name_len, %esi
+    call platform_getenv
+    mov %rax, basicforth_path(%rip)
+    mov %rdx, basicforth_path_len(%rip)
 
-    # Walk envp again for BASICFORTH_SESSION= (override the default isatty gate
-    # for the interactive session: =0 forces off, any other value forces on).
+    # BASICFORTH_SESSION — override the isatty gate for the interactive
+    # session: '0' forces off, any other value forces on, unset keeps the
+    # default. A value that is EMPTY counts as "any other value", since its
+    # first byte is the terminating NUL — which is what the hand-written walk
+    # did, and what the tests pin.
     movq $0, session_env(%rip)      # 0 = unset (use default isatty gate)
-    mov start_argc(%rip), %rcx
-    lea 16(%rsp,%rcx,8), %rdi       # &envp[0]
-.Lsenv_loop:
-    mov (%rdi), %rsi                # envp[i]
-    test %rsi, %rsi
-    jz .Lsenv_done                  # NULL = end of envp
-    lea sess_prefix(%rip), %rdx
-    mov $sess_prefix_len, %ecx
-.Lsenv_cmp:
-    test %ecx, %ecx
-    jz .Lsenv_found                 # prefix matched
-    movzbl (%rsi), %eax
-    cmpb (%rdx), %al
-    jne .Lsenv_next
-    inc %rsi
-    inc %rdx
-    dec %ecx
-    jmp .Lsenv_cmp
-.Lsenv_next:
-    add $8, %rdi
-    jmp .Lsenv_loop
-.Lsenv_found:
-    movzbl (%rsi), %eax             # first byte of the value
-    cmpb $'0', %al
-    je .Lsenv_off
-    movq $1, session_env(%rip)      # non-'0' → force on
-    jmp .Lsenv_done
-.Lsenv_off:
-    movq $2, session_env(%rip)      # '0' → force off
+    lea sess_name(%rip), %rdi
+    mov $sess_name_len, %esi
+    call platform_getenv
+    test %rax, %rax
+    jz .Lsenv_done
+    movq $1, session_env(%rip)      # set → force on...
+    cmpb $'0', (%rax)
+    jne .Lsenv_done
+    movq $2, session_env(%rip)      # ...unless it starts with '0'
 .Lsenv_done:
 
-    # Walk envp again for BASICFORTH_EDITOR= (override the default isatty gate for
-    # the line editor: =0 forces off, any other value forces on). Same pattern.
+    # BASICFORTH_EDITOR — the same gate for the line editor.
     movq $0, editor_env(%rip)       # 0 = unset (use default isatty gate)
-    mov start_argc(%rip), %rcx
-    lea 16(%rsp,%rcx,8), %rdi       # &envp[0]
-.Leenv_loop:
-    mov (%rdi), %rsi                # envp[i]
-    test %rsi, %rsi
-    jz .Leenv_done                  # NULL = end of envp
-    lea edit_prefix(%rip), %rdx
-    mov $edit_prefix_len, %ecx
-.Leenv_cmp:
-    test %ecx, %ecx
-    jz .Leenv_found                 # prefix matched
-    movzbl (%rsi), %eax
-    cmpb (%rdx), %al
-    jne .Leenv_next
-    inc %rsi
-    inc %rdx
-    dec %ecx
-    jmp .Leenv_cmp
-.Leenv_next:
-    add $8, %rdi
-    jmp .Leenv_loop
-.Leenv_found:
-    movzbl (%rsi), %eax             # first byte of the value
-    cmpb $'0', %al
-    je .Leenv_off
-    movq $1, editor_env(%rip)       # non-'0' → force on
-    jmp .Leenv_done
-.Leenv_off:
-    movq $2, editor_env(%rip)       # '0' → force off
+    lea edit_name(%rip), %rdi
+    mov $edit_name_len, %esi
+    call platform_getenv
+    test %rax, %rax
+    jz .Leenv_done
+    movq $1, editor_env(%rip)
+    cmpb $'0', (%rax)
+    jne .Leenv_done
+    movq $2, editor_env(%rip)
 .Leenv_done:
 
-    # Walk envp again for BASICFORTH_DOCS= (colon-separated docs directories, used
-    # by the help system: help / tutorials / apropos). Same pattern as the PATH walk.
-    mov start_argc(%rip), %rcx
-    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
-.Ldenv_loop:
-    mov (%rdi), %rsi
-    test %rsi, %rsi
-    jz .Ldenv_done
-    lea docs_prefix(%rip), %rdx
-    mov $docs_prefix_len, %ecx
-.Ldenv_cmp:
-    test %ecx, %ecx
-    jz .Ldenv_found
-    movzbl (%rsi), %eax
-    cmpb (%rdx), %al
-    jne .Ldenv_next
-    inc %rsi
-    inc %rdx
-    dec %ecx
-    jmp .Ldenv_cmp
-.Ldenv_next:
-    add $8, %rdi
-    jmp .Ldenv_loop
-.Ldenv_found:
-    mov %rsi, basicforth_docs(%rip) # value (past "BASICFORTH_DOCS=")
-    mov %rsi, %rdi
-    xor %ecx, %ecx
-.Ldenv_strlen:
-    cmpb $0, (%rdi,%rcx)
-    je .Ldenv_strlen_done
-    inc %ecx
-    jmp .Ldenv_strlen
-.Ldenv_strlen_done:
-    movslq %ecx, %rax
-    mov %rax, basicforth_docs_len(%rip)
-.Ldenv_done:
+    # BASICFORTH_DOCS — colon-separated docs directories for help / tutorials
+    # / apropos.
+    lea docs_name(%rip), %rdi
+    mov $docs_name_len, %esi
+    call platform_getenv
+    mov %rax, basicforth_docs(%rip)
+    mov %rdx, basicforth_docs_len(%rip)
 
-    # Walk envp again for HOME= (used by `cd ~`). Same pattern as the DOCS walk;
-    # home_ptr points into the env string (valid for the process lifetime).
-    mov start_argc(%rip), %rcx
-    lea 16(%rsp,%rcx,8), %rdi       # RDI = &envp[0]
-.Lhenv_loop:
-    mov (%rdi), %rsi
-    test %rsi, %rsi
-    jz .Lhenv_done
-    lea home_prefix(%rip), %rdx
-    mov $home_prefix_len, %ecx
-.Lhenv_cmp:
-    test %ecx, %ecx
-    jz .Lhenv_found
-    movzbl (%rsi), %eax
-    cmpb (%rdx), %al
-    jne .Lhenv_next
-    inc %rsi
-    inc %rdx
-    dec %ecx
-    jmp .Lhenv_cmp
-.Lhenv_next:
-    add $8, %rdi
-    jmp .Lhenv_loop
-.Lhenv_found:
-    mov %rsi, home_ptr(%rip)        # value (past "HOME=")
-    mov %rsi, %rdi
-    xor %ecx, %ecx
-.Lhenv_strlen:
-    cmpb $0, (%rdi,%rcx)
-    je .Lhenv_strlen_done
-    inc %ecx
-    jmp .Lhenv_strlen
-.Lhenv_strlen_done:
-    movslq %ecx, %rax
-    mov %rax, home_len(%rip)
-.Lhenv_done:
+    # HOME — used by `cd ~`.
+    lea home_name(%rip), %rdi
+    mov $home_name_len, %esi
+    call platform_getenv
+    mov %rax, home_ptr(%rip)
+    mov %rdx, home_len(%rip)
 
     # Capture the absolute startup directory, so `cd` with no argument can return
     # here and session.fs stays pinned to it no matter where a later `cd` goes.
@@ -663,16 +539,18 @@ warn_no_core:   .ascii "basicforth: core.fs not found - only built-in primitives
 .equ warn_no_core_len, . - warn_no_core
 session_fs_name: .ascii "session.fs"
 .equ session_fs_len, . - session_fs_name
-env_prefix:     .ascii "BASICFORTH_PATH="
-.equ env_prefix_len, . - env_prefix
-sess_prefix:    .ascii "BASICFORTH_SESSION="
-.equ sess_prefix_len, . - sess_prefix
-edit_prefix:    .ascii "BASICFORTH_EDITOR="
-.equ edit_prefix_len, . - edit_prefix
-docs_prefix:    .ascii "BASICFORTH_DOCS="
-.equ docs_prefix_len, . - docs_prefix
-home_prefix:    .ascii "HOME="
-.equ home_prefix_len, . - home_prefix
+# Variable NAMES, without the '=' — platform_getenv matches the name and
+# requires the '=' itself, so spelling it here would look for "NAME==".
+env_name:       .ascii "BASICFORTH_PATH"
+.equ env_name_len, . - env_name
+sess_name:      .ascii "BASICFORTH_SESSION"
+.equ sess_name_len, . - sess_name
+edit_name:      .ascii "BASICFORTH_EDITOR"
+.equ edit_name_len, . - edit_name
+docs_name:      .ascii "BASICFORTH_DOCS"
+.equ docs_name_len, . - docs_name
+home_name:      .ascii "HOME"
+.equ home_name_len, . - home_name
 opt_v:          .asciz "-v"
 opt_version:    .asciz "--version"
 

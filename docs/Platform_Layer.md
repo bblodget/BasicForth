@@ -405,11 +405,15 @@ The name must match up to a following `=`: a prefix comparison alone would make
 `PATH` match `PATHOLOGICAL=1`. An empty name matches nothing, rather than
 matching an entry that begins with `=` — which some systems do produce.
 
-Backs the Forth `getenv` primitive. `main.s` still open-codes the same walk
-five times over for `BASICFORTH_PATH`, `BASICFORTH_SESSION`,
-`BASICFORTH_EDITOR`, `BASICFORTH_DOCS` and `HOME` — not because it has to
-(`start_envp` is saved before the first of them) but because they predate this
-function. Folding them onto it is the obvious follow-up.
+Backs the Forth `getenv` primitive, and startup's own five lookups —
+`BASICFORTH_PATH`, `BASICFORTH_SESSION`, `BASICFORTH_EDITOR`,
+`BASICFORTH_DOCS` and `HOME` — which used to be five hand-written copies of
+this walk in `main.s`, per architecture.
+
+A side effect worth knowing: `main.s` no longer reads `argv`/`envp` off the
+stack except in the few instructions that save them at `_start`, so the rest
+of startup no longer depends on `RSP`/`SP` still pointing at the initial
+frame.
 
 |              | ARM64                                     | x86-64                                     |
 |--------------|-------------------------------------------|--------------------------------------------|

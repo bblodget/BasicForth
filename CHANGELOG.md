@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Changed: startup reads its environment through `platform_getenv`
+
+- `main.s` open-coded the same envp walk **five times** on each architecture —
+  ten copies — for `BASICFORTH_PATH`, `BASICFORTH_SESSION`,
+  `BASICFORTH_EDITOR`, `BASICFORTH_DOCS` and `HOME`. Each is now one call.
+  About 200 lines of assembly removed, and the OS knowledge lives in the
+  platform layer, which is what it is for.
+- **Behaviour is unchanged, and that was checked rather than assumed.** The
+  same matrix was run against binaries built before and after, on both
+  architectures: all five `BASICFORTH_SESSION` states (unset / `0` / `1` /
+  other / empty), plus `BASICFORTH_DOCS`, `HOME` and the library path.
+  Identical output every time.
+- The subtle case that had to survive: an **empty** `BASICFORTH_SESSION=`
+  counts as "force on", because the hand-written walk read the first byte of
+  the value and compared it to `'0'`, and for an empty value that byte is the
+  terminating NUL. Preserved deliberately.
+- The names lost their trailing `=`. The old walks compared a prefix that
+  *included* it, which is why they were exact-match; `platform_getenv` matches
+  the name and requires the `=` itself, so keeping it would have looked for
+  `NAME==`. Both directions are now tested at startup, not just in the Forth
+  word: `BASICFORTH_DOCSX` must be ignored, and `BASICFORTH_DOCS` must still
+  be read.
+- Startup no longer reads `argv`/`envp` off the stack outside the handful of
+  instructions that save them at `_start`, so it no longer depends on the
+  stack pointer still addressing the initial frame.
+
 ### Changed: `voice.fs` reads `$VOICE_ENGINE_CMD` when it loads
 
 - `. ./setup.sh` then `require voice.fs` is now the whole setup — no template
