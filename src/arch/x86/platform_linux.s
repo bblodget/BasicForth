@@ -801,6 +801,60 @@ pipe_fds:     .space 8            # int[2] filled by pipe2
 pipe_tab:     .space PIPE_MAX*16  # (fd, pid) pairs; pid == 0 → slot free
 .text
 
+# ---------- PROCESS ENVIRONMENT ----------
+# platform_getenv ( RDI=name, RSI=namelen -- RAX=value, RDX=valuelen )
+# Look a variable up in the environment this process started with. RAX=0 and
+# RDX=0 when it is not set.
+#
+# The value is a pointer INTO the environment block, not a copy: those strings
+# sit in the initial process stack and live as long as the process, so there is
+# nothing to own and nothing to free. platform_system already hands the same
+# block to execve, and the HOME pointer kept for `cd ~` is the same kind of
+# borrow.
+#
+# A name must match up to a following '=' — comparing the prefix alone would
+# make "PATH" match "PATHOLOGICAL=1". An empty name matches nothing rather
+# than matching an entry that begins with '=', which some systems do produce.
+.global platform_getenv
+platform_getenv:
+    test %rsi, %rsi
+    jz .Lgenv_none                  # empty name: never a match
+    mov start_envp(%rip), %r8
+    test %r8, %r8
+    jz .Lgenv_none                  # no environment at all
+.Lgenv_loop:
+    mov (%r8), %r9                  # R9 = envp[i]
+    test %r9, %r9
+    jz .Lgenv_none                  # NULL terminates envp
+    xor %ecx, %ecx                  # RCX = offset into the name
+.Lgenv_cmp:
+    cmp %rsi, %rcx
+    je .Lgenv_eq                    # whole name matched — need '=' next
+    movzbl (%r9,%rcx), %eax
+    cmpb (%rdi,%rcx), %al
+    jne .Lgenv_next                 # differs (an entry's NUL never matches)
+    inc %rcx
+    jmp .Lgenv_cmp
+.Lgenv_eq:
+    cmpb $'=', (%r9,%rcx)
+    jne .Lgenv_next                 # a longer name that merely starts the same
+    lea 1(%r9,%rcx), %rax           # value begins past the '='
+    xor %edx, %edx
+.Lgenv_strlen:
+    cmpb $0, (%rax,%rdx)
+    je .Lgenv_done
+    inc %rdx
+    jmp .Lgenv_strlen
+.Lgenv_done:
+    ret
+.Lgenv_next:
+    add $8, %r8
+    jmp .Lgenv_loop
+.Lgenv_none:
+    xor %eax, %eax
+    xor %edx, %edx
+    ret
+
 # ---------- PIPES (popen / pclose) ----------
 
 # platform_popen ( RDI=NUL-terminated command, RSI=fam -- RAX=fd or -errno )

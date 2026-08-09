@@ -4618,6 +4618,23 @@ forth_rename_file:
     LDP X29, X30, [SP], #16
     RET
 
+// GETENV ( c-addr u -- c-addr2 u2 )  the environment value named by c-addr/u.
+// Length 0 means there is nothing to use; the ADDRESS then says which kind of
+// nothing — 0 for unset, a real pointer for a variable set to the empty string.
+// The result points into the process environment, not at a copy, so do not
+// write through it and do not free it. Same depth in as out, so the name's
+// cells are simply overwritten.
+.global forth_getenv
+forth_getenv:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19, #CELL]            // c-addr (name)
+    LDR X1, [X19]                   // u
+    BL platform_getenv              // X0 = value, X1 = length (0 0 unset)
+    STR X0, [X19, #CELL]
+    STR X1, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
 // (system) ( c-addr u -- status )  run a shell command via /bin/sh -c, blocking
 // until it finishes; status is the child's exit code (0-255), or -1 on a
 // fork/exec failure. The string is copied to a private NUL-terminated buffer
@@ -6158,7 +6175,8 @@ DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
-DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
+DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_getenv
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
 DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at

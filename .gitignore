@@ -23,6 +23,3 @@ pumpkin-scripts/
 testing/
 __pycache__/
 
-# Local Python virtualenv (a TTS engine for voice.fs lives here) — 250 MB of
-# machine-specific binaries, and the path is baked into setup.sh
-venv/

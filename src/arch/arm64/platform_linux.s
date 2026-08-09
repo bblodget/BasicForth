@@ -889,6 +889,64 @@ pipe_fds:     .space 8            // int[2] filled by pipe2
 pipe_tab:     .space PIPE_MAX*16  // (fd, pid) pairs; pid == 0 → slot free
 .text
 
+// ---------- PROCESS ENVIRONMENT ----------
+// platform_getenv ( X0=name, X1=namelen -- X0=value, X1=valuelen )
+// Look a variable up in the environment this process started with. X0=0 and
+// X1=0 when it is not set.
+//
+// The value is a pointer INTO the environment block, not a copy: those strings
+// sit in the initial process stack and live as long as the process, so there is
+// nothing to own and nothing to free. platform_system already hands the same
+// block to execve, and the HOME pointer kept for `cd ~` is the same kind of
+// borrow.
+//
+// A name must match up to a following '=' — comparing the prefix alone would
+// make "PATH" match "PATHOLOGICAL=1". An empty name matches nothing rather
+// than matching an entry that begins with '=', which some systems do produce.
+//
+// A leaf: no BL, so no frame. X2-X6 are scratch (caller-saved), and X19/X21/X22
+// (DSP/HERE/LATEST) are untouched.
+.global platform_getenv
+platform_getenv:
+    CBZ X1, .Lgenv_none             // empty name: never a match
+    ADR X2, start_envp
+    LDR X2, [X2]                    // X2 = &envp[0]
+    CBZ X2, .Lgenv_none             // no environment at all
+.Lgenv_loop:
+    LDR X3, [X2]                    // X3 = envp[i]
+    CBZ X3, .Lgenv_none             // NULL terminates envp
+    MOV X4, #0                      // X4 = offset into the name
+.Lgenv_cmp:
+    CMP X4, X1
+    B.EQ .Lgenv_eq                  // whole name matched — need '=' next
+    LDRB W5, [X3, X4]
+    LDRB W6, [X0, X4]
+    CMP W5, W6
+    B.NE .Lgenv_next                // differs (an entry's NUL never matches)
+    ADD X4, X4, #1
+    B .Lgenv_cmp
+.Lgenv_eq:
+    LDRB W5, [X3, X4]
+    CMP W5, #'='
+    B.NE .Lgenv_next                // a longer name that merely starts the same
+    ADD X0, X3, X4
+    ADD X0, X0, #1                  // value begins past the '='
+    MOV X1, #0
+.Lgenv_strlen:
+    LDRB W5, [X0, X1]
+    CBZ W5, .Lgenv_done
+    ADD X1, X1, #1
+    B .Lgenv_strlen
+.Lgenv_done:
+    RET
+.Lgenv_next:
+    ADD X2, X2, #8
+    B .Lgenv_loop
+.Lgenv_none:
+    MOV X0, #0
+    MOV X1, #0
+    RET
+
 // ---------- PIPES (popen / pclose) ----------
 
 // platform_popen ( X0=NUL-terminated command, X1=fam -- X0=fd or -errno )

@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### Changed: `voice.fs` reads `$VOICE_ENGINE_CMD` when it loads
+
+- `. ./setup.sh` then `require voice.fs` is now the whole setup — no template
+  to paste at the prompt. Precedence is `voice-cmd!` > `$VOICE_ENGINE_CMD` >
+  the built-in default, and `voice-from-env` re-reads the variable after
+  experimenting with another engine.
+- Found by using it. `setup.sh` exported a correct template, `voice.fs`
+  ignored it and installed its own default — which names piper with **no
+  `--data-dir`** — and the render failed with piper's `unable to find voice`.
+  That message says nothing about which template asked, so the environment
+  being right and unread is a genuinely confusing state to debug.
+- An **unusable** variable — unset, empty, or longer than the 512-character
+  template buffer — leaves the default alone. The guard is load-bearing in
+  both directions: `voice-cmd!` refuses a zero-length *and* an oversized
+  template by storing nothing, which is right for an explicit call that must
+  not silently do something else, and wrong for an opportunistic one. Without
+  it, a misconfigured variable leaves a session with "no engine command set"
+  when it had a perfectly good default — worse than never reading the
+  environment at all. Accepts exactly 512, refuses 513.
+- The stand-in-engine tests now clear `VOICE_ENGINE_CMD` explicitly, since a
+  library that reads the environment would otherwise make the suite's answers
+  depend on whose shell it ran in.
+
+### Added: `getenv` — read the process environment
+
+- `getenv ( c-addr u -- c-addr2 u2 )` answers with an environment variable's
+  value, or a length of 0 when it is unset. A conspicuous gap for a Forth that
+  ships `#!` scripts, `ARGC`/`ARGV` and shell words: scripts want `$HOME`,
+  `$EDITOR`, `$PAGER`.
+- **In the platform layer, where OS knowledge belongs** — `platform_getenv`
+  walks the same `start_envp` that `platform_system` already hands to
+  `execve`. No syscall; the environment is just memory the kernel left on the
+  stack.
+- The result **points into the environment block** rather than copying: those
+  strings live as long as the process, so there is nothing to own and nothing
+  to free. The `HOME` pointer kept for `cd ~` is the same kind of borrow.
+- **A name matches only up to a following `=`.** A prefix comparison alone
+  would make `PAT` answer with `PATHOLOGICAL`'s value, and `PATH` shadow it.
+  Both directions are tested, because only one of them is obvious from reading
+  the code. An empty name matches nothing rather than matching an entry
+  beginning with `=`, which some systems do produce.
+- **Unset and set-to-empty are both length 0, and the ADDRESS separates them**
+  — 0 for unset, a real pointer for a variable set to the empty string. So
+  `nip 0=` is true when there is nothing to use (unset and empty alike) and
+  `drop 0=` is true only when unset, at the cost of no flag and no second
+  return value. That avoids
+  `find`'s asymmetric two-answer shape, which has caught us out before.
+- Both architectures verified against a deliberately broken build: dropping
+  the `=` check fails exactly the prefix test, and an off-by-one on the value
+  pointer fails exactly the four that read a value. Identical on x86-64 and
+  ARM64, and the well-formed path is asserted on both — not just the failures.
+
 ### Added: `voice.fs` — rendering speech to WAV files
 
 - `voice-render ( text u path u -- ior )` speaks text into a WAV file by

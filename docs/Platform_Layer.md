@@ -393,6 +393,30 @@ passed to `execve`, so the child inherits `$EDITOR`/`$PATH`/`$TERM`. ARM64 has n
 | **Output**   | X0 = exit status (0-255), or -1 on fork/exec   | RAX = exit status (0-255), or -1 on fork/exec |
 | **Syscall**  | clone #220, execve #221, wait4 #260            | fork #57, execve #59, wait4 #61              |
 
+### platform_getenv
+
+Look a variable up in the environment the process started with, using the same
+`start_envp` that `platform_system` hands to `execve`. Returns a pointer
+**into** the environment block — those strings sit in the initial process stack
+and live as long as the process, so there is nothing to own and nothing to
+free, exactly like the `HOME` pointer kept for `cd ~`.
+
+The name must match up to a following `=`: a prefix comparison alone would make
+`PATH` match `PATHOLOGICAL=1`. An empty name matches nothing, rather than
+matching an entry that begins with `=` — which some systems do produce.
+
+Backs the Forth `getenv` primitive. `main.s` still open-codes the same walk
+five times over for `BASICFORTH_PATH`, `BASICFORTH_SESSION`,
+`BASICFORTH_EDITOR`, `BASICFORTH_DOCS` and `HOME` — not because it has to
+(`start_envp` is saved before the first of them) but because they predate this
+function. Folding them onto it is the obvious follow-up.
+
+|              | ARM64                                     | x86-64                                     |
+|--------------|-------------------------------------------|--------------------------------------------|
+| **Input**    | X0 = name, X1 = name length               | RDI = name, RSI = name length              |
+| **Output**   | X0 = value, X1 = length (0, 0 if unset)   | RAX = value, RDX = length (0, 0 if unset)  |
+| **Syscall**  | none — walks `start_envp`                 | none — walks `start_envp`                  |
+
 ### platform_popen
 
 Run a shell command (`/bin/sh -c <cmd>`) with one end of a pipe replacing the

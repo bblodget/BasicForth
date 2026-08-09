@@ -41,6 +41,31 @@ Variable holding the argument count (including the program name).
 Variable holding the raw `char**` argument base — for FFI-style walking; the
 words above are built on it.
 
+## getenv ( c-addr u -- c-addr2 u2 )
+The value of the environment variable named by `c-addr u`, or a length of **0**
+when it is not set.
+
+    s" HOME" getenv type              \ /home/you
+    s" EDITOR" getenv nip 0= if ." no $EDITOR" cr then
+
+The name must match in full: `s" PAT" getenv` does **not** find `PATH`.
+
+**Unset and set-to-empty are both length 0, and the ADDRESS tells them apart:**
+
+    VAR=hello    c-addr2 = the value    u2 = 5
+    VAR=         c-addr2 = an address   u2 = 0
+    unset        c-addr2 = 0            u2 = 0
+
+So `nip 0=` is true when there is **nothing to use** — unset and empty alike,
+which is all most callers need — and `drop 0=` is true **only when unset**,
+for the few that care about the difference. No flag and no second return
+value: the address was already carrying the answer.
+
+The result **points into the process environment**, not at a copy. That costs
+nothing and never needs freeing, and it lasts as long as the program runs —
+but it is not yours to write through, and it reflects the environment
+BasicForth started with, not later changes made by a child process.
+
 ## bye-code ( n -- )
 Exit with status `n`, so shells and Makefiles can test the result. Like
 `bye`, the dirty-guard asks about unsaved work first at a terminal.
@@ -50,5 +75,6 @@ Exit with status `n`, so shells and Makefiles can test the result. Like
 ## See Also
 
 - `help files` — `stdin` / `stdout` / `stderr` for filter scripts.
+- `help shell` — running other programs, which inherit this environment.
 - `help interpreter` — plain `bye`.
 - examples/echo.fs, examples/cat.fs, examples/sort.fs — working scripts.

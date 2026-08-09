@@ -67,6 +67,13 @@ platform_raw_mode:
 platform_write:
     RET
 
+// The unit tests run without a saved envp, so every name reads as unset.
+.global platform_getenv
+platform_getenv:
+    MOV X0, #0
+    MOV X1, #0
+    RET
+
 .global platform_write_fd
 platform_write_fd:
     RET

@@ -2083,6 +2083,46 @@ assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-i
 assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
 
 # =========================================================================
+section "GETENV (process environment)"
+# =========================================================================
+# getenv borrows a pointer INTO the environment rather than copying, so these
+# also check it hands back the right LENGTH — a strlen that ran off the end
+# would still print the value and then some.
+ge_run() {   # <forth> -> output, with a controlled environment
+    printf '%s\n' "$1" | env FOO=bar EMPTY= PATHOLOGICAL=1 \
+        BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1
+}
+ge_check() {
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+ge_check "getenv reads a set variable"      "$(ge_run 's" FOO" getenv type')" "^bar ok"
+ge_check "getenv gives the exact length"    "$(ge_run 's" FOO" getenv nip .')" "^3  ok"
+ge_check "getenv on an unset name gives 0"  "$(ge_run 's" NOSUCHVAR" getenv nip .')" "^0  ok"
+ge_check "getenv on an empty value gives 0" "$(ge_run 's" EMPTY" getenv nip .')" "^0  ok"
+# Both are length 0, and the ADDRESS is what separates them: 0 for unset, a
+# real pointer for a variable set to the empty string. Pinned because it is
+# the whole reason this word needs no flag — and because documenting the
+# opposite is exactly the mistake that got caught here.
+ge_check "getenv: unset gives a NULL address" \
+    "$(ge_run 's" NOSUCHVAR" getenv drop 0<> .')" "^0  ok"
+ge_check "getenv: empty-but-set gives a real address" \
+    "$(ge_run 's" EMPTY" getenv drop 0<> .')" "^-1  ok"
+ge_check "getenv takes an empty name as unset" "$(ge_run 's" " getenv nip .')" "^0  ok"
+# The '=' check is the whole difference between a lookup and a prefix match:
+# without it "PAT" would answer with PATHOLOGICAL's value, and "PATH" would
+# shadow it too. Both directions are tested because only one of them is
+# obvious from reading the code.
+ge_check "getenv does not match a name PREFIX" "$(ge_run 's" PAT" getenv nip .')" "^0  ok"
+ge_check "getenv matches the whole name exactly" \
+    "$(ge_run 's" PATHOLOGICAL" getenv type')" "^1 ok"
+ge_check "getenv leaves the stack balanced" \
+    "$(ge_run 's" FOO" getenv 2drop s" NOPE" getenv 2drop depth .')" "^0  ok"
+
+# =========================================================================
 section "System Words"
 # =========================================================================
 
@@ -5859,9 +5899,19 @@ SH
 chmod +x "$vc_dir/engine" "$vc_dir/fails" "$vc_dir/silent"
 
 vc_run() {                           # run Forth lines inside the fixture dir
+    # VOICE_ENGINE_CMD is cleared so these are about the stand-in engine and
+    # nothing else — voice.fs now reads that variable at load, so an ambient
+    # one would make the suite's answers depend on whose shell it ran in.
     ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$1" \
-        | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $vc_forth 2>&1 )
+        | env -u VOICE_ENGINE_CMD BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
 }
+vc_run_env() {                       # same, with VOICE_ENGINE_CMD = $1
+    ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$2" \
+        | env VOICE_ENGINE_CMD="$1" BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
+}
+
 vc_check() {                         # name, output, pattern
     if printf '%s' "$2" | grep -q -- "$3"; then
         printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
@@ -5869,6 +5919,32 @@ vc_check() {                         # name, output, pattern
         printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
     fi
 }
+
+# $VOICE_ENGINE_CMD is picked up at LOAD time, so `require voice.fs` is enough
+# and no one has to paste a template. The built-in default names piper with no
+# --data-dir, so it only finds a voice where piper happens to look; leaving the
+# environment unread meant watching a render fail with the engine's own "unable
+# to find voice", which says nothing about which template produced it.
+vc_check "voice.fs takes its template from the environment" \
+    "$(vc_run_env './engine %t %o' 's" hi" s" env.txt" voice-render .')" "^0  ok"
+# Unset and set-but-EMPTY must both leave the default alone: voice-cmd! with a
+# zero length stores an empty template, which would wipe the default rather
+# than decline to replace it.
+vc_check "an unset variable leaves the built-in default" \
+    "$(vc_run 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+vc_check "an empty variable leaves the built-in default" \
+    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and so does one too LONG to hold. voice-cmd! refuses by storing nothing,
+# which is right for an explicit call but would leave a bare `require voice.fs`
+# with "no engine command set" — a working default destroyed by a variable that
+# was only ever meant to improve on it.
+vc_big="./engine %t %o$(printf '#%.0s' $(seq 1 520))"       # 534 — just past 512
+vc_check "an oversized variable leaves the built-in default" \
+    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and an explicit voice-cmd! still beats the environment.
+vc_check "voice-cmd! overrides the environment" \
+    "$(vc_run_env './engine %t %o' 's" ./fails %t %o" voice-cmd! s" hi" s" o.txt" voice-render .')" \
+    "^3 "
 
 # Both placeholders expand, and the text reaches the engine VERBATIM however
 # much shell syntax it contains. The payload is a harmless canary: if the

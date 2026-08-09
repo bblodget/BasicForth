@@ -66,23 +66,22 @@ export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOM
 # BasicForth — SDL key events don't use XIM.
 export XMODIFIERS=@im=none
 
-# The text-to-speech engine voice.fs renders with (docs/Speech.md). Found, not
-# hardcoded, for the same reason the root above is derived: several worktrees
-# source this file, and an absolute path would send every one of them to a
-# single checkout's venv. Looked for in the venv beside THIS checkout, then a
-# shared one, then whatever is on PATH.
+# The text-to-speech engine voice.fs renders with (docs/Speech.md). Taken from
+# PATH, with no install location written down anywhere: pipx (the recommended
+# install) puts piper in ~/.local/bin, and a distribution package or an
+# activated venv lands on PATH just the same.
+#
+# That there is nothing to keep in step is the point. Several worktrees source
+# this file, so a path into one checkout would send all of them to that one
+# copy — and a venv inside a checkout is reachable only from it anyway.
 #
 # Left unset when there is no engine, which is what makes the suite's
 # real-engine test skip with a reason instead of failing. Must be EXPORTED:
 # that test reads it from a child process.
 #
-# Override either half before sourcing, for a different install or voice:
+# Override either half before sourcing, for a different voice or voice store:
 #   PIPER_VOICES=/srv/voices PIPER_VOICE=en_GB-alba-medium . ./setup.sh
-for _bf_piper in "$BASICFORTH_HOME/venv/bin/piper" "$HOME/.venv/piper/bin/piper"; do
-    [ -x "$_bf_piper" ] && break
-    _bf_piper=""
-done
-[ -n "$_bf_piper" ] || _bf_piper="$(command -v piper 2>/dev/null)"
+_bf_piper="$(command -v piper 2>/dev/null)"
 if [ -n "$_bf_piper" ]; then
     # %o/%t are voice.fs placeholders, not shell syntax — and the whole
     # template must avoid double quotes, which would end voice-cmd!'s s".

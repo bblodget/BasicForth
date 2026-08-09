@@ -9,10 +9,11 @@ it and play it like any other sound.
 
 At a glance:
 
-    voice-render ( text u path u -- ior )  speak text into a WAV file; 0 = ok
-    voice-why    ( -- c-addr u )           why the last render failed
-    voice-cmd!   ( c-addr u -- )           set the engine command template
-    voice-cmd    ( -- c-addr u )           the template in force
+    voice-render   ( text u path u -- ior )  speak text into a WAV file; 0 = ok
+    voice-why      ( -- c-addr u )           why the last render failed
+    voice-cmd!     ( c-addr u -- )           set the engine command template
+    voice-cmd      ( -- c-addr u )           the template in force
+    voice-from-env ( -- )                    re-read $VOICE_ENGINE_CMD
 
 This is an **offline** step. A neural engine spends hundreds of milliseconds
 loading its model before it says anything, and a 60 Hz frame is 16 — so a
@@ -74,7 +75,20 @@ there rather than going on to judge the engine by a file it was never able to
 replace.
 
 ## voice-cmd! ( c-addr u -- )
-Set the command template used to run the engine. Two placeholders expand:
+Set the command template used to run the engine, overriding whatever loading
+`voice.fs` worked out. The template in force is decided in this order:
+
+    voice-cmd!            an explicit call, at any time — always wins
+    $VOICE_ENGINE_CMD     read once, when voice.fs loads
+    a built-in default    piper, with no --data-dir
+
+so `. ./setup.sh` then `require voice.fs` needs no template pasted in. The
+default is a guess and says so: it finds a voice only where piper happens to
+look by default, and a machine that keeps its voices elsewhere gets the
+engine's own *"unable to find voice"* — which says nothing about *which*
+template asked for it.
+
+Two placeholders expand:
 
     %t   the text to speak        %o   the output WAV path
 
@@ -104,6 +118,20 @@ The template currently in force.
 The string lives **in the template buffer itself**, so the next `voice-cmd!`
 overwrites it. To switch engines and switch back, keep your own copy of the
 old template — holding what `voice-cmd` returned restores nothing.
+
+## voice-from-env ( -- )
+Set the template from `$VOICE_ENGINE_CMD`, as loading `voice.fs` already did.
+Use it to get back to the configured engine after experimenting:
+
+    s" espeak-ng -w %o -- %t" voice-cmd!    \ try the robotic one
+    voice-from-env                          \ back to the real one
+
+An **unusable** variable — unset, empty, or longer than a template can be —
+leaves the current template alone rather than clearing it. `voice-cmd!` refuses
+both of the latter by storing *nothing*, which is right when you asked for one
+specific template and must not silently get another, but wrong for a variable
+that was only ever meant to improve on a working default: the result would be
+"no engine command set" for a session that had a perfectly good one.
 
 See `help samples` for loading the WAV afterwards, `help playing` for playing
 it, and `docs/Speech.md` for how speech fits together as a whole.
