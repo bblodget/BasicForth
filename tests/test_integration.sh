@@ -5899,9 +5899,19 @@ SH
 chmod +x "$vc_dir/engine" "$vc_dir/fails" "$vc_dir/silent"
 
 vc_run() {                           # run Forth lines inside the fixture dir
+    # VOICE_ENGINE_CMD is cleared so these are about the stand-in engine and
+    # nothing else — voice.fs now reads that variable at load, so an ambient
+    # one would make the suite's answers depend on whose shell it ran in.
     ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$1" \
-        | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $vc_forth 2>&1 )
+        | env -u VOICE_ENGINE_CMD BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
 }
+vc_run_env() {                       # same, with VOICE_ENGINE_CMD = $1
+    ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$2" \
+        | env VOICE_ENGINE_CMD="$1" BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
+}
+
 vc_check() {                         # name, output, pattern
     if printf '%s' "$2" | grep -q -- "$3"; then
         printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
@@ -5909,6 +5919,32 @@ vc_check() {                         # name, output, pattern
         printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
     fi
 }
+
+# $VOICE_ENGINE_CMD is picked up at LOAD time, so `require voice.fs` is enough
+# and no one has to paste a template. The built-in default names piper with no
+# --data-dir, so it only finds a voice where piper happens to look; leaving the
+# environment unread meant watching a render fail with the engine's own "unable
+# to find voice", which says nothing about which template produced it.
+vc_check "voice.fs takes its template from the environment" \
+    "$(vc_run_env './engine %t %o' 's" hi" s" env.txt" voice-render .')" "^0  ok"
+# Unset and set-but-EMPTY must both leave the default alone: voice-cmd! with a
+# zero length stores an empty template, which would wipe the default rather
+# than decline to replace it.
+vc_check "an unset variable leaves the built-in default" \
+    "$(vc_run 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+vc_check "an empty variable leaves the built-in default" \
+    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and so does one too LONG to hold. voice-cmd! refuses by storing nothing,
+# which is right for an explicit call but would leave a bare `require voice.fs`
+# with "no engine command set" — a working default destroyed by a variable that
+# was only ever meant to improve on it.
+vc_big="./engine %t %o$(printf '#%.0s' $(seq 1 520))"       # 534 — just past 512
+vc_check "an oversized variable leaves the built-in default" \
+    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and an explicit voice-cmd! still beats the environment.
+vc_check "voice-cmd! overrides the environment" \
+    "$(vc_run_env './engine %t %o' 's" ./fails %t %o" voice-cmd! s" hi" s" o.txt" voice-render .')" \
+    "^3 "
 
 # Both placeholders expand, and the text reaches the engine VERBATIM however
 # much shell syntax it contains. The payload is a harmless canary: if the

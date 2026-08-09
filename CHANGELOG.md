@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed: `voice.fs` reads `$VOICE_ENGINE_CMD` when it loads
+
+- `. ./setup.sh` then `require voice.fs` is now the whole setup — no template
+  to paste at the prompt. Precedence is `voice-cmd!` > `$VOICE_ENGINE_CMD` >
+  the built-in default, and `voice-from-env` re-reads the variable after
+  experimenting with another engine.
+- Found by using it. `setup.sh` exported a correct template, `voice.fs`
+  ignored it and installed its own default — which names piper with **no
+  `--data-dir`** — and the render failed with piper's `unable to find voice`.
+  That message says nothing about which template asked, so the environment
+  being right and unread is a genuinely confusing state to debug.
+- An **unusable** variable — unset, empty, or longer than the 512-character
+  template buffer — leaves the default alone. The guard is load-bearing in
+  both directions: `voice-cmd!` refuses a zero-length *and* an oversized
+  template by storing nothing, which is right for an explicit call that must
+  not silently do something else, and wrong for an opportunistic one. Without
+  it, a misconfigured variable leaves a session with "no engine command set"
+  when it had a perfectly good default — worse than never reading the
+  environment at all. Accepts exactly 512, refuses 513.
+- The stand-in-engine tests now clear `VOICE_ENGINE_CMD` explicitly, since a
+  library that reads the environment would otherwise make the suite's answers
+  depend on whose shell it ran in.
+
 ### Added: `getenv` — read the process environment
 
 - `getenv ( c-addr u -- c-addr2 u2 )` answers with an environment variable's

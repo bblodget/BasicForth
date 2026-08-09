@@ -54,29 +54,53 @@ at all, including the board and the QEMU aarch64 test run.
 Nothing here ships an engine; the machine provides one. Piper is a good
 default: neural, offline, small, and permissively licensed.
 
-    python3 -m venv ~/.venv/piper
-    ~/.venv/piper/bin/pip install piper-tts
+    sudo apt install pipx                 # or your distribution's package
+    pipx ensurepath                       # once: puts ~/.local/bin on PATH
+    pipx install piper-tts
     mkdir -p ~/.local/share/piper-voices
-    ~/.venv/piper/bin/python -m piper.download_voices \
+    ~/.local/pipx/venvs/piper-tts/bin/python -m piper.download_voices \
         --data-dir ~/.local/share/piper-voices en_US-lessac-medium
 
-Then point the template at that copy, using absolute paths since the venv is
-not on `PATH`:
+    command -v piper                      # check before going further
 
-    s" /home/you/.venv/piper/bin/piper --data-dir /home/you/.local/share/piper-voices
-       -m en_US-lessac-medium -f %o -- %t" voice-cmd!
+**`pipx ensurepath` matters, and it needs a fresh shell.** It edits a shell
+profile (`~/.bashrc` or similar), so the change reaches the shell you are
+already in only after you start a new one or re-source that file. Skip it, or
+carry on in the same shell, and everything above still *succeeds* while
+`piper` is not on `PATH` — which is why the check is there. `setup.sh` finds
+its engine on `PATH` and nothing else, so an unreachable piper leaves
+`VOICE_ENGINE_CMD` unset, and the only sign is the suite's real-engine test
+reporting `SKIP … VOICE_ENGINE_CMD not set`.
 
-(one line, split here only to fit the page).
+`pipx` is the tool for installing Python **applications** rather than
+libraries: piper gets its own isolated environment, and the `piper` command is
+linked into `~/.local/bin` — the directory `ensurepath` adds. A plain
+`python3 -m venv` works too, but then the command exists only inside that
+venv — fine until you have several checkouts, none of which can see a venv
+belonging to another.
 
-`setup.sh` builds that template for you. It looks for piper in `venv/` beside
-the checkout, then `~/.venv/piper`, then `PATH`, and exports the result as
-`VOICE_ENGINE_CMD` — so either install location above works. `PIPER_VOICES`
-and `PIPER_VOICE` override the directory and the voice.
+Downloading voices is the one thing that needs the environment's own
+interpreter, as above: pipx links the `piper` **app** onto `PATH`, and
+`download_voices` is a module rather than an app. The voice is about 60 MB;
+`--data-dir` is what both commands call it.
 
-It **clears** the variable when the checkout it is sourced from has no
-engine, rather than leaving whatever a previous checkout set. Sourcing
-`setup.sh` from a second worktree is routine, and an inherited value would
-quietly keep pointing at the first one's venv.
+`setup.sh` builds the template from whatever `piper` is on `PATH` and exports
+it as `VOICE_ENGINE_CMD`, so there is no install path written down anywhere to
+drift. `PIPER_VOICES` and `PIPER_VOICE` override the voice store and the voice.
+
+**`voice.fs` reads that variable when it loads**, so the whole setup is:
+
+    . ./setup.sh
+    ...
+    require voice.fs
+    s" you win" s" you-win.wav" voice-render abort" render failed"
+
+with no template to paste. An explicit `voice-cmd!` still overrides it, and
+`voice-from-env` goes back.
+
+It **clears** the variable when no engine is on `PATH`, rather than leaving
+whatever an earlier shell set — an inherited value would quietly keep pointing
+at an engine this shell cannot see.
 
 The integration suite reads that variable and runs one end-to-end check that
 a real engine's WAV renders *and decodes*, which no stand-in engine can

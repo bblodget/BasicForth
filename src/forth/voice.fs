@@ -57,6 +57,31 @@ variable (vc-#)
 
 s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!
 
+\ ...but $VOICE_ENGINE_CMD wins, because the default above can only guess. It
+\ names piper with no --data-dir, so it finds a voice only where piper happens
+\ to look; setup.sh knows where the voices on THIS machine actually are.
+\ Exporting the right template and having the library ignore it is a confusing
+\ way to watch a render fail -- the engine's own "unable to find voice" says
+\ nothing about which template it came from.
+\
+\ Explicit still beats both: a voice-cmd! after loading overrides whatever
+\ arrived here.
+\
+\ An UNUSABLE variable -- unset, empty, or longer than a template can be --
+\ leaves the default alone. The guard is the whole point: voice-cmd! refuses
+\ both of those by storing NOTHING, which is right when a caller asked for one
+\ specific template and must not silently get another, but wrong here. This
+\ word is opportunistic; declining to change anything beats replacing a
+\ working default with "no engine command set".
+\
+\ A word rather than a bare line because `if` is compile-only. Worth keeping
+\ afterwards: re-run it to pick the environment back up after experimenting.
+: voice-from-env ( -- )
+    s" VOICE_ENGINE_CMD" getenv                     ( a u )
+    dup 0=  over (vc-max) > or if 2drop exit then   \ unusable: keep what we have
+    voice-cmd! ;
+voice-from-env
+
 \ --- why the last render failed ---
 128 constant (vc-why-max)
 create (vc-why-buf) (vc-why-max) allot
