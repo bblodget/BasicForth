@@ -353,9 +353,22 @@ variable (dump-addr)  variable (dump-len)
 \ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
 \ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
 \ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
-variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 0
+\ Seeded from the kernel, not the clock. ms@ alone gave two processes started in
+\ the same millisecond the SAME stream — 200 parallel launches produced 87
+\ distinct first values — and made that first value nearly linear in the launch
+\ time, since one xorshift round does not hide the structure of a seed that only
+\ varies in its low bits. entropy fails closed (early boot, or a kernel without
+\ getrandom), so the clock remains the fallback rather than the plan.
+\ In a definition because `if` is compile-only: this line runs as core.fs loads.
+variable seed
+: (reseed) ( -- )  entropy if drop ms@ then  1 or seed ! ;
+(reseed)
+\ A zero state is xorshift's fixed point: every output would be 0 forever, and
+\ `0 seed !` is the obvious thing to type after reading "store a known value to
+\ make runs repeatable". Fold it to a constant instead, so 0 names an ordinary
+\ repeatable stream like any other value. Every nonzero seed is untouched.
 : random ( -- n )
-    seed @
+    seed @ ?dup 0= if $9E3779B97F4A7C15 then
     dup 13 lshift xor
     dup  7 rshift xor
     dup 17 lshift xor

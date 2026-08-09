@@ -18,6 +18,8 @@
 .equ SIGCHLD,            17
 .equ SYS_clock_gettime,  113
 .equ SYS_getdents64,     61
+.equ SYS_getrandom,      278
+.equ GRND_NONBLOCK,      0x0001
 
 .equ CLOCK_MONOTONIC, 1
 
@@ -945,6 +947,41 @@ platform_getenv:
 .Lgenv_none:
     MOV X0, #0
     MOV X1, #0
+    RET
+
+// ---------- KERNEL ENTROPY ----------
+// platform_random ( -- X0=value, X1=ior )
+// One 64-bit value from the kernel's CSPRNG. X1=0 on success; non-zero means
+// nothing was produced and X0 is meaningless.
+//
+// GRND_NONBLOCK: before the pool is initialised (very early boot) getrandom
+// would otherwise BLOCK, and hanging at startup is worse than a weaker seed.
+// EAGAIN comes back instead and the caller falls back to the clock. An old
+// kernel without the call (pre-3.17) returns -ENOSYS through the same path.
+//
+// A short read is a failure too, not a partial success: seeding from 3 bytes
+// of entropy and 5 bytes of stack garbage would look like it worked.
+//
+// A leaf, but it needs 16 bytes of buffer, so it moves SP rather than keeping
+// a frame. X2/X8 are scratch; X19/X21/X22 (DSP/HERE/LATEST) are untouched.
+.global platform_random
+platform_random:
+    SUB SP, SP, #16
+    MOV X0, SP                      // buf
+    MOV X1, #8                      // count
+    MOV X2, #GRND_NONBLOCK          // flags
+    MOV X8, #SYS_getrandom
+    SVC #0
+    CMP X0, #8                      // anything but all 8 bytes is a failure
+    B.NE .Lrand_fail
+    LDR X0, [SP]
+    MOV X1, #0
+    ADD SP, SP, #16
+    RET
+.Lrand_fail:
+    MOV X0, #0
+    MOV X1, #1
+    ADD SP, SP, #16
     RET
 
 // ---------- PIPES (popen / pclose) ----------

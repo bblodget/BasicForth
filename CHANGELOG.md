@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Added: `entropy` — kernel randomness, and a seed worth having
+
+- `entropy ( -- x ior )` returns one 64-bit value from the kernel's CSPRNG via
+  `getrandom` (318 on x86-64, 278 on arm64). Two cells because the failure
+  could not be folded into the value: 0 is a legal random number **and** the
+  one seed that stops xorshift dead, so a caller could not tell "unlucky" from
+  "broken".
+- **The generator is now seeded from it, not from the clock.** `ms@` alone gave
+  every process started in the same millisecond an identical stream: 200
+  parallel launches produced **87 distinct** first values. It also left that
+  first value nearly linear in the launch time — consecutive runs shared their
+  top eight digits and stepped by a near-constant ~2.16×10⁹ per millisecond,
+  because one xorshift round does not hide the structure of a seed that varies
+  only in its low bits. The same measurement now gives 200 of 200.
+- Sequential launches were never the problem, and still aren't: 300 launches of
+  `6 rnd` were uniform before and after (χ²≈2.8, df=5). What was broken was
+  anything launched in parallel, and anything reading a single random number at
+  startup.
+- `GRND_NONBLOCK`, so an uninitialised pool early in boot returns a failure
+  rather than **blocking** — hanging at startup is worse than a weaker seed.
+  A kernel without the call (pre-3.17) fails the same way, and both fall back
+  to `ms@`. That fallback is the one path with no automated coverage: forcing
+  it needs seccomp. It was verified by forcing the branch by hand.
+
+### Fixed: `0 seed !` silently killed the random generator
+
+- Zero is xorshift's fixed point, so every subsequent `random` returned 0 and
+  every `rnd` returned 0 — forever, with nothing reported. `random` now folds a
+  zero state to a fixed constant, which makes `0` an ordinary repeatable seed
+  like any other value. No other seed changes, so every existing sequence is
+  the same as before.
+- `help seed` had warned never to use 0. A warning is the wrong shape for this:
+  the value is one someone reaches for precisely *because* the docs say a known
+  seed makes runs repeatable, and nothing enforced it. The warning is gone
+  because the trap is.
+- Free in practice — 3M `random` calls measured 147–149 ms with the guard
+  against 142–149 ms without, the loop being dominated by STC dispatch.
+- The test for this passed against a deliberately broken build at first:
+  `assert_output` matches a substring of output that still contains the echoed
+  input, and the input `0 seed ! random 0= .` contains a `0`. Moved to
+  `assert_result`, which strips the echo — the hole that helper exists for.
+
 ### Fixed: a wrapped `code span` inverted code and prose in `help`
 
 - The renderer clears its span state at every newline, so an inline span that
