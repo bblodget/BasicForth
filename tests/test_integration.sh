@@ -2457,6 +2457,35 @@ assert_output "key_escape"           'key_escape .'                       "27"
 assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
 assert_output "rnd zero base"       '1 rnd .'                             "0"
 
+# entropy ( -- x ior ): a value straight from the kernel, not the PRNG.
+assert_result "entropy succeeds"     'entropy nip .'                       "0"
+assert_result "entropy twice differs" 'entropy drop entropy drop = .'      "0"
+
+# A zero seed is xorshift's fixed point -- every output would be 0 forever, and
+# `0 seed !` is the obvious thing to type after reading that a known seed makes
+# runs repeatable. It must behave like any other seed instead: nonzero output,
+# and the same stream both times.
+assert_result "zero seed still runs" '0 seed ! random 0= .'                "0"
+assert_result "zero seed repeats"    '0 seed ! random 0 seed ! random = .' "-1"
+assert_result "known seed repeats"   '42 seed ! random 42 seed ! random = .' "-1"
+assert_result "known seeds differ"   '42 seed ! random 43 seed ! random = .' "0"
+
+# The regression that started this: seeding from ms@ gave every process started
+# in the SAME MILLISECOND an identical stream -- 200 parallel launches produced
+# 87 distinct first values. Launch a batch at once and require all of them to
+# differ. Under the old seeding this failed outright; with kernel entropy a
+# collision among 16 draws from 2^64 will not happen.
+ent_n=16
+ent_distinct=$(seq 1 $ent_n | xargs -P $ent_n -I{} sh -c \
+    "printf '.\" R=\" random . cr\nbye\n' | BASICFORTH_PATH='$FORTH_LIB' timeout 20 $FORTH 2>/dev/null \
+     | sed -n 's/.*R=\(-\?[0-9]\+\).*/\1/p' | head -1" | sort -u | wc -l)
+if [ "$ent_distinct" -eq "$ent_n" ]; then
+    printf "  ${GREEN}PASS${NC}  parallel launches get independent streams\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  parallel launches get independent streams\n"
+    printf "    %d of %d launches produced a distinct first value\n" "$ent_distinct" "$ent_n"; ((failed++))
+fi
+
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
 

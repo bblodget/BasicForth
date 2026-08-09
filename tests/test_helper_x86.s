@@ -80,6 +80,14 @@ platform_getenv:
     xor %edx, %edx
     ret
 
+# Always "no entropy available": the unit tests must not depend on a syscall,
+# and the caller's clock fallback is the path this exercises.
+.global platform_random
+platform_random:
+    xor %eax, %eax
+    mov $1, %edx
+    ret
+
 .global platform_write_fd
 platform_write_fd:
     ret

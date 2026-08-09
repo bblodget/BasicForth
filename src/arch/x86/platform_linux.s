@@ -24,6 +24,8 @@
 .equ SYS_pipe2,          293
 .equ SYS_clock_gettime,  228
 .equ SYS_getdents64,     217
+.equ SYS_getrandom,      318
+.equ GRND_NONBLOCK,      0x0001
 
 .equ CLOCK_MONOTONIC, 1
 
@@ -853,6 +855,38 @@ platform_getenv:
 .Lgenv_none:
     xor %eax, %eax
     xor %edx, %edx
+    ret
+
+# ---------- KERNEL ENTROPY ----------
+# platform_random ( -- RAX=value, RDX=ior )
+# One 64-bit value from the kernel's CSPRNG. RDX=0 on success; non-zero means
+# nothing was produced and RAX is meaningless.
+#
+# GRND_NONBLOCK: before the pool is initialised (very early boot) getrandom
+# would otherwise BLOCK, and hanging at startup is worse than a weaker seed.
+# EAGAIN comes back instead and the caller falls back to the clock. An old
+# kernel without the call (pre-3.17) returns -ENOSYS through the same path.
+#
+# A short read is a failure too, not a partial success: seeding from 3 bytes
+# of entropy and 5 bytes of stack garbage would look like it worked.
+.global platform_random
+platform_random:
+    sub $16, %rsp
+    mov %rsp, %rdi                  # buf
+    mov $8, %esi                    # count
+    mov $GRND_NONBLOCK, %edx        # flags
+    mov $SYS_getrandom, %eax
+    syscall
+    cmp $8, %rax                    # anything but all 8 bytes is a failure
+    jne .Lrand_fail
+    mov (%rsp), %rax
+    xor %edx, %edx
+    add $16, %rsp
+    ret
+.Lrand_fail:
+    xor %eax, %eax
+    mov $1, %edx
+    add $16, %rsp
     ret
 
 # ---------- PIPES (popen / pclose) ----------

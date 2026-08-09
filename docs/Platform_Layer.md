@@ -421,6 +421,30 @@ frame.
 | **Output**   | X0 = value, X1 = length (0, 0 if unset)   | RAX = value, RDX = length (0, 0 if unset)  |
 | **Syscall**  | none — walks `start_envp`                 | none — walks `start_envp`                  |
 
+### platform_random
+
+One 64-bit value from the kernel's CSPRNG, for seeding the Forth generator.
+Backs the Forth `entropy` primitive; `core.fs` seeds `seed` with it at startup
+and falls back to `ms@` when it fails.
+
+`GRND_NONBLOCK` is deliberate. Before the pool is initialised — very early in
+boot — `getrandom` would otherwise **block**, and hanging at startup is a worse
+failure than a weaker seed, so `EAGAIN` comes back instead. A kernel without
+the call at all (pre-3.17) returns `-ENOSYS` through the same path.
+
+A short read counts as failure, not partial success: seeding from three bytes
+of entropy and five bytes of stack garbage would look like it had worked.
+
+The clock is the fallback rather than the plan because `ms@` alone gave every
+process started in the same millisecond an identical stream — 200 parallel
+launches produced 87 distinct first values.
+
+|              | ARM64                                     | x86-64                                     |
+|--------------|-------------------------------------------|--------------------------------------------|
+| **Input**    | none                                      | none                                       |
+| **Output**   | X0 = value, X1 = ior (0 = success)        | RAX = value, RDX = ior (0 = success)       |
+| **Syscall**  | `getrandom` (278), `GRND_NONBLOCK`        | `getrandom` (318), `GRND_NONBLOCK`         |
+
 ### platform_popen
 
 Run a shell command (`/bin/sh -c <cmd>`) with one end of a pipe replacing the
