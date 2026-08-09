@@ -2122,6 +2122,22 @@ ge_check "getenv matches the whole name exactly" \
 ge_check "getenv leaves the stack balanced" \
     "$(ge_run 's" FOO" getenv 2drop s" NOPE" getenv 2drop depth .')" "^0  ok"
 
+# STARTUP reads its own five variables through the same platform_getenv, so
+# the exact-name rule has to hold there too — not just for the Forth word.
+# BASICFORTH_DOCSX starts with BASICFORTH_DOCS and must be ignored; a prefix
+# match would silently accept it and point the help system somewhere else.
+# timeout 30: `help` scans the docs directory and reads a page, which takes
+# ~9 s under the qemu aarch64 run where a plain startup takes well under 1.
+ge_docs=$(printf 'help getenv\nbye\n' \
+    | env -u BASICFORTH_DOCS BASICFORTH_DOCSX="$REPO_ROOT/docs/Language-Reference" \
+          BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1)
+ge_check "startup does not mistake BASICFORTH_DOCSX for BASICFORTH_DOCS" \
+    "$ge_docs" "BASICFORTH_DOCS not set"
+ge_docs2=$(printf 'help getenv\nbye\n' \
+    | env BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" BASICFORTH_PATH="$FORTH_LIB" \
+          timeout 30 $FORTH 2>&1)
+ge_check "startup still reads BASICFORTH_DOCS itself" "$ge_docs2" "^Scripting:"
+
 # =========================================================================
 section "System Words"
 # =========================================================================
