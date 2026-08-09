@@ -98,9 +98,9 @@ the disc. A radius of 0 is a single pixel.
 
 ## Colors
 
-You've been using named constants — `black white red green blue yellow
-cyan magenta`. A color is just a number, `$RRGGBB` (hex: red, green, blue,
-one byte each), so you can mix your own:
+You've been using named constants —
+`black white red green blue yellow cyan magenta`. A color is just a number,
+`$RRGGBB` (hex: red, green, blue, one byte each), so you can mix your own:
 
     $FF8000 constant orange
     f  orange 160 90 40 fill-circle  s

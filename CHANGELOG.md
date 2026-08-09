@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Fixed: a wrapped `code span` inverted code and prose in `help`
+
+- The renderer clears its span state at every newline, so an inline span that
+  opened on one line and closed on the next left the second line's backtick
+  parity **inverted**: the closing backtick opened a span instead, and from
+  there code rendered as prose and prose as code until the next backtick
+  rebalanced it. `help fonts` said `require font-terminus-8x16.fs` in plain
+  text with the words around it colored.
+- Nine spans shipped that way: four reference entries (`help fonts`,
+  `help font!`, `help thread`, `help defer`) and five tutorial steps across
+  four lessons — Graphics, Bitmaps, Modules, and Sound twice. All rewrapped;
+  no wording changed, and no lesson step grew a line, so nothing that fitted
+  a screen now pages.
+- Rewrapping to fit the spans left the paragraphs ragged at first — lines wrap
+  on **source** width here (median 75, p90 78 across 2108 prose lines), and
+  breaking early to keep a span whole left some rendered lines at 51 columns
+  beside neighbours at 77. Reflowed properly, with each span treated as one
+  unbreakable token. A few lines stay short where a long span cannot fit
+  beside anything.
+- **The docs were fixed, not the renderer.** Carrying span state across a
+  newline is the more correct fix — CommonMark allows the wrap — but every
+  boundary would then need to clear it (headings, code blocks, blank lines,
+  each rendered section, and the pager's reverse-video prompt), or an inverted
+  line becomes color bleeding across a page break. The constraint is cheap to
+  obey while the docs are hand-wrapped, so it is enforced instead.
+- A lint fails the build on any line with an odd backtick count, over both
+  `BASICFORTH_DOCS` directories. It sits beside the intraword-`*` lint, which
+  guards the same class of fault: prose that reads fine in the file and is
+  broken where it counts. Fenced blocks are skipped so a future fence is not
+  reported as a wrapped span — there are none in those directories today.
+- Found from the other direction: `help snd-wait` described waiting for every
+  channel without naming `ch-wait`, which waits for one, and `help sound`'s
+  at-a-glance list omitted it. Adding that cross-reference introduced a
+  wrapped span, which is how the nine came to light. `ch-wait` drains the
+  whole channel, not one sound — two 300 ms tones queued on channel 1 hold it
+  for 666 ms.
+
 ### Changed: startup reads its environment through `platform_getenv`
 
 - `main.s` open-coded the same envp walk **five times** on each architecture —

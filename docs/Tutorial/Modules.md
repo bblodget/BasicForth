@@ -187,11 +187,11 @@ Your `score.fs` is still on disk. `load score.fs` brings it all back.
 
 ## Where to go next
 
-That's the loop: **save**, `list`, `:e`, `delete`, `reload`. The reference
-page `help modules` covers every word here plus `redo` and `-session`; `see
-<word>` shows any word's source, from the file or from your session.
-`docs/Persistence.md` tells the deeper story — why editing mutates the file
-in place while a plain `:` appends.
+That's the loop: **save**, `list`, `:e`, `delete`, `reload`. The reference page
+`help modules` covers every word here plus `redo` and `-session`; `see <word>`
+shows any word's source, from the file or from your session.
+`docs/Persistence.md` tells the deeper story — why editing mutates the file in
+place while a plain `:` appends.
 
     tutorials          \ pick another lesson
 
