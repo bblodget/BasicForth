@@ -704,13 +704,13 @@ keeps running while they play:
 ```
 > require sound.fs
  ok
-> snd-open  440 200 tone  beep  snd-wait  snd-close
+> snd-open drop  440 200 tone  beep  snd-wait  snd-close
  ok
 ```
 
 `tone ( freq ms -- )` returns immediately; `snd-wait` blocks until the queue
 drains (use it before `bye`). With no device open the sound words are silent
-no-ops — games open with `snd-open? drop` to run soundless on a system with
+no-ops — games open with `snd-open drop` to run soundless on a system with
 no audio instead of aborting. See `help sound` and `docs/Sound.md`; the
 bouncing-ball demo `examples/bounce.fs` blips off the walls.
 
@@ -726,7 +726,8 @@ them open:
 > : risky  true abort" went boom" ;
  ok
 > ' risky catch .
-went boom-2  ok
+went boom
+-2  ok
 > : game  ['] play catch  snd-close sdl-close  throw ;
 ```
 

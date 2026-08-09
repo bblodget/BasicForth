@@ -87,6 +87,13 @@ value.
 Unlike a `variable` (whose `!` contents aren't saved), a `value` set with a
 direct `to` at the prompt **persists across `save`/`reload`** — see `help modules`.
 
+**Which to reach for.** Prefer `value` for anything you only ever read as a
+number: it reads without `@`, and a forgotten `@` on a `variable` doesn't fail
+— it silently hands you an address that looks like a plausible number. Use
+`variable` when you need the **address**: `+!`, an `allot`ed array, a buffer,
+an FFI out-parameter. Note also that `to` parses its target name when the line
+is compiled, so a cell chosen at run time must be a `variable`.
+
 ## to ( x "name" -- )
 Store a new value into a `value` (or a deferred word). Any other target is
 refused — `x: not a value or deferred word` — since the store would corrupt an
@@ -108,9 +115,8 @@ gforth spells it.
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it
-before a behavior is installed aborts with `greet: uninitialized deferred
-word`. The
-tool behind top-down design (`tutorial Chase`).
+before a behavior is installed aborts with `greet: uninitialized deferred word`.
+The tool behind top-down design (`tutorial Chase`).
 
     defer greet
     :noname  ." Hello!" cr ;  is greet

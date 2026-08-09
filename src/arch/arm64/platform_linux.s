@@ -18,6 +18,8 @@
 .equ SIGCHLD,            17
 .equ SYS_clock_gettime,  113
 .equ SYS_getdents64,     61
+.equ SYS_getrandom,      278
+.equ GRND_NONBLOCK,      0x0001
 
 .equ CLOCK_MONOTONIC, 1
 
@@ -888,6 +890,99 @@ sys_wstatus:  .space 8            // wait4 status word
 pipe_fds:     .space 8            // int[2] filled by pipe2
 pipe_tab:     .space PIPE_MAX*16  // (fd, pid) pairs; pid == 0 → slot free
 .text
+
+// ---------- PROCESS ENVIRONMENT ----------
+// platform_getenv ( X0=name, X1=namelen -- X0=value, X1=valuelen )
+// Look a variable up in the environment this process started with. X0=0 and
+// X1=0 when it is not set.
+//
+// The value is a pointer INTO the environment block, not a copy: those strings
+// sit in the initial process stack and live as long as the process, so there is
+// nothing to own and nothing to free. platform_system already hands the same
+// block to execve, and the HOME pointer kept for `cd ~` is the same kind of
+// borrow.
+//
+// A name must match up to a following '=' — comparing the prefix alone would
+// make "PATH" match "PATHOLOGICAL=1". An empty name matches nothing rather
+// than matching an entry that begins with '=', which some systems do produce.
+//
+// A leaf: no BL, so no frame. X2-X6 are scratch (caller-saved), and X19/X21/X22
+// (DSP/HERE/LATEST) are untouched.
+.global platform_getenv
+platform_getenv:
+    CBZ X1, .Lgenv_none             // empty name: never a match
+    ADR X2, start_envp
+    LDR X2, [X2]                    // X2 = &envp[0]
+    CBZ X2, .Lgenv_none             // no environment at all
+.Lgenv_loop:
+    LDR X3, [X2]                    // X3 = envp[i]
+    CBZ X3, .Lgenv_none             // NULL terminates envp
+    MOV X4, #0                      // X4 = offset into the name
+.Lgenv_cmp:
+    CMP X4, X1
+    B.EQ .Lgenv_eq                  // whole name matched — need '=' next
+    LDRB W5, [X3, X4]
+    LDRB W6, [X0, X4]
+    CMP W5, W6
+    B.NE .Lgenv_next                // differs (an entry's NUL never matches)
+    ADD X4, X4, #1
+    B .Lgenv_cmp
+.Lgenv_eq:
+    LDRB W5, [X3, X4]
+    CMP W5, #'='
+    B.NE .Lgenv_next                // a longer name that merely starts the same
+    ADD X0, X3, X4
+    ADD X0, X0, #1                  // value begins past the '='
+    MOV X1, #0
+.Lgenv_strlen:
+    LDRB W5, [X0, X1]
+    CBZ W5, .Lgenv_done
+    ADD X1, X1, #1
+    B .Lgenv_strlen
+.Lgenv_done:
+    RET
+.Lgenv_next:
+    ADD X2, X2, #8
+    B .Lgenv_loop
+.Lgenv_none:
+    MOV X0, #0
+    MOV X1, #0
+    RET
+
+// ---------- KERNEL ENTROPY ----------
+// platform_random ( -- X0=value, X1=ior )
+// One 64-bit value from the kernel's CSPRNG. X1=0 on success; non-zero means
+// nothing was produced and X0 is meaningless.
+//
+// GRND_NONBLOCK: before the pool is initialised (very early boot) getrandom
+// would otherwise BLOCK, and hanging at startup is worse than a weaker seed.
+// EAGAIN comes back instead and the caller falls back to the clock. An old
+// kernel without the call (pre-3.17) returns -ENOSYS through the same path.
+//
+// A short read is a failure too, not a partial success: seeding from 3 bytes
+// of entropy and 5 bytes of stack garbage would look like it worked.
+//
+// A leaf, but it needs 16 bytes of buffer, so it moves SP rather than keeping
+// a frame. X2/X8 are scratch; X19/X21/X22 (DSP/HERE/LATEST) are untouched.
+.global platform_random
+platform_random:
+    SUB SP, SP, #16
+    MOV X0, SP                      // buf
+    MOV X1, #8                      // count
+    MOV X2, #GRND_NONBLOCK          // flags
+    MOV X8, #SYS_getrandom
+    SVC #0
+    CMP X0, #8                      // anything but all 8 bytes is a failure
+    B.NE .Lrand_fail
+    LDR X0, [SP]
+    MOV X1, #0
+    ADD SP, SP, #16
+    RET
+.Lrand_fail:
+    MOV X0, #0
+    MOV X1, #1
+    ADD SP, SP, #16
+    RET
 
 // ---------- PIPES (popen / pclose) ----------
 

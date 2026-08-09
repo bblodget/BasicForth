@@ -190,7 +190,7 @@ two things it used to mean. See `docs/Language-Reference/Comparison.md`.
 | ]         | ( -- )                                        | asm   | (x)    | Switch to compile        |
 | [CHAR]    | ( "name" -- )                                 | asm   | (x)    | IMMEDIATE+COMPILE_ONLY   |
 | FIND      | ( c-addr u -- xt 1 \| xt -1 \| c-addr u 0 )  | asm   | (x)    | Dictionary lookup        |
-| >BODY     | ( xt -- a-addr )                              | asm   | (x)    | xt to data field         |
+| >BODY     | ( xt -- a-addr )                              | asm   | (x)    | `create`d words ONLY; other types return non-addresses |
 | DECIMAL   | ( -- )                                        | forth | (x)    | core.fs: #10 BASE !     |
 | WORD      | ( char -- c-addr )                            | forth | (x)    | core.fs                  |
 | >NUMBER   | ( ud c-addr u -- ud c-addr u )                | forth | (x)    | core.fs                  |
@@ -231,7 +231,7 @@ two things it used to mean. See `docs/Language-Reference/Comparison.md`.
 | Word          | Stack effect                                  | Layer | Status | Notes                   |
 |---------------|-----------------------------------------------|-------|--------|-------------------------|
 | ABORT         | ( -- )                                        | asm   | (x)    | Clear stacks, reset REPL |
-| ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE)      |
+| ABORT"        | ( flag "ccc" -- )                             | forth | (x)    | core.fs (IMMEDIATE); interpreted: acts now |
 | QUIT          | ( -- )                                        | asm   | (x)    | Reset RSP, enter REPL    |
 | ENVIRONMENT?  | ( c-addr u -- false \| i*x true )             | forth | (x)    | core.fs (always false)   |
 | S"            | ( "ccc" -- c-addr u )                         | both  | (x)    | Inline string literal; interpreted: transient buffer |

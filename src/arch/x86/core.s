@@ -619,6 +619,42 @@ forth_invert:
     notq (%r15)
     ret
 
+# POPCOUNT ( x -- n )
+# Count the set bits in x, by the SWAR method: pairs, then nibbles, then the
+# multiply that sums all eight bytes into the top one.
+#
+# Deliberately NOT the POPCNT instruction. POPCNT is x86-64-v2, and we build
+# with no -march flag — every other primitive here is baseline x86-64, so
+# using it would quietly raise the CPU requirement for the whole system, and
+# an older machine would die on SIGILL with nothing to explain it. This costs
+# a handful of cycles that no caller will notice. (ARM64 can use CNT: unlike
+# POPCNT it is mandatory in ARMv8-A, so it raises nothing.)
+.global forth_popcount
+forth_popcount:
+
+    mov (%r15), %rax
+    mov %rax, %rdx
+    shr $1, %rdx
+    movabs $0x5555555555555555, %rcx
+    and %rcx, %rdx
+    sub %rdx, %rax                  # pairs: count of each 2 bits
+    movabs $0x3333333333333333, %rcx
+    mov %rax, %rdx
+    and %rcx, %rdx
+    shr $2, %rax
+    and %rcx, %rax
+    add %rdx, %rax                  # nibbles
+    mov %rax, %rdx
+    shr $4, %rdx
+    add %rdx, %rax
+    movabs $0x0F0F0F0F0F0F0F0F, %rcx
+    and %rcx, %rax                  # bytes
+    movabs $0x0101010101010101, %rcx
+    imul %rcx, %rax                 # sum of bytes lands in the top byte
+    shr $56, %rax
+    mov %rax, (%r15)
+    ret
+
 # LSHIFT ( x1 u -- x2 )
 # Logical left shift
 .global forth_lshift
@@ -4153,6 +4189,33 @@ forth_rename_file:
     mov %rax, (%r15)                # ior = errno
     ret
 
+# GETENV ( c-addr u -- c-addr2 u2 )  the environment value named by c-addr/u.
+# Length 0 means there is nothing to use; the ADDRESS then says which kind of
+# nothing — 0 for unset, a real pointer for a variable set to the empty string.
+# The result points into the process environment, not at a copy, so do not
+# write through it and do not free it. Same depth in as out, so the name's
+# cells are simply overwritten.
+.global forth_getenv
+forth_getenv:
+    mov CELL(%r15), %rdi            # c-addr (name)
+    mov (%r15), %rsi                # u
+    call platform_getenv            # RAX = value, RDX = length (0 0 unset)
+    mov %rax, CELL(%r15)
+    mov %rdx, (%r15)
+    ret
+
+# entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
+# success; non-zero means x is meaningless, not that x is a bad number. The
+# failure value cannot be folded into x: 0 is a legal random value and is also
+# exactly the seed that stops xorshift dead, so the two must stay separate.
+.global forth_entropy
+forth_entropy:
+    call platform_random            # RAX = value, RDX = ior
+    sub $2*CELL, %r15
+    mov %rax, CELL(%r15)            # x
+    mov %rdx, (%r15)                # ior on top
+    ret
+
 # (system) ( c-addr u -- status )  run a shell command via /bin/sh -c, blocking
 # until it finishes; status is the child's exit code (0-255), or -1 on a
 # fork/exec failure. The string is copied to a private NUL-terminated buffer
@@ -5453,7 +5516,8 @@ DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
 DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
 DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
-DEFWORD dict_rot,        "rot",        forth_rot,         dict_invert
+DEFWORD dict_popcount,   "popcount",   forth_popcount,    dict_invert
+DEFWORD dict_rot,        "rot",        forth_rot,         dict_popcount
 DEFWORD dict_nip,        "nip",        forth_nip,         dict_rot
 DEFWORD dict_tuck,       "tuck",       forth_tuck,        dict_nip
 DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
@@ -5562,7 +5626,9 @@ DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
-DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
+DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
+DEFWORD dict_entropy,     "entropy",      forth_entropy,     dict_getenv
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_entropy
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
 DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at

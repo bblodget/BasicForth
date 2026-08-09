@@ -5,13 +5,14 @@
 other.
 
     require wav.fs
-    snd-open
+    snd-open drop
     s" blip.wav" wav-load value blip
     blip wav-play drop
     snd-wait  snd-close
 
 Load once, play many times. The same sample can be sounding on several
-channels at once — nothing here copies or modifies it.
+channels at once, and none of these words copies or alters it — SDL takes its
+own copy of the bytes as they are queued.
 
 At a glance:
 
@@ -66,7 +67,7 @@ whether the sound came from a file or from `tone`:
 To play a sound at a particular level, take the channel first, set it, and
 then play:
 
-    snd-alloc value ch
+    next-ch value ch
     64 ch ch-vol!
     blip ch wav-play-on
 

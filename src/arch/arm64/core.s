@@ -730,6 +730,21 @@ forth_invert:
     STR X9, [X19]
     RET
 
+// POPCOUNT ( x -- n )
+// Count the set bits in x. CNT counts per BYTE, so ADDV sums the eight
+// per-byte counts into one. V0 is caller-saved scratch; CNT/ADDV are
+// mandatory Advanced SIMD in ARMv8-A.
+.global forth_popcount
+forth_popcount:
+
+    LDR X9, [X19]
+    FMOV D0, X9
+    CNT V0.8B, V0.8B
+    ADDV B0, V0.8B
+    FMOV W9, S0
+    STR X9, [X19]
+    RET
+
 // LSHIFT ( x1 u -- x2 )
 // Logical left shift
 .global forth_lshift
@@ -4603,6 +4618,41 @@ forth_rename_file:
     LDP X29, X30, [SP], #16
     RET
 
+// GETENV ( c-addr u -- c-addr2 u2 )  the environment value named by c-addr/u.
+// Length 0 means there is nothing to use; the ADDRESS then says which kind of
+// nothing — 0 for unset, a real pointer for a variable set to the empty string.
+// The result points into the process environment, not at a copy, so do not
+// write through it and do not free it. Same depth in as out, so the name's
+// cells are simply overwritten.
+.global forth_getenv
+forth_getenv:
+    STP X29, X30, [SP, #-16]!
+    LDR X0, [X19, #CELL]            // c-addr (name)
+    LDR X1, [X19]                   // u
+    BL platform_getenv              // X0 = value, X1 = length (0 0 unset)
+    STR X0, [X19, #CELL]
+    STR X1, [X19]
+    LDP X29, X30, [SP], #16
+    RET
+
+// entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
+// success; non-zero means X0 is meaningless, not that it is a bad number. The
+// failure value cannot be folded into x: 0 is a legal random value and is also
+// exactly the seed that stops xorshift dead, so the two must stay separate.
+//
+// Two STRs rather than one STP: STP would put its FIRST operand at the LOW
+// address, which is TOS here, so the pair reads backwards from the stack
+// comment. Spelling both stores out keeps the order impossible to misread.
+.global forth_entropy
+forth_entropy:
+    STP X29, X30, [SP, #-16]!
+    BL platform_random              // X0 = value, X1 = ior
+    SUB X19, X19, #(2*CELL)
+    STR X0, [X19, #CELL]            // x
+    STR X1, [X19]                   // ior on top
+    LDP X29, X30, [SP], #16
+    RET
+
 // (system) ( c-addr u -- status )  run a shell command via /bin/sh -c, blocking
 // until it finishes; status is the child's exit code (0-255), or -1 on a
 // fork/exec failure. The string is copied to a private NUL-terminated buffer
@@ -6033,7 +6083,8 @@ DEFWORD dict_and,        "and",        forth_and,         dict_zero_less
 DEFWORD dict_or,         "or",         forth_or,          dict_and
 DEFWORD dict_xor,        "xor",        forth_xor,         dict_or
 DEFWORD dict_invert,     "invert",     forth_invert,      dict_xor
-DEFWORD dict_rot,        "rot",        forth_rot,         dict_invert
+DEFWORD dict_popcount,   "popcount",   forth_popcount,    dict_invert
+DEFWORD dict_rot,        "rot",        forth_rot,         dict_popcount
 DEFWORD dict_nip,        "nip",        forth_nip,         dict_rot
 DEFWORD dict_tuck,       "tuck",       forth_tuck,        dict_nip
 DEFWORD dict_two_dup,    "2dup",       forth_two_dup,     dict_tuck
@@ -6142,7 +6193,9 @@ DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
 DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
-DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_rename_file
+DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
+DEFWORD dict_entropy,     "entropy",      forth_entropy,     dict_getenv
+DEFWORD dict_mmap_anon,   "(mmap-anon)",  forth_mmap_anon,   dict_entropy
 DEFWORD dict_munmap,      "(munmap)",     forth_munmap,      dict_mmap_anon
 DEFWORD dict_latest_at,   "(latest@)",    forth_latest_at,   dict_munmap
 DEFWORD dict_restore_dict,"(restore-dict)",forth_restore_dict,dict_latest_at

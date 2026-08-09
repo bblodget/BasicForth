@@ -19,7 +19,7 @@ At a glance:
     source       ( -- c-addr u )        the current input line
     source-id    ( -- 0|-1|fileid )     where input is coming from
     >in          ( -- a-addr )          variable: parse position in source
-    >body        ( xt -- a-addr )       a created word's data address
+    >body        ( xt -- a-addr )       a CREATEd word's data field (only those)
     unused       ( -- u )               dictionary space remaining
     environment? ( c-addr u -- ... )    standard environment query
     catch        ( xt -- 0 | n )        run xt, trapping any throw
@@ -110,10 +110,26 @@ the interpreter re-read (or skip) part of the line. Sharp tool.
     parse2 hello      \ hello hello   (same token parsed twice)
 
 ## >body ( xt -- a-addr )
-Given the xt of a `create`d (or `variable`/`constant`) word, return the address
-of its data field.
+Given the xt of a **`create`d word** — which includes `variable` — return the
+address of its data field.
 
     create cx 5 ,   ' cx >body @ .    \ 5
+    variable vv     ' vv >body vv = . \ -1  (the variable itself)
+
+**Only those.** A `create`d word stores a *pointer* to its data field, and
+`>body` follows it; every other kind of word keeps something else in that slot,
+and `>body` hands back whatever is there:
+
+    99 value val    ' val >body .     \ 99   — the value, NOT an address
+    42 constant kk  ' kk  >body .     \ 42   — likewise
+    : col 42 ;      ' col >body .     \ 42   — its first inline literal
+
+So the result *looks* like a number you could use, and `@` on it will fault.
+The standard says as much: `>BODY` is defined for `CREATE`d words and leaves
+everything else undefined. (Gforth returns a real address in every case, which
+it can because its bodies sit at a fixed offset from the xt; ours don't, so the
+two disagree outside `create`.) If you want a value's cell, there isn't one to
+take the address of — read it by name and write it with `to`.
 
 ## unused ( -- u )
 The number of free bytes left in the dictionary — handy for keeping an eye on
@@ -134,7 +150,7 @@ you drop them). This is how a word cleans up after a failure instead of
 losing control to the REPL:
 
     : risky  true abort" went boom" ;
-    ' risky catch .        \ went boom-2   (we kept control)
+    ' risky catch .        \ went boom, then -2   (we kept control)
     : game  ['] play catch  snd-close sdl-close  throw ;
 
 The final `throw` re-raises a non-zero code after the cleanup — and is a
@@ -166,13 +182,22 @@ data stack — the normal "stop what you're doing and listen" reset.
 Clear the data stack and `quit`. The blunt-instrument error recovery.
 Equivalent to `-1 throw`, so a `catch` traps it.
 
-## abort" ( flag -- )  (compile-only; text follows)
-Inside a definition, compile a guard: at run time, if the flag is true, print
-the message and `-2 throw` (the standard `abort"` code) — a `catch` traps it
-as -2, message already printed.
+## abort" ( flag -- )  (text follows)
+If the flag is true, print the message and `-2 throw` (the standard `abort"`
+code) — a `catch` traps it as -2, message already printed. False consumes the
+flag and carries on.
 
     : checked  1 abort" went boom" ;
     checked           \ went boom  (and aborts)
+
+Inside a definition it compiles a guard that runs when the word does. Outside
+one it acts immediately, which is what makes the everyday allocation check
+work at the top of a file:
+
+    1024 allocate abort" out of memory" value buf
+
+`allocate` leaves an address *and* an error code; `abort"` takes the code, so
+`value` gets the address.
 
 ## bye ( -- )
 Leave BasicForth, restoring the terminal. If the session has unsaved work,

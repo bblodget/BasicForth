@@ -127,8 +127,10 @@ interpreting:
   from the input buffer (no copy needed).
 
 A string longer than 256 characters aborts with
-`interpreted string too long`. ABORT" remains compile-only (ANS leaves
-its interpretation semantics undefined).
+`interpreted string too long`. **ABORT"** is STATE-smart the same way, and
+for the same reason — ANS leaves its interpretation semantics undefined, but
+`allocate abort" out of memory" value buf` at the top of a file is worth more
+than the licence to refuse it. Interpreted, it tests the flag there and then.
 
 ## COUNT
 

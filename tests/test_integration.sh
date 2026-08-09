@@ -245,6 +245,36 @@ assert_output "xor"         ': test $FF00 $0FF0 xor . ; test'   "61680  ok"
 assert_output "invert 0"           "0 invert ."          "-1  ok"
 assert_output "invert -1"          "-1 invert ."         "0  ok"
 
+assert_output "popcount 0"         "0 popcount ."        "0  ok"
+assert_output "popcount 7"         "7 popcount ."        "3  ok"
+assert_output "popcount 255"       "255 popcount ."      "8  ok"
+assert_output "popcount -1"        "-1 popcount ."       "64  ok"
+assert_output "popcount top bit"   "1 63 lshift popcount ."   "1  ok"
+assert_output "popcount alternating" ': test $5555555555555555 popcount . ; test' "32  ok"
+# the mask idiom documented on this word must not disturb the caller's BASE:
+# `[ hex ] .. [ decimal ]` would leave BASE decimal for whoever loaded it
+assert_output "\$-prefix literal leaves BASE alone" \
+    'hex : m $5555555555555555 ; base @ decimal .'  "16  ok"
+
+# ...and run the `zero-fields` definition EXACTLY as the reference page writes
+# it, so the page is what is under test rather than a copy of it that can
+# drift. A bracket-form mask computes the same answer and still fails here.
+doc_zf=$(sed -n '/^## popcount/,/^## There is no/p' \
+             "$REPO_ROOT/docs/Language-Reference/Comparison.md" \
+         | sed -n '/: zero-fields/,/;$/p' | sed 's/^    //' | tr '\n' ' ')
+if [[ -z "$doc_zf" ]]; then
+    printf "  ${RED}FAIL${NC}  documented zero-fields: snippet not found in Comparison.md\n"; ((failed++))
+else
+    assert_output "documented zero-fields works and leaves BASE alone" \
+        "hex $doc_zf base @ decimal . -1 zero-fields . 0 zero-fields ." "16 0 32  ok"
+fi
+# every bit position, checked against a counting loop — catches a shift or
+# mask that is right for small values and wrong at the top of the cell
+assert_output "popcount vs loop, all 64 bit positions" \
+    ': ref ( x -- n ) 0 swap 64 0 do dup 1 and rot + swap 1 rshift loop drop ;
+     : chk 0 64 0 do 1 i lshift dup popcount swap ref <> if 1+ then loop . ;
+     chk' "0  ok"
+
 # =========================================================================
 section "Memory Access"
 # =========================================================================
@@ -393,8 +423,9 @@ assert_output "session survives uncaught throw" \
     "$(printf '77 throw\n1 2 + .')"  "3  ok"
 assert_output "uncaught abort stays silent" \
     "$(printf '1 2 3 abort\n5 5 + . depth .')"  "10 0"
-assert_output "catch intercepts abort\" as -2" \
-    ": risky true abort\" boom\" ; ' risky catch ."  "boom-2"
+# The message ends its own line, so the throw code lands on the next one.
+assert_result "catch intercepts abort\" as -2" \
+    ": risky true abort\" boom\" ; ' risky catch ."  "$(printf 'boom\n-2')"
 assert_output "nested catch rethrows outward" \
     ": inner 7 throw ; : outer ['] inner catch 100 + throw ; ' outer catch ."  "107"
 assert_output "throw across evaluate restores source" \
@@ -1093,6 +1124,214 @@ else
     fi
 fi
 
+# Gamepads (pad.fs) — same skip rules; pad.fs dlopens libSDL3 at include time.
+#
+# These are NOT controller tests: no controller is assumed, and they pass
+# identically whether or not one is plugged in. Two things are under test.
+#
+# First, the direction logic — the dead zone and the d-pad-wins merge — which
+# lives in (dz) and (merge) precisely so it can be fed exact numbers. A real
+# stick tests this WORSE than a test does: you cannot hold one at exactly
+# pad-dead and check both sides of the threshold.
+#
+# Second, the no-pad-open guards. Those matter because the absent controller
+# is real: someone loads pad.fs with nothing attached and calls pad-dx, and it
+# must answer 0 rather than dereference a null handle. Every guard below is
+# deterministic with hardware present, because no pad is ever opened.
+#
+# What these CANNOT check is whether pad-south is really the bottom button or
+# whether the event offsets are right. Only a physical controller shows that
+# (examples/gamepad.fs is the readout for it).
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (no libSDL3 in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (libSDL3 not installed)\n"
+else
+    # Dead zone: |n| < pad-dead is centre, |n| >= pad-dead is a direction. The
+    # boundary pair 7999/8000 is the whole point — an off-by-one here makes a
+    # pad feel subtly dead or subtly twitchy and no other test would notice.
+    pad_dz=$(printf 'require pad.fs\n-32768 (dz) . -8001 (dz) . -8000 (dz) . -7999 (dz) . 0 (dz) . 7999 (dz) . 8000 (dz) . 32767 (dz) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_dz" | grep -q -- '-1 -1 -1 0 0 0 1 1'; then
+        printf "  ${GREEN}PASS${NC}  (dz) dead zone, both sides of the 7999/8000 boundary\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (dz) dead zone\n    Got: %q\n" "$pad_dz"; ((failed++))
+    fi
+
+    # The d-pad wins over a contradicting stick. Order: dpad-left + stick hard
+    # right must be -1, NOT 0 and NOT +1 — a worn stick resting off centre must
+    # never cancel a deliberate d-pad press. Both d-pad buttons down is 0.
+    pad_mg=$(printf 'require pad.fs\n-1 0 30000 (merge) . 0 -1 -30000 (merge) . -1 -1 0 (merge) . 0 0 -30000 (merge) . 0 0 30000 (merge) . 0 0 100 (merge) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_mg" | grep -q -- '-1 1 0 -1 1 0'; then
+        printf "  ${GREEN}PASS${NC}  (merge) d-pad beats a contradicting stick; both d-pad = 0\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (merge) d-pad/stick merge\n    Got: %q\n" "$pad_mg"; ((failed++))
+    fi
+
+    # Every query with no pad open answers 0/false and leaves the stack clean.
+    # pad-name returns a zero-length string rather than a null pointer, so a
+    # caller can `type` it without checking.
+    pad_gd=$(printf 'require pad.fs\npad? . pad-dx . pad-dy . pad-leftx pad-axis . pad-leftx pad-dir . pad-south pad-held? . pad-south pad-has? . pad-name nip . pad-update pad-close depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_gd" | grep -q '0 0 0 0 0 0 0 0 0'; then
+        printf "  ${GREEN}PASS${NC}  no pad open: every query answers 0, stack stays clean\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  no-pad-open guards\n    Got: %q\n" "$pad_gd"; ((failed++))
+    fi
+
+    # A bad slot and a missing controller are different errors, and neither may
+    # crash: the interpreter has to come back and keep working afterwards.
+    pad_er=$(printf 'require pad.fs\n9 pad-open\n99 pad\n1000 pad-open\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_er" | grep -q 'pad-open: slot out of range' \
+       && printf '%s' "$pad_er" | grep -q 'pad: slot out of range' \
+       && printf '%s' "$pad_er" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-open/pad reject bad slots and the session survives\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad slot error handling\n    Got: %q\n" "$pad_er"; ((failed++))
+    fi
+
+    # pad-open answers an IOR so a game can degrade to the keyboard, so the one
+    # thing it must never do is abort when nothing is plugged in. Both lines
+    # hold with or without hardware: the first says a reason is recorded
+    # exactly when the ior is non-zero, the second says an attached pad really
+    # does open (and is vacuously true on a machine with none).
+    pad_of=$(printf 'require pad.fs\n: (t-ok) pads 0> if 0 pad-open 0= else true then ;\n3 pad-open 0<> pad-why nip 0<> = .  (t-ok) .\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_of" | grep -q -- '-1 -1' \
+       && printf '%s' "$pad_of" | grep -q 'alive0' \
+       && ! printf '%s' "$pad_of" | grep -q 'pad-open:'; then
+        printf "  ${GREEN}PASS${NC}  pad-open answers an ior and sets pad-why only on failure\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-open ior contract\n    Got: %q\n" "$pad_of"; ((failed++))
+    fi
+
+    # pad-why must never hand back an unrelated SDL error. SDL_GetError is NOT
+    # cleared by success -- its own header warns against reading it to decide
+    # whether anything failed -- so a failure the program already handled sits
+    # there until something clears it. Plant one, then fail an open: the reason
+    # must be about the controller, not the planted text.
+    pad_st=$(printf 'require pad.fs\npads drop\n: plant 0 99 2 (SDL_GamepadHasButton) (ccall) drop ;\n: (t-why) pads #pads < if pads pad-open drop pad-why type else .\" SKIP4\" then ;\nplant (t-why)\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if { printf '%s' "$pad_st" | grep -q 'no controller at that index' \
+         || printf '%s' "$pad_st" | grep -q '^SKIP4'; } \
+       && ! printf '%s' "$pad_st" | grep -q "Parameter 'gamepad'" \
+       && printf '%s' "$pad_st" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-why never reports an unrelated stale SDL error\n"; ((passed++))
+        printf '%s' "$pad_st" | grep -q '^SKIP4' && printf "        skipped: the empty-slot half — every slot has a controller\n"
+    else
+        printf "  ${RED}FAIL${NC}  pad-why stale SDL error\n    Got: %q\n" "$pad_st"; ((failed++))
+    fi
+
+    # A stale reason is the failure mode a recorded string invites: pad-why
+    # must be emptied by a successful open, not left saying why the LAST one
+    # failed. Order matters — the failing open has to run first or the clear
+    # is never exercised. The success half needs a controller attached; with
+    # none, the second number is 0 by construction and only the first is real.
+    pad_ws=$(printf 'require pad.fs\n: (t-clr) pads 0> if 0 pad-open drop pad-why nip else 0 then ;\n: (t-fail) pads #pads < if pads pad-open drop pad-why nip 0> else .\" SKIP4 \" true then ;\n(t-fail) .  (t-clr) .\n." alive" depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ws" | grep -q -- '-1 0' \
+       && printf '%s' "$pad_ws" | grep -q 'alive0'; then
+        printf "  ${GREEN}PASS${NC}  pad-why records a failure and a later success clears it\n"; ((passed++))
+        printf '%s' "$pad_ws" | grep -q '^SKIP4' && printf "        skipped: the failure half — every slot has a controller\n"
+    else
+        printf "  ${RED}FAIL${NC}  pad-why lifecycle\n    Got: %q\n" "$pad_ws"; ((failed++))
+    fi
+
+    # Button and axis constants must equal the SDL_GAMEPAD_* enum values in
+    # SDL_gamepad.h. A wrong one fails silently at run time — a button that is
+    # simply never pressed — which is exactly the bug nobody finds.
+    pad_ct=$(printf 'require pad.fs\npad-south . pad-east . pad-west . pad-north . pad-back . pad-guide . pad-start .\npad-lstick . pad-rstick . pad-lshoulder . pad-rshoulder .\npad-up . pad-down . pad-left . pad-right .\npad-leftx . pad-lefty . pad-rightx . pad-righty . pad-ltrigger . pad-rtrigger .\nev-pad-axis . ev-pad-down . ev-pad-up . ev-pad-added . ev-pad-removed .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ct" | grep -q '0 1 2 3 4 5 6' \
+       && printf '%s' "$pad_ct" | grep -q '7 8 9 10' \
+       && printf '%s' "$pad_ct" | grep -q '11 12 13 14' \
+       && printf '%s' "$pad_ct" | grep -q '0 1 2 3 4 5' \
+       && printf '%s' "$pad_ct" | grep -q '1616 1617 1618 1619 1620'; then
+        printf "  ${GREEN}PASS${NC}  gamepad button/axis/event constants match SDL_gamepad.h\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  gamepad constants\n    Got: %q\n" "$pad_ct"; ((failed++))
+    fi
+
+    # C returns narrower than a cell arrive with the high bits undefined, so
+    # pad-axis sign-extends by hand. Getting this wrong turns a stick pushed
+    # left (-32768) into +65535 -- full deflection the WRONG WAY.
+    pad_sx=$(printf 'require pad.fs\n$FFFF (s16) . $8000 (s16) . $7FFF (s16) . 0 (s16) . $FFFFFFFF (s32) . $80000000 (s32) . 1 (s32) .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_sx" | grep -q -- '-1 -32768 32767 0 -1 -2147483648 1'; then
+        printf "  ${GREEN}PASS${NC}  (s16)/(s32) sign-extend narrow C returns\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  narrow C return sign extension\n    Got: %q\n" "$pad_sx"; ((failed++))
+    fi
+
+    # pads must answer a non-negative count without a window, and without
+    # leaving SDL's malloc'd id array behind. Value depends on what is plugged
+    # in, so assert the contract, not the number.
+    pad_ps=$(printf 'require pad.fs\npads 0< 0= . depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_ps" | grep -q -- '-1 0'; then
+        printf "  ${GREEN}PASS${NC}  pads counts controllers with no window open\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pads with no window\n    Got: %q\n" "$pad_ps"; ((failed++))
+    fi
+
+    # (pad-id) bounds-checks the index against the SAME SDL_GetGamepads call it
+    # then indexes, and answers 0 rather than reading off the end of the array.
+    # An earlier version took the count from `pads` and indexed a SECOND call's
+    # array -- unplug a controller in between and the index runs past it. This
+    # passes with or without hardware: an index of 999 is out of range either
+    # way, and 0 is not a valid SDL instance id.
+    pad_id=$(printf 'require pad.fs\npads drop\n999 (pad-id) . 5000 (pad-id) . depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_id" | grep -q '0 0 0'; then
+        printf "  ${GREEN}PASS${NC}  (pad-id) refuses an out-of-range index (no read past the list)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  (pad-id) bounds check\n    Got: %q\n" "$pad_id"; ((failed++))
+    fi
+
+    # Subsystem teardown must not be contagious. SDL_Quit() ends EVERY
+    # subsystem, so pad-closeall calls SDL_QuitSubSystem(GAMEPAD) instead --
+    # the same care sdl-close already takes, and for the same reason: closing
+    # one thing here used to leave sound.fs's streams pointing at freed memory.
+    # Closing the pad must leave the window drawable and the audio playable.
+    # `pads drop` is what STARTS the gamepad subsystem -- without it
+    # pad-closeall's quit branch never runs and this test proves nothing.
+    # snd-open is spelled with abort", not drop: it used to abort by itself and
+    # the test leaned on that, so a bare `drop` here would let a FAILED open
+    # through and still report success with tone silently a no-op.
+    pad_td=$(printf 'require pad.fs\nrequire sound.fs\n64 32 sdl-open snd-open abort\" teardown: no audio device\"\npads drop\npad-closeall\nsdl-frame red clear gr-base @ l@ u. sdl-show\n440 20 tone\n." survived" sdl-close snd-close depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 15 $FORTH 2>&1)
+    if printf '%s' "$pad_td" | grep -q '16711680' \
+       && printf '%s' "$pad_td" | grep -q 'survived0'; then
+        printf "  ${GREEN}PASS${NC}  pad-closeall leaves the window and audio alive\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  pad-closeall subsystem teardown\n    Got: %q\n" "$pad_td"; ((failed++))
+    fi
+
+    # ...and the other way round: closing the window must not kill the gamepad
+    # subsystem either.
+    # Asks SDL whether the subsystem is up, via SDL_WasInit. An earlier version
+    # asserted `pads 0< 0=`, which is ALSO true when the subsystem is dead and
+    # pads answers 0 -- it passed against a deliberately broken sdl-close.
+    pad_tw=$(printf 'require pad.fs\n64 32 sdl-open\npads drop (pad-up?) sdl-close (pad-up?) . .\n." survived" pad-closeall depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 15 $FORTH 2>&1)
+    if printf '%s' "$pad_tw" | grep -q -- '-1 -1' && printf '%s' "$pad_tw" | grep -q 'survived0'; then
+        printf "  ${GREEN}PASS${NC}  sdl-close leaves the gamepad subsystem alive\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  sdl-close vs gamepad subsystem\n    Got: %q\n" "$pad_tw"; ((failed++))
+    fi
+
+    # require pad.fs pulls sdl3.fs (and through it ffi/graphics) on its own.
+    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open sdl-win 0<> . sdl-close pad-closeall depth .\nbye\n' \
+        | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$pad_rq" | grep -q -- '-1 0'; then
+        printf "  ${GREEN}PASS${NC}  require pad.fs pulls sdl3 deps; pad-closeall keeps SDL usable\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  require pad.fs deps\n    Got: %q\n" "$pad_rq"; ((failed++))
+    fi
+fi
+
 # SDL3 audio — same skip rules, dummy audio driver so no sound hardware is
 # required. tone before snd-open must be a silent no-op (depth unchanged);
 # after snd-open the stream is live and tone queues PCM (tone aborts via
@@ -1102,18 +1341,20 @@ if [[ "$FORTH" == *qemu* ]]; then
 elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
 else
-    snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open? . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_out" | grep -q '0 -1 0 put-ok'; then
+    if printf '%s' "$snd_out" | grep -q '0 0 0 put-ok'; then
         printf "  ${GREEN}PASS${NC}  SDL3 audio open+tone (queued PCM via dummy audio driver)\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 audio open+tone\n    Got: %q\n" "$snd_out"; ((failed++))
     fi
-    # No working audio (bogus driver): snd-open? must return false without
-    # aborting, and tone must stay a no-op — a game degrades to soundless.
-    snd_na=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? . 300 50 tone depth . .\" na-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # No working audio (bogus driver): snd-open must report a non-zero ior
+    # without aborting, snd-why must say why, and tone must stay a no-op — a
+    # game degrades to soundless. The ior is 1 here; only zero/non-zero is
+    # contractual, so the assertion also accepts the message being present.
+    snd_na=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open 0<> . snd-ready? . 300 50 tone depth . snd-why type .\" na-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=nosuchdriver BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_na" | grep -q '0 0 na-ok'; then
+    if printf '%s' "$snd_na" | grep -q -- '-1 0 0 .*not available.*na-ok'; then
         printf "  ${GREEN}PASS${NC}  SDL3 audio unavailable -> soundless no-op\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 audio unavailable -> soundless no-op\n    Got: %q\n" "$snd_na"; ((failed++))
@@ -1122,7 +1363,7 @@ else
     # spawns threads, so a plain SYS_exit (only the calling thread) leaves a
     # zombie main thread + live SDL threads and the parent waits forever;
     # platform_exit uses SYS_exit_group. timeout kills a hang -> status 124.
-    printf 'include %s/ffi.fs\ninclude %s/sound.fs\nsnd-open beep\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    printf 'include %s/ffi.fs\ninclude %s/sound.fs\nsnd-open drop beep\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH >/dev/null 2>&1
     if [[ $? -eq 0 ]]; then
         printf "  ${GREEN}PASS${NC}  bye exits with audio open (exit_group ends SDL threads)\n"; ((passed++))
@@ -1135,7 +1376,7 @@ else
     # so tone's own `snd-stream 0=` guard could not see it, and the next note
     # wrote into freed memory — a core dump inside SDL's audio thread, well
     # away from anything Forth could report.
-    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
+    mix_a=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open drop\n32 16 sdl-open\nsdl-close\n440 40 tone\ndepth . .\" audio-ok\"\nsnd-close\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$mix_a" | grep -q '0 audio-ok'; then
         printf "  ${GREEN}PASS${NC}  sdl-close leaves audio alive (quits only SDL_INIT_VIDEO)\n"; ((passed++))
@@ -1145,7 +1386,7 @@ else
     # The mirror, which already held: snd-close quits only SDL_INIT_AUDIO, so
     # the window keeps drawing. Reads the pixel back to prove the surface is
     # still live rather than merely that nothing crashed.
-    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
+    mix_b=$(printf 'require sound.fs\nrequire sdl3.fs\nsnd-open drop\n32 16 sdl-open\nsnd-close\nsdl-frame red clear gr-base @ l@ u.\nsdl-close\ndepth . .\" video-ok\"\nbye\n' \
         | SDL_VIDEODRIVER=dummy SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$mix_b" | grep -q '16711680' && printf '%s' "$mix_b" | grep -q '0 video-ok'; then
         printf "  ${GREEN}PASS${NC}  snd-close leaves the window drawable (quits only SDL_INIT_AUDIO)\n"; ((passed++))
@@ -1157,7 +1398,7 @@ else
     # The point of channels: sounds on DIFFERENT channels play together.
     # tone-on puts two tones on channels 1 and 2, and both must report queued
     # audio at once, with the tone channel untouched.
-    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_mix=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 300 1 tone-on 660 300 2 tone-on 1 ch-playing? . 2 ch-playing? . tone-ch ch-playing? . 1 ch-stop 1 ch-playing? . 2 ch-playing? . snd-stop 2 ch-playing? . .\" mix-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_mix" | grep -q -- '-1 -1 0 0 -1 0 mix-ok'; then
         printf "  ${GREEN}PASS${NC}  channels mix; ch-stop stops only its own channel\n"; ((passed++))
@@ -1170,7 +1411,7 @@ else
     # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
     # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
     # land on some other channel. Dark Star's siren sweep depends on this.
-    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
         printf "  ${GREEN}PASS${NC}  bare tone still sequences on the tone channel\n"; ((passed++))
@@ -1178,19 +1419,19 @@ else
         printf "  ${RED}FAIL${NC}  tone sequencing on tone-ch\n    Got: %q\n" "$ch_seq"; ((failed++))
     fi
 
-    # snd-alloc is round-robin, never hands back tone-ch, and steals the OLDEST
+    # next-ch is round-robin, never hands back tone-ch, and steals the OLDEST
     # channel once they are all busy. Filling every channel with a long tone
     # and allocating twice must give 1 then 2 -- the two least recently used.
-    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open? drop snd-alloc . snd-alloc . snd-alloc . fill snd-alloc . snd-alloc . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_alloc=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: fill snd-channels 1 ?do 220 2000 i tone-on loop ;\n: t snd-open drop next-ch . next-ch . next-ch . fill next-ch . next-ch . .\" alloc-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_alloc" | grep -q '1 2 3 1 2 alloc-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-alloc round-robins, then steals the oldest\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  next-ch round-robins, then steals the oldest\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  snd-alloc round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
+        printf "  ${RED}FAIL${NC}  next-ch round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
     fi
 
     # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
-    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open? drop snd-channels . snd-close 999 to snd-channels snd-open? drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open? drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open drop snd-channels . snd-close 999 to snd-channels snd-open drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
         printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
@@ -1198,9 +1439,60 @@ else
         printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
     fi
 
+    # snd-close must clear EVERY slot, not just the first snd-channels of
+    # them. snd-channels is user-writable, so shrinking it while a device is
+    # open once hid the tail from its own cleanup: open 64, drop to 4, close,
+    # and 60 handles stayed in the table pointing at destroyed streams.
+    # This counts non-null handles, which is the invariant snd-close states
+    # for itself -- NOT proof that streams leaked, because SDL_QuitSubSystem
+    # frees them (RSS is flat over 50 such cycles). The defect is the dangling
+    # handles; the ior and (snd-dev) both look healthy throughout.
+    snd_shrink=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: live 0 snd-max-channels 0 do i cells (ch-streams) + @ if 1+ then loop ;\n: t snd-open drop live . 4 to snd-channels snd-close live . snd-open drop live . snd-close live . .\" shrink-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_shrink" | grep -q '64 0 4 0 shrink-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-close clears every slot after a shrink\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-close leaves streams after a shrink\n    Got: %q\n" "$snd_shrink"; ((failed++))
+    fi
+
+    # Opening an already-open device SUCCEEDS and changes nothing. The device
+    # handle is the observable that actually moves: before the guard, three
+    # opens gave three devices (21, 25, 29) and snd-close reclaimed only the
+    # last, leaking two devices and their streams. Asserting on the ior alone
+    # would pass against the leaking version, since that returned success too.
+    snd_idem=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value D1\n: t snd-open . (snd-dev) to D1 snd-open . (snd-dev) D1 = . snd-open . (snd-dev) D1 = . snd-ready? . snd-close snd-ready? . .\" idem-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_idem" | grep -q -- '0 0 -1 0 -1 -1 0 idem-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open is idempotent (no second device)\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-open idempotence\n    Got: %q\n" "$snd_idem"; ((failed++))
+    fi
+
+    # A redundant open must not disturb what is already playing. This is the
+    # reason the guard exists rather than a close-then-open: an on-start hook
+    # runs twice after a dirty :e, and re-opening would silence the game.
+    snd_keep=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 100 3 ch-vol! 440 3000 3 tone-on 3 ch-playing? . 3 ch-vol@ . snd-open drop 3 ch-playing? . 3 ch-vol@ . .\" keep-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_keep" | grep -q -- '-1 100 -1 100 keep-ok'; then
+        printf "  ${GREEN}PASS${NC}  a redundant snd-open keeps audio and volume\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  redundant snd-open disturbs playback\n    Got: %q\n" "$snd_keep"; ((failed++))
+    fi
+
+    # Both idioms the ior exists for. `drop` runs on regardless; `abort"`
+    # stops only on failure — and on a working device must NOT fire, which is
+    # the half the old true-means-success flag got backwards.
+    snd_idiom=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open abort\" no audio device\" .\" survived-abort-idiom \" snd-open drop depth . snd-close .\" idiom-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_idiom" | grep -q 'survived-abort-idiom 0 idiom-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open abort\" does not fire on success\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-open abort\" idiom\n    Got: %q\n" "$snd_idiom"; ((failed++))
+    fi
+
     # Volume clamps to 0..snd-unity, and an out-of-range channel is inert
     # rather than a wild dictionary write.
-    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open? drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_vol=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 3 ch-vol@ . 9999 3 ch-vol! 3 ch-vol@ . -5 3 ch-vol! 3 ch-vol@ . 99 ch-vol@ . 7 99 ch-vol! 99 ch-queued . pad 4 99 ch-put 99 ch-stop .\" vol-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_vol" | grep -q '256 256 0 256 0 vol-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-vol clamps; out-of-range channels are inert\n"; ((passed++))
@@ -1212,7 +1504,7 @@ else
     # ch-put must hand the bytes over untouched: the same loaded sound can be
     # playing on several channels, and the queued byte count must not depend on
     # the volume either. 1000 and -1000 (65536-1000 = 64536 through w@).
-    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open? drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . 4 ch-vol@ . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_scale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\ncreate SB 8 allot\n: t snd-open drop 1000 SB w! -1000 SB 2 + w! 1000 SB 4 + w! -1000 SB 6 + w! 64 4 ch-vol! SB 8 4 ch-put SB w@ . SB 2 + w@ . 4 ch-queued 8 = . 4 ch-vol@ . .\" scale-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_scale" | grep -q '1000 64536 -1 64 scale-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-put passes samples through; volume is SDL gain\n"; ((passed++))
@@ -1224,7 +1516,7 @@ else
     # recorded volume alone so it can be restored -- and a hard stop mid-fade
     # must restore it too, or the next sound on that channel plays faint for
     # no visible reason.
-    ch_fade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 200 1 ch-vol! 440 3000 1 tone-on ;\n: b 60 1 ch-fade 1 ch-vol@ . 20 ms snd-pump 1 ch-playing? . ;\n: c 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: d 200 2 ch-vol! 440 3000 2 tone-on 60 2 ch-fade ;\n: e 20 ms snd-pump 2 ch-stop 2 ch-vol@ . .\" fade-ok\" snd-close ;\na b c d e\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_fade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 200 1 ch-vol! 440 3000 1 tone-on ;\n: b 60 1 ch-fade 1 ch-vol@ . 20 ms snd-pump 1 ch-playing? . ;\n: c 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: d 200 2 ch-vol! 440 3000 2 tone-on 60 2 ch-fade ;\n: e 20 ms snd-pump 2 ch-stop 2 ch-vol@ . .\" fade-ok\" snd-close ;\na b c d e\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_fade" | grep -q -- '200 -1 0 200 200 fade-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-fade stops the channel and restores the volume\n"; ((passed++))
@@ -1237,11 +1529,11 @@ else
     # unrelated sound on the same channel:
     #   1. ch-stop cancels it explicitly
     #   2. the faded sound simply finishes before the fade does
-    #   3. snd-alloc hands the channel out again once it fell silent
+    #   3. next-ch hands the channel out again once it fell silent
     # The observable in every case is whether a NEW sound survives being pumped
     # past the old deadline -- ch-vol@ cannot see any of it, because a fade
     # moves the GAIN and never the recorded volume.
-    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open? drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f snd-alloc to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_early=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value AC\n: a snd-open drop 440 50 1 tone-on 200 1 ch-fade ;\n: b 120 ms snd-pump 1 ch-playing? 0= . ;\n: c 440 3000 1 tone-on ;\n: d 200 ms snd-pump 1 ch-playing? . 1 ch-vol@ . ;\n: e 440 50 2 tone-on 200 2 ch-fade 120 ms snd-pump ;\n: f next-ch to AC  440 3000 AC tone-on  200 ms snd-pump ;\n: g AC ch-playing? . AC ch-vol@ . .\" early-ok\" snd-close ;\na b c d e f g\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_early" | grep -q -- '-1 -1 256 -1 256 early-ok'; then
         printf "  ${GREEN}PASS${NC}  a fade dies with its sound, not with its deadline\n"; ((passed++))
@@ -1253,7 +1545,7 @@ else
     # while fading must survive the fade ending. (Snapshotting the volume at
     # ch-fade time and writing it back on cancel silently undoes the change --
     # the setting reverts to whatever it was when the fade started.)
-    ch_volfade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 200 1 ch-vol! 440 3000 1 tone-on 400 1 ch-fade ;\n: b 50 ms snd-pump 100 1 ch-vol! 1 ch-vol@ . ;\n: c 440 3000 1 tone-on 1 ch-vol@ . ;\n: d 180 2 ch-vol! 440 3000 2 tone-on 100 2 ch-fade 20 ms snd-pump 90 2 ch-vol! 200 ms snd-pump 2 ch-vol@ . .\" volfade-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_volfade=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 200 1 ch-vol! 440 3000 1 tone-on 400 1 ch-fade ;\n: b 50 ms snd-pump 100 1 ch-vol! 1 ch-vol@ . ;\n: c 440 3000 1 tone-on 1 ch-vol@ . ;\n: d 180 2 ch-vol! 440 3000 2 tone-on 100 2 ch-fade 20 ms snd-pump 90 2 ch-vol! 200 ms snd-pump 2 ch-vol@ . .\" volfade-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_volfade" | grep -q '100 100 90 volfade-ok'; then
         printf "  ${GREEN}PASS${NC}  a volume set during a fade survives the fade ending\n"; ((passed++))
@@ -1267,7 +1559,7 @@ else
     # is an audible blip in the middle of a fade. Setting the SAME volume
     # half-way through a fade must leave the gain exactly where it was.
     # (0.5 = 1056964608, 1.0 = 1065353216.)
-    ch_jump=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value G\n: a snd-open? drop 256 1 ch-vol! 440 9000 1 tone-on 1000 1 ch-fade ;\n: b 500 ms snd-pump 1 (ch-gain@) to G G 1065353216 < . ;\n: c 256 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . ;\n: d 120 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . .\" jump-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_jump=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value G\n: a snd-open drop 256 1 ch-vol! 440 9000 1 tone-on 1000 1 ch-fade ;\n: b 500 ms snd-pump 1 (ch-gain@) to G G 1065353216 < . ;\n: c 256 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . ;\n: d 120 1 ch-vol! 1 (ch-gain@) G = . 1 ch-vol@ . .\" jump-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_jump" | grep -q -- '-1 -1 256 -1 120 jump-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-vol! during a fade records without jumping the gain\n"; ((passed++))
@@ -1283,7 +1575,7 @@ else
     # values order exactly as the values do).
     # A 10-second fade decays only ~0.2% over the 20 ms here, so a gain that
     # has fallen below 0.5 can only have come from the volume change.
-    ch_ramp=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 256 1 ch-vol! 440 9000 1 tone-on 10000 1 ch-fade ;\n: b 20 ms snd-pump 1 (ch-gain@) 1063675494 > . ;\n: c 38 1 ch-vol! 20 ms snd-pump 1 (ch-gain@) 1056964608 < . .\" ramp-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_ramp=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 256 1 ch-vol! 440 9000 1 tone-on 10000 1 ch-fade ;\n: b 20 ms snd-pump 1 (ch-gain@) 1063675494 > . ;\n: c 38 1 ch-vol! 20 ms snd-pump 1 (ch-gain@) 1056964608 < . .\" ramp-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_ramp" | grep -q -- '-1 -1 ramp-ok'; then
         printf "  ${GREEN}PASS${NC}  a fade ramps from the live volume, not a stale one\n"; ((passed++))
@@ -1296,7 +1588,7 @@ else
     # notice) must cancel that fade, or the deadline arrives and takes both
     # sounds with it -- and the gain must go back to full (1.0 = 1065353216),
     # or the surviving sound plays at whatever level the fade had reached.
-    ch_overlap=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 440 3000 1 tone-on 200 1 ch-fade ;\n: b 20 ms snd-pump 1 ch-playing? . ;\n: c 660 3000 1 tone-on ;\n: d 300 ms snd-pump 1 ch-playing? . 1 ch-vol@ . 1 (ch-gain@) 1065353216 = . .\" over-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_overlap=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 440 3000 1 tone-on 200 1 ch-fade ;\n: b 20 ms snd-pump 1 ch-playing? . ;\n: c 660 3000 1 tone-on ;\n: d 300 ms snd-pump 1 ch-playing? . 1 ch-vol@ . 1 (ch-gain@) 1065353216 = . .\" over-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_overlap" | grep -q -- '-1 -1 256 -1 over-ok'; then
         printf "  ${GREEN}PASS${NC}  queueing during a fade cancels it, keeping both sounds\n"; ((passed++))
@@ -1309,7 +1601,7 @@ else
     # cannot see this -- a fade moves the GAIN, never the recorded volume -- so
     # the observable is whether a NEW sound survives being pumped past the old
     # fade's deadline.
-    ch_stale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop 440 3000 1 tone-on 40 1 ch-fade ;\n: b 10 ms snd-pump 1 ch-stop ;\n: c 440 3000 1 tone-on ;\n: d 100 ms snd-pump 1 ch-playing? . .\" stale-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_stale=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop 440 3000 1 tone-on 40 1 ch-fade ;\n: b 10 ms snd-pump 1 ch-stop ;\n: c 440 3000 1 tone-on ;\n: d 100 ms snd-pump 1 ch-playing? . .\" stale-ok\" snd-close ;\na b c d\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_stale" | grep -q -- '-1 stale-ok'; then
         printf "  ${GREEN}PASS${NC}  a stopped fade does not stop the next sound too\n"; ((passed++))
@@ -1321,7 +1613,7 @@ else
     # holds a few input bytes back waiting for more input that never arrives,
     # so ch-queued sits at a small non-zero number forever. ch-playing? asks
     # the OUTPUT side instead, which does reach zero -- otherwise snd-wait
-    # spins on that channel and snd-alloc never sees it free again.
+    # spins on that channel and next-ch never sees it free again.
     # Flushing the stream would also release those bytes, but it means
     # declaring end-of-input after every sound, and SDL warns of a gap at the
     # join -- which would gap consecutive tones, the sequencing tone has
@@ -1331,8 +1623,8 @@ else
     # unambiguously PLAYING 30 ms in and unambiguously finished 600 ms later.
     # The second half is the one that matters -- a resampling stream holds a
     # little input back, so a channel measured by ch-queued would never report
-    # empty, snd-wait would spin on it and snd-alloc would never see it free.
-    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open? drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . snd-alloc 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # empty, snd-wait would spin on it and next-ch would never see it free.
+    ch_flush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value BUF\n: a snd-open drop 8000 allocate drop to BUF AUDIO_S16LE 1 16000 5 ch-format! ;\n: b BUF 8000 5 ch-put 30 ms 5 ch-playing? . ;\n: c 600 ms 5 ch-playing? . next-ch 0 > . 5 ch-wait BUF free drop .\" flush-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_flush" | grep -q -- '-1 0 -1 flush-ok'; then
         printf "  ${GREEN}PASS${NC}  a resampled channel finishes instead of hanging forever\n"; ((passed++))
@@ -1349,7 +1641,7 @@ else
     # non-zero residue after playout is the tripwire. Note the obvious test
     # (comparing ch-queued after two tones) detects nothing: it reads 17640
     # either way, because flushing converts data without unqueueing it.
-    ch_noflush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open? drop AUDIO_S16LE 1 16000 4 ch-format! pad 400 4 ch-put ;\n: b 300 ms 4 ch-queued 0 > . 4 ch-playing? . .\" noflush-ok\" snd-close ;\na b\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_noflush=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: a snd-open drop AUDIO_S16LE 1 16000 4 ch-format! pad 400 4 ch-put ;\n: b 300 ms 4 ch-queued 0 > . 4 ch-playing? . .\" noflush-ok\" snd-close ;\na b\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_noflush" | grep -q -- '-1 0 noflush-ok'; then
         printf "  ${GREEN}PASS${NC}  ch-put leaves the stream open, so sounds join seamlessly\n"; ((passed++))
@@ -1361,7 +1653,7 @@ else
     # A wav plays on a channel; two plays land on different channels and both
     # sound at once; the queued byte count is the sample's own size, which is
     # what proves nothing was converted or copied on the way in.
-    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open? drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_play" | grep -q -- '-1 -1 -1 -1 768 play-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play mixes two sounds, queueing the sample untouched\n"; ((passed++))
@@ -1372,7 +1664,7 @@ else
     # 16-bit (format 32784 = 0x8010), against a device side of 44100. Reading
     # the format back is the direct check -- the queued byte count is identical
     # whether or not the format was set, so it cannot catch this.
-    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open? drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_fmt" | grep -q '44100 1 32784 16000 1 32784 44100 1 32784 fmt-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play sets the channel format; tone-on sets it back\n"; ((passed++))
@@ -1382,7 +1674,7 @@ else
 
     # A sample that failed to load must not be playable, and must not be
     # mistaken for channel 0.
-    wav_null=$(printf 'include %s/wav.fs\n: t snd-open? drop 0 wav-play . 0 5 wav-play-on 5 ch-queued . .\" null-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" \
+    wav_null=$(printf 'include %s/wav.fs\n: t snd-open drop 0 wav-play . 0 5 wav-play-on 5 ch-queued . .\" null-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_null" | grep -q -- '-1 0 null-ok'; then
         printf "  ${GREEN}PASS${NC}  playing a failed load is inert, and is not channel 0\n"; ((passed++))
@@ -1392,7 +1684,7 @@ else
 
     # Every channel word must be a silent no-op with no device open, the same
     # contract tone already had, so a soundless system never aborts.
-    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . snd-alloc . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . next-ch . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
         printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
@@ -1599,10 +1891,16 @@ assert_output "ALLOCATE failure → a-addr 0" \
     ": t 1000000000000000 allocate swap .\" a=\" . 0<> .\" bad=\" . ; t" \
     "a=0 bad=-1"
 # FREE / RESIZE of a null pointer (e.g. a failed ALLOCATE's result) must not
-# dereference it — return a non-zero ior instead of faulting.
-assert_output "FREE null → non-zero ior" \
+# dereference it. FREE reports success (C's free(NULL); lets "free then zero"
+# run twice); RESIZE still reports a non-zero ior.
+assert_output "FREE null → success, no fault" \
     ": t 0 free .\" fz=\" . ; t" \
-    "fz=22"
+    "fz=0"
+# The idiom the above exists for: a cleanup path that runs twice must not fault
+# or report an error the second time round.
+assert_output "FREE twice with zeroing → both succeed" \
+    "variable p 64 allocate drop p ! : t p @ free .\" a=\" . 0 p ! p @ free .\" b=\" . ; t" \
+    "a=0 b=0"
 assert_output "RESIZE null → a-addr 0, non-zero ior" \
     ": t 0 64 resize .\" rz=\" . .\" ra=\" . ; t" \
     "rz=22 ra=0"
@@ -1785,11 +2083,81 @@ assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-i
 assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
 
 # =========================================================================
+section "GETENV (process environment)"
+# =========================================================================
+# getenv borrows a pointer INTO the environment rather than copying, so these
+# also check it hands back the right LENGTH — a strlen that ran off the end
+# would still print the value and then some.
+ge_run() {   # <forth> -> output, with a controlled environment
+    printf '%s\n' "$1" | env FOO=bar EMPTY= PATHOLOGICAL=1 \
+        BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1
+}
+ge_check() {
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+ge_check "getenv reads a set variable"      "$(ge_run 's" FOO" getenv type')" "^bar ok"
+ge_check "getenv gives the exact length"    "$(ge_run 's" FOO" getenv nip .')" "^3  ok"
+ge_check "getenv on an unset name gives 0"  "$(ge_run 's" NOSUCHVAR" getenv nip .')" "^0  ok"
+ge_check "getenv on an empty value gives 0" "$(ge_run 's" EMPTY" getenv nip .')" "^0  ok"
+# Both are length 0, and the ADDRESS is what separates them: 0 for unset, a
+# real pointer for a variable set to the empty string. Pinned because it is
+# the whole reason this word needs no flag — and because documenting the
+# opposite is exactly the mistake that got caught here.
+ge_check "getenv: unset gives a NULL address" \
+    "$(ge_run 's" NOSUCHVAR" getenv drop 0<> .')" "^0  ok"
+ge_check "getenv: empty-but-set gives a real address" \
+    "$(ge_run 's" EMPTY" getenv drop 0<> .')" "^-1  ok"
+ge_check "getenv takes an empty name as unset" "$(ge_run 's" " getenv nip .')" "^0  ok"
+# The '=' check is the whole difference between a lookup and a prefix match:
+# without it "PAT" would answer with PATHOLOGICAL's value, and "PATH" would
+# shadow it too. Both directions are tested because only one of them is
+# obvious from reading the code.
+ge_check "getenv does not match a name PREFIX" "$(ge_run 's" PAT" getenv nip .')" "^0  ok"
+ge_check "getenv matches the whole name exactly" \
+    "$(ge_run 's" PATHOLOGICAL" getenv type')" "^1 ok"
+ge_check "getenv leaves the stack balanced" \
+    "$(ge_run 's" FOO" getenv 2drop s" NOPE" getenv 2drop depth .')" "^0  ok"
+
+# STARTUP reads its own five variables through the same platform_getenv, so
+# the exact-name rule has to hold there too — not just for the Forth word.
+# BASICFORTH_DOCSX starts with BASICFORTH_DOCS and must be ignored; a prefix
+# match would silently accept it and point the help system somewhere else.
+# timeout 30: `help` scans the docs directory and reads a page, which takes
+# ~9 s under the qemu aarch64 run where a plain startup takes well under 1.
+ge_docs=$(printf 'help getenv\nbye\n' \
+    | env -u BASICFORTH_DOCS BASICFORTH_DOCSX="$REPO_ROOT/docs/Language-Reference" \
+          BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1)
+ge_check "startup does not mistake BASICFORTH_DOCSX for BASICFORTH_DOCS" \
+    "$ge_docs" "BASICFORTH_DOCS not set"
+ge_docs2=$(printf 'help getenv\nbye\n' \
+    | env BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" BASICFORTH_PATH="$FORTH_LIB" \
+          timeout 30 $FORTH 2>&1)
+ge_check "startup still reads BASICFORTH_DOCS itself" "$ge_docs2" "^Scripting:"
+
+# =========================================================================
 section "System Words"
 # =========================================================================
 
-# >BODY
+# >BODY — meaningful for CREATEd words only.  A created word stores a POINTER
+# to its data field and >body follows it; a value/constant/colon word keeps
+# something else in that slot, so >body hands back a plausible NUMBER that is
+# not an address (@ on it faults).  The standard leaves those cases undefined
+# and gforth answers differently — it returns a real address for every word,
+# which it can because its bodies sit at a fixed offset from the xt and ours
+# do not.  Pinned here so the divergence is a decision, not a surprise.
 assert_output ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
+assert_result ">body: create follows the pointer" \
+    "create cx 5 , ' cx >body @ ."                       "5"
+assert_result ">body: variable is its own data field" \
+    "variable vv ' vv >body vv = ."                      "-1"
+assert_result ">body: a value yields its CONTENTS, not an address" \
+    "99 value val ' val >body ."                         "99"
+assert_result ">body: a constant likewise" \
+    "42 constant kk ' kk >body ."                        "42"
 
 # >IN — reflects the parse offset into the current line. For the fixed input
 # ">in @ .", >in has advanced past ">in @" (to column 5) when @ runs.
@@ -1804,6 +2172,31 @@ assert_output "abort recovers"     '1 2 abort 3 .'                   "> "
 # ABORT"
 assert_output 'abort" true'        ': test true abort" oops" ; test' "oops"
 assert_output 'abort" false'       ': test false abort" oops" 42 ; test .' "42"
+
+# ABORT" OUTSIDE a definition.  It is IMMEDIATE, so with no interpreting
+# branch it used to RUN at the prompt: POSTPONE its code into the dictionary
+# where nothing would call it, and return -- no message, no abort, and the
+# flag left on the stack.  That last part is what made it dangerous rather
+# than merely useless: `allocate abort" ..." value buf` bound the IOR and
+# orphaned the address, so the next store went to whatever 0 points at.
+# assert_result throughout: every expectation here also appears in the input.
+assert_result 'abort" interpreting, true flag, prints'  \
+    '-1 abort" interp-boom"'                            "interp-boom"
+assert_result 'abort" interpreting, true flag, aborts the line'  \
+    "$(printf '1 2 -1 abort" x" 3 4\ndepth .')"         "0"
+assert_result 'abort" interpreting, false flag, eats the flag'  \
+    '0 abort" nope" depth .'                            "0"
+assert_result 'abort" interpreting, false flag, emits no code'  \
+    'here 0 abort" nope" here = .'                      "-1"
+# The whole reason this matters: the everyday allocate idiom at a file's top
+# level.  Broken, this bound 0 and left the address behind (0 1).
+assert_result 'abort" interpreting binds allocate address, not ior'  \
+    '64 allocate abort" oom" value b1  b1 0<> . depth .'  "-1 0"
+# The message has to pay the owed newline like every other error; without the
+# cr it ran straight into the next prompt ("oops> ").  The following line's
+# output can only start a line of its own if the newline was paid.
+assert_result 'abort" message ends the line'  \
+    "$(printf ': t -1 abort" oops" ;\nt\n." tail" cr')"  "$(printf 'oops\ntail')"
 
 # >NUMBER
 assert_output ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
@@ -2063,6 +2456,35 @@ assert_output "key_escape"           'key_escape .'                       "27"
 # Random number generator
 assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
 assert_output "rnd zero base"       '1 rnd .'                             "0"
+
+# entropy ( -- x ior ): a value straight from the kernel, not the PRNG.
+assert_result "entropy succeeds"     'entropy nip .'                       "0"
+assert_result "entropy twice differs" 'entropy drop entropy drop = .'      "0"
+
+# A zero seed is xorshift's fixed point -- every output would be 0 forever, and
+# `0 seed !` is the obvious thing to type after reading that a known seed makes
+# runs repeatable. It must behave like any other seed instead: nonzero output,
+# and the same stream both times.
+assert_result "zero seed still runs" '0 seed ! random 0= .'                "0"
+assert_result "zero seed repeats"    '0 seed ! random 0 seed ! random = .' "-1"
+assert_result "known seed repeats"   '42 seed ! random 42 seed ! random = .' "-1"
+assert_result "known seeds differ"   '42 seed ! random 43 seed ! random = .' "0"
+
+# The regression that started this: seeding from ms@ gave every process started
+# in the SAME MILLISECOND an identical stream -- 200 parallel launches produced
+# 87 distinct first values. Launch a batch at once and require all of them to
+# differ. Under the old seeding this failed outright; with kernel entropy a
+# collision among 16 draws from 2^64 will not happen.
+ent_n=16
+ent_distinct=$(seq 1 $ent_n | xargs -P $ent_n -I{} sh -c \
+    "printf '.\" R=\" random . cr\nbye\n' | BASICFORTH_PATH='$FORTH_LIB' timeout 20 $FORTH 2>/dev/null \
+     | sed -n 's/.*R=\(-\?[0-9]\+\).*/\1/p' | head -1" | sort -u | wc -l)
+if [ "$ent_distinct" -eq "$ent_n" ]; then
+    printf "  ${GREEN}PASS${NC}  parallel launches get independent streams\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  parallel launches get independent streams\n"
+    printf "    %d of %d launches produced a distinct first value\n" "$ent_distinct" "$ent_n"; ((failed++))
+fi
 
 # INCLUDE (parse-word + included)
 assert_output "include word"         'include core.fs 42 .'                      "42"
@@ -4683,6 +5105,31 @@ else
     printf "    Would render as italics:\n%s\n" "$md_star"; ((failed++))
 fi
 
+# Markdown lint: an inline `code span` must open and close on ONE line. The
+# renderer clears its span state at every newline ((mk-flush) in core.fs), so
+# a span that wraps leaves the NEXT line's backtick parity inverted -- the
+# closing backtick opens a span instead, and code and prose swap colors for
+# the rest of that line. CommonMark allows the wrap; our renderer does not.
+# Nine shipped that way: four reference entries (`help fonts`, `help font!`,
+# `help thread`, `help defer`) and five tutorial steps across four lessons.
+# An odd backtick count on a line is the tell.
+# Skipped: indented lines (verbatim code blocks) and fenced blocks, whose ```
+# would itself count three -- there are no fences in these dirs today, but a
+# future one must not be reported as a wrapped span.
+md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+    awk '/^ {4}|^\t/            { next }
+         /^[ \t]*```/           { fence = !fence; next }
+         fence                  { next }
+         gsub(/`/, "`") % 2     { printf "%d: %s\n", FNR, substr($0, 1, 58) }' "$f" \
+        | sed "s|^|$(basename "$f"):|"
+done)
+if [ -z "$md_span" ]; then
+    printf "  ${GREEN}PASS${NC}  help prose has no wrapped code span\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help prose has no wrapped code span\n"
+    printf "    Inverts code and prose on the next line:\n%s\n" "$md_span"; ((failed++))
+fi
+
 # =========================================================================
 section "Interactive tutorial (tutorial / next / back)"
 # =========================================================================
@@ -5493,6 +5940,223 @@ else
     printf "  ${RED}FAIL${NC}  shellutil mktemp + rm round-trip\n    Got: %q\n" "$shu_out"; ((failed++))
 fi
 rm -rf "$shu_tmp"
+
+# =========================================================================
+section "VOICE (rendering speech to WAV)"
+# =========================================================================
+# voice.fs drives an external text-to-speech engine, and the engine is a
+# settable command template — which is exactly what lets these tests run
+# everywhere. Three-line shell scripts stand in for the engine, so the
+# plumbing (substitution, quoting, every failure ior) is covered on a machine
+# with no TTS installed at all, on both architectures. What a stand-in cannot
+# tell us is whether a REAL engine's WAV loads; that check needs a real
+# engine present and is not faked here.
+vc_pre="include $FORTH_LIB/voice.fs"
+vc_forth="${FORTH/.\//$PWD/}"        # absolute, so it survives a cd
+vc_dir="$(mktemp -d)"
+cat > "$vc_dir/engine" <<'SH'
+#!/bin/sh
+printf '%s' "$1" > "$2"              # $1 = the text, $2 = the output path
+SH
+cat > "$vc_dir/fails" <<'SH'
+#!/bin/sh
+exit 7
+SH
+cat > "$vc_dir/silent" <<'SH'
+#!/bin/sh
+exit 0                               # exits clean, writes nothing
+SH
+chmod +x "$vc_dir/engine" "$vc_dir/fails" "$vc_dir/silent"
+
+vc_run() {                           # run Forth lines inside the fixture dir
+    # VOICE_ENGINE_CMD is cleared so these are about the stand-in engine and
+    # nothing else — voice.fs now reads that variable at load, so an ambient
+    # one would make the suite's answers depend on whose shell it ran in.
+    ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$1" \
+        | env -u VOICE_ENGINE_CMD BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
+}
+vc_run_env() {                       # same, with VOICE_ENGINE_CMD = $1
+    ( cd "$vc_dir" && printf '%s\n%s\n' "$vc_pre" "$2" \
+        | env VOICE_ENGINE_CMD="$1" BASICFORTH_PATH="$FORTH_LIB" \
+              timeout 10 $vc_forth 2>&1 )
+}
+
+vc_check() {                         # name, output, pattern
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+
+# $VOICE_ENGINE_CMD is picked up at LOAD time, so `require voice.fs` is enough
+# and no one has to paste a template. The built-in default names piper with no
+# --data-dir, so it only finds a voice where piper happens to look; leaving the
+# environment unread meant watching a render fail with the engine's own "unable
+# to find voice", which says nothing about which template produced it.
+vc_check "voice.fs takes its template from the environment" \
+    "$(vc_run_env './engine %t %o' 's" hi" s" env.txt" voice-render .')" "^0  ok"
+# Unset and set-but-EMPTY must both leave the default alone: voice-cmd! with a
+# zero length stores an empty template, which would wipe the default rather
+# than decline to replace it.
+vc_check "an unset variable leaves the built-in default" \
+    "$(vc_run 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+vc_check "an empty variable leaves the built-in default" \
+    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and so does one too LONG to hold. voice-cmd! refuses by storing nothing,
+# which is right for an explicit call but would leave a bare `require voice.fs`
+# with "no engine command set" — a working default destroyed by a variable that
+# was only ever meant to improve on it.
+vc_big="./engine %t %o$(printf '#%.0s' $(seq 1 520))"       # 534 — just past 512
+vc_check "an oversized variable leaves the built-in default" \
+    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+# ...and an explicit voice-cmd! still beats the environment.
+vc_check "voice-cmd! overrides the environment" \
+    "$(vc_run_env './engine %t %o' 's" ./fails %t %o" voice-cmd! s" hi" s" o.txt" voice-render .')" \
+    "^3 "
+
+# Both placeholders expand, and the text reaches the engine VERBATIM however
+# much shell syntax it contains. The payload is a harmless canary: if the
+# quoting ever regresses the evidence is a file appearing in a temp
+# directory, never a destructive command.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" it'"'"'s $(touch pwn) and `touch pwn2`" s" out.txt" voice-render .
+." [" voice-why type ." ]"')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && [ "$(cat "$vc_dir/out.txt" 2>/dev/null)" = 'it'"'"'s $(touch pwn) and `touch pwn2`' ] \
+   && [ ! -e "$vc_dir/pwn" ] && [ ! -e "$vc_dir/pwn2" ] \
+   && printf '%s' "$vc_o" | grep -q '\[\]'; then
+    printf "  ${GREEN}PASS${NC}  voice-render substitutes %%t/%%o and quotes shell syntax\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  voice-render substitution/quoting\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# A literal printf %s must survive: only %o and %t expand.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" 100%s sure" s" pct.txt" voice-render .')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && [ "$(cat "$vc_dir/pct.txt" 2>/dev/null)" = "100%s sure" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render leaves a literal %%s alone\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  literal %%s\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# The four failure iors, each with the reason voice-why gives for it.
+vc_check "voice-render: no engine command set (ior 1)" \
+    "$(vc_run 's" " voice-cmd! s" hi" s" a.wav" voice-render . voice-why type')" \
+    "^1 no engine command set"
+vc_check "voice-render: engine exits non-zero (ior 3)" \
+    "$(vc_run 's" ./fails %t %o" voice-cmd! s" hi" s" b.wav" voice-render . voice-why type')" \
+    "^3 engine exited with an error"
+vc_check "voice-render: engine writes nothing (ior 4)" \
+    "$(vc_run 's" ./silent %t %o" voice-cmd! s" hi" s" c.wav" voice-render . voice-why type')" \
+    "^4 engine wrote no audio"
+
+# A STALE output file must not be mistaken for this render's work. Render
+# once for real, then point a silent engine at the same path: the answer must
+# be "wrote no audio", not the previous take reported as success. Re-rendering
+# a vocabulary after a voice model goes missing is exactly this case, and it
+# is the worst kind of failure — nothing looks wrong until you listen.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" first take" s" stale.txt" voice-render .
+s" ./silent %t %o" voice-cmd!
+s" second take" s" stale.txt" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && printf '%s' "$vc_o" | grep -q "^4 engine wrote no audio" \
+   && [ ! -e "$vc_dir/stale.txt" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render will not pass off a stale file as success\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stale output detection\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# Clearing the old output can itself FAIL — a read-only directory, or a path
+# that is a directory — and (sh-rm) drops the shell's status, so nothing says
+# so. A surviving stale file must not then be counted as this render's work.
+mkdir -p "$vc_dir/ro" && printf 'previous take' > "$vc_dir/ro/old.txt"
+chmod 555 "$vc_dir/ro"
+vc_o=$(vc_run 's" ./silent %t %o" voice-cmd!
+s" new phrase" s" ro/old.txt" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^5 could not clear the previous output" \
+   && [ "$(cat "$vc_dir/ro/old.txt" 2>/dev/null)" = "previous take" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render reports a clearance it could not make\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  undeletable stale output\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+# A directory at the output path is the same hazard by another route:
+# open-file SUCCEEDS on a directory here, so a size check would call it 4096
+# bytes of existing audio. Both checks catch it; the existence one names the
+# right culprit instead of blaming the engine.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" hello" s" ro" voice-render . voice-why type')
+vc_check "voice-render refuses a directory as the output path" \
+    "$vc_o" "^5 could not clear the previous output"
+chmod 755 "$vc_dir/ro"
+
+# ...but a render that CANNOT run must not destroy the previous take either:
+# the removal happens only once the command is known to fit.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+s" keep me" s" keep.txt" voice-render .
+here 4200 char a fill
+here 4200 s" keep.txt" voice-render .')
+if printf '%s' "$vc_o" | grep -q "^0  ok" \
+   && printf '%s' "$vc_o" | grep -q "^2  ok" \
+   && [ "$(cat "$vc_dir/keep.txt" 2>/dev/null)" = "keep me" ]; then
+    printf "  ${GREEN}PASS${NC}  a refused render leaves the previous file intact\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused render kept the old file\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# An overlong command must be REFUSED, not run truncated — a truncated
+# command could have lost the flag naming its output file. Same canary rule.
+vc_o=$(vc_run 's" ./engine %t %o" voice-cmd!
+here 4200 char a fill
+here 4200 s" $(touch pwn3)" voice-render . voice-why type')
+if printf '%s' "$vc_o" | grep -q "^2 engine command too long" \
+   && [ ! -e "$vc_dir/pwn3" ]; then
+    printf "  ${GREEN}PASS${NC}  voice-render refuses an overlong command\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  overlong command refusal\n    Got: %q\n" "$vc_o"; ((failed++))
+fi
+
+# A template too long to hold is stored as NOTHING, not truncated: the
+# render that follows must report "no engine command set", never run a
+# half-command that lost its output flag.
+vc_check "voice-cmd! stores nothing rather than truncating" \
+    "$(vc_run 'here 600 char x fill  here 600 voice-cmd!
+voice-cmd nip .  s" hi" s" d.wav" voice-render .')" \
+    "^0 1  ok"
+
+# The one question a stand-in engine cannot answer: does a REAL engine's WAV
+# survive wav-load? Export VOICE_ENGINE_CMD with a template (setup.sh has one)
+# and this runs; leave it unset and it skips, saying so. wavcore.fs rather
+# than wav.fs on purpose — decoding needs no SDL, so this works on a machine
+# with no audio device, and under qemu if an engine is installed there.
+if [ -n "$VOICE_ENGINE_CMD" ] && [ "${VOICE_ENGINE_CMD//\"/}" != "$VOICE_ENGINE_CMD" ]; then
+    # A template is handed to voice-cmd! through s", which ends at the first
+    # double quote — so one here would silently leave the DEFAULT template in
+    # force and fail this test for a reason that looks nothing like the cause.
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD contains a \" — use single quotes)\n"
+elif [ -n "$VOICE_ENGINE_CMD" ]; then
+    vc_real=$(printf 's" %s" voice-cmd!\ninclude %s/wavcore.fs\ns" you win" s" real.wav" voice-render .\n: t s" real.wav" wav-load dup 0= if drop ." LOADFAIL " wav-why type exit then\n  dup wav-frames 0> . dup wav-chans 0> . dup wav-rate . wav-free ;\nt\n' \
+        "$VOICE_ENGINE_CMD" "$FORTH_LIB")
+    # a neural engine loads its model before it says anything: seconds, not ms
+    vc_o=$( cd "$vc_dir" && printf '%s\n' "$vc_pre" "$vc_real" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $vc_forth 2>&1 )
+    if printf '%s' "$vc_o" | grep -q "^0  ok" \
+       && printf '%s' "$vc_o" | grep -q "^-1 -1 "; then
+        printf "  ${GREEN}PASS${NC}  a real engine's WAV renders and decodes (%s)\n" \
+            "$(printf '%s' "$vc_o" | sed -n 's/^-1 -1 \([0-9]*\).*/\1 Hz/p' | head -1)"
+        ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  real engine render+decode\n    Got: %q\n" "$vc_o"; ((failed++))
+    fi
+else
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD not set)\n"
+fi
+
+chmod -R u+w "$vc_dir" 2>/dev/null
+rm -rf "$vc_dir"
 
 # =========================================================================
 section "DIS (disassembler)"

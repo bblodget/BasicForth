@@ -118,6 +118,9 @@ What works today:
 - Samples: `WAV-LOAD` reads a `.wav` (8/16/32-bit integer and 32-bit float,
   mono or stereo, 24-bit widened losslessly), `WAV-FROM` decodes one already
   in memory, and `WAV-PLAY` puts it on a channel (`wavcore.fs`, `wav.fs`)
+- Speech: `VOICE-RENDER` speaks text into a WAV file through whatever
+  text-to-speech engine the machine has (`voice.fs`) — the engine is a
+  settable command template, so nothing here is tied to one
 - Threads: `THREAD` runs a Forth word on an OS thread, `JOIN` waits for it,
   `THREADS` lists them — `BASE`, `sp0` and the exception handler are
   thread-local, and worker stacks are fenced with guard pages

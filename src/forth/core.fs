@@ -172,12 +172,8 @@
         r> 1+ r> 1-                 ( new-ud-lo new-ud-hi c-addr+1 u-1 )
     repeat ;
 
-\ ABORT" ( flag "ccc" -- )  IMMEDIATE, COMPILE_ONLY
-\ If flag is true at runtime, print message and -2 throw (the standard
-\ ABORT" code, distinguishable from plain abort's -1 in a catch handler).
-\ Deviation: the message prints at throw time, not via the handler.
-: ABORT"  postpone if  postpone s"  postpone type
-    -2 postpone literal  postpone throw  postpone then ; immediate
+\ ABORT" is defined further down, with S" and ." — its interpreting half needs
+\ the same parser they do, and it cannot be used above that point.
 
 \ WORD ( char "<chars>ccc<char>" -- c-addr )
 \ Parse delimited string, return counted string at HERE.
@@ -268,8 +264,10 @@ variable (s"flip)
 : (s"buf)   ( -- a )  \ alternate halves of (s"bufs) on each use
     (s"flip) @ dup 0= (s"flip) !
     if (s"bufs) (s"max) + else (s"bufs) then ;
+\ The guard is written longhand because ABORT" is not defined yet: it is
+\ defined below these words, since its interpreting half needs (s"parse).
 : (s"copy)  ( c-addr u -- buf u )  \ copy string into a transient buffer
-    dup (s"max) > abort" interpreted string too long"
+    dup (s"max) > if ." interpreted string too long" cr -2 throw then
     (s"buf) swap                ( c-addr buf u )
     dup >r over >r cmove r> r> ;
 \ The tokenizer leaves >IN pointing at the space after the S" token itself;
@@ -282,6 +280,29 @@ variable (s"flip)
     state @ if (s"prim) execute else (s"parse) (s"copy) then ; immediate
 : ."    ( Compiling: append inline string + TYPE. Interpreting: type now )
     state @ if (."prim) execute else (s"parse) type then ; immediate
+
+\ ABORT" ( flag "ccc" -- )  IMMEDIATE
+\ If flag is true, print the message and -2 THROW (the standard ABORT" code,
+\ distinguishable from plain abort's -1 in a catch handler).
+\ Deviation: the message prints at throw time, not via the handler.
+\
+\ STATE-smart for the same reason S" and ." are, and defined here rather than
+\ with the other core words because the interpreting branch needs (s"parse).
+\ Being merely IMMEDIATE with no interpreting branch, it used to be a silent
+\ no-op outside a definition: it ran, POSTPONEd its code into the dictionary
+\ where nothing would ever call it, and returned without even consuming its
+\ flag. `addr ior` from ALLOCATE then reached the next word intact, so the
+\ everyday `allocate abort" out of memory" value buf` at the top of a file
+\ bound the IOR and orphaned the address.
+\
+\ Both branches parse the string, so the rest of the line is consumed whether
+\ the flag was true or not.
+: ABORT"  state @ if
+        postpone if  postpone s"  postpone type  postpone cr
+        -2 postpone literal  postpone throw  postpone then
+    else
+        (s"parse) rot if type cr -2 throw else 2drop then
+    then ; immediate
 
 \ Programming-Tools words (15)
 : ?     ( a-addr -- ) @ . ;
@@ -332,9 +353,22 @@ variable (dump-addr)  variable (dump-len)
 \ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
 \ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
 \ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
-variable seed  ms@ 1 or seed !             \ nonzero seed or xorshift sticks at 0
+\ Seeded from the kernel, not the clock. ms@ alone gave two processes started in
+\ the same millisecond the SAME stream — 200 parallel launches produced 87
+\ distinct first values — and made that first value nearly linear in the launch
+\ time, since one xorshift round does not hide the structure of a seed that only
+\ varies in its low bits. entropy fails closed (early boot, or a kernel without
+\ getrandom), so the clock remains the fallback rather than the plan.
+\ In a definition because `if` is compile-only: this line runs as core.fs loads.
+variable seed
+: (reseed) ( -- )  entropy if drop ms@ then  1 or seed ! ;
+(reseed)
+\ A zero state is xorshift's fixed point: every output would be 0 forever, and
+\ `0 seed !` is the obvious thing to type after reading "store a known value to
+\ make runs repeatable". Fold it to a constant instead, so 0 names an ordinary
+\ repeatable stream like any other value. Every nonzero seed is untouched.
 : random ( -- n )
-    seed @
+    seed @ ?dup 0= if $9E3779B97F4A7C15 then
     dup 13 lshift xor
     dup  7 rshift xor
     dup 17 lshift xor
@@ -448,10 +482,19 @@ create   (rl-ch) 1 allot                \ 1-byte scratch for each read
     cell+ 0 ;                         ( a-addr 0 )
 
 \ FREE ( a-addr -- ior )  return a block from ALLOCATE/RESIZE to the system.
-\ A null a-addr (e.g. a failed ALLOCATE's result) is rejected with a non-zero
-\ ior instead of dereferencing the header at a-addr - cell.
+\ Freeing a null a-addr SUCCEEDS and does nothing -- matching C's free(NULL)
+\ and gforth. It is never a dereference: the header at a-addr - cell is only
+\ read once the address is known non-null.
+\ Why success rather than an error: a second FREE of a live block is fatal
+\ (munmap unmaps a region something else may now own), and the idiom that
+\ prevents it is "free, then zero the variable". Erroring on null would make
+\ that idiom fail the moment cleanup runs twice -- a module stopped twice, a
+\ teardown after a failed startup -- so the error would punish the one habit
+\ that avoids the fatal bug. RESIZE keeps its null rejection: there is no
+\ equivalent idiom asking for it, and a null that quietly becomes a fresh
+\ block hides a real mistake.
 : free ( a-addr -- ior )
-    dup 0= if  drop EINVAL exit  then \ reject null; don't deref
+    dup 0= if  drop 0 exit  then      \ free(NULL) succeeds; never deref
     1 cells -                         ( base )  \ step back to the header
     dup @ (munmap)                    ( n )    \ unmap base for its stored length
     negate ;                          \ 0 stays 0; -errno → positive ior

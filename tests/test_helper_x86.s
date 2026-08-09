@@ -73,6 +73,21 @@ platform_raw_mode:
 platform_write:
     ret
 
+# The unit tests run without a saved envp, so every name reads as unset.
+.global platform_getenv
+platform_getenv:
+    xor %eax, %eax
+    xor %edx, %edx
+    ret
+
+# Always "no entropy available": the unit tests must not depend on a syscall,
+# and the caller's clock fallback is the path this exercises.
+.global platform_random
+platform_random:
+    xor %eax, %eax
+    mov $1, %edx
+    ret
+
 .global platform_write_fd
 platform_write_fd:
     ret

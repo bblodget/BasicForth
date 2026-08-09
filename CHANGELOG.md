@@ -1,5 +1,533 @@
 # Changelog
 
+## Unreleased
+
+### Added: `entropy` — kernel randomness, and a seed worth having
+
+- `entropy ( -- x ior )` returns one 64-bit value from the kernel's CSPRNG via
+  `getrandom` (318 on x86-64, 278 on arm64). Two cells because the failure
+  could not be folded into the value: 0 is a legal random number **and** the
+  one seed that stops xorshift dead, so a caller could not tell "unlucky" from
+  "broken".
+- **The generator is now seeded from it, not from the clock.** `ms@` alone gave
+  every process started in the same millisecond an identical stream: 200
+  parallel launches produced **87 distinct** first values. It also left that
+  first value nearly linear in the launch time — consecutive runs shared their
+  top eight digits and stepped by a near-constant ~2.16×10⁹ per millisecond,
+  because one xorshift round does not hide the structure of a seed that varies
+  only in its low bits. The same measurement now gives 200 of 200.
+- Sequential launches were never the problem, and still aren't: 300 launches of
+  `6 rnd` were uniform before and after (χ²≈2.8, df=5). What was broken was
+  anything launched in parallel, and anything reading a single random number at
+  startup.
+- `GRND_NONBLOCK`, so an uninitialised pool early in boot returns a failure
+  rather than **blocking** — hanging at startup is worse than a weaker seed.
+  A kernel without the call (pre-3.17) fails the same way, and both fall back
+  to `ms@`. That fallback is the one path with no automated coverage: forcing
+  it needs seccomp. It was verified by forcing the branch by hand.
+
+### Fixed: `0 seed !` silently killed the random generator
+
+- Zero is xorshift's fixed point, so every subsequent `random` returned 0 and
+  every `rnd` returned 0 — forever, with nothing reported. `random` now folds a
+  zero state to a fixed constant, which makes `0` an ordinary repeatable seed
+  like any other value. No other seed changes, so every existing sequence is
+  the same as before.
+- `help seed` had warned never to use 0. A warning is the wrong shape for this:
+  the value is one someone reaches for precisely *because* the docs say a known
+  seed makes runs repeatable, and nothing enforced it. The warning is gone
+  because the trap is.
+- Free in practice — 3M `random` calls measured 147–149 ms with the guard
+  against 142–149 ms without, the loop being dominated by STC dispatch.
+- The test for this passed against a deliberately broken build at first:
+  `assert_output` matches a substring of output that still contains the echoed
+  input, and the input `0 seed ! random 0= .` contains a `0`. Moved to
+  `assert_result`, which strips the echo — the hole that helper exists for.
+
+### Fixed: a wrapped `code span` inverted code and prose in `help`
+
+- The renderer clears its span state at every newline, so an inline span that
+  opened on one line and closed on the next left the second line's backtick
+  parity **inverted**: the closing backtick opened a span instead, and from
+  there code rendered as prose and prose as code until the next backtick
+  rebalanced it. `help fonts` said `require font-terminus-8x16.fs` in plain
+  text with the words around it colored.
+- Nine spans shipped that way: four reference entries (`help fonts`,
+  `help font!`, `help thread`, `help defer`) and five tutorial steps across
+  four lessons — Graphics, Bitmaps, Modules, and Sound twice. All rewrapped;
+  no wording changed, and no lesson step grew a line, so nothing that fitted
+  a screen now pages.
+- Rewrapping to fit the spans left the paragraphs ragged at first — lines wrap
+  on **source** width here (median 75, p90 78 across 2108 prose lines), and
+  breaking early to keep a span whole left some rendered lines at 51 columns
+  beside neighbours at 77. Reflowed properly, with each span treated as one
+  unbreakable token. A few lines stay short where a long span cannot fit
+  beside anything.
+- **The docs were fixed, not the renderer.** Carrying span state across a
+  newline is the more correct fix — CommonMark allows the wrap — but every
+  boundary would then need to clear it (headings, code blocks, blank lines,
+  each rendered section, and the pager's reverse-video prompt), or an inverted
+  line becomes color bleeding across a page break. The constraint is cheap to
+  obey while the docs are hand-wrapped, so it is enforced instead.
+- A lint fails the build on any line with an odd backtick count, over both
+  `BASICFORTH_DOCS` directories. It sits beside the intraword-`*` lint, which
+  guards the same class of fault: prose that reads fine in the file and is
+  broken where it counts. Fenced blocks are skipped so a future fence is not
+  reported as a wrapped span — there are none in those directories today.
+- Found from the other direction: `help snd-wait` described waiting for every
+  channel without naming `ch-wait`, which waits for one, and `help sound`'s
+  at-a-glance list omitted it. Adding that cross-reference introduced a
+  wrapped span, which is how the nine came to light. `ch-wait` drains the
+  whole channel, not one sound — two 300 ms tones queued on channel 1 hold it
+  for 666 ms.
+
+### Changed: startup reads its environment through `platform_getenv`
+
+- `main.s` open-coded the same envp walk **five times** on each architecture —
+  ten copies — for `BASICFORTH_PATH`, `BASICFORTH_SESSION`,
+  `BASICFORTH_EDITOR`, `BASICFORTH_DOCS` and `HOME`. Each is now one call.
+  About 200 lines of assembly removed, and the OS knowledge lives in the
+  platform layer, which is what it is for.
+- **Behaviour is unchanged, and that was checked rather than assumed.** The
+  same matrix was run against binaries built before and after, on both
+  architectures: all five `BASICFORTH_SESSION` states (unset / `0` / `1` /
+  other / empty), plus `BASICFORTH_DOCS`, `HOME` and the library path.
+  Identical output every time.
+- The subtle case that had to survive: an **empty** `BASICFORTH_SESSION=`
+  counts as "force on", because the hand-written walk read the first byte of
+  the value and compared it to `'0'`, and for an empty value that byte is the
+  terminating NUL. Preserved deliberately.
+- The names lost their trailing `=`. The old walks compared a prefix that
+  *included* it, which is why they were exact-match; `platform_getenv` matches
+  the name and requires the `=` itself, so keeping it would have looked for
+  `NAME==`. Both directions are now tested at startup, not just in the Forth
+  word: `BASICFORTH_DOCSX` must be ignored, and `BASICFORTH_DOCS` must still
+  be read.
+- Startup no longer reads `argv`/`envp` off the stack outside the handful of
+  instructions that save them at `_start`, so it no longer depends on the
+  stack pointer still addressing the initial frame.
+
+### Changed: `voice.fs` reads `$VOICE_ENGINE_CMD` when it loads
+
+- `. ./setup.sh` then `require voice.fs` is now the whole setup — no template
+  to paste at the prompt. Precedence is `voice-cmd!` > `$VOICE_ENGINE_CMD` >
+  the built-in default, and `voice-from-env` re-reads the variable after
+  experimenting with another engine.
+- Found by using it. `setup.sh` exported a correct template, `voice.fs`
+  ignored it and installed its own default — which names piper with **no
+  `--data-dir`** — and the render failed with piper's `unable to find voice`.
+  That message says nothing about which template asked, so the environment
+  being right and unread is a genuinely confusing state to debug.
+- An **unusable** variable — unset, empty, or longer than the 512-character
+  template buffer — leaves the default alone. The guard is load-bearing in
+  both directions: `voice-cmd!` refuses a zero-length *and* an oversized
+  template by storing nothing, which is right for an explicit call that must
+  not silently do something else, and wrong for an opportunistic one. Without
+  it, a misconfigured variable leaves a session with "no engine command set"
+  when it had a perfectly good default — worse than never reading the
+  environment at all. Accepts exactly 512, refuses 513.
+- The stand-in-engine tests now clear `VOICE_ENGINE_CMD` explicitly, since a
+  library that reads the environment would otherwise make the suite's answers
+  depend on whose shell it ran in.
+
+### Added: `getenv` — read the process environment
+
+- `getenv ( c-addr u -- c-addr2 u2 )` answers with an environment variable's
+  value, or a length of 0 when it is unset. A conspicuous gap for a Forth that
+  ships `#!` scripts, `ARGC`/`ARGV` and shell words: scripts want `$HOME`,
+  `$EDITOR`, `$PAGER`.
+- **In the platform layer, where OS knowledge belongs** — `platform_getenv`
+  walks the same `start_envp` that `platform_system` already hands to
+  `execve`. No syscall; the environment is just memory the kernel left on the
+  stack.
+- The result **points into the environment block** rather than copying: those
+  strings live as long as the process, so there is nothing to own and nothing
+  to free. The `HOME` pointer kept for `cd ~` is the same kind of borrow.
+- **A name matches only up to a following `=`.** A prefix comparison alone
+  would make `PAT` answer with `PATHOLOGICAL`'s value, and `PATH` shadow it.
+  Both directions are tested, because only one of them is obvious from reading
+  the code. An empty name matches nothing rather than matching an entry
+  beginning with `=`, which some systems do produce.
+- **Unset and set-to-empty are both length 0, and the ADDRESS separates them**
+  — 0 for unset, a real pointer for a variable set to the empty string. So
+  `nip 0=` is true when there is nothing to use (unset and empty alike) and
+  `drop 0=` is true only when unset, at the cost of no flag and no second
+  return value. That avoids
+  `find`'s asymmetric two-answer shape, which has caught us out before.
+- Both architectures verified against a deliberately broken build: dropping
+  the `=` check fails exactly the prefix test, and an off-by-one on the value
+  pointer fails exactly the four that read a value. Identical on x86-64 and
+  ARM64, and the well-formed path is asserted on both — not just the failures.
+
+### Added: `voice.fs` — rendering speech to WAV files
+
+- `voice-render ( text u path u -- ior )` speaks text into a WAV file by
+  driving an external text-to-speech program. The result is an ordinary
+  sample: `wav-load` it and play it like any other sound.
+- **The engine is not baked in.** `voice-cmd!` takes a command template with
+  two placeholders — `%t` for the text, `%o` for the output path — and
+  everything else passes through as shell syntax. That is what lets one word
+  drive engines whose flags disagree (`piper … -f %o -- %t`, `espeak-ng -w %o
+  -- %t`, or `printf '%s' %t | engine --out %o` for the ones reading stdin),
+  and it means **nothing in this repo binds to a TTS engine**. Only `%o` and
+  `%t` expand, so a literal `printf %s` survives.
+- Both substitutions are quoted through `shellutil.fs`, so a phrase
+  containing an apostrophe, a `$`, a backtick or a semicolon is data and
+  never syntax. Tested with a canary payload; the test fails if the quoting
+  is swapped for a plain append.
+- **Rendering is deliberately an offline step.** Measured with flite's `slt`
+  voice: 8.7 ms of work for 0.72 s of audio, 35.8 ms for 2.97 s — about 80×
+  real time, and still one to two dropped frames at 60 Hz. A neural engine
+  loads a model first and is heavier again. So a game renders its vocabulary
+  once and plays samples at run time, which is what the TI-99/4A's
+  fixed-vocabulary speech ROM amounted to as well.
+- `voice.fs` requires only `shellutil.fs` — no FFI, no SDL, no WAV decoder —
+  so it works on a machine with no audio hardware, including the board and
+  the QEMU aarch64 run. Same reasoning that keeps `wavcore.fs` dependency-free.
+  Its tests drive a stand-in shell script rather than requiring a TTS engine,
+  so every one of them runs on both architectures. The one question a
+  stand-in cannot answer — does a *real* engine's WAV decode? — is a separate
+  check gated on `VOICE_ENGINE_CMD` (exported from `setup.sh`), skipping with
+  a reason when no engine is configured. Verified against piper: 22050 Hz
+  mono, decoded by `wavcore.fs` and played.
+- **An engine that exits 0 having written nothing is its own failure code.**
+  piper does exactly that when its voice model is missing, and a caller
+  trusting the exit status would go on to `wav-load` an empty file — so
+  `voice-render` checks the output file itself. `voice-why` names every
+  failure by hand; an overlong command is refused rather than run truncated,
+  since a truncated command could have lost the flag naming its output file.
+- The output file is **removed before the engine runs**, so that check is
+  about this render rather than about whatever was at the path already.
+  Without it the worst version of the same failure survives: re-rendering a
+  vocabulary whose voice model has gone missing reports success for every
+  phrase while leaving the previous take on disk, and nothing looks wrong
+  until you listen. The command is composed twice to get the ordering right —
+  once to learn whether it fits, again after the removal, since removing runs
+  through the same shared command buffer — so a render that *cannot* run
+  never destroys the previous take.
+- The removal is then **verified**, because it can fail silently: `rm` cannot
+  unlink from a read-only directory, and `(sh-rm)` drops the shell's status.
+  A stale file surviving removal would answer "yes, there is audio here" for a
+  render that produced none, so `voice-render` asks whether the path is
+  actually clear and reports ior 5 if not. This also catches a `path` naming a
+  directory — `open-file` succeeds on one, so a size-based check would read it
+  as 4096 bytes of existing audio.
+- New docs: `help voice`, `docs/Speech.md` (which tier to reach for, and how
+  to install an engine).
+
+### Changed: `snd-alloc` is now `next-ch`
+
+- `alloc` promised two things it never delivered: memory, and a matching
+  release. Nothing is allocated — the channels are a fixed set — and there is
+  no `free`, because a channel returns to the rotation by itself once it falls
+  silent. The name described a lifecycle that does not exist.
+- Worse in this language than it would be elsewhere. "Allocate a channel" is
+  ordinary usage for pooled resources generally, but `allocate` here is the
+  heap word, and the Sound lesson has the reader call it for real a few steps
+  after meeting `snd-alloc`.
+- `next-ch` is shaped like `tone-ch`, which answers the same kind of question:
+  that is the channel `tone` uses, this is the next channel to use. It also
+  moves the word out of the `snd-` group (the device: open, close, wait) where
+  it never belonged, since it returns a channel.
+- 31 call sites — `sound.fs`, `wav.fs`, four doc pages, the lesson, and ten
+  integration tests. No alias; the old name is gone.
+
+### Changed: `snd-vol` is now `tone-amp`
+
+- Both halves of the old name misled. `snd-` reads as device-wide, like its
+  neighbours `snd-open`, `snd-close`, `snd-wait`, `snd-channels` — but it
+  touches nothing except `tone` and `beep`. And `-vol` collided with the actual
+  volume system, `ch-vol!` / `ch-vol@` / `snd-unity`, which is a *different
+  quantity*: a gain of 0..256 applied to any audio on its way out, versus a
+  sample height of 0..32767 baked in at generation time.
+- `tone-amp` says both things. It is named for `tone` exactly as `tone-ch` is —
+  the channel `tone` uses, the amplitude `tone` uses — and calling it an
+  amplitude rather than a volume is the point, since that is what distinguishes
+  it from the gain.
+- No alias; the old name is gone. Callers: two lines in `sound.fs`, the
+  reference pages, and the lesson. Nothing in `examples/` or the suites used it.
+- The reference entry was also wrong in a second way, fixed here: it claimed
+  `snd-vol ( -- a-addr )`, "volume variable". It has been a `value` returning a
+  number, not an address, for some time — `a-addr` would have sent a reader to
+  `@` and `!` on it.
+
+### Documented: `>body` is for `create`d words only
+
+- No behaviour change — the reference page was wrong and the trap was
+  undocumented. It said `>body` worked for "`create`d (or `variable`/
+  `constant`)" words; **`constant` was never true**. A created word stores a
+  *pointer* to its data field and `>body` follows it, but a `value`, `constant`
+  or colon word keeps something else in that slot, so `>body` returns whatever
+  is there — `' val >body` on `99 value val` gives **99**, and `@` on it faults.
+- The standard leaves those cases undefined, so this is a legal reading, but a
+  plausible-looking number is a poor way to say "undefined". The page now names
+  each case that misbehaves, and four tests pin them so the answers can't drift
+  silently.
+- Gforth returns a real address for *every* word type, which it can because its
+  bodies sit at a fixed offset from the xt. Ours don't — `create` compiles a
+  literal pointing at a data field stored elsewhere — so matching it would mean
+  changing `create`'s layout. Recorded as a deliberate divergence rather than
+  something to fix.
+
+### Changed: `snd-open` returns an ior, and `snd-open?` is gone
+
+- **`snd-open ( -- ior )`** — 0 for success, like `allocate` and `open-file`.
+  One word now serves both callers, with no `0=` in either:
+
+      snd-open drop                     \ don't care; soundless is fine
+      snd-open abort" no audio device"  \ sound is a requirement
+      snd-open if snd-why type cr then  \ handle it, with SDL's own reason
+
+- **`snd-open?` is deleted.** Its `?` read as a question while the word
+  actually *opened*, and both halves of that mistake drew blood. Calling it to
+  ask "is sound on?" opened a **second device and leaked the first** —
+  measured at 21, 25, 29 across three calls, with `snd-close` reclaiming only
+  the last. And its true-means-success flag fought `abort"`, which fires on
+  true: `snd-open? abort" no sound"` aborted precisely when the open
+  *succeeded*, and let a real failure through silently. An ior gets both right
+  because the interesting case is non-zero either way.
+- **`snd-ready? ( -- flag )`** is the question it was mistaken for.
+- **`snd-why ( -- c-addr u )`** gives SDL's reason for the last failure, the
+  detail an opaque ior cannot carry — the same shape as `wav-load`/`wav-why`.
+  The message is *copied* at the moment of failure: `SDL_GetError` is only
+  valid until the next SDL call, and every failure path runs `snd-close`,
+  whose `SDL_QuitSubSystem` would replace it.
+- **Opening an already-open device succeeds and does nothing.** A redundant
+  call is now free — an `on-start` hook runs twice after a dirty `:e` — where
+  before it leaked. Deliberately a guard rather than a close-then-open, which
+  would clear every queue, reset every volume and pop the device; the real
+  reopen is spelled `snd-close snd-open drop`.
+- Closes a decision `docs/Exceptions.md` had recorded as deferred on the
+  grounds that `?`-variants "cost nothing".
+
+### Fixed: `snd-close` left dangling stream handles after a `snd-channels` shrink
+
+- `snd-close` walked `snd-channels` slots, but `snd-channels` is a *value* the
+  caller can write. Shrink it while a device is open and the tail of the table
+  falls outside its own cleanup: `snd-open drop  4 to snd-channels  snd-close`
+  destroyed 4 streams and left **60 stale handles** in a table this word
+  promises to empty.
+- Scope, measured rather than assumed: it is **not** a memory leak — the
+  `SDL_QuitSubSystem` at the end of `snd-close` frees every remaining audio
+  object, and 50 open/shrink/close cycles move RSS by nothing. Nor does
+  touching one fault today: SDL rejects the freed pointer and `ch-queued`
+  reads 0. What is left is 60 dangling handles and a broken invariant, with
+  the not-faulting part being SDL's defensiveness rather than a contract.
+- It now walks `snd-max-channels` — what the table is sized to, and what the
+  comment above it already claimed ("a fixed ceiling means snd-close can
+  always clear every slot"). `(ch-reset)` had it right; only the close path
+  used the mutable bound.
+- Found reviewing the `snd-channels` default change — and the shrink-then-close
+  order was the one this changelog's own first draft recommended. The docs now
+  put `snd-close` **before** the change, which also avoids orphaning anything
+  still playing above the new count.
+
+### Changed: `snd-channels` now defaults to 64, the ceiling
+
+- Measured rather than assumed. Against 16: **+104 KB** peak RSS, identical
+  open time and CPU over three seconds of playback, and `snd-pump` at 0.94 µs
+  instead of 0.25 µs — 3.8× on a ratio, 0.006% of a frame at 60 fps. The
+  per-channel Forth tables were already sized at `snd-max-channels`, so the
+  only real cost is the extra SDL streams.
+- `next-ch` therefore never has to steal in practice, and nobody has to know
+  the knob exists. It survives for the case that actually wants it: shrinking
+  to force channel reuse in a test costs 10 ms at 4 channels against 218 ms
+  at 64.
+
+### Added: `pad.fs` — game controllers
+
+- `require pad.fs` reads game controllers through SDL's *gamepad* layer, so
+  hundreds of pads — Xbox, DualShock/DualSense, Switch Pro, Steam and anything
+  in SDL's mapping database — all answer the same words.
+- Buttons are named by **position**, not by letter: the bottom face button is
+  `pad-south` on every controller, where it is printed A on an Xbox pad, B on a
+  Nintendo one and ✕ on a PlayStation one. No letter is true of all three.
+- Held state rather than events: `pad-held? ( button -- flag )`,
+  `pad-axis ( axis -- -32768..32767 )`. Events still arrive through `sdl-poll`
+  (`ev-pad-down`, `ev-pad-added`, …) for programs that want edges.
+- `pad-dx` / `pad-dy` fold the d-pad and the left stick into one −1/0/1 answer,
+  which is what a grid game actually wants. **When the two disagree the d-pad
+  wins** — a worn stick resting off centre must never cancel a deliberate
+  press. `pad-dead` (default 8000) is the dead zone, and a value, so a tired
+  pad can be tuned at the prompt. `pad-dir` applies the same treatment to any
+  axis, for the right stick and the triggers.
+- Up to four controllers open at once, in slots 0–3: `pad-open` opens one,
+  `pad` selects which the queries act on, so a two-player loop is
+  `0 pad … 1 pad …`.
+- **`pad-open ( n -- ior )`** answers `0` for success rather than aborting,
+  because a missing controller is an ordinary state of the world. All three
+  reactions read straight, with no `0=` anywhere: `0 pad-open drop` to run
+  keyboard-only, `0 pad-open abort" no controller"` to insist, `0 pad-open if
+  … then` to handle it. A flag would invert one of those — with true meaning
+  success, `abort"` fires exactly when the pad opens — which is the mistake
+  `sound.fs` shipped as `snd-open?`, so neither library now spells an opener
+  with a `?`. **`pad-why ( -- c-addr u )`** carries the detail, since "nothing
+  plugged in" is worth retrying next frame and "no mapping for this device"
+  never will be until `pad-map` runs; it is emptied by a successful open, so
+  it never reports a stale reason.
+- A slot that cannot exist still aborts: no controller at slot 1 is the
+  everyday case `pad-open` reports, slot 9 is a caller bug, and one shared
+  non-zero would bury it in the branch written to ignore failure.
+- With nothing plugged in every query answers 0 or false, so a game runs
+  keyboard-only on a machine with no controller.
+- `pad-has?` / `pad-hasaxis?` ask whether a pad even has a control, since not
+  all of them do; `pad-map` teaches SDL a controller it does not recognise.
+- Hotplug works: `pad-update` (and `pads`) pump the event queue, which is where
+  SDL detects devices arriving and leaving, and `pad?` reports whether a
+  controller is still *attached* rather than merely opened. Re-opening a slot
+  closes the stale handle first, so recovering from an unplug is one line:
+  `0 pad-open drop`, retried each frame until it takes.
+- `examples/gamepad.fs` is a live readout of every control — the quickest way
+  to check a new pad is mapped as expected. Full reference in `help pad`.
+- **`tutorial Gamepad`** teaches it hands-on, in 20 steps at the prompt with no
+  window: open a pad, watch a stick that reads 128 with nobody touching it,
+  find out what too small a dead zone does to a game, and end at `pad-dx`. A
+  reader with no controller can still do the whole lesson — every reading is
+  `0`, and "there might not be a pad" is one of the things being taught rather
+  than a gap being worked around.
+
+### Changed: `free` on a null address now succeeds
+
+- **`0 free` returned ior 22 and now returns 0**, doing nothing — the same as
+  C's `free(NULL)` and gforth. It was never a dereference either way; only the
+  reported result changes.
+- The reason is the idiom it was blocking. Freeing a *live* block twice hands
+  the memory back while something else may already own it, and that is fatal
+  rather than an ior you get to inspect. What prevents it is "free, then zero
+  the variable" — after which a second cleanup pass frees a null. With the old
+  result that second pass reported an error, so the contract punished the one
+  habit that avoids the fatal case. Found writing an `on-stop` hook that a
+  dirty `:e` reloads twice.
+- `resize` is deliberately left strict. A null there is a mistake rather than
+  an idiom, and quietly turning it into a fresh allocation would hide one.
+- `help memory` now states the null contract for both, which it never did in
+  either direction.
+
+### Added: `popcount` — how many bits of a cell are set
+
+- `popcount ( x -- n )`, 0 to 64. The reason to want it is packing: thirty-two
+  2-bit fields fit in a cell, and asking "how many are zero" costs a shift, an
+  `or`, an `invert`, an `and` and one `popcount` — no loop, and the same work
+  whether one field matches or all of them do. `help popcount` shows the idiom.
+- **x86 does NOT use the `POPCNT` instruction.** It is x86-64-v2, we build with
+  no `-march` flag, and every other primitive here is baseline x86-64 — so
+  using it would quietly raise the CPU requirement of the whole system, and an
+  older machine would die on `SIGILL` with nothing to explain it. The SWAR
+  sequence costs a handful of cycles instead, ~10% on a benchmark that calls it
+  in a tight loop and nothing at all anywhere else.
+- ARM64 *does* use the hardware `CNT`, because unlike `POPCNT` it is mandatory
+  Advanced SIMD in ARMv8-A and raises nothing. `CNT` counts per byte, so `ADDV`
+  sums the lanes. Both files say why they differ.
+
+### Added: `examples/dice.fs` — a threaded Monte Carlo simulation
+
+- Throw a d4 231 times, count the 1s, repeat a billion times, report the most
+  ever seen. A billion battles runs in about 40 seconds on 8 cores.
+- It is really three lessons about making threaded code fast, in the order the
+  gains actually arrive: giving each worker its **own cache line** (a shared
+  RNG seed made 4 threads run 4x *slower* than 1, with no lock anywhere in
+  sight), then **batching 32 throws into one 64-bit value** and counting them
+  with `popcount` (~20x), and only then the threads themselves (~11x).
+- And a lesson in verifying an optimisation. The batched version passed a
+  bit-exact check against a naive counter, and reproduced the mean and standard
+  deviation exactly — while inflating the far tail by ~50%, the only region the
+  program measures. xorshift64 is F2-linear, so 32 fields sliced out of one
+  output are not independent. splitmix64's output mix is what makes batching
+  legitimate; `battle-slow` stays in the file as the reference.
+
+### Fixed: the Concurrency lesson could freeze at the step that defines `run2`
+
+- The lesson showed `run2` four steps before anything aimed the workers, and
+  invited the reader back to the prompt after every step. Typing the word that
+  had just appeared on screen ran `0 0 (count)` — a loop stepping by **zero**,
+  never reaching `LIMIT` — in two threads at once, and `join` waited on workers
+  that could not finish. Only Ctrl-C got the session back.
+- The counters and start positions are now `value`s with their starting numbers
+  in the definition, so `run2` works the moment it exists. `value` requires an
+  initial value, which makes the bug unrepresentable rather than merely fixed.
+- The lesson suite covers it now: the step runs `run2 .`, so a lesson that
+  wedges is reported as a failing lesson instead of a hang.
+- The helpers step was split in two, since adding a line pushed it past a
+  20-row terminal.
+
+### Changed: tutorials prefer `value` over `variable` for plain numbers
+
+- A forgotten `@` on a `variable` doesn't fail — it hands you an address that
+  looks like a plausible number. A `value` has nothing to forget. `variable`
+  stays for anything that needs the **address**: `+!`, `allot`ed arrays,
+  buffers, FFI out-parameters, and any cell chosen at run time (`to` parses its
+  target name when the line is compiled).
+- The rule is stated in `help defining-words` under `value`, and the Snake
+  lesson mentions it where it introduces `variable`. Snake's variables step was
+  split so the note doesn't push it past a 24-row terminal.
+- The Concurrency lesson's shared-counter warning now names `+to` alongside
+  `+!`: both are read-modify-write, and the sugar hides the race rather than
+  removing it.
+
+### Added: `tutorial Sound`
+
+- Twenty-eight steps on the one thing a single stream of Forth words cannot
+  express: two sounds at the same time. The spine is measured rather than
+  asserted — `time` on two tones is about 0.65 s, the same two on separate
+  channels about 0.35 s — because "they queue" and "they mix" look identical
+  in source.
+- Covers channels, `next-ch`, per-channel volume, `ch-stop`, and `ch-fade`
+  with the point that made it worth a step of its own: a fade sets a
+  **deadline** and only `snd-pump` applies it, so 500 ms spent not pumping is
+  500 ms of the fade gone.
+- The second half goes down a level. Fill a buffer with a square wave, hand it
+  over with `ch-format!` and `ch-put` — the machinery `tone` was using all
+  along — then wrap those same bytes in a 44-byte RIFF header and give them to
+  `wav-from`. So the lesson ships no binary asset, builds the file it decodes,
+  and `wav-from` earns its keep rather than being asserted useful.
+- It ends by giving everything back, and then by making that safe: `free`
+  alone leaves the `value` naming the buffer pointing at released memory, and
+  the lesson explicitly leaves your definitions behind. So `square` and `riff`
+  are written with a null guard from the start and the cleanup zeroes what it
+  frees — which turns a word that would have written 4410 samples through a
+  null pointer into one that does nothing, and makes the whole step repeatable.
+- Replayed by `make run-lessons` under the dummy audio driver, which consumes
+  audio in real time, so `snd-wait` and the fade loop terminate. Nothing can be
+  heard there, so almost every step also *shows* something — a channel count, a
+  byte count, a duration. The exception is the step contrasting `tone` with
+  `snd-wait`, where the observation is **when** a message appears (3 ms against
+  2059 ms) rather than what it says; that one is for a reader at a terminal.
+- Steps with a clock in them are single words (`cut`, `fading`, `fade-out`)
+  rather than lines typed in sequence. A `200 ms` between two typed lines is
+  lost in how long the reader takes to read the second — and the harness types
+  infinitely fast, so it can never notice. Verified by replaying with seconds
+  injected between every line, not just at native speed.
+
+### Fixed: `abort"` did nothing outside a definition
+
+- `-1 abort" boom"` at the prompt, or at the top level of a `.fs` file, printed
+  nothing and did not abort. It is `IMMEDIATE` with no interpreting branch, so
+  it *ran*: `postpone`d its guard into the dictionary where nothing would ever
+  call it, and returned — **without consuming its flag**. Its own comment
+  claimed `COMPILE_ONLY`, but `; immediate` sets only the immediate bit, so the
+  check that would have refused it never fired.
+- The leftover flag is what made it harmful rather than merely useless. The
+  everyday idiom at the top of a file
+
+      1024 allocate abort" out of memory" value buf
+
+  left `( addr ior )` intact, so `buf` bound the **error code** and the address
+  was orphaned on the stack. `buf` was 0, and the first store into it faulted —
+  a segfault several lines from the cause.
+- `abort"` is now STATE-smart, exactly like `s"` and `."` beside it, and lives
+  with them because its interpreting half needs the same parser. Compiled code
+  is unchanged. Both branches parse the message, so the rest of the line is
+  consumed whether the flag was true or not.
+- The message now ends its own line. It never paid the owed newline, so an
+  `abort"` firing at the prompt ran straight into the next one (`went boom> `).
+  Four pages showed the old run-together form and have been corrected — the
+  manual, the `Interpreter` and `String_Words` references, and the `Exceptions`
+  lesson, whose replay stayed green because the harness checks for errors, not
+  for the values a lesson claims.
+- Nothing shipped was affected: every `abort"` in `core.fs` and the libraries
+  is inside a definition, where it always compiled correctly. That is also why
+  no suite caught it — found while writing a lesson that used the idiom.
+
 ## v0.14.0 — 2026-08-02
 
 ### Added: `wav-from` — decode a `.wav` already in memory

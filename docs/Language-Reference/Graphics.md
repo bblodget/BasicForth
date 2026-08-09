@@ -217,6 +217,7 @@ color: `$FF8000` is orange.
 
 - `help sdl3` — the SDL3 window these pixels appear in (`sdl-open`,
   `sdl-frame`/`sdl-show`, `sdl-scale`, events).
+- `help pad` — game controllers, for driving whatever you draw.
 - `help memory` — `allocate` for sprite and off-screen buffers, `l@`/`l!`.
 - docs/Graphics.md — the surface design; docs/Graphics_Planning.md — the GPU
   road ahead.
