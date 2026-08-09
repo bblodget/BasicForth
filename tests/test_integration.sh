@@ -2083,6 +2083,46 @@ assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-i
 assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
 
 # =========================================================================
+section "GETENV (process environment)"
+# =========================================================================
+# getenv borrows a pointer INTO the environment rather than copying, so these
+# also check it hands back the right LENGTH — a strlen that ran off the end
+# would still print the value and then some.
+ge_run() {   # <forth> -> output, with a controlled environment
+    printf '%s\n' "$1" | env FOO=bar EMPTY= PATHOLOGICAL=1 \
+        BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1
+}
+ge_check() {
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+ge_check "getenv reads a set variable"      "$(ge_run 's" FOO" getenv type')" "^bar ok"
+ge_check "getenv gives the exact length"    "$(ge_run 's" FOO" getenv nip .')" "^3  ok"
+ge_check "getenv on an unset name gives 0"  "$(ge_run 's" NOSUCHVAR" getenv nip .')" "^0  ok"
+ge_check "getenv on an empty value gives 0" "$(ge_run 's" EMPTY" getenv nip .')" "^0  ok"
+# Both are length 0, and the ADDRESS is what separates them: 0 for unset, a
+# real pointer for a variable set to the empty string. Pinned because it is
+# the whole reason this word needs no flag — and because documenting the
+# opposite is exactly the mistake that got caught here.
+ge_check "getenv: unset gives a NULL address" \
+    "$(ge_run 's" NOSUCHVAR" getenv drop 0<> .')" "^0  ok"
+ge_check "getenv: empty-but-set gives a real address" \
+    "$(ge_run 's" EMPTY" getenv drop 0<> .')" "^-1  ok"
+ge_check "getenv takes an empty name as unset" "$(ge_run 's" " getenv nip .')" "^0  ok"
+# The '=' check is the whole difference between a lookup and a prefix match:
+# without it "PAT" would answer with PATHOLOGICAL's value, and "PATH" would
+# shadow it too. Both directions are tested because only one of them is
+# obvious from reading the code.
+ge_check "getenv does not match a name PREFIX" "$(ge_run 's" PAT" getenv nip .')" "^0  ok"
+ge_check "getenv matches the whole name exactly" \
+    "$(ge_run 's" PATHOLOGICAL" getenv type')" "^1 ok"
+ge_check "getenv leaves the stack balanced" \
+    "$(ge_run 's" FOO" getenv 2drop s" NOPE" getenv 2drop depth .')" "^0  ok"
+
+# =========================================================================
 section "System Words"
 # =========================================================================
 

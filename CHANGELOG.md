@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added: `getenv` — read the process environment
+
+- `getenv ( c-addr u -- c-addr2 u2 )` answers with an environment variable's
+  value, or a length of 0 when it is unset. A conspicuous gap for a Forth that
+  ships `#!` scripts, `ARGC`/`ARGV` and shell words: scripts want `$HOME`,
+  `$EDITOR`, `$PAGER`.
+- **In the platform layer, where OS knowledge belongs** — `platform_getenv`
+  walks the same `start_envp` that `platform_system` already hands to
+  `execve`. No syscall; the environment is just memory the kernel left on the
+  stack.
+- The result **points into the environment block** rather than copying: those
+  strings live as long as the process, so there is nothing to own and nothing
+  to free. The `HOME` pointer kept for `cd ~` is the same kind of borrow.
+- **A name matches only up to a following `=`.** A prefix comparison alone
+  would make `PAT` answer with `PATHOLOGICAL`'s value, and `PATH` shadow it.
+  Both directions are tested, because only one of them is obvious from reading
+  the code. An empty name matches nothing rather than matching an entry
+  beginning with `=`, which some systems do produce.
+- **Unset and set-to-empty are both length 0, and the ADDRESS separates them**
+  — 0 for unset, a real pointer for a variable set to the empty string. So
+  `nip 0=` is true when there is nothing to use (unset and empty alike) and
+  `drop 0=` is true only when unset, at the cost of no flag and no second
+  return value. That avoids
+  `find`'s asymmetric two-answer shape, which has caught us out before.
+- Both architectures verified against a deliberately broken build: dropping
+  the `=` check fails exactly the prefix test, and an off-by-one on the value
+  pointer fails exactly the four that read a value. Identical on x86-64 and
+  ARM64, and the well-formed path is asserted on both — not just the failures.
+
 ### Added: `voice.fs` — rendering speech to WAV files
 
 - `voice-render ( text u path u -- ior )` speaks text into a WAV file by

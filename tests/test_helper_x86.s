@@ -73,6 +73,13 @@ platform_raw_mode:
 platform_write:
     ret
 
+# The unit tests run without a saved envp, so every name reads as unset.
+.global platform_getenv
+platform_getenv:
+    xor %eax, %eax
+    xor %edx, %edx
+    ret
+
 .global platform_write_fd
 platform_write_fd:
     ret
