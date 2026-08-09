@@ -33,8 +33,8 @@ and nothing is left to join them or free their stacks. Start them all, join
 them all, and report afterwards — `tutorial Concurrency` builds that pattern.
 
 A worker runs **already-compiled** words only: no `:`, no `create`, no
-interpret-time `s"`, no `save`/`load`. Define first, then run — `help
-concurrency` explains why.
+interpret-time `s"`, no `save`/`load`. Define first, then run —
+`help concurrency` explains why.
 
 ## join ( t -- result status )
 Wait for the thread to finish, release its stacks, and report. Two values,

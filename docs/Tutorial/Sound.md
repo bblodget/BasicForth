@@ -69,8 +69,8 @@ play in turn. That is what the 0.65 s was.
     tone-amp  2000 to tone-amp  440 400 tone  snd-wait  to tone-amp
 
 Quieter. That line borrows `tone-amp`, plays with the borrowed value, and hands
-your original back — the leading `tone-amp` pushes it, the closing `to
-tone-amp` stores it again.
+your original back — the leading `tone-amp` pushes it, the closing `to tone-amp`
+stores it again.
 
 A 16-bit sample holds up to 32767, so the default 8000 is about a quarter of
 full swing. That is deliberate: a square wave at full scale is punishing,
@@ -452,9 +452,9 @@ still here — this lesson leaves your definitions behind — and `wave` would
 still hold the address of memory that now belongs to somebody else.
 
 That is a **dangling pointer**, and writing through one is the worst kind of
-bug: it works, nothing complains, and something unrelated breaks later. `0 to
-wave` is the other half of `free` — and `audio`, which was never freed at all,
-still needed it, because it pointed into a block that was. Type `next`.
+bug: it works, nothing complains, and something unrelated breaks later.
+`0 to wave` is the other half of `free` — and `audio`, which was never freed at
+all, still needed it, because it pointed into a block that was. Type `next`.
 
 ## Which is what square was checking for
 

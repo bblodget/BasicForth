@@ -219,8 +219,8 @@ When you want one of those dropped lines anyway, end it with `keep`:
     variable hi-score
     1000 hi-score !  keep
 
-`variable hi-score` is a definition and would be saved regardless; the `1000
-hi-score !` moved no dictionary at all, so without `keep` your high score
+`variable hi-score` is a definition and would be saved regardless; the
+`1000 hi-score !` moved no dictionary at all, so without `keep` your high score
 would reload as zero.
 
 `bitmaps.fs` is an ordinary source file. `include bitmaps.fs` in a fresh

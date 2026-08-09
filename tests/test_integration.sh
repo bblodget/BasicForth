@@ -5076,6 +5076,31 @@ else
     printf "    Would render as italics:\n%s\n" "$md_star"; ((failed++))
 fi
 
+# Markdown lint: an inline `code span` must open and close on ONE line. The
+# renderer clears its span state at every newline ((mk-flush) in core.fs), so
+# a span that wraps leaves the NEXT line's backtick parity inverted -- the
+# closing backtick opens a span instead, and code and prose swap colors for
+# the rest of that line. CommonMark allows the wrap; our renderer does not.
+# Nine shipped that way: four reference entries (`help fonts`, `help font!`,
+# `help thread`, `help defer`) and five tutorial steps across four lessons.
+# An odd backtick count on a line is the tell.
+# Skipped: indented lines (verbatim code blocks) and fenced blocks, whose ```
+# would itself count three -- there are no fences in these dirs today, but a
+# future one must not be reported as a wrapped span.
+md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+    awk '/^ {4}|^\t/            { next }
+         /^[ \t]*```/           { fence = !fence; next }
+         fence                  { next }
+         gsub(/`/, "`") % 2     { printf "%d: %s\n", FNR, substr($0, 1, 58) }' "$f" \
+        | sed "s|^|$(basename "$f"):|"
+done)
+if [ -z "$md_span" ]; then
+    printf "  ${GREEN}PASS${NC}  help prose has no wrapped code span\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  help prose has no wrapped code span\n"
+    printf "    Inverts code and prose on the next line:\n%s\n" "$md_span"; ((failed++))
+fi
+
 # =========================================================================
 section "Interactive tutorial (tutorial / next / back)"
 # =========================================================================

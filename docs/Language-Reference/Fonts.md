@@ -1,9 +1,9 @@
 # Fonts — Text on the Framebuffer
 
 Draw text onto a graphics surface. A glyph is a 1-bit bitmap and the color is
-chosen at draw time, so `text` is a thin loop over `stamp-scale` (see `help
-graphics`). Load a font with `require font-terminus-8x16.fs`; that pulls in the
-shared engine `fontcore.fs` (which holds `text`/`glyph`/`font-scale`) and
+chosen at draw time, so `text` is a thin loop over `stamp-scale` (see
+`help graphics`). Load a font with `require font-terminus-8x16.fs`; that pulls
+in the shared engine `fontcore.fs` (which holds `text`/`glyph`/`font-scale`) and
 `graphics.fs`, and selects the font. Every font is fixed-width with 256 glyphs
 in **CP437** order — printable ASCII plus box-drawing, block shading and
 accented letters.
@@ -128,9 +128,10 @@ the font, which registers itself with `font!`:
 `font!` records the table base and cell size and derives the row stride
 (`font-stride`, `ceil(w/8)` bytes), so a font wider than 8 pixels needs no extra
 information. To add your own font, generate a data file with `tools/psf2font.py`
-from any 8-pixel-wide PSF console font (it emits the table, the `require
-fontcore.fs`, and the selector) — the file name `font-<family>-<size>.fs` gives
-the selector its name, and the cell height comes from the PSF itself.
+from any 8-pixel-wide PSF console font (it emits the table, the
+`require fontcore.fs`, and the selector) — the file name
+`font-<family>-<size>.fs` gives the selector its name, and the cell height comes
+from the PSF itself.
 
 ## See Also
 

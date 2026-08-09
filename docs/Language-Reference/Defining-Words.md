@@ -115,9 +115,8 @@ gforth spells it.
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it
-before a behavior is installed aborts with `greet: uninitialized deferred
-word`. The
-tool behind top-down design (`tutorial Chase`).
+before a behavior is installed aborts with `greet: uninitialized deferred word`.
+The tool behind top-down design (`tutorial Chase`).
 
     defer greet
     :noname  ." Hello!" cr ;  is greet
