@@ -3211,14 +3211,35 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     (cur-src) dup 0= if  drop exit  then    \ the REPL: nothing above us
     (source-path) dup if  (ldg-push)  else  2drop  then ;
 
+\ Is a definition still being compiled? F_HIDDEN ($40) at nt+8, set by `:` and
+\ cleared by `;`. Not STATE: `[` interprets inside an open definition, which is
+\ exactly how an include gets attempted mid-definition in the first place.
+: (def-open?) ( -- flag )  (latest@) 8 + c@ 64 and 0<> ;
+
 : included ( c-addr u -- )                  \ load + record; error if missing
+    \ A definition's code compiles straight into the dictionary at HERE, so a
+    \ file loaded now would interleave its headers with that code. Refuse the
+    \ whole load once, here, rather than let build_header reject each `:` in
+    \ the file one at a time and bury the cause in a cascade. Returning (not
+    \ aborting) leaves the open definition intact, so `]` and `;` still finish it.
+    (def-open?) if
+        ." include: a definition is still open — load it before, or after, "
+        ." the definition" cr  2drop exit  then
     (ldg-n) @ >r                            \ mark, to pop this file off below
     (ldg-n) @ 0= if  (ldg-seed)  then       \ started by main.s, not by us
     2dup (ldg-loading?) if                  \ a cycle: this file is mid-load
         ." require: " type ."  is already loading — skipped" cr
         r> (ldg-n) !  exit  then
     2dup (ldg-push)
-    2dup included                           \ the assembly INCLUDED does the work
+    \ Keep the path on the RETURN stack across the load. A loaded file may
+    \ legitimately leave items on the data stack, and they land on top of
+    \ ( c-addr u ) -- after which (inc-mark) below takes the file's values as
+    \ an address and a length. `1 2 3` in a file was enough to segfault the
+    \ session. The return stack nests, so a file that includes another file
+    \ is safe; two variables would not be.
+    2dup >r >r
+    included                                \ the assembly INCLUDED does the work
+    r> r>
     (inc-opened?) 0= if
         r> (ldg-n) !                        \ pop before leaving through the ABORT,
         ." cannot open " type cr abort      \ else a missing file stays "loading"
