@@ -82,6 +82,17 @@ completed. See Planning.md for high-level vision and design decisions.
   pair with the tag below the value. Both arches now use the identical
   two-`STR` push idiom `IF` uses.
 
+- [x] **Crash sweep before v0.15.1 (2026-08-10).** Ran malformed and
+  accidental-mistake inputs through both a file load and the prompt, asserting
+  on signal rather than output. Three crash, all of them standard-UNDEFINED
+  behaviour where the fault comes from the CPU or libc, not from us:
+  `0 execute` (an integer as an xt), `0 @` (null dereference), `12345 free`
+  (a pointer libc never allocated). None is reachable from well-formed code.
+  Recorded so nobody re-investigates them as bugs. **Nothing was found in the
+  family of the include crash** — no case where ordinary correct usage faults.
+  A bounds-checked `execute` would turn the first into a clean error, but that
+  is a feature, not a fix.
+
 - [ ] **A control-flow closer with nothing open reports `stack underflow`, not
   `mismatched-control-flow`.** Noticed 2026-07-29 while fixing the `CASE` bug
   above, and deliberately left alone there because it is not a `CASE` problem —
