@@ -1717,6 +1717,8 @@ err_pfx_question: .ascii "? "
 .equ err_pfx_question_len, . - err_pfx_question
 err_pfx_conly:    .ascii "compile only: "
 .equ err_pfx_conly_len, . - err_pfx_conly
+msg_def_open: .ascii "definition still open: "
+.equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2200,6 +2202,9 @@ forth_find_meta:
 //   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
 build_header:
     STP X29, X30, [SP, #-16]!
+    LDRB W9, [X22, #8]             // a definition still open?
+    TST W9, #F_HIDDEN
+    B.NE .Lbh_open_named
 
     // Save LATEST and HERE for error recovery
     ADR X9, saved_latest
@@ -2256,6 +2261,9 @@ build_header:
 // every token has length >= 1 — so the entry exists only for its metadata.
 build_header_anon:
     STP X29, X30, [SP, #-16]!
+    LDRB W9, [X22, #8]             // a definition still open?
+    TST W9, #F_HIDDEN
+    B.NE .Lbh_open
     ADR X9, saved_latest
     STR X22, [X9]
     ADR X9, saved_here
@@ -2353,6 +2361,53 @@ build_header_anon:
     MOV X0, #1                     // error
     LDP X29, X30, [SP], #16
     RET
+
+// A definition is still open: LATEST is hidden, and its code is being compiled
+// straight into the dictionary at HERE. A new header here would land in the
+// MIDDLE of that code -- the outer word would then execute a header as
+// instructions, and `;` would clear HIDDEN on the newcomer instead of on the
+// word being defined, stranding it hidden and unreachable forever.
+//
+// Refuse before touching saved_latest/saved_here, or the recovery anchor moves
+// to a point the rollback must never return to.
+//
+// STATE is not the test: `[` interprets inside an open definition, so a nested
+// `create` or an `include` there sees state = 0 while a definition is very much
+// open. The HIDDEN bit is what actually says "a definition is in progress".
+// Refusing has to ABORT THE LINE, not report and return. Returning leaves the
+// interpreter parsing what was meant to be the definition: first its name (a
+// name that already exists then gets EXECUTED), and then its body one token at
+// a time -- `: x canary ;` ran `canary`. Same cure as .Ltick_not_found above:
+// set the token and the wording, then longjmp. No LDP epilog -- the longjmp
+// abandons this frame with the rest.
+//
+// Named defining words parse their name first, so the report can name it and
+// the name does not survive into the input stream.
+.Lbh_open_named:
+    BL forth_parse_word            // ( -- c-addr u )
+    LDR X9, [X19]                  // u
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]           // c-addr
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #2*CELL          // discard the name
+    B .Lbh_open_raise
+
+// :NONAME parses nothing, so err_token is still ":noname" -- exactly right.
+.Lbh_open:
+.Lbh_open_raise:
+    ADR X9, msg_def_open
+    ADR X10, err_pfx_addr
+    STR X9, [X10]
+    MOV X9, #msg_def_open_len
+    ADR X10, err_pfx_len
+    STR X9, [X10]
+    // .Lcf_abort, NOT .Lcf_longjmp -- see the x86 mirror. The bare longjmp
+    // leaves the open definition's header as LATEST and HIDDEN, after which
+    // this guard refuses every later definition and the session can never
+    // define another word.
+    B .Lcf_abort
 
 // ---------- COLON (Forth-level) ----------
 // ( -- )
@@ -4032,7 +4087,8 @@ forth_noname:
     STP X23, X24, [SP, #-16]!
     STP X25, X26, [SP, #-16]!
 
-    BL build_header_anon            // cannot fail on name; dict-full aborts
+    BL build_header_anon            // fails only if a definition is still open
+    CBNZ X0, .Lnoname_done          // ...in which case touch nothing
 
     // Tag Flags2: anonymous definition (X22 = new entry)
     MOV W9, #T_NONAME
@@ -4056,6 +4112,7 @@ forth_noname:
     MOV X10, #-1
     STR X10, [X9]
 
+.Lnoname_done:
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16

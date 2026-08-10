@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.15.1 — 2026-08-10
+
+A patch release: two crash/data-loss fixes, no new features and no changed
+wording anywhere else.
+
+### Fixed: `include` of a file that leaves stack items segfaulted the session
+
+- **Any `.fs` file ending with a value on the data stack crashed BasicForth**,
+  in v0.15.0 and every release before it. `1 2 3` in a file was enough. A
+  config-style file that ends in a number was all it took.
+- `included` held the file's path — `( c-addr u )` — on the data stack across
+  the load. A loaded file may legitimately leave items there, and they land on
+  top of the path, so the sentinel-recording step afterwards read the file's
+  values as an address and a length: `c@` on address 3.
+- The path now waits on the **return** stack. That nests, so a file which
+  includes another file is safe; two variables would not have been.
+- A file's stack items now survive the load, in order, which is what the
+  standard asks for: `include cfg.fs` then `.s` shows `<3> 1 2 3`.
+
+### Fixed: a definition could be left hidden and unreachable
+
+- `: foo [ include lib.fs ] 42 ;` defined the library's words and left **`foo`
+  itself hidden and unreachable** — `? foo`.
+- The root was general rather than about `include`. A definition's code is
+  compiled straight into the dictionary at HERE, so **any** header built while
+  a definition is open lands in the middle of that code, and `;` then clears
+  the hidden flag on the newcomer instead of on the word being defined.
+- Building a header while a definition is open is now refused, naming the word:
+  `definition still open: keeper`. The check is the hidden flag on LATEST, not
+  `STATE` — `[` interprets inside an open definition, which is how the case
+  arises at all — and it refuses before touching the recovery anchor, since
+  moving that was part of the damage.
+- `include` mid-definition is refused earlier and more gently, so one message
+  replaces a cascade of per-header refusals and the open definition survives to
+  be finished by `]` and `;`.
+
+### Also
+
+- `docs/Locals.md` — a design note for the planned locals word set: what a
+  runtime frame costs (measured), the paths that must release it, and the
+  decisions taken. No code; the feature is not built.
+
 ## v0.15.0 — 2026-08-09
 
 ### Added: `entropy` — kernel randomness, and a seed worth having
