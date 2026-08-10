@@ -36,19 +36,23 @@ and project phases.
 
 ## Status
 
-**v0.14.0** — **Sound you can layer, and threads to run it on.** Audio was one
-queue: a tone waited for whatever was already playing. Now the device holds
-**mixing channels** — sounds on different channels play together, sounds queued
-on one play in turn — and `tone` keeps its own, so a run of tones is still a
-run of tones. **WAV files load and play**: 8, 16 and 32-bit integer and 32-bit
-float, mono or stereo, plus 24-bit widened losslessly because SDL has no format
-for it. Measured against a real organ sample set, the first decoder read 406
-files of 13,529; this one reads all of them. Volume is SDL's own gain, so it
-changes sound *already playing*, and **`ch-fade`** takes a channel down
-gently where `ch-stop` cuts it off. Reaching the gain at all needed
-**float arguments in the FFI** (`(ccallf)`, `>f32`) — three separate features
-had been bent around that gap. `wav-from` decodes a `.wav` already in memory,
-so a sound can ship as Forth source the way the fonts do.
+**v0.15.0** — **Give it a voice and a controller.** `voice-render` turns text
+into a WAV file through whatever text-to-speech engine the machine has — the
+engine is a **command template**, so nothing here is tied to one, and a game
+renders its phrases once at build time rather than paying synthesis in the
+frame loop. **Game controllers** arrive with `pad.fs`: four slots, compass
+button names, hot-plug handled where SDL actually reports it. A program can
+**read its environment** now (`getenv`), which is how `voice.fs` finds its
+engine, and startup's own five lookups go through the same platform call
+instead of five hand-written copies per architecture.
+
+The random generator is **seeded from the kernel** rather than the clock:
+`ms@` gave two processes started in the same millisecond an identical stream —
+200 parallel launches produced 87 distinct first values, now 200 of 200 — and
+`0 seed !`, the obvious thing to type for a repeatable run, used to kill the
+generator dead. Both fixed. The sound API also lost its odd corners:
+`snd-open` returns an `ior` like `open-file`, `snd-alloc` is `next-ch`, and
+`snd-vol` is `tone-amp` — named for what it is, since it is not a volume.
 
 And BasicForth **runs Forth on OS threads** — `thread`, `join`, `threads`, with
 `BASE`, `sp0` and the exception handler moved into thread-local storage and
@@ -131,8 +135,14 @@ What works today:
   `VERSION` (also `basicforth -v`), and `DIS` — disassemble any word, your
   own or a primitive, with call targets named (`disasm.fs`)
 - Unix integration: `#!` shebang scripts, `ARGC`/`ARGV`/`ARG`/`NEXT-ARG`/`SHIFT-ARGS`,
-  `BYE-CODE` (exit status), clean stdout for use as a pipe/utility
-- Game support: arrow key parsing, key constants, random number generator
+  `GETENV`, `BYE-CODE` (exit status), clean stdout for use as a pipe/utility
+- Game controllers: `PAD-OPEN` claims one of four player slots (`pad.fs`),
+  reporting an `ior` rather than aborting, with buttons named
+  by **position** (`PAD-SOUTH`/`PAD-EAST`/`PAD-WEST`/`PAD-NORTH`) rather than
+  by a letter that moves between Xbox, Nintendo and PlayStation, plus sticks,
+  triggers, and a d-pad that wins over the analog stick when both are pushed
+- Game support: arrow key parsing, key constants, and a random number generator
+  seeded from the kernel (`RANDOM`, `RND`, `ENTROPY`)
 - Examples: Snake (`snake.fs`, `snake-mini.fs`) plus Unix-style utilities
   (`cat.fs`, `sort.fs`, `tac.fs`, `echo.fs`, `lines.fs`) — x86-64 and ARM64
 - File loading: auto-load `core.fs` (and `session.fs`) at startup;
@@ -142,8 +152,9 @@ What works today:
 - Control-flow safety: tag mismatch and balance checking
 
 What's next: a GPU backend (SDL_GPU) behind the surface API and sockets —
-plus a package registry, the locals word set, speech synthesis, and more
-games. (Threading shipped in v0.14.0.)
+plus a package registry, the locals word set, live speech at the prompt, and
+more games. (Threading shipped in v0.14.0; rendering speech to a file, in
+v0.15.0 — what is left is saying a phrase without writing it down first.)
 
 ## Building
 

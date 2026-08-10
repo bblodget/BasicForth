@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.0 — 2026-08-09
 
 ### Added: `entropy` — kernel randomness, and a seed worth having
 
