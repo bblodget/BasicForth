@@ -3120,6 +3120,42 @@ inc_recover=$( cd "$inc_dir" && printf 'include bad.fs\n5 6 + . bye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
 inc_rest=$( cd "$inc_dir" && printf 'include good.fs g1 . bye\n' \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $inc_forth 2>&1 )
+# A refused defining word must CONSUME its name. Left in the input stream, the
+# interpreter reads it as the next word to run — so refusing `: canary 99 ;`
+# and then EXECUTING an already-defined `canary` was possible. Harmless canary,
+# asserted by its absence.
+printf ': canary ." CANARY-RAN" ;\n' > "$inc_dir/canary.fs"
+cn_out=$(printf 'include %s/canary.fs\n: outerw [ : canary 99 ; ] 1 ;\nbye\n' "$inc_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+# ...and the BODY must not run either: refusing has to abort the line, or the
+# interpreter walks on through `canary ;` one token at a time.
+cb_out=$(printf 'include %s/canary.fs\n: outerw [ : x canary ; ] 1 ;\ndepth .\nstate @ .\nbye\n' "$inc_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+# ...and the session must SURVIVE it. The refusal happens with a definition
+# open, so the abort has to abandon that definition: leave its header as LATEST
+# and still HIDDEN and this very guard refuses every later definition — the
+# session could then never define another word.
+sv2_out=$(printf ': outerw [ : x 1 ; ] 1 ;\n: fresh 7 ;\nfresh .\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if printf '%s' "$sv2_out" | grep -q '7  ok' \
+   && ! printf '%s' "$sv2_out" | grep -q 'definition still open: fresh'; then
+    printf "  ${GREEN}PASS${NC}  after a refusal the session can still define words\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refusal wedged later definitions\n    Got: %q\n" "$sv2_out"; ((failed++))
+fi
+if printf '%s' "$cb_out" | grep -q 'definition still open: x' \
+   && ! printf '%s' "$cb_out" | grep -q 'CANARY-RAN' \
+   && printf '%s' "$cb_out" | grep -q '^0 ' ; then
+    printf "  ${GREEN}PASS${NC}  a refused definition's body is not executed; the line aborts\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused body leaked into the interpreter\n    Got: %q\n" "$cb_out"; ((failed++))
+fi
+if printf '%s' "$cn_out" | grep -q 'definition still open: canary' \
+   && ! printf '%s' "$cn_out" | grep -q 'CANARY-RAN'; then
+    printf "  ${GREEN}PASS${NC}  a refused definition name is consumed, not executed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  refused name leaked into the interpreter\n    Got: %q\n" "$cn_out"; ((failed++))
+fi
 rm -rf "$inc_dir"
 if [[ "$inc_recover" == *"11"* ]]; then
     printf "  ${GREEN}PASS${NC}  INCLUDE recovers from a compile error (REPL keeps going)\n"; ((passed++))
@@ -6259,6 +6295,48 @@ assert_output "time without a name" "time"                "time: needs a word na
 # =========================================================================
 section "UNCLOSED DEFINITION AT END OF FILE"
 # =========================================================================
+# A loaded file may legitimately leave items on the data stack. `included`
+# used to hold ( c-addr u ) there ACROSS the load, so the file's values landed
+# on top of the path and (inc-mark) then read the file's numbers as an address
+# and a length. `1 2 3` in a file was enough to SEGFAULT the session. Assert on
+# exit status, not output: the failure was a crash, and the REPL echoes input.
+inc_dir="$(mktemp -d)"
+printf '1 2 3\n'                      > "$inc_dir/leaves.fs"
+printf '7 8\n'                        > "$inc_dir/inner.fs"
+printf 'include %s/inner.fs\n9\n' "$inc_dir" > "$inc_dir/outer.fs"
+
+printf 'include %s/leaves.fs\ndepth .\nbye\n' "$inc_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    printf "  ${GREEN}PASS${NC}  include of a file that leaves stack items does not crash\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  include leaving stack items crashed (exit $?)\n"; ((failed++))
+fi
+# ...and the file's values survive, in order, which is what the standard wants.
+inc_out=$(printf 'include %s/outer.fs\n.s\nbye\n' "$inc_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if printf '%s' "$inc_out" | grep -q '<3> 7 8 9'; then
+    printf "  ${GREEN}PASS${NC}  a nested include keeps every file's stack items in order\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  nested include stack items\n    Got: %q\n" "$inc_out"; ((failed++))
+fi
+
+# An include mid-definition is refused ONCE, cleanly: a definition's code is
+# compiled straight into the dictionary at HERE, so a loaded file would
+# interleave its headers with that code. The open definition survives, so `]`
+# and `;` still finish it. build_header keeps its own guard as the backstop.
+printf ': keeper 7 ;\n' > "$inc_dir/lib1.fs"
+hdr_out=$(printf ': foo [ include %s/lib1.fs ] 42 ;\nfoo .\ndepth .\nbye\n' "$inc_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+if printf '%s' "$hdr_out" | grep -q 'a definition is still open' \
+   && printf '%s' "$hdr_out" | grep -q '42' \
+   && ! printf '%s' "$hdr_out" | grep -q '? foo'; then
+    printf "  ${GREEN}PASS${NC}  include mid-definition is refused once; the definition survives\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  definition-open guard\n    Got: %q\n" "$hdr_out"; ((failed++))
+fi
+rm -rf "$inc_dir"
+
 # A file that stops mid-definition — a missing ';', nearly always — used to
 # load "successfully" and leave the caller compiling: every line typed after
 # it was swallowed into the unterminated word, `bye` included, so the session
