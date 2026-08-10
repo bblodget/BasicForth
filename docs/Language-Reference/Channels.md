@@ -84,6 +84,12 @@ Returns `tone-ch` when no device is open — harmless, since every channel word
 is a no-op then — and `-1` when every channel has been claimed, which is not a
 channel at all. With a device open it never returns `tone-ch`.
 
+**A stolen channel is not cleared.** Queueing is all that queueing does, so a
+new sound plays *after* whatever was still on the channel rather than replacing
+it. Usually that is fine — the point is that the sound is not lost. When you
+need the channel to start empty, say so with `ch-stop`, which is what
+`speech.fs` does when it claims one.
+
 A channel only counts as busy once audio is queued on it, so queue promptly:
 
     : blip ( -- )  660 40 next-ch tone-on ;

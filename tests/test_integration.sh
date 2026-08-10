@@ -1807,6 +1807,17 @@ s" two" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
 : t snd-open drop speech-open drop probe . ." claim-ok" ; t')" \
         '0 claim-ok'
 
+    # When every channel is busy, next-ch hands back the least recently used
+    # one WITHOUT clearing it -- tone-on only queues. So speech could be handed
+    # a channel with an effect still on it, and the first phrase would play
+    # behind that effect: exactly the thing speech-ch exists to prevent, broken
+    # at the moment speech opens. Measured before the fix: 237976 bytes
+    # inherited. speech-open now stops the channel it takes over.
+    sp_check "speech takes over its channel rather than inheriting a queue" \
+        "$(sp_run ': fill snd-channels 1 ?do 220 3000 i tone-on loop ;
+: t snd-open drop fill speech-open . speech-ch ch-queued . ." busy-ok" snd-stop ; t')" \
+        '0 0 busy-ok'
+
     # next-ch answers -1 when every channel is claimed. Claiming that would
     # report success while speech had nowhere to play.
     sp_check "speech reports having no channel rather than taking -1" \

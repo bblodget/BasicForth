@@ -142,6 +142,11 @@ variable (sp-why-len)
     to speech-ch
     speech-ch ch-claim                       \ or next-ch reissues it the
                                              \ moment the phrase falls silent
+    \ When every channel is busy, next-ch hands back the least recently used
+    \ one WITHOUT clearing it -- so the channel can arrive with someone else's
+    \ effect still queued, and the first phrase would play behind it. Taking
+    \ the channel means taking it over.
+    speech-ch ch-stop
     speech-ch (ch-stream) to (sp-stream)
     0 ;
 
