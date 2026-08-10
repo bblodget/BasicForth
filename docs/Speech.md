@@ -144,13 +144,33 @@ the clearance is verified rather than assumed. If the path could not be
 cleared the render stops there and says so, instead of judging the engine by
 a file it was never able to replace.
 
-## Where speech goes next
+## Speaking with speech.fs
 
-`speech.fs` puts `say` at the prompt, synthesizing into memory through the
-FFI and playing on a `sound.fs` channel — no file, no shell, and `talking?`
-answered by the channel itself. flite suits that job: its
-`flite_text_to_wave` takes two arguments and hands back a buffer, which fits
-the FFI as it stands and needs no callback.
+`speech.fs` puts `say` at the prompt, synthesizing into memory through the FFI
+and playing on a `sound.fs` channel — no file, no shell, and `talking?`
+answered by the channel itself. flite suits that job: `flite_text_to_wave`
+takes two arguments and hands back a `cst_wave` (`sample_rate@8`,
+`num_samples@12`, `num_channels@16`, `samples*@24`, verified by calling it),
+which fits the FFI as it stands and needs no callback. The samples go straight
+to `ch-put` and the wave is freed on the next line, because SDL copies.
+
+Speech takes **its own channel**, with `next-ch` at open time, and keeps it. A
+channel is a sequential queue, so that single decision buys both properties
+worth having: successive `say`s wait for each other instead of talking over
+themselves, and a phrase never queues up behind a sound effect.
+
+Binding is lazy — `require speech.fs` never touches flite, and `speech-open`
+returns an `ior`. A machine without the library gets a reason it can print
+rather than an abort while loading a file, which is the same shape `snd-open`
+uses for a machine without audio.
+
+The cost that shapes everything else: **`say` blocks while it synthesizes**.
+Measured with `cmu_us_slt`, "Go!" is 7 ms, a full sentence 38 ms, against a
+16.7 ms frame at 60 Hz. Fast enough to feel instant at a prompt, too slow to
+sit in a frame loop — which is the whole reason `voice.fs` exists beside it
+rather than being replaced by it.
+
+## Where speech goes next
 
 Longer term, an engine that streams while it speaks would let BasicForth
 start talking before a sentence is finished. That wants a C callback into

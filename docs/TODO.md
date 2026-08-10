@@ -913,8 +913,8 @@ docs/Graphics.md for the API.
   Consequences: (a) a `pad-rumble?` predicate built on that property would
   confidently tell F310 owners their pad rumbles — either find better grounding
   or document it as "the driver claims it can"; (b) a test asserting the call
-  succeeds passes on hardware with no motors, so it proves nothing —
-  see [[verify-fixes-against-broken-build]]; (c) **the dev hardware cannot
+  succeeds passes on hardware with no motors, so it proves nothing (a test
+  must be run against the BROKEN build before it is trusted); (c) **the dev hardware cannot
   verify this feature at all**, which is why the tutorial was written first,
   reversing the note above.
 - [ ] **Hotplug auto-reopen.** Today a game must notice `pad?` went false and
@@ -939,22 +939,18 @@ docs/Graphics.md for the API.
   Requires only `shellutil.fs` — no FFI, no SDL, no decoder — so it runs on
   the board and under QEMU, and its tests use a stand-in shell script rather
   than needing a TTS installed. `help voice`, `docs/Speech.md`.
-- [ ] **Speech, tier 2: speaking** — `speech.fs` with `say ( c-addr u -- )`,
-  synthesizing into memory through flite and playing on a `sound.fs` channel;
-  `talking?` is the channel's own `ch-playing?`. Verified viable before
-  planning: `flite_text_to_wave` takes **2 arguments** and returns a
-  `cst_wave*` (`rate@8 num_samples@12 channels@16 samples*@24`), which fits
-  `(ccall)` as it stands — no callback, no floats, and `RTLD_NOW` alone
-  resolves the voice library. Bind lazily from `speech-open ( -- ior )` using
-  `(dlopen)`/`(dlsym)` so a machine without libflite gets an ior rather than
-  an abort at `require` time. Freeing flite's buffer straight after `ch-put`
-  is safe — `SDL_PutAudioStreamData` copies.
-- [ ] **Dark Star phrases** — render the ~11 phrases of the original's
-  vocabulary into a `voice/` directory beside the game, restore `Speech?`,
-  and wire `SayEnd`'s random win/lose pick and `GoGoGo`'s "don't talk over
-  yourself" gate to `ch-playing?`. Costs the game **no new runtime
-  dependency** (it already has `wav.fs`), and self-rendered phrases avoid the
-  rights question hanging over the original's art.
+- [x] **Speech, tier 2: speaking — SHIPPED 2026-08-10** (`speech.fs`). `say
+  ( c-addr u -- )` synthesizes into memory through flite and plays on a
+  `sound.fs` channel; `talking?` is that channel's own `ch-playing?`. Speech
+  keeps its own channel, so successive says queue instead of overlapping and a
+  phrase never waits behind a sound effect. Binding is lazy, so `require` never
+  aborts on a machine without libflite. `say` BLOCKS while synthesizing —
+  7 ms for "Go!", 38 ms for a sentence, against a 16.7 ms frame — which is why
+  `voice.fs` stays the answer inside a game loop.
+- [x] **Dark Star phrases — SHIPPED 2026-08-09.** 14 phrases rendered with
+  piper into a `voice/` directory beside the game, played through `wav.fs`, so
+  the game gained no new runtime dependency and self-rendered audio sidesteps
+  the rights question hanging over the original's art.
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
@@ -1038,6 +1034,37 @@ docs/Graphics.md for the API.
 ---
 
 ## Future / Usability
+
+- [ ] **`docs/Install.md` — one page from `git clone` to a working setup.**
+  There is no single place that says what BasicForth needs, and the coverage
+  is uneven (surveyed 2026-08-10):
+  - Build toolchain is documented **twice**, in `README.md` §Prerequisites and
+    `docs/BasicForth_Manual.md` §Prerequisites, which will drift.
+  - **SDL3 has no install instructions at all** — only a parenthetical in
+    `docs/Graphics.md:138` noting bookworm has no `libsdl3` package. Without
+    it, graphics, sound, samples, gamepads and speech are all unavailable.
+  - **flite is undocumented entirely**, and `speech.fs` needs `libflite.so.1`
+    plus a voice library.
+  - piper IS documented well, but only inside `docs/Speech.md` §Installing an
+    engine, where nobody looking for dependencies would find it.
+  - `. ./setup.sh` is used in examples but never explained as a step, and
+    `git clone` — the first move anyone makes — appears nowhere.
+
+  The page should lead with the property that is currently invisible:
+  **nothing is required to build except `binutils`, `gcc` and `make`.** Every
+  library is `dlopen`ed on demand, so the binary builds and runs without any
+  of them, and a missing one costs exactly one feature. List each optional
+  library with what stops working without it.
+
+  Then cut the duplication: README and the Manual point at the page instead of
+  each carrying their own copy.
+
+  Check before writing, rather than recording what is true on this laptop:
+  what SDL3 install actually works on plain Debian/Ubuntu today (this machine
+  built 3.4.12 from source into `/usr/local`), and the real flite package
+  names — deriving a fact at run time beats writing down what happened to be
+  true on one machine, the trap that produced three defects during the
+  voice.fs work.
 
 - [x] **REPL "option B": emit the newline lazily, before the first byte of
   output — DONE 2026-07-28** (branch lazy-newline). The one untried idea from
