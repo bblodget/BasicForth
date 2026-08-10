@@ -1634,6 +1634,8 @@ err_pfx_question: .ascii "? "
 .equ err_pfx_question_len, . - err_pfx_question
 err_pfx_conly:    .ascii "compile only: "
 .equ err_pfx_conly_len, . - err_pfx_conly
+msg_def_open: .ascii "definition still open: "
+.equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow\n"
 .equ msg_unbalanced_len, . - msg_unbalanced
 msg_cf_mismatch: .ascii "mismatched control flow\n"
@@ -2066,6 +2068,8 @@ forth_find_meta:
 #   [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4]
 #   Then HERE points to where compiled code will go.
 build_header:
+    testb $F_HIDDEN, 8(%r12)        # a definition is still open?
+    jnz .Lbh_open_named
     # Save LATEST and HERE for error recovery
     mov %r12, saved_latest(%rip)
     mov %r13, saved_here(%rip)
@@ -2121,6 +2125,8 @@ build_header:
 # length name is unfindable — find/(nt-by-name) compare lengths first and
 # every token has length >= 1 — so the entry exists only for its metadata.
 build_header_anon:
+    testb $F_HIDDEN, 8(%r12)        # a definition is still open?
+    jnz .Lbh_open
     mov %r12, saved_latest(%rip)
     mov %r13, saved_here(%rip)
     xor %ecx, %ecx                  # name length 0
@@ -2213,6 +2219,56 @@ build_header_anon:
 .Lbh_err:
     stc                             # error
     ret
+
+# A definition is still open: LATEST is hidden, and its code is being compiled
+# straight into the dictionary at HERE. A new header here would land in the
+# MIDDLE of that code -- the outer word would then execute a header as
+# instructions, and `;` would clear HIDDEN on the newcomer instead of on the
+# word being defined, stranding it hidden and unreachable forever.
+#
+# Refuse before touching saved_latest/saved_here, or the recovery anchor moves
+# to a point the rollback must never return to.
+#
+# STATE is not the test: `[` interprets inside an open definition, so a nested
+# `create` or an `include` there sees state = 0 while a definition is very much
+# open. The HIDDEN bit is what actually says "a definition is in progress".
+# Refusing has to ABORT THE LINE, not report and return. Returning leaves the
+# interpreter parsing what was meant to be the definition: first its name (a
+# name that already exists then gets EXECUTED), and then its body one token at
+# a time -- `: x canary ;` ran `canary`. This is the same mistake .Lil_compile_only
+# was fixed for; it takes the same cure, the standard error protocol. Set the
+# token and the wording, then longjmp out. The caller prints it, with the
+# file:line prefix on a load.
+#
+# Named defining words parse their name first, so the report can name it and
+# the name does not survive into the input stream.
+.Lbh_open_named:
+    call forth_parse_word           # ( -- c-addr u )
+    mov (%r15), %rax
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15               # discard the name
+    jmp .Lbh_open_raise
+
+# :NONAME parses nothing, so err_token is still ":noname" -- exactly right.
+.Lbh_open:
+.Lbh_open_raise:
+    lea msg_def_open(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_def_open_len, err_pfx_len(%rip)
+    # .Lcf_abort, NOT .Lcf_longjmp. The bare longjmp is for interpret-mode
+    # errors and leaves the dictionary alone -- but a definition is open by
+    # definition here, so its header would stay LATEST and stay HIDDEN, and
+    # this very guard would then refuse EVERY later definition: the session
+    # could never define another word. .Lcf_abort rolls LATEST/HERE back to
+    # the anchor, which still points before the open definition precisely
+    # because the guard refused before touching it.
+    #
+    # STATE is not the test for which of the two to use (`[` makes it 0 while
+    # a definition is open), which is exactly the trap the tick-not-found site
+    # sidesteps by testing state when IT cannot be inside brackets.
+    jmp .Lcf_abort
 
 # ---------- COLON (Forth-level) ----------
 # ( -- )
@@ -3642,7 +3698,8 @@ forth_noname:
     push %rbx
     push %rbp
 
-    call build_header_anon          # cannot fail on name; dict-full aborts
+    call build_header_anon          # fails only if a definition is still open
+    jc .Lnoname_done                # ...in which case touch nothing
 
     # Tag Flags2: anonymous definition (RBX = new entry)
     movb $T_NONAME, 9(%rbx)
@@ -3657,6 +3714,7 @@ forth_noname:
     # Enter compile mode
     movq $-1, state(%rip)
 
+.Lnoname_done:
     pop %rbp
     pop %rbx
     ret

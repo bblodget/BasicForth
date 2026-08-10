@@ -106,7 +106,21 @@ completed. See Planning.md for high-level vision and design decisions.
   checking `: q1 then ;` at the prompt *and* mid-file, since the file path is
   where a wrong diagnosis costs the most.
 
-- [ ] **`:noname` inside a colon definition wedges a file load.** Found
+- [x] **`:noname` inside a colon definition wedges a file load.** RESOLVED
+  2026-08-10, in two halves and neither was `:noname`. The wedge was fixed
+  2026-07-26 (below). The remaining "stack underflow" half was a
+  MISDIAGNOSIS: `: v :noname 42 ; drop 5 ;` compiles `:noname` as a call (it
+  is not immediate), `;` closes `v`, and the underflow is the following `drop`
+  on an empty stack — correct behaviour. `: v :noname 42 ;` alone leaves depth
+  0 and no error.
+
+  What the entry was really masking: **`include` of any file that leaves items
+  on the data stack SEGFAULTED the session** (v0.15.0 and earlier). `included`
+  in core.fs held ( c-addr u ) on the data stack across the load, so the file's
+  values landed on top of the path and `(inc-mark)` read them as an address and
+  a length. `1 2 3` in a file was enough. Fixed by keeping the path on the
+  return stack, which also nests for a file that includes another file.
+  Original entry follows. Found
   2026-07-25 during the interaction sweep, while checking a Codex review
   claim. `:noname` nested in an open definition is not supported — fair
   enough — but it fails badly rather than cleanly:
@@ -185,7 +199,16 @@ completed. See Planning.md for high-level vision and design decisions.
     A real fix has to distinguish "anchor" from "current definition's
     rollback point", which today are the same three variables.
 
-- [ ] **`include` inside `[ ... ]` mid-definition leaves the outer word
+- [x] **`include` inside `[ ... ]` mid-definition leaves the outer word
+  undefined.** FIXED 2026-08-10. Root cause was general: a definition's code is
+  compiled straight into the dictionary at HERE, so ANY new header built while
+  one is open lands in the middle of that code, and `;` then clears HIDDEN on
+  the newcomer instead of on the word being defined. `build_header` and
+  `build_header_anon` now refuse when LATEST is hidden ("definition still
+  open"), before touching saved_latest/saved_here — STATE is not the test,
+  since `[` interprets inside an open definition. Original entry follows.
+
+- [ ] ~~**`include` inside `[ ... ]` mid-definition leaves the outer word
   undefined**, and can strand a hidden entry. Pre-existing (verified against a
   build without the unclosed-definition work): the require sentinel
   `(inc:<name>)` is defined by the Forth `included` wrapper *after* the load
@@ -979,8 +1002,28 @@ docs/Graphics.md for the API.
 ## Phase 8: Threading and Locals
 
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
+  - **Researched 2026-08-10: see docs/Locals.md.** Verdict: build it, runtime
+    frame, separate stack, `lp` in the existing TLS block. Measured on x86: a
+    primitive call ~1 ns, so the `rot over swap` a 3-arg word does today costs
+    ~3 ns — but a `variable`-style access costs 4–5 ns, so **a local reference
+    must be open-coded, not a create/does> word**, or locals make such words
+    SLOWER than the juggling they replace. Risk is the unwind contract, not the
+    syntax: a separate stack is not unwound by `.Lcf_longjmp` or the recovery
+    anchor, so a frame leaks silently on every error unless released by hand.
+    EIGHT reset paths, not the obvious two — uncaught throw, QUIT, dict_full,
+    the interpret-line longjmp, the guard-page SIGSEGV (which resumes by
+    rewriting the ucontext, so it does not grep like the others), the recovery
+    anchor, REPL re-entry, thread start. The rule to hold: anything reaching
+    `repl_loop` with a reset return stack resets `lp` too. Plus a NINTH,
+    compile-time: the list of local names is per-definition state like STATE,
+    so an abandoned definition must clear it or the next one inherits stale
+    names. `does>` must reject local references (the frame is dead by then).
   - Separate locals stack (not return stack) to avoid conflicts with >R/R>
-  - `{` syntax: `{ a b c -- result }` declares locals, pops from data stack
+  - **Syntax decided 2026-08-10: Forth 2012 `{: a b c :}`**, not `{ … }`
+  - **Core, not a library** — five of the eight reset paths are in assembly,
+    so a require'd .fs could never hold the unwind contract
+  - Locals shadow the dictionary; warn when the name is an existing WORD,
+    since `{: i :}` silently steals the DO loop index
   - Each local name compiles to a locals-stack-relative fetch
   - TO works with locals (compile a locals-stack-relative store)
   - Reentrant and thread-safe (each thread gets its own locals stack)
