@@ -25,6 +25,14 @@
   word is already a no-op.
 - `speech-open` reports ior 7 when no channel is available, rather than
   claiming `-1` and appearing to succeed with nowhere to play.
+- `speech-open` **stops** the channel it takes over. When every channel is
+  busy, `next-ch` returns the least recently used one *without clearing it* —
+  queueing is all that queueing does — so speech could be handed a channel with
+  an effect still on it and the first phrase would play behind that effect.
+  Measured before the fix: 237976 bytes inherited. That is the guarantee
+  `speech-ch` exists for, broken at the moment speech opens. `help next-ch` now
+  states that a stolen channel is not cleared, which was true before and
+  undocumented.
 - `snd-close` releases every claim, since closing destroys the channels
   themselves — so there is no way to leak one across a device cycle.
 - The reference page and `sound.fs`'s own header both stated "there is no

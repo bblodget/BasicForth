@@ -86,6 +86,12 @@ never queues up behind a sound effect.
 
 It is never channel 0 — that belongs to `tone`.
 
+`speech-open` **stops** whatever is on the channel it takes. When every channel
+is busy, `next-ch` hands back the least recently used one without clearing it,
+so the channel can arrive with a sound effect still queued — and the first
+phrase would play behind it, which is the thing this channel exists to prevent.
+Taking the channel means taking it over.
+
 A `snd-close` destroys it, so `speech-open` takes a fresh one after the device
 comes back. That re-take is not cosmetic: reopening starts handing the same
 channel numbers out again, so a kept number would collide with whatever
