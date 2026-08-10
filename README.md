@@ -124,7 +124,9 @@ What works today:
   in memory, and `WAV-PLAY` puts it on a channel (`wavcore.fs`, `wav.fs`)
 - Speech: `VOICE-RENDER` speaks text into a WAV file through whatever
   text-to-speech engine the machine has (`voice.fs`) — the engine is a
-  settable command template, so nothing here is tied to one
+  settable command template, so nothing here is tied to one — and `SAY`
+  speaks arbitrary text on the spot through flite, synthesized into memory
+  with no file at all (`speech.fs`)
 - Threads: `THREAD` runs a Forth word on an OS thread, `JOIN` waits for it,
   `THREADS` lists them — `BASE`, `sp0` and the exception handler are
   thread-local, and worker stacks are fenced with guard pages

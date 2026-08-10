@@ -108,6 +108,7 @@ create (ch-streams) snd-max-channels cells allot   \ SDL_AudioStream* per channe
 create (ch-ages)    snd-max-channels cells allot   \ tick when last handed out
 create (ch-vols)    snd-max-channels cells allot   \ 0..snd-unity
 create (ch-fade-t0) snd-max-channels cells allot   \ fade start, ms@
+create (ch-owned)   snd-max-channels cells allot   \ claimed by a subsystem
 create (ch-fade-ms) snd-max-channels cells allot   \ fade length; 0 = not fading
 variable (ch-tick)                                 \ monotonic hand-out counter
 variable (ch-next)                                 \ round-robin hand-out cursor
@@ -160,6 +161,7 @@ variable (snd-why-len)
         snd-unity i cells (ch-vols)    + !
         0         i cells (ch-fade-ms)  + !
         0         i cells (ch-fade-t0)  + !
+        0         i cells (ch-owned)    + !
     loop  0 (ch-tick) !  0 (ch-next) ! ;
 (ch-reset)
 
@@ -339,10 +341,12 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
     0 ;
 
 \ --- handing out a channel ---
-\ NOTE: nothing is allocated here, in the `allocate` sense -- next-ch reserves
-\ one of the fixed channels, and there is no matching release: a channel comes
-\ back into rotation on its own. (It was called snd-alloc until 2026-08-07,
-\ which promised both a heap and a free that never existed.)
+\ NOTE: nothing is allocated here, in the `allocate` sense -- next-ch hands out
+\ one of the fixed channels, and it needs no release: a channel comes back into
+\ rotation on its own once it falls silent. (It was called snd-alloc until
+\ 2026-08-07, which promised both a heap and a free that never existed.)
+\ ch-claim is the exception, and deliberately a separate word: a subsystem that
+\ must KEEP a channel says so, and says when it is done.
 \
 \ A free channel if there is one, otherwise the least recently handed out.
 \ Never returns tone-ch, so sound effects cannot cut a game's tones short.
@@ -354,17 +358,49 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 : (ch-cycle) ( -- ch )                 \ next channel in 1..snd-channels-1
     (ch-next) @ 1+  dup snd-channels >= if drop 1 then  dup (ch-next) ! ;
 
+\ A CLAIMED channel belongs to a subsystem for as long as it wants it, and
+\ next-ch never hands it out. Without this, "keep a channel" is not something a
+\ caller can actually do: next-ch skips a channel only while audio is QUEUED on
+\ it, so a channel held for later comes back into rotation the moment it falls
+\ silent -- and speech.fs, holding one so phrases never queue behind a sound
+\ effect, saw its channel reissued 3 times in 200 next-ch calls.
+\ snd-close releases every claim, because (ch-reset) clears the table.
+: (ch-owned?) ( ch -- flag )
+    dup (ch-ok?) if cells (ch-owned) + @ 0<> else drop false then ;
+: ch-claim ( ch -- )
+    dup (ch-ok?) if 1 swap cells (ch-owned) + ! else drop then ;
+: ch-release ( ch -- )
+    dup (ch-ok?) if 0 swap cells (ch-owned) + ! else drop then ;
+
+: (ch-spare?) ( ch -- flag )           \ neither claimed nor playing
+    dup (ch-owned?) if drop false exit then  ch-playing? 0= ;
+
 : next-ch ( -- ch )
     (snd-stream) 0= if tone-ch exit then
     snd-channels 1- 0 ?do
         (ch-cycle)
-        dup ch-playing? 0= if  dup (ch-touch) unloop exit  then
+        dup (ch-spare?) if  dup (ch-touch) unloop exit  then
         drop
     loop
-    1                                     ( oldest-so-far )
-    snd-channels 2 ?do
-        i cells (ch-ages) + @  over cells (ch-ages) + @  < if drop i then
+    \ All busy: steal the least recently handed out that nobody has CLAIMED.
+    \ Stealing a claimed one would drop an effect on top of a phrase, which is
+    \ the thing claiming it prevents.
+    -1                                    ( oldest-so-far, -1 = none yet )
+    snd-channels 1 ?do
+        i (ch-owned?) 0= if
+            dup 0< if  drop i  else
+                i cells (ch-ages) + @  over cells (ch-ages) + @  < if drop i then
+            then
+        then
     loop
+    \ Every channel claimed: there is genuinely nothing to hand out. Answer -1,
+    \ which is NOT a channel -- every channel word ignores it, so the sound is
+    \ dropped. Falling back to tone-ch would be worse than useless: channel 0 is
+    \ reserved exactly so effects cannot cut a game's tones short, and handing
+    \ it out here would do that on the one path where the caller has no idea
+    \ anything is wrong. (With no device open next-ch still answers tone-ch --
+    \ harmless there, because every channel word is already a no-op.)
+    dup 0< if drop -1 exit then
     dup (ch-touch) ;
 
 : ch-stop ( ch -- )

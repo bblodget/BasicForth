@@ -1430,6 +1430,36 @@ else
         printf "  ${RED}FAIL${NC}  next-ch round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
     fi
 
+    # A claimed channel is never handed out. next-ch skips a channel only while
+    # audio is QUEUED on it, so before ch-claim a channel held for later came
+    # back into rotation the moment it fell silent -- measured at 3 reissues in
+    # 200 calls, which is how speech ended up sharing a queue with sound
+    # effects. 500 calls over 64 channels is ~8 laps, so a channel that is not
+    # respected will certainly come up.
+    # The release half matters as much: without it the claim could be doing
+    # nothing and this would still pass.
+    ch_claim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value MINE\n: probe 0 500 0 do next-ch MINE = if 1+ then loop ;\n: t snd-open drop next-ch to MINE MINE ch-claim probe . MINE ch-release probe 0> . .\" claim-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_claim" | grep -q -- '0 -1 claim-ok'; then
+        printf "  ${GREEN}PASS${NC}  a claimed channel is never handed out, until released\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ch-claim / ch-release\n    Got: %q\n" "$ch_claim"; ((failed++))
+    fi
+
+    # Claiming everything leaves next-ch nothing to give, and it must NOT fall
+    # back to tone-ch: channel 0 is reserved so effects cannot cut a game's
+    # tones short, and handing it out here would do exactly that on the one
+    # path where the caller cannot tell anything is wrong. -1 is not a channel,
+    # so every channel word ignores it and the sound is dropped instead.
+    # Asserted together with tone still owning channel 0 afterwards.
+    ch_allclaim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 1 ?do i ch-claim loop ;\n: t snd-open drop claim-all next-ch . 440 200 tone tone-ch ch-queued 0> . 5 ch-release next-ch . .\" allclaim-ok\" snd-wait snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_allclaim" | grep -q -- '-1 -1 5 allclaim-ok'; then
+        printf "  ${GREEN}PASS${NC}  every channel claimed yields no channel, sparing tone-ch\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  next-ch with every channel claimed\n    Got: %q\n" "$ch_allclaim"; ((failed++))
+    fi
+
     # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
     ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open drop snd-channels . snd-close 999 to snd-channels snd-open drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
@@ -1690,6 +1720,118 @@ else
         printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  channel words with no device\n    Got: %q\n" "$ch_closed"; ((failed++))
+    fi
+fi
+
+# =========================================================================
+section "Speech (speech.fs)"
+# =========================================================================
+# speech.fs synthesizes through flite into memory and queues the samples on a
+# channel, so it needs libSDL3 (via sound.fs) AND libflite. Same skip rules as
+# the SDL sections; under qemu neither library is in the sysroot.
+sp_run() {   # sp_run <forth lines> -> output
+    printf 'include %s/ffi.fs\ninclude %s/sound.fs\ninclude %s/speech.fs\n%s\nbye\n' \
+        "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" "$1" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 20 $FORTH 2>&1
+}
+sp_check() { # sp_check <name> <output> <grep pattern>
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (no aarch64 libSDL3/libflite in the qemu sysroot)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (libSDL3 not installed)\n"
+elif ! ldconfig -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (libflite not installed)\n"
+else
+    sp_check "speech-open succeeds, and is idempotent" \
+        "$(sp_run ': t snd-open drop speech-open . speech-open . ." sp-ok" ; t')" '0 0 sp-ok'
+
+    # say must actually produce audio, not merely return. The observable is
+    # bytes queued on speech's own channel -- and that the channel is NOT
+    # channel 0, which belongs to tone.
+    sp_check "say queues audio on its own channel" \
+        "$(sp_run ': t snd-open drop speech-open drop s" Dark Star ready" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
+        '-1 -1 -1 said'
+
+    # The bug this caught during development: `dup >r` left the cst_wave on the
+    # data stack as well as the return stack, so every say leaked a cell.
+    # Junk underneath, so a consumed-too-much defect shows up as well.
+    sp_check "say leaves the stack exactly as it found it" \
+        "$(sp_run ': t snd-open drop speech-open drop 99 88 77 s" hello" say depth . . . . ." depth-ok" speech-ch ch-wait ; t')" \
+        '3 77 88 99 depth-ok'
+
+    # >z copies into one shared 256-byte buffer and aborts past it. say checks
+    # first, so an over-long phrase reports about the phrase and consumes its
+    # arguments. Built in a buffer because the REPL's input line cannot carry
+    # a 250-character literal -- it truncates somewhere past 200.
+    sp_check "an over-long phrase is refused, not aborted" \
+        "$(sp_run 'create sbuf 300 allot : fill-n 0 do 65 sbuf i + c! loop ; 300 fill-n
+: t snd-open drop speech-open drop 99 sbuf 250 say speech-why type ." |" depth . . ." long-ok" ; t')" \
+        'phrase too long to say|1 99 long-ok'
+
+    sp_check "a phrase just inside the limit still speaks" \
+        "$(sp_run 'create sbuf 300 allot : fill-n 0 do 65 sbuf i + c! loop ; 300 fill-n
+: t snd-open drop speech-open drop sbuf 200 say speech-ch ch-queued 0> . ." fit-ok" speech-ch ch-wait ; t')" \
+        '-1 fit-ok'
+
+    # Speaking with nothing open is a silent no-op, the contract tone already
+    # has, so a machine without speech runs rather than aborting.
+    sp_check "say with no speech open is a silent no-op" \
+        "$(sp_run ': t 99 s" hello" say depth . . ." closed-ok" ; t')" '1 99 closed-ok'
+
+    # snd-close destroys every stream, and a later snd-open builds new ones and
+    # starts handing the same channel NUMBERS out again. Holding speech-ch
+    # across that reported success with no device, and left speech sharing a
+    # channel with whatever next-ch gave the next caller -- destroying the one
+    # property speech-ch exists for. Whole cycle in one test: ready? goes
+    # false, open reports the missing device, say stays a silent no-op, and
+    # after reopening speech takes a channel that next-ch then does NOT reissue.
+    sp_check "speech survives snd-close and a reopen without going stale" \
+        "$(sp_run ': t snd-open drop speech-open drop snd-close
+speech-ready? . speech-open . 99 s" x" say depth . .
+snd-open drop speech-open . next-ch speech-ch = .
+s" two" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
+        '0 6 1 99 0 0 -1 cycle-ok'
+
+    # Speech's whole reason for holding a channel is that a phrase must never
+    # queue behind a sound effect. That only holds if next-ch stops handing the
+    # channel out -- it was reissued 3 times in 200 calls before ch-claim.
+    sp_check "speech's channel is not reissued to anyone else" \
+        "$(sp_run ': probe 0 500 0 do next-ch speech-ch = if 1+ then loop ;
+: t snd-open drop speech-open drop probe . ." claim-ok" ; t')" \
+        '0 claim-ok'
+
+    # next-ch answers -1 when every channel is claimed. Claiming that would
+    # report success while speech had nowhere to play.
+    sp_check "speech reports having no channel rather than taking -1" \
+        "$(sp_run ': claim-all snd-channels 1 ?do i ch-claim loop ;
+: t snd-open drop claim-all speech-open . speech-why type ." |" 99 s" x" say depth . . ." exh-ok" ; t')" \
+        'no free channel to speak on|1 99 exh-ok'
+
+    sp_check "speech-open without an audio device reports it" \
+        "$(sp_run ': t speech-open . speech-why type ." |" ." nodev-ok" ; t')" \
+        'no audio device (snd-open first)|nodev-ok'
+
+    sp_check "an unknown voice library is reported, not fatal" \
+        "$(sp_run ': t snd-open drop s" libflite_nope.so.1" s" register_nope" speech-voice! speech-open . speech-why type ." |" ." voice-ok" ; t')" \
+        'no such voice library|voice-ok'
+
+    # The missing-libflite path cannot be reached natively on a machine that
+    # has libflite, so mask the library. Without this the ior-1 branch and the
+    # promise that `require speech.fs` never aborts are both untested.
+    if command -v bwrap >/dev/null 2>&1; then
+        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null /lib/x86_64-linux-gnu/libflite.so.1 \
+            sh -c "$(declare -f sp_run); FORTH_LIB='$FORTH_LIB'; FORTH='$FORTH'; sp_run ': t snd-open drop speech-open . speech-why type .\" |\" 99 s\" hi\" say depth . . .\" noflite-ok\" ; t'" 2>&1)
+        sp_check "no libflite: an ior and a reason, and say stays a no-op" \
+            "$sp_noflite" 'no libflite.so.1 on this machine|1 99 noflite-ok'
+    else
+        printf "  ${YELLOW}SKIP${NC}  no-libflite path (needs bwrap to mask the library)\n"
     fi
 fi
 
@@ -5080,8 +5222,12 @@ fi
 if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  every audio library word has a reference entry (needs libSDL3)\n"
 else
-    lib_words=$(printf 'require wav.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
-        | sed -n '3p' | sed 's/ ok *$//')
+    # speech.fs too, and for the same reason the wav tree was added: a library
+    # this audit does not `require` is invisible to it, so its public names
+    # could ship undocumented. It loads without libflite -- the binding is
+    # lazy -- so only libSDL3 gates this.
+    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
+        | sed -n '4p' | sed 's/ ok *$//')
     lib_core=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
         | sed -n '2p' | sed 's/ ok *$//')
     lib_missing=""

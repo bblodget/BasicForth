@@ -18,7 +18,9 @@ At a glance:
     snd-channels     ( -- n )          how many channels (64; rarely changed)
     snd-max-channels ( -- n )          hard ceiling, 64
     tone-ch          ( -- 0 )          the channel `tone` uses
-    next-ch        ( -- ch )         a free channel, else steal the oldest
+    next-ch          ( -- ch )         a free channel, else steal the oldest
+    ch-claim         ( ch -- )         keep this channel; next-ch skips it
+    ch-release       ( ch -- )         give it back to the rotation
     tone-on          ( freq ms ch -- ) a tone on a chosen channel
     ch-put           ( c-addr u ch -- ) queue raw 16-bit mono samples
     ch-playing?      ( ch -- flag )    is anything queued?
@@ -73,15 +75,51 @@ every channel is busy it **steals the one handed out longest ago**, so a
 program firing more sounds than it has channels loses its stalest sound rather
 than its newest.
 
-Nothing is allocated, in the `allocate` sense, and there is nothing to release:
+Nothing is allocated, in the `allocate` sense, and nothing has to be released:
 the channels are a fixed set, and one returns to rotation by itself. It is
 named like `tone-ch` because it answers the same kind of question — that is
 the channel `tone` uses, this is the next channel to use.
 
-Returns `tone-ch` when no device is open. A channel only counts as busy once
-audio is queued on it, so queue promptly:
+Returns `tone-ch` when no device is open — harmless, since every channel word
+is a no-op then — and `-1` when every channel has been claimed, which is not a
+channel at all. With a device open it never returns `tone-ch`.
+
+A channel only counts as busy once audio is queued on it, so queue promptly:
 
     : blip ( -- )  660 40 next-ch tone-on ;
+
+That last point is why **keeping** a channel needs `ch-claim`: a channel held
+for later goes back into rotation as soon as it falls silent, so `next-ch`
+would hand it to someone else between two of your sounds.
+
+## ch-claim ( ch -- )
+Keep a channel. `next-ch` will not hand it out again — not while it is silent,
+and not when every other channel is busy and it would otherwise be stolen.
+
+Use it when a subsystem needs a channel of its own for as long as it runs, so
+that its sounds queue behind *each other* and nothing else lands among them.
+`speech.fs` does exactly this: a spoken phrase must never wait behind a sound
+effect, which is only true if the channel stays its own.
+
+    next-ch dup ch-claim value music-ch
+
+Without it the channel is reissued surprisingly quickly — measured, one held
+channel came back from `next-ch` 3 times in 200 calls.
+
+Claiming every channel leaves `next-ch` nothing to give, and it answers `-1`.
+That is **not** a channel — every channel word ignores it, so the sound is
+dropped. It does not fall back to `tone-ch`: channel 0 is reserved so that
+effects cannot cut a game's tones short, and handing it out here would do
+precisely that, on the one path where the caller has no way to tell.
+
+Ignored for a channel that doesn't exist. `snd-close` releases every claim,
+since closing destroys the channels themselves.
+
+## ch-release ( ch -- )
+Give a claimed channel back to the rotation. The counterpart to `ch-claim`,
+and only meaningful after one — an unclaimed channel is already in rotation.
+
+    music-ch ch-release
 
 ## tone-on ( freq ms ch -- )
 Like `tone`, but on a channel you choose. `tone` is exactly

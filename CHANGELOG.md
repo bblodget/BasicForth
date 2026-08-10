@@ -1,5 +1,85 @@
 # Changelog
 
+## Unreleased
+
+### Added: `ch-claim` / `ch-release` — keeping a channel
+
+- `next-ch` skips a channel only while audio is **queued** on it, so a channel
+  held for later came back into rotation the moment it fell silent. "Keep a
+  channel" was therefore not something a caller could actually do, and nothing
+  said so: measured, one held channel was handed back out **3 times in 200
+  `next-ch` calls**. `speech.fs` held one precisely so a phrase would never
+  queue behind a sound effect, and that guarantee was quietly false.
+- `ch-claim ( ch -- )` takes a channel out of the rotation until
+  `ch-release ( ch -- )` puts it back. `next-ch` skips claimed channels in both
+  passes — the round-robin scan and the steal-the-oldest fallback — because
+  stealing one would drop an effect on top of a phrase, which is the thing
+  claiming it prevents.
+- Claiming every channel leaves nothing to hand out, and `next-ch` answers `-1`
+  — not a channel, so every channel word ignores it and the sound is dropped.
+  It deliberately does **not** fall back to `tone-ch`: channel 0 is reserved so
+  effects cannot cut a game's tones short, and handing it out on exhaustion
+  would break that on the one path where the caller cannot tell. (Reviewed
+  twice — the first version did fall back to `tone-ch`.) With no device open
+  `next-ch` still answers `tone-ch`, which is harmless because every channel
+  word is already a no-op.
+- `speech-open` reports ior 7 when no channel is available, rather than
+  claiming `-1` and appearing to succeed with nowhere to play.
+- `snd-close` releases every claim, since closing destroys the channels
+  themselves — so there is no way to leak one across a device cycle.
+- The reference page and `sound.fs`'s own header both stated "there is no
+  matching release", which this makes false. Both corrected.
+
+### Added: `speech.fs` — `say`, speaking text with no file anywhere
+
+- `say ( c-addr u -- )` synthesizes through flite into memory and queues the
+  samples on a channel. Nothing is rendered, nothing is loaded, nothing touches
+  disk — the complement to `voice.fs`, which records a phrase properly and is
+  what a game should use.
+- **`say` blocks while it synthesizes, and that is the whole reason both exist.**
+  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for "Dark Star, ready.",
+  38 ms for a full sentence. A frame at 60 Hz is 16.7 ms. Instant at a prompt,
+  frame-dropping in a loop. The docs say that with the numbers rather than as a
+  vague caution.
+- Speech takes **its own channel** at open time and keeps it. A channel is a
+  sequential queue, so one decision buys two properties: successive `say`s wait
+  for each other instead of talking over themselves, and a phrase never queues
+  up behind a sound effect.
+- Binding is lazy, so `require speech.fs` never touches flite and a machine
+  without it gets an `ior` from `speech-open` rather than an abort mid-load —
+  the shape `snd-open` already uses for a machine without audio.
+- The voice is a library/symbol pair (`speech-voice!`) rather than a short name.
+  Deriving `register_cmu_us_slt` from `slt` would have broken for the `indic`
+  and `grapheme` voices, which are exactly the ones someone goes looking for.
+  The soname matters too: a runtime install has `libflite.so.1` and no
+  `libflite.so`, because the bare name ships in the `-dev` package.
+- `say` refuses a phrase over `say-max` (240) with a reason. The FFI's
+  NUL-terminating buffer is 256 bytes and aborts past it; checking first means
+  the complaint names the phrase rather than a buffer the caller never
+  mentioned.
+- `speech-ready?` compares the channel's **stream pointer**, not just the
+  channel number, and `speech-open` checks for a device before checking
+  idempotence. Both from a review finding: holding `speech-ch` across a
+  `snd-close` made `speech-open` return 0 with no device at all, left
+  `speech-ready?` true so `say` burned 38 ms synthesizing into nothing, and —
+  after a later `snd-open` rebuilt the streams — left speech on a channel that
+  `next-ch` then handed to the next caller as well, so a sound effect and
+  speech shared one queue. That is precisely the property `speech-ch` exists to
+  guarantee, broken silently. A channel number cannot tell a closed device from
+  a reopened one; the stream pointer distinguishes both.
+- Found while testing: `say` leaked a cell. `dup >r` put the `cst_wave` on both
+  stacks and only the return-stack copy was consumed, so every call grew the
+  stack by one. Caught because a timing harness printed a nonsense number, then
+  pinned by running `say` with junk underneath and checking `depth` — the test
+  that now guards it.
+- The missing-libflite path cannot be reached on a machine that has flite, so
+  its test masks the library with `bwrap`. Without that, both the `ior` branch
+  and the promise that `require` never aborts would have shipped unexercised.
+- The audio-word reference audit now `require`s `speech.fs` as well as `wav.fs`
+  — a library it does not require is invisible to it, the same gap that let
+  `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
+  immediately.
+
 ## v0.15.1 — 2026-08-10
 
 A patch release: two crash/data-loss fixes, no new features and no changed
@@ -41,6 +121,7 @@ wording anywhere else.
 - `docs/Locals.md` — a design note for the planned locals word set: what a
   runtime frame costs (measured), the paths that must release it, and the
   decisions taken. No code; the feature is not built.
+
 
 ## v0.15.0 — 2026-08-09
 
