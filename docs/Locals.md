@@ -1,0 +1,231 @@
+# Locals — Design Note
+
+Status: **researched, not built.** Phase 8 (`docs/TODO.md`, "Threading and
+Locals"). This note records what the runtime-frame design costs, where it can
+go wrong, and what still has to be decided.
+
+## Recommendation
+
+Build it, with a **separate locals stack and a runtime frame**, as the TODO
+already sketches. The measurements below say the frame is affordable, and the
+risk is smaller than it first appears — but only if one implementation
+constraint is respected (see "The one thing that decides this").
+
+## Why locals earn their place here
+
+Three-plus arguments is where Forth's stack notation stops paying, and games
+code is full of `x y w h color`. The evidence is in this repository, not in
+theory:
+
+- `pad.fs`'s `pad-open` carries `( n handle )` annotations on nearly every
+  line, purely to survive review.
+- Its `(merge)` needs `>r … r>` around a stack comment (`( neg? pos?   R:
+  stick )`) to stay readable. Writing that comment wrong — putting `R: stick`
+  outside the parens — cost a debugging round, and the code was correct.
+- `(pad-why!)` juggles a C pointer against a loop index across five lines.
+
+None of those words is badly factored. They have three arguments.
+
+It also serves the project's stated aim directly: BASIC-inspired, approachable,
+"boot up and start coding". Stack juggling is the first wall a newcomer from
+BASIC or C hits.
+
+## Design
+
+Per the existing sketch, unchanged:
+
+    : blit ( src x y w h -- )  {: s x y w h :}
+        ... s x y w h referenced by name ...
+
+**Syntax is Forth 2012 section 13's `{: … :}`**, not the `{ … }` the TODO
+originally sketched. Decided 2026-08-10: matching the standard costs two
+characters and leaves `{` free for something else later.
+
+- **A separate locals stack**, not the return stack. This is the decision that
+  removes most of the danger: no interaction with `>r`/`r>`, and none with
+  `do`/`loop` control parameters, which live on the return stack.
+- **Per-thread**, via the existing `.tdata` TLS block in `core.s` — the same
+  place `sp0`, `handler` and `base` already live. Workers get their own copy
+  for free from the `.tdata` image, exactly as `is_repl` does.
+- **`lp` in TLS, not in a register.** Both arches document a freed register
+  (`R14` / `X20`, formerly TOS), but both are in active scratch use — 36 and 16
+  references respectively. Reclaiming one is a separate change and not worth
+  coupling to this.
+- **Pay only if you use it.** Frame setup and teardown are emitted only in
+  definitions that declare locals. A word with no locals compiles exactly as it
+  does today. The single unconditional cost is one extra cell saved and
+  restored by `catch`, which is noise.
+
+## What it costs — measured, x86-64, 30M iterations
+
+Each stack operation is a `call` in STC, so this measures dispatch, which is
+what dominates. Baseline `empty` loop subtracted; all four variants verified
+stack-neutral before timing.
+
+| variant   | time  | per call |
+|-----------|-------|----------|
+| `empty`   | 0.02s | —        |
+| `lits`    | 0.22s | ~1.1 ns  |
+| `juggle`  | 0.33s | ~1.0 ns  |
+| `viavars` | 0.71s | ~4–5 ns  |
+
+- **A primitive call costs about 1 ns.** So the `rot over swap` a three-argument
+  word does today costs roughly 3 ns each time through.
+- **A `variable`-style access costs 4–5 ns** — four times a primitive. That is
+  the `create`/`does>` call, not the fetch.
+
+Not measured on ARM64: the only ARM64 target here is QEMU, where timings mean
+nothing. Worth repeating on the Pumpkin board before committing to the design.
+
+## The one thing that decides this
+
+**A local reference must be open-coded, or at worst compile to a single
+primitive-class call. It must not be implemented as a `create`/`does>` word.**
+
+The table above is the whole argument. Locals replace ~3 ns of juggling. If a
+local reference is open-coded — load at `lp`-relative offset, push — it costs
+well under a nanosecond and no dispatch, and locals are a clear win. If it
+compiles to one primitive call it is roughly a wash, which is still fine
+because the readability is the point. If it is built like `variable`, each
+reference costs 4–5 ns and **locals make three-argument words slower than the
+juggling they replaced.**
+
+That is the failure mode to design against, and it is invisible to a
+correctness test.
+
+## The unwind contract
+
+The frame must be released on every path that leaves a definition. With a
+separate stack this is *not* automatic — the return stack unwinds itself, the
+locals stack does not.
+
+**The rule, which matters more than the list below:** *every path that reaches
+`repl_loop` with a reset return stack must also reset `lp` to `lp0`.* State it
+that way and a reset path added later is covered by construction. Enumerating
+sites alone is how this gets missed — the first draft of this note listed four
+and there are eight.
+
+**Normal return.** `forth_semicolon` and `forth_exit` emit an `lp` restore
+before the `RET`, in definitions that declared locals. `compile_ret` has seven
+callers, but the other five (`forth_value`, `forth_defer`, `forth_create`,
+`forth_constant`, `forth_does`) emit `RET` for compiler-generated stubs that
+cannot contain locals.
+
+**Cooperative unwind.** `forth_catch` carries one more cell in its frame
+alongside the saved DSP; `forth_throw`'s *caught* path restores `lp` from it.
+
+**Reset-to-REPL paths — all eight, in `src/arch/x86/` and the ARM64 mirror:**
+
+| site | file | what it is |
+|---|---|---|
+| `.Lthrow_reset` | `core.s` ~4885 | an **uncaught** throw — resets both stacks |
+| `forth_quit` | `core.s` ~4919 | `QUIT`, which resets the return stack by definition |
+| `dict_full` | `main.s` ~503 | dictionary exhausted |
+| `.Lcf_longjmp` | `core.s` ~3123 | the interpret-line error unwind |
+| `.Lsig_recover` | `platform_linux.s` ~534 | guard-page SIGSEGV — stack under/overflow |
+| recovery anchor | `core.s` ~2288, ~2469 | `colon_dsp`/`saved_latest`/`saved_here` restore |
+| REPL re-entry | `main.s` ~507 | fault or ABORT during a startup script |
+| thread start | `core.s` ~4732 | each worker gets its own locals stack |
+
+`ABORT` needs no entry of its own: it is `-1 throw`, so it funnels through
+either a catch frame or `.Lthrow_reset`.
+
+Two of these deserve singling out. **`.Lcf_longjmp`** restores `%rsp` wholesale
+from `il_rsp`, abandoning the return stack without touching anything else — it
+already unlinks the `handler` chain by hand, so this is the same shape of fix
+in the same place. **`.Lsig_recover`** is the awkward one: it resumes at
+`repl_loop` by rewriting RIP/RSP/R15/R12/R13 in the signal `ucontext` rather
+than by executing a reset, which is exactly why grepping for the usual
+`rp0(%rip), %rsp` idiom does not find it. Because `lp` lives in TLS rather than
+a register, the handler can store to it directly — no `ucontext` edit needed —
+but it has to be remembered.
+
+This is where the work will actually go wrong. These are abort paths, and abort
+paths here have a history: the partial-header bug needed fixing at five
+separate ones, and the recovery anchor is global rather than per-definition. A
+leaked frame is silent — nothing fails until the locals stack overflows, much
+later, in unrelated code.
+
+**Test obligation:** assert `lp` is back at `lp0` after *each* of the eight
+paths, not a sample of them — a caught `throw`, an uncaught `throw`, `QUIT`, an
+aborted colon definition, a stack underflow (guard page), a stack overflow, a
+`dict_full`, and a worker thread exiting. Not "does it work" but "did the frame
+go back", which is a different assertion and the only one that fails when a
+reset path is missed.
+
+## Scoping: locals shadow, and that is sharper here than elsewhere
+
+A local takes precedence over anything of the same name in the dictionary, for
+the rest of the definition, reverting at `;`. That is what every other language
+does and what the standard requires.
+
+The difference is that Forth lets you shadow **verbs**, not just data:
+
+    : sum {: i :}  10 0 do i + loop ;   \ `i` is the local, NOT the loop index
+
+`i` and `j` are primitives here, and `i` is about the most natural name a local
+could have. `{: dup :}` would be worse. In C, shadowing costs you a variable;
+here it can cost you the loop index or an operator, silently.
+
+So: **shadow, but have the compiler print a note when a local's name already
+exists in the dictionary.** It stays quiet for `x y w h s n` and speaks up
+exactly when a verb is about to disappear. `to` follows the same resolution
+order — `to x` stores to the local when one is in scope, to the `value`
+otherwise.
+
+## Core, not a library
+
+This cannot be a `require`d `.fs` file, for a concrete reason rather than a
+stylistic one: **five of the eight reset paths are in assembly** —
+`.Lsig_recover` in `platform_linux.s`, `.Lcf_longjmp` and `forth_quit` in
+`core.s`, `dict_full` in `main.s`. A library cannot reach them, so it could
+never make the unwind contract hold. Name resolution also has to consult the
+locals list *before* the dictionary while compiling, which is the outer
+interpreter itself.
+
+The split follows the house pattern: frame primitives and the `lp` resets in
+`core.s`, the `{:` parsing word in `core.fs`.
+
+Being in core costs nothing when unused. Frame code is emitted only in
+definitions that declare locals; the resolution check is gated on a non-empty
+locals list; the `lp` resets sit on error paths, not hot ones.
+
+## Open questions
+
+None blocking. The three that were here are resolved above or below:
+assignable (yes), `does>` (reject), `see` (already free — it replays captured
+source text rather than decompiling, so `{: s x y w h :}` prints verbatim).
+
+## Two edges that need deciding at compile time
+
+**`does>` must reject local references.** The body after `does>` runs when the
+*created* word is executed — long after the defining word returned and its
+frame was popped:
+
+    : mk {: v :}  create v ,  does> @ v + ;   \ `v` here reads a dead frame
+
+The name is lexically inside the same definition, but the frame is not live.
+This has to be a compile-time error, not a wild read.
+
+**`:noname` should take locals** like any other definition. Worth doing
+alongside the open `:noname` bug in `docs/TODO.md`, because they share a root:
+a definition abandoned part-way leaves `STATE` compiling, and locals add a
+*second* piece of per-definition compile-time state — the list of local names.
+
+That list is a ninth thing the abort paths must reset, and it is not the
+runtime `lp`. It belongs wherever `drop_partial_header` is called and `state`
+is zeroed (`.Lthrow_reset`, `forth_quit`, `.Lcf_longjmp`). Miss it and the
+*next* definition inherits stale local names — which would compile, and be
+wrong.
+
+## Deliberately deferred
+
+**Compile-time offset tracking**, where locals resolve to fixed data-stack
+offsets and cost nothing at runtime. It needs the compiler to know the exact
+data-stack depth at every point in a definition, which this compiler does not
+track, and it constrains the feature (assignment and control-flow merges both
+get awkward). It is a later optimisation, alongside the peephole inliner
+already in the TODO.
+
+The syntax is identical either way, so this can be swapped in later with no
+user-visible change. That is what makes deferring it safe.
