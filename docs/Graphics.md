@@ -8,9 +8,13 @@ texture that reaches the screen.
 
 The display backend is **SDL3** (`sdl3.fs` over the FFI): a desktop window on
 the laptop, or the display directly (SDL's KMSDRM driver) on a console-only
-system like the Pumpkin board. Frames present vsync'd. See the **Graphics
+system like the Pumpkin board. Frames are paced by a timer (`sdl-fps`), not
+by vsync — see "Frame pacing" below. See the **Graphics
 Direction** design decision in [Planning.md](Planning.md) for how this fits
-the project philosophy and the path to GPU/3D via SDL_GPU.
+the project philosophy and the path to GPU/3D via SDL_GPU. SDL3 is loaded on
+demand and is not needed to build BasicForth — [Install.md](Install.md) has
+the install, including building it from source on distributions that do not
+package it yet.
 
 > History: the first display backend (v0.8.0) talked to DRM/KMS directly via
 > `ioctl` — no libraries at all. It worked (validated on real hardware), but a
@@ -80,14 +84,15 @@ effectively instant.
 
 | Word | Stack | Meaning |
 |------|-------|---------|
-| `sdl-open` | ( w h -- ) | window + renderer (vsync) + streaming texture |
+| `sdl-open` | ( w h -- ) | window + renderer + streaming texture |
 | `sdl-frame` | ( -- ) | lock the texture, point the surface at its pixels |
-| `sdl-show` | ( -- ) | unlock + present; blocks until the display refresh |
+| `sdl-show` | ( -- ) | unlock + present; sleeps to hold `sdl-fps` |
 | `sdl-close` | ( -- ) | tear everything down |
 | `sdl-poll` | ( -- flag ) | poll one event into the event buffer |
 | `sdl-event-type` | ( -- u ) | type of the polled event |
 | `sdl-key` | ( -- keycode ) | keycode of a polled key event |
 | `sdl-scale` | ( -- n ) | pixel size (a `value`; set with `to` before `sdl-open`) |
+| `sdl-fps` | ( -- n ) | frame rate `sdl-show` holds (a `value`, default 60; 0 = no pacing) |
 
 **Pixel size** (`sdl-scale`, default 1): with `4 to sdl-scale`, `320 180
 sdl-open` opens a 1280×720 window whose drawing surface is 320×180 — every
@@ -103,8 +108,8 @@ Keycodes: `key-esc key-space key-q key-left key-right key-up key-down`.
 A frame goes: `sdl-frame` → draw with graphics.fs words → `sdl-show`. The
 texture is streaming/**write-only**: after `sdl-show` its contents are gone,
 so draw each frame from scratch (`clear` + draw — both are fast). `sdl-show`
-returns after the display refresh (vsync), so the frame loop needs no timer.
-The event loop is a poll:
+sleeps out the rest of the frame's budget, so the loop needs no timer of its
+own. The event loop is a poll:
 
 ```
 begin sdl-poll while
@@ -115,6 +120,22 @@ begin sdl-poll while
 repeat
 ```
 
+## Frame pacing
+
+`sdl-show` holds the frame rate with a millisecond timer: it measures how long
+the frame took and sleeps out the remainder of `1000 / sdl-fps` ms. A frame
+that overran its budget simply doesn't sleep — there is no catch-up. `sdl-fps`
+is a `value`, 60 by default; `0 to sdl-fps` turns pacing off and lets the loop
+run flat out.
+
+**Deliberately not vsync.** `sdl-open` calls `SDL_SetRenderVSync(0)`, and that
+is not an oversight to be tidied up later. Under a compositing desktop, vsync
+blocks the present hard — Mutter throttles the swap to roughly 1 fps once the
+window settles, which stalls the whole program rather than pacing it. The
+compositor vsyncs the final composite anyway, so nothing is gained by asking
+for it here, and on KMSDRM the timer paces just as well. Don't reintroduce
+`SDL_SetRenderVSync(1)`.
+
 ## The demo (examples/bounce.fs)
 
 ```
@@ -123,7 +144,7 @@ bounce                        \ ESC, q, or close the window to quit
 ```
 
 A yellow ball (`fill-circle`) bouncing inside `rect` walls on a 320×180
-surface shown 4× in a 1280×720 window, one step per display refresh.
+surface shown 4× in a 1280×720 window, one step per frame.
 `bounce-frames ( n -- )` runs a fixed number of frames and exits (for
 automated tests).
 

@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Fixed: a control-flow closer with nothing open blamed the data stack
+
+- `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
+  `while`, `again`, `loop`, `+loop`, `endof` and `endcase` — the whole family.
+  `cf_check_tag` read the top of the compile-time stack before checking
+  anything, so with nothing open it walked off the top, hit the guard page, and
+  the fault handler got there first. The definition rolled back correctly and no
+  wrong code was ever emitted; the message simply named the wrong thing, and
+  sent a beginner who typed `then` with no `if` off to look at their stack.
+  It now bounds the read by `colon_dsp`, the way `ENDCASE` already did.
+- `WHILE` needed its own fix: it inlined the tag compare instead of calling
+  `cf_check_tag` (which only peeks — it never consumed), so it kept reporting a
+  stack underflow after the shared fix landed.
+
+### Fixed: an unbalanced definition reported nowhere, then let the load run on
+
+- `: Say ... if ... ;` with the `then` left off printed a bare
+  `unresolved control flow` — no file, no line, no name — and then **returned**,
+  so the file went on loading against a word that never got defined. The only
+  line number you ever saw came from the first *call* to the missing word.
+  Found in the Dark Star port, where the typo was on line 167 and the sole
+  reported location was 213.
+- It now reports like every other compile error, naming the definition read out
+  of its own half-built header:
+  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  also stops the load at that line instead of producing a second, unrelated
+  looking failure further down. `;` was the last compile error that let a load
+  continue.
+- A `:noname` has no name to give — it builds a hidden header with an empty
+  name — so it reports the token instead: `unresolved control flow: ;`.
+- Names print as the dictionary stores them, which is lower case.
+
+### Changed: control-flow errors name the word you typed
+
+- `? mismatched-control-flow` is now `mismatched control flow: then`. The `?`
+  prefix is BasicForth's *undefined word* marker, so the old report read as
+  though `then` did not exist, and the token position was spent on a fixed
+  string that said nothing the prefix had not. The outer interpreter already
+  banks each word in `err_token` before `FIND`, so naming the actual closer
+  cost nothing — and inside a file you get
+  `game.fs:2: mismatched control flow: then`.
+- One wrinkle worth knowing: the token is the last word the **outer
+  interpreter** parsed. That is the closer for ordinary source, but the
+  enclosing word when a closer is reached at run time through
+  `' then execute` — a construction that is already undefined, since it
+  bypasses the compile-only check.
+
 ### Added: `ch-claim` / `ch-release` — keeping a channel
 
 - `next-ch` treats a channel as busy only while audio is **queued** on it, so a
@@ -130,6 +177,55 @@
   — a library it does not require is invisible to it, the same gap that let
   `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
   immediately.
+
+### Fixed: the docs still said frames present vsync'd
+
+- Pacing moved to the `sdl-fps` timer in v0.12.0 because
+  `SDL_SetRenderVSync(1)` blocks the present under a compositing desktop —
+  Mutter throttles the swap to about 1 fps once the window settles. The
+  reference page (`help sdl3`) was updated then; nowhere else was, and
+  `sdl3.fs` ended up **contradicting itself**, its file header promising
+  "vsync paces the loop" a hundred lines above the comment explaining why
+  vsync is off.
+- Corrected in `docs/Graphics.md` (five claims, including `sdl-show` "blocks
+  until the display refresh" and the demo running "one step per display
+  refresh"), `sdl3.fs`'s own header, `examples/bounce.fs`'s header,
+  `docs/Planning.md`, and two completed `docs/TODO.md` entries that were the
+  only record there of how pacing works and recorded it wrongly.
+- `docs/Graphics.md` gains a **Frame pacing** section stating the mechanism
+  and, more importantly, *why it is not vsync* — the missing "why" is what let
+  a settled decision read as an oversight waiting to be tidied up. `sdl-fps`
+  is now in the word table too; it was absent.
+
+### Added: `docs/Install.md` — clone to a working prompt
+
+- There was no single place saying what BasicForth needs. The build toolchain
+  was documented twice (`README.md` and the Manual, free to drift), SDL3 had
+  no install instructions at all beyond a parenthetical in `Graphics.md`,
+  flite was undocumented, piper was documented only inside `Speech.md`, and
+  neither `git clone` nor `. ./setup.sh` appeared anywhere as a step.
+- The page leads with what none of that made visible: **nothing is required
+  to build but `binutils`, `gcc` and `make`.** Every library is `dlopen`ed on
+  demand, so a missing one cannot break the build, cannot stop the binary
+  starting, and costs exactly its own feature. `ldd` on the binary lists libc
+  and nothing else.
+- **`gcc` is required to build, not just to run the unit tests** — the README
+  and the Manual both said otherwise. It links the binary, which is what
+  makes the FFI's `dlopen` work at all.
+- A missing library does not degrade the way the "loaded on demand" story
+  might suggest, and the page says so: `require sdl3.fs` prints `dlopen:
+  cannot load library` and the session continues, but loading stops there, so
+  the words are absent and a later `snd-open` reports `? snd-open`.
+- The SDL3-from-source recipe was verified end to end rather than written
+  from memory — built into a scratch prefix, confirmed with `LD_DEBUG=libs`
+  that BasicForth loaded that build, then opened a window and drew on it. Two
+  traps documented: cmake's "Enabled backends" summary is the check that
+  matters, since SDL builds happily with no video backend when the dev
+  headers are missing and only fails later at `sdl-open`; and `sudo ldconfig`
+  after installing to `/usr/local` is required, not optional.
+- `README.md` and `docs/BasicForth_Manual.md` lose their duplicate
+  §Prerequisites and point at the page. `Graphics.md` and `Speech.md` gain
+  cross-references.
 
 ## v0.15.1 — 2026-08-10
 
