@@ -462,6 +462,23 @@ platform_init_guard_pages:
     SVC #0
     CBNZ X0, .Lguard_fail
 
+    // The locals stack is fenced the same way. Its underflow guard catches an
+    // unbalanced teardown (an engine bug, not a user one); its overflow guard
+    // catches recursion deeper than LOCALS_STACK_SIZE allows.
+    ADR X0, lguard_page_underflow
+    MOV X1, #PAGE_SIZE
+    MOV X2, #PROT_NONE
+    MOV X8, #SYS_mprotect
+    SVC #0
+    CBNZ X0, .Lguard_fail
+
+    ADR X0, lguard_page_overflow
+    MOV X1, #PAGE_SIZE
+    MOV X2, #PROT_NONE
+    MOV X8, #SYS_mprotect
+    SVC #0
+    CBNZ X0, .Lguard_fail
+
     // mprotect(dict_space, dict_space_end - dict_space, RWX)
     // STC compiles machine code into the dictionary; the dynamically-linked
     // binary maps .bss read-write only (unlike the old `ld -N` RWX segment).
@@ -538,10 +555,29 @@ sigsegv_handler:
     // Check if fault is in overflow guard page
     ADR X4, guard_page_overflow
     CMP X3, X4
-    B.LO .Lsig_unknown
+    B.LO .Lsig_check_lunder
     ADD X5, X4, #PAGE_SIZE
     CMP X3, X5
     B.LO .Lsig_overflow
+
+.Lsig_check_lunder:
+    // The locals stack's own pair. Named separately from the data stack's so a
+    // report says which stack went, rather than sending someone to look at the
+    // wrong one.
+    ADR X4, lguard_page_underflow
+    CMP X3, X4
+    B.LO .Lsig_check_lover
+    ADD X5, X4, #PAGE_SIZE
+    CMP X3, X5
+    B.LO .Lsig_lunderflow
+
+.Lsig_check_lover:
+    ADR X4, lguard_page_overflow
+    CMP X3, X4
+    B.LO .Lsig_unknown
+    ADD X5, X4, #PAGE_SIZE
+    CMP X3, X5
+    B.LO .Lsig_loverflow
 
 .Lsig_unknown:
     // Not our guard page — re-raise default SIGSEGV
@@ -580,6 +616,27 @@ sigsegv_handler:
     MOV X2, #msg_overflow_len
     MOV X8, #SYS_write
     SVC #0
+    B .Lsig_recover
+
+.Lsig_lunderflow:
+    // LP went back above lp0: a frame was torn down that was never set up.
+    // That is an engine bug, not a program one, so say so -- there is no Forth
+    // code that can cause it.
+    BL pay_pending_nl
+    MOV X0, #STDOUT
+    ADR X1, msg_lunderflow
+    MOV X2, #msg_lunderflow_len
+    MOV X8, #SYS_write
+    SVC #0
+    B .Lsig_recover
+
+.Lsig_loverflow:
+    BL pay_pending_nl
+    MOV X0, #STDOUT
+    ADR X1, msg_loverflow
+    MOV X2, #msg_loverflow_len
+    MOV X8, #SYS_write
+    SVC #0
 
 .Lsig_recover:
     // Modify ucontext registers to resume at repl_loop with clean state
@@ -594,6 +651,18 @@ sigsegv_handler:
     TLS_ADDR X3, sp0
     LDR X3, [X3]
     STR X3, [X23, #UC_X19]             // X19 = sp0 (DSP = empty)
+
+    // LP back to empty. This is one of the eight reset paths, and the awkward
+    // one: recovery here happens by REWRITING the ucontext, not by executing a
+    // reset, which is why grepping for the usual rp0 idiom does not find it.
+    // LP lives in TLS rather than a register, so the handler stores to it
+    // directly -- no ucontext edit needed, but it must be remembered. A leaked
+    // frame is silent until the locals stack overflows, much later, in
+    // unrelated code.
+    TLS_ADDR X3, lp0
+    LDR X3, [X3]
+    TLS_ADDR X4, lp
+    STR X3, [X4]
 
     // Always restore LATEST and HERE — a fault during forth_colon may
     // have partially modified X21/X22 before STATE was set to compiling.
@@ -617,6 +686,10 @@ msg_underflow:  .ascii "stack underflow\n"
 .equ msg_underflow_len, . - msg_underflow
 msg_overflow:   .ascii "stack overflow\n"
 .equ msg_overflow_len, . - msg_overflow
+msg_loverflow:  .ascii "locals stack overflow\n"
+.equ msg_loverflow_len, . - msg_loverflow
+msg_lunderflow: .ascii "locals stack underflow (engine bug -- please report)\n"
+.equ msg_lunderflow_len, . - msg_lunderflow
 msg_guard_fail: .ascii "fatal: guard page setup failed\n"
 .equ msg_guard_fail_len, . - msg_guard_fail
 

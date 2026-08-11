@@ -1,8 +1,65 @@
 # Locals — Design Note
 
-Status: **researched, not built.** Phase 8 (`docs/TODO.md`, "Threading and
-Locals"). This note records what the runtime-frame design costs, where it can
-go wrong, and what still has to be decided.
+Status: **stage 1 built (2026-08-11): the runtime frame and its unwind
+contract. No syntax yet.** Phase 8 (`docs/TODO.md`, "Threading and Locals").
+This note records what the runtime-frame design costs, where it can go wrong,
+and what still has to be decided.
+
+## What stage 1 shipped
+
+The substrate, driven by primitives rather than syntax, so the dangerous half
+could be tested before `{: … :}` existed:
+
+| word | effect | |
+|---|---|---|
+| `(lframe)` | `( x1 .. xn n -- )` | push a frame; `x1` becomes local 0 |
+| `(lunframe)` | `( n -- )` | pop a frame of n cells |
+| `(local@)` | `( i -- x )` | fetch local i |
+| `(local!)` | `( x i -- )` | store to local i |
+| `(lp@)` `(lp0@)` | `( -- a )` | the pointer, and this thread's empty mark |
+| `(lstack-size)` | `( -- n )` | bytes per locals stack |
+
+These are the **testing** surface, not the compiled one. Stage 2 must open-code
+the reference, not call `(local@)` — see "The one thing that decides this".
+
+Sizes moved to **`src/config.inc`**, included by both architectures, so a
+tunable cannot drift between them. `LOCALS_STACK_SIZE` is 16 KB (2048 cells)
+for the REPL thread and each worker; `threads.fs` reads it back through
+`(lstack-size)` rather than keeping a second copy.
+
+### Three things the design below got wrong
+
+**1. "Every path that reaches `repl_loop` … resets `lp` to `lp0`" is too
+strong.** `forth_interpret_line` **nests**: a compiled word holding a frame can
+call `EVALUATE`, and an error inside that evaluation unwinds only the *inner*
+interpret_line while the caller keeps running. Resetting to `lp0` there hands
+the caller freed slots — and because local 0 then sits in the guard page, it
+faults. The rule is really *restore `lp` to what it was when **this**
+interpret_line began*; at the outermost level that value **is** `lp0`. `lp` is
+saved on entry and restored on the error exits (x86 in place of the alignment
+padding, ARM64 in the padding slot the `il_sp` push already carried).
+
+**2. The reset sites were miscounted, in both directions.** `interpret_line`
+has *three* exits, not one: `.Lil_done`, `.Lil_err_return` (undefined word,
+compile-only word) and `.Lcf_longjmp`. The first two are not reachable from
+the label the note named, and `.Lil_err_return` was missed on the first pass —
+the nesting test caught it. Meanwhile `.Lsemi_unbalanced` stopped being a site
+at all when it was routed through `.Lcf_abort` the day before.
+
+**3. `.Lil_done` deliberately does *not* restore.** A balanced line already
+left `lp` where it found it, so restoring on the normal path would silently
+*repair* a leaked frame rather than let it surface — which would defeat every
+test in the section.
+
+### What the guard pages bought immediately
+
+The locals stack is fenced like the data stack, with its own pair of pages and
+its own messages (`locals stack overflow`, and `locals stack underflow (engine
+bug — please report)`, since no Forth code can cause the latter). That fence
+earned itself during stage 1: a draft test stored to a local with **no frame
+open**, which faulted cleanly instead of scribbling on the REPL's memory. It
+had been passing anyway, on the echoed input — see the vacuous-assertion note
+in `docs/TODO.md`.
 
 ## Recommendation
 
@@ -104,6 +161,12 @@ locals stack does not.
 that way and a reset path added later is covered by construction. Enumerating
 sites alone is how this gets missed — the first draft of this note listed four
 and there are eight.
+
+> **Corrected in stage 1.** The rule above is right for paths that reach
+> `repl_loop`, and wrong for `forth_interpret_line`, which **returns to its
+> caller** and can be nested inside a word that holds a live frame. Those exits
+> restore `lp` to *this* call's entry value, not to `lp0`. See "Three things
+> the design below got wrong" at the top.
 
 **Normal return.** `forth_semicolon` and `forth_exit` emit an `lp` restore
 before the `RET`, in definitions that declared locals. `compile_ret` has seven

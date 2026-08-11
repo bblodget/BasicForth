@@ -1088,6 +1088,29 @@ docs/Graphics.md for the API.
 
 ## Phase 8: Threading and Locals
 
+- [x] **The REPL's data stack was half a worker's.** RESOLVED 2026-08-11.
+  `DATA_STACK_SIZE` was 4096 bytes (512 cells) while `thread-dstack` in
+  `src/forth/threads.fs` was 8192 — two numbers, in two files, in two
+  languages, that nothing explained. Noticed while sizing the locals stack.
+
+  Fixed by making it **one constant, not two equal ones**: `DATA_STACK_SIZE`
+  is 8192 in `src/config.inc` and `threads.fs` reads it back through
+  `(dstack-size)`, so a REPL/worker difference can no longer be expressed.
+  Two constants that are *supposed* to stay equal is the arrangement that
+  produced the drift; one makes it unrepresentable. Raised rather than
+  lowered: no working program breaks by being given more room, whereas
+  halving the workers' could break one that works today.
+
+  `THREAD_RSTACK_SIZE` stays alone — the REPL's return stack is the process
+  stack (~8 MB) from the kernel, so there is nothing to unify it with.
+
+  Nothing in the suites depended on the old figure (the `4096`s in the tests
+  are a page-size fixture, a pty read buffer and a path length); two doc pages
+  stated it and were updated. The worry that made this a separate item — that
+  the guard-page tests fault against this size — turned out not to bite: those
+  tests overflow by looping until they fault, so the size only changes how
+  long they take.
+
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
   - **Researched 2026-08-10: see docs/Locals.md.** Verdict: build it, runtime
     frame, separate stack, `lp` in the existing TLS block. Measured on x86: a

@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### Added: the locals runtime frame (stage 1 — no syntax yet)
+
+- The substrate for local variables: a **separate locals stack**, per thread,
+  fenced by its own guard pages, with `lp`/`lp0` in the existing TLS block.
+  `{: … :}` is stage 2; this stage ships only the frame primitives
+  (`(lframe)`, `(lunframe)`, `(local@)`, `(local!)`, `(lp@)`, `(lp0@)`,
+  `(lstack-size)`) so the part that actually goes wrong could be tested first.
+- A separate stack is not unwound by anything that unwinds the return stack, so
+  every reset path releases it by hand: caught and uncaught `throw`, `QUIT`,
+  an aborted definition, both guard-page faults, `dict_full`, and worker exit.
+  A missed one leaks silently — nothing fails until the locals stack overflows
+  much later, in unrelated code — so each has an assertion that `lp` came back,
+  which is a different question from "does it work".
+- **A definition that declares no locals is unchanged.** Frame setup happens
+  only where locals are declared, and teardown is a fixed add, because the
+  frame size is known at compile time. The one unconditional cost is a cell in
+  the `catch` frame, which `throw` needs because it unwinds past an arbitrary
+  number of frames at once.
+- Overflowing the locals stack reports `locals stack overflow`, distinct from
+  the data stack's message, so a report points at the right stack.
+
+### Changed: tunable sizes live in one shared file
+
+- `src/config.inc` now holds every tunable size — `CELL`, `DATA_STACK_SIZE`,
+  `LOCALS_STACK_SIZE` and `THREAD_RSTACK_SIZE` — included by `core.s` and
+  `main.s` on both architectures. The Makefiles depend on it, so changing a
+  value forces a rebuild: a stack assembled from a different number than its
+  guard pages would be worse than no sharing at all.
+- `threads.fs` states no size of its own. `thread-dstack`, `thread-rstack` and
+  the worker locals stack read back through `(dstack-size)`, `(thread-rsize)`
+  and `(lstack-size)`, so the Forth side cannot disagree with the assembler
+  about how big a stack is or where to fence it.
+
+### Changed: the data stack is 1024 cells, and one size for every thread
+
+- Collecting the numbers in one file exposed that the REPL's data stack was
+  **half a worker's** — 4096 bytes against 8192 — set in two files, in two
+  languages, with nothing explaining why the thread you actually type at got
+  the smaller one.
+- Now a single `DATA_STACK_SIZE` of **8192 bytes (1024 cells)** serves both, so
+  a REPL/worker difference cannot be expressed at all. Two constants that are
+  supposed to stay equal is the arrangement that produced the drift. Raised
+  rather than lowered: no working program breaks by being given more room.
+- Same principle as `LOCALS_STACK_SIZE`, which was shared from the start —
+  what a computation can hold, and how deep it can recurse, should not depend
+  on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
+  return stack is the process stack handed over by the kernel.
+
 ### Fixed: a control-flow closer with nothing open blamed the data stack
 
 - `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
