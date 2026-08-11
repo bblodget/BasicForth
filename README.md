@@ -160,19 +160,19 @@ v0.15.0 — what is left is saying a phrase without writing it down first.)
 
 ## Building
 
-### Prerequisites
+```sh
+sudo apt install git binutils gcc make    # git fetches; binutils+gcc+make build
+git clone https://github.com/bblodget/BasicForth.git
+cd BasicForth
+make
+. ./setup.sh
+basicforth
+```
 
-**x86-64** (native):
-- GNU assembler (`as`)
-- GNU linker (`ld`)
-- GCC (for unit tests)
-
-**ARM64** (cross-compile from x86-64):
-- `aarch64-linux-gnu-as`, `aarch64-linux-gnu-ld`
-- `aarch64-linux-gnu-gcc` (for unit tests)
-- `qemu-aarch64-static` (optional, for local smoke testing)
-
-On Debian/Ubuntu: `apt install binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu qemu-user-static`
+Nothing else is needed to build or to run: SDL3, flite and a speech engine
+are all `dlopen`ed on demand, so a missing one costs exactly its own feature
+and nothing else. See **[docs/Install.md](docs/Install.md)** for the ARM64
+cross-compile, the optional libraries, and what `setup.sh` does.
 
 ### Build Commands
 
@@ -309,6 +309,7 @@ BasicForth/
     echo.fs / hello.fs      `#!` script utilities
     lines.fs                stdout/stderr split demo
   docs/                     Design documentation
+    Install.md              Clone to working prompt, and the optional libraries
     Tutorial/               Interactive tutorials (tutorial Snake)
     Language-Reference/     Per-topic reference (help stack, …)
 ```
