@@ -143,6 +143,40 @@ The arrows are the exception the list exists for: they have no ASCII value, so
 SDL gives them keycodes in a high range (`$4000004f` and up) that you can only
 reach by name or by number.
 
+## sdl-width sdl-height ( -- n )
+The size of the drawing surface in **logical** pixels — the `w h` you passed
+to `sdl-open`, not the window's size on screen (that is these times
+`sdl-scale`). Zero before the first `sdl-open`.
+
+Every drawing word works in these coordinates, so this is what a game clamps
+against rather than a number it wrote down:
+
+    \ : clamp-x ( x -- x' )  0 max  sdl-width 1- min ;
+
+## sdl-event ( -- addr )
+The 128-byte buffer `sdl-poll` decodes into. `sdl-event-type` and `sdl-key`
+read it for you; this is the raw address, for reading a field of an event
+BasicForth does not wrap yet.
+
+You need SDL's own struct layout to use it, and that layout is per event type
+— which is why the offsets belong in a library rather than at a call site.
+`pad.fs` is the worked example:
+
+    \ : pad-ev-which  ( -- id )  sdl-event 16 + l@ ;
+
+The buffer is reused, so read what you need before the next `sdl-poll`.
+
+## sdl-error ( -- )
+Print SDL's message for the last failed call and `abort`. This is what the
+bindings here call when a window, renderer or texture cannot be created; it is
+public so that your own `(ccall)` bindings can fail the same way, with SDL's
+own text rather than a bare abort.
+
+It never returns, so it is the tail of a failure branch, not something to test
+after:
+
+    \ ... 4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then
+
 ## See Also
 
 - `help graphics` — the drawing words used between `sdl-frame` and `sdl-show`.

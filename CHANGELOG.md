@@ -178,6 +178,50 @@
   `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
   immediately.
 
+### Fixed: `help <word>` missed 53 names across six libraries
+
+- The reference audit swept the core dictionary, the wav/audio tree and
+  `speech.fs` and stopped there — and a library the audit does not `require`
+  is invisible to it. So `help pad-south`, `help sdl-width`, `help font-h`,
+  `help bad-handle` and 49 others answered "no help", several of them for
+  names the page beside them explains in full.
+- **31 in `pad.fs`** — the button, axis and event constants. They now have
+  **7 grouped headings** (`## pad-south pad-east pad-west pad-north ( -- b )`
+  and so on) rather than 31 stubs: a heading indexes every name before its
+  `( `, which holds to at least 15. The alternative — teaching the audit that
+  a name in an at-a-glance table counts — was rejected because it would have
+  turned the audit green while `help pad-south` still failed. The audit is the
+  proxy; `help <word>` is the contract.
+- **12 raw SDL names** — 11 in `sdl3.fs` plus `SDL_INIT_GAMEPAD` in
+  `pad.fs` — split by the existing rule (a name you pass to
+  something is API; a handle or internal enum is parenthesised). `sdl-width`,
+  `sdl-height`, `sdl-event` and `sdl-error` are documented — the first two
+  are what a game clamps against, and `sdl-event` is the buffer `pad.fs`
+  itself reads offsets from. `sdl-win`, `sdl-ren`, `sdl-tex` and the five raw
+  SDL enums became `(sdl-win)`, `(XRGB8888)` and friends.
+- **10 the estimate never counted.** Measuring every library rather than the
+  two named found 3 more in `fontcore.fs`, 5 in `threads.fs`, and the two font
+  **selector words** `terminus-8x16` and `vga-8x8` — the words you call to
+  switch fonts, documented in prose but never as entries. `running` and
+  `finished` became `(running)` / `(finished)`: internal ctx.state values, and
+  as bare names in a flat dictionary two of the likeliest words a game would
+  want for itself.
+- **A third broken heading separator**, which is why `fontcore` had a group at
+  all: `## font-w ( -- n ) · font-h ( -- n )` — a middle dot, where the
+  earlier fix was for `/`. The index stops at the first `(`, so every name
+  after it was lost. Two headings used it; both converted.
+- The audit now `require`s **every** library in `src/forth`, and a second
+  check proves it: `require` leaves an `(inc:<file>)` guard word per file, so
+  the dictionary itself reports what was loaded, and a new `.fs` nobody added
+  to the list fails by name. The first version of this fix listed five
+  libraries and carried a comment claiming the other four came in
+  transitively — `graphics.fs` did, but `shellutil.fs`, `voice.fs` and
+  `disasm.fs` were simply absent, which is the very hole the audit exists to
+  close. A comment cannot be the thing that keeps a sweep complete.
+- Both checks need libSDL3 to load the libraries at all, so under QEMU or on a
+  machine without SDL3 they now print two `SKIP` lines rather than one — the
+  new check would otherwise have disappeared there without saying so.
+
 ### Fixed: the docs still said frames present vsync'd
 
 - Pacing moved to the `sdl-fps` timer in v0.12.0 because
