@@ -3,14 +3,14 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ Presents the graphics.fs software 2D surface in a desktop window (or on the
-\ raw console via SDL's KMSDRM driver), vsync'd. Pulls in its own
-\ dependencies -- just:
+\ raw console via SDL's KMSDRM driver). Pulls in its own dependencies -- just:
 \
 \   require sdl3.fs
 \
 \ A frame goes:  sdl-frame  (lock texture, point the surface at its pixels)
 \                ... draw with graphics.fs words ...
-\                sdl-show   (unlock + present; vsync paces the loop)
+\                sdl-show   (unlock + present; a TIMER paces the loop, not
+\                            vsync -- see sdl-fps below for why)
 \
 \ The texture is streaming/write-only: after sdl-show its contents are gone,
 \ so draw every frame from scratch (clear + draw). Events are polled:

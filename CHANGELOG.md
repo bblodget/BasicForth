@@ -178,6 +178,55 @@
   `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
   immediately.
 
+### Fixed: the docs still said frames present vsync'd
+
+- Pacing moved to the `sdl-fps` timer in v0.12.0 because
+  `SDL_SetRenderVSync(1)` blocks the present under a compositing desktop —
+  Mutter throttles the swap to about 1 fps once the window settles. The
+  reference page (`help sdl3`) was updated then; nowhere else was, and
+  `sdl3.fs` ended up **contradicting itself**, its file header promising
+  "vsync paces the loop" a hundred lines above the comment explaining why
+  vsync is off.
+- Corrected in `docs/Graphics.md` (five claims, including `sdl-show` "blocks
+  until the display refresh" and the demo running "one step per display
+  refresh"), `sdl3.fs`'s own header, `examples/bounce.fs`'s header,
+  `docs/Planning.md`, and two completed `docs/TODO.md` entries that were the
+  only record there of how pacing works and recorded it wrongly.
+- `docs/Graphics.md` gains a **Frame pacing** section stating the mechanism
+  and, more importantly, *why it is not vsync* — the missing "why" is what let
+  a settled decision read as an oversight waiting to be tidied up. `sdl-fps`
+  is now in the word table too; it was absent.
+
+### Added: `docs/Install.md` — clone to a working prompt
+
+- There was no single place saying what BasicForth needs. The build toolchain
+  was documented twice (`README.md` and the Manual, free to drift), SDL3 had
+  no install instructions at all beyond a parenthetical in `Graphics.md`,
+  flite was undocumented, piper was documented only inside `Speech.md`, and
+  neither `git clone` nor `. ./setup.sh` appeared anywhere as a step.
+- The page leads with what none of that made visible: **nothing is required
+  to build but `binutils`, `gcc` and `make`.** Every library is `dlopen`ed on
+  demand, so a missing one cannot break the build, cannot stop the binary
+  starting, and costs exactly its own feature. `ldd` on the binary lists libc
+  and nothing else.
+- **`gcc` is required to build, not just to run the unit tests** — the README
+  and the Manual both said otherwise. It links the binary, which is what
+  makes the FFI's `dlopen` work at all.
+- A missing library does not degrade the way the "loaded on demand" story
+  might suggest, and the page says so: `require sdl3.fs` prints `dlopen:
+  cannot load library` and the session continues, but loading stops there, so
+  the words are absent and a later `snd-open` reports `? snd-open`.
+- The SDL3-from-source recipe was verified end to end rather than written
+  from memory — built into a scratch prefix, confirmed with `LD_DEBUG=libs`
+  that BasicForth loaded that build, then opened a window and drew on it. Two
+  traps documented: cmake's "Enabled backends" summary is the check that
+  matters, since SDL builds happily with no video backend when the dev
+  headers are missing and only fails later at `sdl-open`; and `sudo ldconfig`
+  after installing to `/usr/local` is required, not optional.
+- `README.md` and `docs/BasicForth_Manual.md` lose their duplicate
+  §Prerequisites and point at the page. `Graphics.md` and `Speech.md` gain
+  cross-references.
+
 ## v0.15.1 — 2026-08-10
 
 A patch release: two crash/data-loss fixes, no new features and no changed
