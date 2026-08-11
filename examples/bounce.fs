@@ -3,8 +3,8 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ The desktop-window graphics demo: a yellow ball bouncing inside a walled
-\ court, one frame per display refresh (vsync), with a blip on every wall
-\ hit. Retro chunky pixels: the surface is 320x180 logical pixels shown 4x
+\ court, one step per frame at sdl-fps (60 by default), with a blip on every
+\ wall hit. Retro chunky pixels: the surface is 320x180 logical pixels shown 4x
 \ (sdl-scale) in a 1280x720 window. ESC, q, or closing the window quits.
 \
 \ Usage: include bounce.fs   (dependencies load themselves)

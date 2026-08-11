@@ -839,11 +839,13 @@ docs/Graphics.md for the API.
   `ffi.fs` wrappers, libc-based integration tests, docs/FFI.md + `man ffi`.
   Deferred: float args/returns, >6 args, C-to-Forth callbacks.
 - [x] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
-  `set-surface`; vsync'd present (`sdl-frame` / `sdl-show`); poll-event
+  `set-surface`; present (`sdl-frame` / `sdl-show`); poll-event
   decoding (`sdl-poll`/`sdl-event-type`/`sdl-key`); `tools/sdl3off.c` verifies
   constants/offsets. Dummy-driver integration test (headless).
-- [x] Animation demo: `examples/bounce.fs` — bouncing square at the display
-  refresh rate (vsync), ESC/q/close to quit
+  (Shipped vsync-paced; changed to the `sdl-fps` timer 2026-07-20 — vsync
+  blocks the present under a compositor, see docs/Graphics.md "Frame pacing".)
+- [x] Animation demo: `examples/bounce.fs` — bouncing square, one step per
+  frame, ESC/q/close to quit
 - [x] Interpreted `s"` and `."` (ANS transient-buffer semantics) — STATE-smart
   redefinitions in core.fs; two alternating 256-byte buffers; compile path
   delegates to the ASM primitives so compiled code is unchanged
@@ -1113,36 +1115,40 @@ docs/Graphics.md for the API.
   so `help pad-closeall`, `help pad-hasaxis?`, `help pad-dy` and
   `help on-stop` all failed. The supported form is `## a b ( eff )`.
 
-- [ ] **`docs/Install.md` — one page from `git clone` to a working setup.**
-  There is no single place that says what BasicForth needs, and the coverage
-  is uneven (surveyed 2026-08-10):
-  - Build toolchain is documented **twice**, in `README.md` §Prerequisites and
-    `docs/BasicForth_Manual.md` §Prerequisites, which will drift.
-  - **SDL3 has no install instructions at all** — only a parenthetical in
-    `docs/Graphics.md:138` noting bookworm has no `libsdl3` package. Without
-    it, graphics, sound, samples, gamepads and speech are all unavailable.
-  - **flite is undocumented entirely**, and `speech.fs` needs `libflite.so.1`
-    plus a voice library.
-  - piper IS documented well, but only inside `docs/Speech.md` §Installing an
-    engine, where nobody looking for dependencies would find it.
-  - `. ./setup.sh` is used in examples but never explained as a step, and
-    `git clone` — the first move anyone makes — appears nowhere.
+- [x] **`docs/Install.md` — one page from `git clone` to a working setup —
+  DONE 2026-08-11** (branch install). Leads with the property that was
+  invisible before: nothing is required to build but `binutils`, `gcc` and
+  `make`, because every library is `dlopen`ed on demand and a missing one
+  costs exactly its own feature. Covers clone, all three build cases, the
+  four test targets, `. ./setup.sh` and what it exports, first run, and the
+  optional libraries with what each one buys. `README.md` and
+  `docs/BasicForth_Manual.md` lost their duplicate §Prerequisites and point
+  at it; `Graphics.md`, `Speech.md` gained cross-references.
 
-  The page should lead with the property that is currently invisible:
-  **nothing is required to build except `binutils`, `gcc` and `make`.** Every
-  library is `dlopen`ed on demand, so the binary builds and runs without any
-  of them, and a missing one costs exactly one feature. List each optional
-  library with what stops working without it.
-
-  Then cut the duplication: README and the Manual point at the page instead of
-  each carrying their own copy.
-
-  Check before writing, rather than recording what is true on this laptop:
-  what SDL3 install actually works on plain Debian/Ubuntu today (this machine
-  built 3.4.12 from source into `/usr/local`), and the real flite package
-  names — deriving a fact at run time beats writing down what happened to be
-  true on one machine, the trap that produced three defects during the
-  voice.fs work.
+  Facts pinned down while writing it, each verified on this machine:
+  - **`gcc` is required to BUILD, not just for unit tests** — both the README
+    and the Manual said "for unit tests". It links the binary
+    (`$(CC) -nostartfiles -no-pie … -ldl`), which is what makes the FFI's
+    `dlopen` work at all. The claim had been wrong in two places at once.
+  - **SDL3 has no apt package on Ubuntu 22.04 / Debian bookworm.** Built
+    3.4.12 from source into a scratch prefix to check the recipe end to end,
+    and confirmed with `LD_DEBUG=libs` that BasicForth loaded *that* build,
+    then opened a window and drew on it. cmake's default prefix is
+    `/usr/local`; `sudo ldconfig` afterwards is required, not optional.
+  - **cmake's "Enabled backends" summary is the check that matters.** SDL
+    builds happily with no video or audio backend when the dev headers are
+    missing, and the failure only shows up later at `sdl-open`. SDL's own
+    `docs/README-linux.md` has the per-distribution package list, so the page
+    points at it rather than copying a list that would rot.
+  - **A missing library does not degrade gracefully in the way you might
+    assume.** `require sdl3.fs` prints `dlopen: cannot load library` and the
+    session continues — but loading *stops there*, so the words are simply
+    absent and a later `snd-open` reports `? snd-open`. Verified under
+    `bwrap` with `/usr/local/lib` hidden. The page says so, since "why is
+    this word missing" is the question that actually gets asked.
+  - `help`/`tutorial` without `BASICFORTH_DOCS` answer
+    `(BASICFORTH_DOCS not set)` — quoted literally, since that string is what
+    someone will search for.
 
 - [x] **REPL "option B": emit the newline lazily, before the first byte of
   output — DONE 2026-07-28** (branch lazy-newline). The one untried idea from
