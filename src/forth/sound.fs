@@ -12,22 +12,24 @@
 \
 \ CHANNELS. The device holds snd-channels streams, and SDL mixes everything
 \ bound to it, so sounds on DIFFERENT channels play at the same time. Sounds
-\ queued on ONE channel play one after another. Channel 0 (tone-ch) belongs to
-\ tone, which is why a run of tones still plays in sequence exactly as it
-\ always has -- put a tone on another channel if you want it to overlap.
+\ queued on ONE channel play one after another. snd-open CLAIMS a channel for
+\ tone (tone-ch), which is why a run of tones still plays in sequence exactly
+\ as it always has -- put a tone on another channel if you want it to overlap.
+\ Nothing is special about its number; it is simply taken.
 \
 \ next-ch hands out a free channel, or steals the oldest if they are all
 \ busy: a game firing more sounds than it has channels loses its stalest sound
 \ rather than its newest.
 \
-\ There are snd-channels of them, 64 by default -- enough that next-ch
-\ never has to steal in practice. Shrinking it is the rare case (forcing
-\ channel reuse in a test, or trimming streams on a small target), and it is
-\ read ONCE, when the device opens, so a change needs an explicit close first
-\ -- and the close comes BEFORE the change, so the channels being closed are
-\ still the ones that are open:
+\ There are snd-channels of them, a fixed 64 -- enough that next-ch never has
+\ to steal in practice, and cheap enough (about 100 KB) that having fewer buys
+\ nothing.
 \
-\   snd-close  4 to snd-channels  snd-open drop
+\ A subsystem that needs a channel of its OWN claims one, and next-ch stops
+\ handing it out until it is released. sound.fs does this for tone at snd-open;
+\ speech.fs does it so a phrase never queues behind a sound effect. A claim
+\ outlives a snd-close/snd-open, because it belongs to whoever took it rather
+\ than to the device -- each owner releases its own.
 \
 \ tone queues samples and returns at once (SDL's audio thread drains the
 \ queue), so game loops keep running while a sound plays. snd-wait blocks
@@ -98,22 +100,29 @@ $ffffffff constant (AUDIO_DEFAULT)      \ SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK
 
 \ --- state ---
 \ The channel tables live in the dictionary rather than the heap: they are
-\ small, and a fixed ceiling means snd-close can always clear every slot even
+\ small, and a fixed count means snd-close can always clear every slot, even
 \ when snd-open failed halfway through building them.
-64 constant snd-max-channels           \ hard ceiling on snd-channels
-64 value   snd-channels                \ set BEFORE snd-open; clamped at open
-0  constant tone-ch                    \ channel 0 is reserved for tone
+\
+\ snd-channels is fixed at 64. It was settable until 2026-08-10 and nothing
+\ outside its own tests ever changed it: 64 channels cost about 100 KB and under a
+\ microsecond per snd-pump, so there was nothing to gain by shrinking, while
+\ the shrink path cost a real dangling-handle bug and made snd-close walk a
+\ ceiling rather than a count. One line to make it settable again if a target
+\ ever asks.
+64 constant snd-channels
+\ The channel tone plays on. Claimed at snd-open like anyone else's -- channel
+\ 0 is not special any more -- and -1 while the device is closed.
+-1 value tone-ch
 
-create (ch-streams) snd-max-channels cells allot   \ SDL_AudioStream* per channel
-create (ch-ages)    snd-max-channels cells allot   \ tick when last handed out
-create (ch-vols)    snd-max-channels cells allot   \ 0..snd-unity
-create (ch-fade-t0) snd-max-channels cells allot   \ fade start, ms@
-create (ch-owned)   snd-max-channels cells allot   \ claimed by a subsystem
-create (ch-fade-ms) snd-max-channels cells allot   \ fade length; 0 = not fading
+create (ch-streams) snd-channels cells allot   \ SDL_AudioStream* per channel
+create (ch-ages)    snd-channels cells allot   \ tick when last handed out
+create (ch-vols)    snd-channels cells allot   \ 0..snd-unity
+create (ch-fade-t0) snd-channels cells allot   \ fade start, ms@
+create (ch-owned)   snd-channels cells allot   \ claimed by a subsystem
+create (ch-fade-ms) snd-channels cells allot   \ fade length; 0 = not fading
 variable (ch-tick)                                 \ monotonic hand-out counter
 variable (ch-next)                                 \ round-robin hand-out cursor
 
-0 value (snd-stream)                     \ channel 0's stream (also owns the device)
 0 value (snd-dev)                        \ logical device the channels bind to
 \ How TALL the wave tone builds is, as a sample value -- not a volume. The
 \ channel gain (ch-vol!, 0..snd-unity) is the volume: it scales any audio on
@@ -146,24 +155,69 @@ variable (snd-why-len)
         1+  i 1+ (snd-why-len) !
     loop drop ;
 : snd-why ( -- c-addr u )  (snd-why-buf) (snd-why-len) @ ;
+\ A reason of our own, for a failure SDL knows nothing about.
+: (snd-why$) ( c-addr u -- )
+    (snd-why-max) min  dup (snd-why-len) !  (snd-why-buf) swap cmove ;
 
 \ --- channel tables ---
 : (ch-ok?) ( ch -- flag )  0 snd-channels within ;
 : (ch-stream) ( ch -- stream )
     dup (ch-ok?) if cells (ch-streams) + @ else drop 0 then ;
 
-\ Zeroed at load, not only at open: snd-close walks every slot, and it runs on
-\ the failure paths of snd-open before the tables have been filled in.
+\ CLAIMING A CHANNEL. next-ch hands out a channel that is free right now; it
+\ does not take it out of circulation, because a channel counts as busy only
+\ while audio is queued on it. So a subsystem that wants to KEEP one -- so its
+\ sounds queue behind each other and nothing else lands among them -- claims
+\ it, and next-ch skips it from then on until it is released.
+\
+\ Cooperative, deliberately: a claim is a note in a table, not a capability.
+\ Anyone can release anyone's channel, the same way anyone can ch-stop anyone's
+\ sound. Forth hands you the machine; a program that wants guarantees can build
+\ them on top.
+: (ch-owned?) ( ch -- flag )
+    dup (ch-ok?) if cells (ch-owned) + @ 0<> else drop false then ;
+
+: ch-claim ( ch -- ch flag )           \ false if it does not exist, or is taken
+    dup (ch-ok?) 0= if false exit then
+    dup (ch-owned?) if false exit then
+    dup cells (ch-owned) + 1 swap !
+    true ;
+
+: ch-release ( ch -- )
+    dup (ch-ok?) if cells (ch-owned) + 0 swap ! else drop then ;
+
+\ tone's own channel, taken at snd-open. It cannot go through next-ch, which
+\ is defined much later and needs a live device to answer -- and it does not
+\ need to: nothing is playing yet, so the first unclaimed channel is also the
+\ first free one. ch-claim does the checking.
+: (tone-claim) ( -- flag )
+    snd-channels 0 ?do
+        i ch-claim if  to tone-ch  true unloop exit  then  drop
+    loop  false ;
+
+
+\ Zeroed at load, not only at open: snd-open runs it before building, and the
+\ failure paths of snd-open reach snd-close before the tables are filled in.
+\
+\ CLAIMS ARE NOT TOUCHED HERE. A claim belongs to whoever took it, not to the
+\ device, so it survives a close and a reopen -- otherwise a subsystem holding
+\ a channel would silently lose it the moment the device was cycled, and go on
+\ playing onto a channel next-ch had handed to somebody else. Each owner
+\ releases its own: snd-close drops tone's, speech-close drops speech's.
 : (ch-reset) ( -- )
-    snd-max-channels 0 ?do
+    snd-channels 0 ?do
         0         i cells (ch-streams) + !
         0         i cells (ch-ages)    + !
         snd-unity i cells (ch-vols)    + !
         0         i cells (ch-fade-ms)  + !
         0         i cells (ch-fade-t0)  + !
-        0         i cells (ch-owned)    + !
     loop  0 (ch-tick) !  0 (ch-next) ! ;
 (ch-reset)
+\ Claims start empty exactly once, at load: create/allot does not promise
+\ zeroed space, and nothing later clears this table. In a definition because
+\ ?do is compile-only, like if.
+: (ch-own-clear) ( -- )  snd-channels 0 ?do  0 i cells (ch-owned) + !  loop ;
+(ch-own-clear)
 
 \ Volume is SDL's per-stream gain, applied as it PULLS the audio out. So it
 \ affects sound already queued, costs nothing at queue time, needs no copy of
@@ -266,26 +320,17 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ opened the convenient way is welded to the one stream it returns, and any
 \ later bind fails with "Cannot change stream bindings on device opened with
 \ SDL_OpenAudioDeviceStream". Mixing requires the plain device API.
-\ Walks every slot to snd-max-channels, NOT to snd-channels: snd-channels is a
-\ user-writable value, and shrinking it while open hides the tail from its own
-\ cleanup. `snd-open drop  4 to snd-channels  snd-close` destroyed 4 streams
-\ and left the other 60 handles in the table.
-\
-\ Not a memory leak -- the SDL_QuitSubSystem below frees every remaining audio
-\ object, and 50 such cycles move RSS by nothing. What it leaves is 60
-\ DANGLING handles in a table this word promises to empty, and today SDL
-\ happens to reject them (ch-queued reads 0 rather than faulting), which is
-\ SDL being defensive about freed memory rather than anything we are owed.
-\ The table is fixed-size precisely so this loop can always clear it; the
-\ bound has to be the table's, not the caller's.
+\ Walks every slot: snd-channels is fixed, so the count that was open is the
+\ count now, and a partly built set from a failed snd-open still gets cleared.
 : snd-close ( -- )
-    snd-max-channels 0 ?do
+    snd-channels 0 ?do
         i cells (ch-streams) + dup @ ?dup if
             1 (SDL_DestroyAudioStream) (ccall) drop  0 swap !
         else drop then
     loop
+    tone-ch 0 >= if  tone-ch ch-release  -1 to tone-ch  then
     (snd-dev) ?dup if 1 (SDL_CloseAudioDevice) (ccall) drop then
-    0 to (snd-stream)  0 to (snd-dev)
+    0 to (snd-dev)
     (SDL_INIT_AUDIO) 1 (SDL_QuitSubSystem) (ccall) drop ;
 
 \ Create every channel's stream and bind it to the device.
@@ -322,7 +367,6 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ the tone channel, and below that its steal scan would count backwards.
 : snd-open ( -- ior )
     snd-ready? if 0 exit then
-    snd-channels 2 max snd-max-channels min to snd-channels
     (ch-reset)
     \ Init failing is the one exit that must NOT run (snd-failed): there is no
     \ subsystem to quit, and nothing was built. Every later failure has both.
@@ -333,7 +377,18 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
     (AUDIO_DEFAULT) (snd-spec) 2 (SDL_OpenAudioDevice) (ccall) to (snd-dev)
     (snd-dev) 0= if (snd-failed) exit then
     (ch-build) 0= if (snd-failed) exit then
-    (ch-streams) @ to (snd-stream)         \ channel 0 = the tone channel
+    \ tone gets a channel the same way anyone else does. It claims one, so
+    \ next-ch will not hand it out and effects cannot land among a run of
+    \ tones -- what reserving channel 0 used to buy, without the special case.
+    \ Not an SDL failure, so it cannot go through (snd-failed) -- that reports
+    \ SDL's last error, which here would be stale or empty and blame the wrong
+    \ thing. Reachable only if something claimed every channel while the device
+    \ was closed, since snd-close frees tone's own.
+    (tone-claim) 0= if
+        snd-close
+        s" every channel is claimed; none free for tone" (snd-why$)
+        2 exit
+    then
     \ Resume unconditionally: whether a freshly opened device starts paused is
     \ not documented, and resuming an already-playing device is harmless.
     (snd-dev) 1 (SDL_ResumeAudioDevice) (ccall) (c-bool) 0= if (snd-failed) exit then
@@ -348,15 +403,15 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ ch-claim is the exception, and deliberately a separate word: a subsystem that
 \ must KEEP a channel says so, and says when it is done.
 \
-\ A free channel if there is one, otherwise the least recently handed out.
-\ Never returns tone-ch, so sound effects cannot cut a game's tones short.
+\ A free channel if there is one, otherwise the least recently handed out that
+\ nobody has claimed. tone's channel is claimed, so effects never land on it.
 \
 \ The search is round-robin rather than lowest-free, because a channel only
 \ becomes busy once audio is queued on it: two next-ch calls in a row, before
 \ either has been given samples, would otherwise both hand back channel 1 and
 \ the second sound would land on top of the first.
 : (ch-cycle) ( -- ch )                 \ next channel in 1..snd-channels-1
-    (ch-next) @ 1+  dup snd-channels >= if drop 1 then  dup (ch-next) ! ;
+    (ch-next) @ 1+  dup snd-channels >= if drop 0 then  dup (ch-next) ! ;
 
 \ A CLAIMED channel belongs to a subsystem for as long as it wants it, and
 \ next-ch never hands it out. Without this, "keep a channel" is not something a
@@ -364,43 +419,29 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ it, so a channel held for later comes back into rotation the moment it falls
 \ silent -- and speech.fs, holding one so phrases never queue behind a sound
 \ effect, saw its channel reissued 3 times in 200 next-ch calls.
-\ snd-close releases every claim, because (ch-reset) clears the table.
-: (ch-owned?) ( ch -- flag )
-    dup (ch-ok?) if cells (ch-owned) + @ 0<> else drop false then ;
-: ch-claim ( ch -- )
-    dup (ch-ok?) if 1 swap cells (ch-owned) + ! else drop then ;
-: ch-release ( ch -- )
-    dup (ch-ok?) if 0 swap cells (ch-owned) + ! else drop then ;
-
 : (ch-spare?) ( ch -- flag )           \ neither claimed nor playing
     dup (ch-owned?) if drop false exit then  ch-playing? 0= ;
 
 : next-ch ( -- ch )
-    (snd-stream) 0= if tone-ch exit then
-    snd-channels 1- 0 ?do
+    snd-ready? 0= if -1 exit then
+    snd-channels 0 ?do
         (ch-cycle)
         dup (ch-spare?) if  dup (ch-touch) unloop exit  then
         drop
     loop
-    \ All busy: steal the least recently handed out that nobody has CLAIMED.
-    \ Stealing a claimed one would drop an effect on top of a phrase, which is
-    \ the thing claiming it prevents.
+    \ Everything is playing: hand back the least recently given out that nobody
+    \ has claimed. A claimed channel is never stolen -- that is what claiming
+    \ it means -- so with every channel claimed there is nothing to give and
+    \ the answer is -1, which ch-claim rejects and every channel word ignores.
     -1                                    ( oldest-so-far, -1 = none yet )
-    snd-channels 1 ?do
+    snd-channels 0 ?do
         i (ch-owned?) 0= if
             dup 0< if  drop i  else
                 i cells (ch-ages) + @  over cells (ch-ages) + @  < if drop i then
             then
         then
     loop
-    \ Every channel claimed: there is genuinely nothing to hand out. Answer -1,
-    \ which is NOT a channel -- every channel word ignores it, so the sound is
-    \ dropped. Falling back to tone-ch would be worse than useless: channel 0 is
-    \ reserved exactly so effects cannot cut a game's tones short, and handing
-    \ it out here would do that on the one path where the caller has no idea
-    \ anything is wrong. (With no device open next-ch still answers tone-ch --
-    \ harmless there, because every channel word is already a no-op.)
-    dup 0< if drop -1 exit then
+    dup 0< if exit then
     dup (ch-touch) ;
 
 : ch-stop ( ch -- )
@@ -420,7 +461,7 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
 \ because SDL pulls audio on its own thread and a Forth word cannot be a C
 \ callback, so the only clock we have is your loop.
 : snd-pump ( -- )
-    (snd-stream) 0= if exit then
+    snd-ready? 0= if exit then
     snd-channels 0 ?do
         i cells (ch-fade-ms) + @ ?dup if           ( dur )
             ms@ i cells (ch-fade-t0) + @ -         ( dur elapsed )
@@ -461,7 +502,7 @@ create (ch-spec) 12 allot              \ scratch SDL_AudioSpec for ch-format!
     \ solves that a different way -- but it declares end-of-input, and SDL
     \ warns of a gap at the join. That would put a gap between consecutive
     \ sounds on one channel, which is exactly the seamless run of tones that
-    \ channel 0 exists to preserve.
+    \ tone's own claimed channel exists to preserve.
     (ch-put-raw) ;
 
 \ --- tone synthesis ---
@@ -496,7 +537,7 @@ variable (t-buf)    \ heap sample buffer (16-bit samples)
     begin dup ch-playing? while 10 ms repeat drop  50 ms ;
 
 : snd-wait ( -- )
-    (snd-stream) 0= if exit then
+    snd-ready? 0= if exit then
     snd-channels 0 ?do
         begin i ch-playing? while 10 ms repeat
     loop

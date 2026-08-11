@@ -10,16 +10,16 @@ channel play **one after another**. Load the backend with `require sound.fs`.
     660 300 2 tone-on        \ channel 2 -- both sound at once
     snd-wait snd-close
 
-Channel 0 (`tone-ch`) belongs to `tone`, which is why a run of plain tones
-still plays in sequence. Ask for another channel when you want overlap.
+`tone` claims a channel of its own when the device opens (`tone-ch`), which is
+why a run of plain tones still plays in sequence. Ask for another channel when
+you want overlap.
 
 At a glance:
 
-    snd-channels     ( -- n )          how many channels (64; rarely changed)
-    snd-max-channels ( -- n )          hard ceiling, 64
-    tone-ch          ( -- 0 )          the channel `tone` uses
+    snd-channels     ( -- 64 )         how many channels there are
+    tone-ch          ( -- ch )         the channel `tone` claimed; -1 if closed
     next-ch          ( -- ch )         a free channel, else steal the oldest
-    ch-claim         ( ch -- )         keep this channel; next-ch skips it
+    ch-claim         ( ch -- ch flag ) keep this channel; next-ch skips it
     ch-release       ( ch -- )         give it back to the rotation
     tone-on          ( freq ms ch -- ) a tone on a chosen channel
     ch-put           ( c-addr u ch -- ) queue raw 16-bit mono samples
@@ -40,34 +40,24 @@ At a glance:
     AUDIO_F32LE      ( -- fmt )        32-bit float samples
     AUDIO_U8         ( -- fmt )        8-bit unsigned samples
 
-## snd-channels ( -- n )
-How many channels the device has. It defaults to 64 — the ceiling — because
-channels cost almost nothing: 64 instead of 16 measures at about 100 KB of
-memory and under a microsecond per `snd-pump`. So most programs never touch
-this.
+## snd-channels ( -- 64 )
+How many channels the device has. A constant: 64 channels cost about 100 KB and
+under a microsecond per `snd-pump`, so there is nothing to gain by having fewer.
 
-The reason to **shrink** it is to force channel reuse cheaply: filling every
-channel to exercise `next-ch`'s stealing takes 10 ms at 4 channels and
-218 ms at 64, which is why the test suite turns it down.
+It was a settable `value` until 2026-08-10, and nothing outside its own tests
+ever changed it — while the shrink path cost a dangling-handle bug and made
+`snd-close` walk a ceiling rather than a count. One line to make it settable
+again if a target ever needs it.
 
-Read **once**, when `snd-open` runs, and `snd-open` on an already-open device
-does nothing — so changing it needs an explicit close, and the close goes
-**first**, while the channels being closed are still the ones that are open:
+## tone-ch ( -- ch )
+The channel `tone` and `beep` play on, or `-1` while the device is closed.
 
-    snd-close   4 to snd-channels   snd-open drop
+`snd-open` claims it the same way any subsystem would, and `snd-close` releases
+it. So it is not privileged — it is simply taken. `next-ch` skips it because it
+is *claimed*, not because it is channel 0, and a run of tones stays a run of
+tones for that reason.
 
-(`snd-close` clears every slot regardless, so the other order no longer leaks
-streams — but it does orphan anything still playing on a channel above the new
-count, which the `ch-` words can no longer reach.)
-
-Clamped into `2 .. snd-max-channels`.
-
-## snd-max-channels ( -- n )
-The hard ceiling on `snd-channels`, 64.
-
-## tone-ch ( -- 0 )
-The channel `tone` and `beep` use. Reserved: `next-ch` never returns it, so
-sound effects cannot cut a game's tones short.
+Which number you get is not worth relying on; ask `tone-ch`.
 
 ## next-ch ( -- ch )
 The next channel to play something on — a free one if there is any, and if
@@ -80,9 +70,9 @@ the channels are a fixed set, and one returns to rotation by itself. It is
 named like `tone-ch` because it answers the same kind of question — that is
 the channel `tone` uses, this is the next channel to use.
 
-Returns `tone-ch` when no device is open — harmless, since every channel word
-is a no-op then — and `-1` when every channel has been claimed, which is not a
-channel at all. With a device open it never returns `tone-ch`.
+Returns `-1` when there is nothing to give — no device open, or every channel
+claimed. That is not a channel, so every channel word ignores it and the sound
+is simply dropped, and `ch-claim` refuses it.
 
 **A stolen channel is not cleared.** Queueing is all that queueing does, so a
 new sound plays *after* whatever was still on the channel rather than replacing
@@ -98,34 +88,45 @@ That last point is why **keeping** a channel needs `ch-claim`: a channel held
 for later goes back into rotation as soon as it falls silent, so `next-ch`
 would hand it to someone else between two of your sounds.
 
-## ch-claim ( ch -- )
-Keep a channel. `next-ch` will not hand it out again — not while it is silent,
-and not when every other channel is busy and it would otherwise be stolen.
+## ch-claim ( ch -- ch flag )
+Keep a channel: `next-ch` will not hand it out again until it is released — not
+while it is silent, and not when everything else is busy and it would otherwise
+be stolen. The channel comes back so the usual phrasing reads straight:
 
-Use it when a subsystem needs a channel of its own for as long as it runs, so
-that its sounds queue behind *each other* and nothing else lands among them.
-`speech.fs` does exactly this: a spoken phrase must never wait behind a sound
-effect, which is only true if the channel stays its own.
+    next-ch ch-claim if  to music-ch  else  drop  ." no channel" cr  then
 
-    next-ch dup ch-claim value music-ch
+True if the claim was taken. **False only if the channel does not exist, or
+somebody already holds it** — that is the one check it makes.
 
-Without it the channel is reissued surprisingly quickly — measured, one held
-channel came back from `next-ch` 3 times in 200 calls.
+Use it when a subsystem wants a channel of its own for as long as it runs, so
+its sounds queue behind *each other* and nothing else lands among them.
+`sound.fs` claims one for `tone` at `snd-open`; `speech.fs` claims one so a
+spoken phrase never waits behind a sound effect.
 
-Claiming every channel leaves `next-ch` nothing to give, and it answers `-1`.
-That is **not** a channel — every channel word ignores it, so the sound is
-dropped. It does not fall back to `tone-ch`: channel 0 is reserved so that
-effects cannot cut a game's tones short, and handing it out here would do
-precisely that, on the one path where the caller has no way to tell.
+Without it the channel is reissued surprisingly quickly — `next-ch` treats a
+channel as busy only while audio is *queued* on it, so one held for later comes
+straight back into rotation the moment it falls silent. Measured, a held
+channel came back 3 times in 200 calls.
 
-Ignored for a channel that doesn't exist. `snd-close` releases every claim,
-since closing destroys the channels themselves.
+A claim is **cooperative**: a note in a table, not a capability. Anyone can
+release anyone's channel, the same way anyone can `ch-stop` anyone's sound. A
+program that wants a guarantee can build one on top; this layer just tells the
+truth about who asked for what.
+
+It **outlives a device cycle**. `snd-close` and `snd-open` do not clear claims,
+because a claim belongs to whoever took it rather than to the device — so a
+subsystem holding a channel still holds it when the device comes back, instead
+of silently losing it and playing onto a channel `next-ch` has since given to
+someone else. Each owner releases its own: `snd-close` drops `tone`'s,
+`speech-close` drops speech's.
 
 ## ch-release ( ch -- )
-Give a claimed channel back to the rotation. The counterpart to `ch-claim`,
-and only meaningful after one — an unclaimed channel is already in rotation.
+Give a claimed channel back to the rotation. The counterpart to `ch-claim`, and
+only meaningful after one — an unclaimed channel is already in rotation.
 
     music-ch ch-release
+
+Ignored for a channel that doesn't exist.
 
 ## tone-on ( freq ms ch -- )
 Like `tone`, but on a channel you choose. `tone` is exactly

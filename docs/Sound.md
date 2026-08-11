@@ -96,7 +96,7 @@ differ this way; it shows up only as a runtime error from
 
 ### Channels
 
-The device holds `snd-channels` streams (default 64, the ceiling), all bound to
+The device holds `snd-channels` streams (a fixed 64), all bound to
 one logical device, and **SDL mixes them** — there is no mixer code here.
 Sounds on different channels play together; sounds queued on one channel play
 in sequence.
@@ -106,10 +106,17 @@ allocated** when all are busy, so a program that fires more sounds than it has
 channels loses its stalest rather than refusing the newest. It is round-robin
 rather than lowest-free because a channel only counts as busy once audio is
 queued on it — two allocations before either was given samples would otherwise
-both return channel 1.
+both return the same channel.
 
-Channel 0 is reserved for `tone`, which is what keeps a run of plain tones
-playing in sequence exactly as it did before channels existed.
+A subsystem that needs a channel to stay its own **claims** it, and `next-ch`
+stops offering it until it is released. A claim outlives a `snd-close` /
+`snd-open`, because it belongs to whoever took it rather than to the device;
+each owner releases its own, so `snd-close` gives back only `tone`'s.
+
+`snd-open` claims a channel for `tone` (`tone-ch`), which is what keeps a run
+of plain tones playing in sequence exactly as it did before channels existed.
+It is claimed rather than reserved: `next-ch` skips it because somebody holds
+it, not because of its number, so `tone` needs no special case anywhere.
 
 Per-channel volume is `SDL_SetAudioStreamGain`, applied by SDL **as it pulls
 the audio out**. So it costs nothing at queue time, needs no copy of anyone's

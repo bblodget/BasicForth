@@ -75,19 +75,14 @@ variable (sp-why-len)
 0 value (fl-delete)
 0 value (fl-voice)                           \ cst_voice* from register_*
 -1 value speech-ch                           \ our own channel, -1 = not open
-0 value (sp-stream)                          \ the stream that channel had
-
-\ Ready means the VOICE is bound AND our channel is still the one we took.
-\ Holding the channel number alone is not enough: snd-close destroys every
-\ stream, and a later snd-open builds new ones and starts handing the same
-\ numbers out again -- so a stale speech-ch would collide with whatever
-\ next-ch gave the next caller, and the two would share a queue. Comparing
-\ the stream POINTER catches both the closed device (0) and the reopened one
-\ (a different stream), which a channel number cannot distinguish.
+\ Ready means the voice is bound and we still hold a live channel. Speech's
+\ claim outlives a snd-close -- claims belong to whoever took them, not to the
+\ device -- so the channel is still ours after the device comes back, and only
+\ the stream needs checking to know there is a device at all.
 : speech-ready? ( -- flag )
     (fl-voice) 0= if false exit then
     speech-ch 0< if false exit then
-    speech-ch (ch-stream) dup 0<> swap (sp-stream) = and ;
+    speech-ch (ch-stream) 0<> ;
 
 \ The cst_wave flite hands back. Verified by calling it rather than read off a
 \ header: type*@0, sample_rate@8 (int), num_samples@12 (int), num_channels@16
@@ -135,20 +130,29 @@ variable (sp-why-len)
     \ Our own channel: a channel is a sequential queue, so successive says wait
     \ for each other instead of talking over themselves, and speech never
     \ queues up behind a sound effect.
-    \ next-ch answers -1 when every channel is claimed. Claiming that would
-    \ "succeed" while speech had nowhere to play.
-    next-ch dup 0< if
+    \ next-ch answers -1 when there is nothing to give, and ch-claim rejects it.
+    next-ch ch-claim 0= if
         drop s" no free channel to speak on" (sp-why$) 7 exit then
     to speech-ch
-    speech-ch ch-claim                       \ or next-ch reissues it the
-                                             \ moment the phrase falls silent
-    \ When every channel is busy, next-ch hands back the least recently used
-    \ one WITHOUT clearing it -- so the channel can arrive with someone else's
-    \ effect still queued, and the first phrase would play behind it. Taking
-    \ the channel means taking it over.
+    \ next-ch hands back the least recently used channel WITHOUT clearing it
+    \ when everything is busy, so it can arrive with someone else's effect
+    \ still queued and the first phrase would play behind it. Taking the
+    \ channel means taking it over.
     speech-ch ch-stop
-    speech-ch (ch-stream) to (sp-stream)
     0 ;
+
+\ Give the channel back. flite stays bound: reopening then only has to take a
+\ channel again, and re-registering a voice buys nothing (there is no dlclose
+\ here either). Closing speech is about the channel.
+\
+\ It stops mid-phrase rather than letting one finish. Releasing a channel with
+\ audio still on it puts the next caller's sound behind the tail of a phrase --
+\ say speech-ch ch-wait first if you want it played out.
+: speech-close ( -- )
+    speech-ch 0< if exit then                \ idempotent, like snd-close
+    speech-ch ch-stop
+    speech-ch ch-release
+    -1 to speech-ch ;
 
 \ --- speaking -------------------------------------------------------------
 

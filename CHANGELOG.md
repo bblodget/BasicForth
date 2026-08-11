@@ -4,39 +4,82 @@
 
 ### Added: `ch-claim` / `ch-release` — keeping a channel
 
-- `next-ch` skips a channel only while audio is **queued** on it, so a channel
-  held for later came back into rotation the moment it fell silent. "Keep a
-  channel" was therefore not something a caller could actually do, and nothing
-  said so: measured, one held channel was handed back out **3 times in 200
-  `next-ch` calls**. `speech.fs` held one precisely so a phrase would never
-  queue behind a sound effect, and that guarantee was quietly false.
-- `ch-claim ( ch -- )` takes a channel out of the rotation until
+- `next-ch` treats a channel as busy only while audio is **queued** on it, so a
+  channel held for later came straight back into rotation the moment it fell
+  silent. "Keep a channel" was therefore not something a caller could do, and
+  nothing said so: measured, a held channel was handed back out **3 times in
+  200 calls**, which is how speech ended up sharing a queue with sound effects.
+- `ch-claim ( ch -- ch flag )` takes a channel out of the rotation until
   `ch-release ( ch -- )` puts it back. `next-ch` skips claimed channels in both
-  passes — the round-robin scan and the steal-the-oldest fallback — because
-  stealing one would drop an effect on top of a phrase, which is the thing
-  claiming it prevents.
-- Claiming every channel leaves nothing to hand out, and `next-ch` answers `-1`
-  — not a channel, so every channel word ignores it and the sound is dropped.
-  It deliberately does **not** fall back to `tone-ch`: channel 0 is reserved so
-  effects cannot cut a game's tones short, and handing it out on exhaustion
-  would break that on the one path where the caller cannot tell. (Reviewed
-  twice — the first version did fall back to `tone-ch`.) With no device open
-  `next-ch` still answers `tone-ch`, which is harmless because every channel
-  word is already a no-op.
-- `speech-open` reports ior 7 when no channel is available, rather than
-  claiming `-1` and appearing to succeed with nowhere to play.
-- `speech-open` **stops** the channel it takes over. When every channel is
-  busy, `next-ch` returns the least recently used one *without clearing it* —
-  queueing is all that queueing does — so speech could be handed a channel with
-  an effect still on it and the first phrase would play behind that effect.
-  Measured before the fix: 237976 bytes inherited. That is the guarantee
-  `speech-ch` exists for, broken at the moment speech opens. `help next-ch` now
-  states that a stolen channel is not cleared, which was true before and
-  undocumented.
-- `snd-close` releases every claim, since closing destroys the channels
-  themselves — so there is no way to leak one across a device cycle.
-- The reference page and `sound.fs`'s own header both stated "there is no
-  matching release", which this makes false. Both corrected.
+  passes — the round-robin scan and the steal-the-oldest fallback — and answers
+  `-1` when there is nothing to give, which `ch-claim` refuses and every
+  channel word ignores. The channel comes back on the stack so the usual
+  phrasing reads straight: `next-ch ch-claim if to music-ch else drop ... then`.
+- **The only check `ch-claim` makes is whether somebody already holds it.** A
+  claim is a note in a table, not a capability: anyone can release anyone's
+  channel, the same way anyone can `ch-stop` anyone's sound. An earlier version
+  of this grew claim tokens and an ownership predicate to make that impossible;
+  it was deleted. Forth hands you the machine, and a program wanting guarantees
+  can build them on top.
+- **A claim outlives a device cycle.** `snd-open` no longer clears the claim
+  table, because a claim belongs to whoever took it rather than to the device.
+  That single decision removes a whole family of defects rather than guarding
+  against them: with claims cleared, a subsystem holding a channel silently
+  lost it on `snd-close`/`snd-open` and went on playing onto a channel
+  `next-ch` had since given to someone else — and detecting *that* is what
+  drove the tokens, which in turn needed identity a channel number could not
+  carry. Nothing invalidates the number behind the holder's back now, so there
+  is nothing to detect. Each owner releases its own: `snd-close` drops `tone`'s,
+  `speech-close` drops speech's.
+
+### Changed: `tone` claims a channel instead of owning channel 0
+
+- `snd-open` can now fail because there is no channel left for `tone` — only
+  reachable if something claimed every channel while the device was shut, since
+  `snd-close` frees `tone`'s own. It reports **its own ior and its own reason**
+  rather than going through the SDL failure path, which would have handed back
+  SDL's last error: reproduced before fixing as ior 1 with an *empty*
+  `snd-why`, and ior 1 is what a failed `SDL_Init` returns, so the caller was
+  told the wrong thing twice over.
+
+- `tone-ch` was `0 constant` and `next-ch` was written never to return it.
+  Now `snd-open` **claims** a channel for `tone` like any other subsystem, and
+  `snd-close` releases it; `tone-ch` is a `value`, `-1` while closed.
+- Same guarantee, no special case: `next-ch` skips it because it is claimed,
+  not because of its number. A run of tones still cannot be interrupted by a
+  sound effect, and `next-ch`'s exhaustion path no longer has to decide whether
+  handing back the tone channel is acceptable — it never was.
+- `tutorial Sound` taught that `tone-ch` is a **constant** and demonstrated
+  that `to tone-ch` fails. The practice is unchanged and the *reason* is
+  rewritten: what makes the channel `tone`'s is the claim, not the number.
+
+### Fixed: four `help` entries were unreachable by their second name
+
+- `help on-stop`, `help pad-closeall`, `help pad-hasaxis?` and `help pad-dy`
+  all answered "no help", while the first name of each pair worked. The
+  headings read `## a ( eff ) / b ( eff )`, and the index takes the words up to
+  the first `(` — so only `a` was ever registered. The supported form is
+  `## a b ( eff )`.
+- Nothing caught it because the reference audit never `require`s `pad.fs`, the
+  same blind spot that let `snd-dev` ship undocumented. Adding it turns the
+  audit red with about 40 further names, in two groups — described-but-unindexed
+  in `pad.fs`, and genuinely undocumented raw handles in `sdl3.fs` — so that is
+  filed in `docs/TODO.md` rather than bolted on here.
+
+### Changed: `snd-channels` is a constant, 64
+
+- It was a settable `value`, clamped at open. **Nothing outside its own tests
+  ever changed it** — no example, no lesson, no library — and the stated
+  justification (letting the suite force channel reuse cheaply) was stale: the
+  stealing test fills all 64 and pays the 228 ms. Measured, 64 vs 4 channels is
+  228 ms vs 11 ms for that one fill.
+- Removing it deletes the clamp in `snd-open`, the ordering hazard where the
+  close had to come *before* the change, `snd-close`'s walk-to-the-ceiling
+  subtlety, the two tests that only tested the feature — one of them the
+  regression test for a dangling-handle bug that can no longer happen — and a
+  claim-leak corner where a claim could outlive the channel it named.
+- `snd-max-channels` went with it; the two names now meant the same number.
+  One line to make it settable again if a target ever needs fewer.
 
 ### Added: `speech.fs` — `say`, speaking text with no file anywhere
 
@@ -65,16 +108,16 @@
   NUL-terminating buffer is 256 bytes and aborts past it; checking first means
   the complaint names the phrase rather than a buffer the caller never
   mentioned.
-- `speech-ready?` compares the channel's **stream pointer**, not just the
-  channel number, and `speech-open` checks for a device before checking
-  idempotence. Both from a review finding: holding `speech-ch` across a
-  `snd-close` made `speech-open` return 0 with no device at all, left
-  `speech-ready?` true so `say` burned 38 ms synthesizing into nothing, and —
-  after a later `snd-open` rebuilt the streams — left speech on a channel that
-  `next-ch` then handed to the next caller as well, so a sound effect and
-  speech shared one queue. That is precisely the property `speech-ch` exists to
-  guarantee, broken silently. A channel number cannot tell a closed device from
-  a reopened one; the stream pointer distinguishes both.
+- `speech-ready?` asks two things: is the voice bound, and is speech's channel
+  live. Nothing more is needed, because a claim outlives a device cycle — the
+  channel speech took is still speech's when the device comes back. Getting
+  there took several passes, all chasing the same question the wrong way: the
+  channel number (reissued after a cycle), then the channel's stream pointer
+  (an address is not an identity — over 40 cycles one came back 8 times), then
+  a claim token. Making claims survive the cycle deleted the question instead
+  of answering it.
+- `speech-open` checks for a device **before** checking idempotence. The other
+  order reported success after `snd-close`, with no device to speak through.
 - Found while testing: `say` leaked a cell. `dup >r` put the `cst_wave` on both
   stacks and only the return-stack copy was consumed, so every call grew the
   stack by one. Caught because a timing harness printed a nonsense number, then

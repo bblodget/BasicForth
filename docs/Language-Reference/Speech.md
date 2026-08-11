@@ -13,6 +13,7 @@ silent no-ops, so a machine without flite runs rather than failing.
 At a glance:
 
     speech-open  ( -- ior )        bind flite and take a channel; 0 = success
+    speech-close ( -- )            give the channel back
     speech-ready? ( -- flag )      is speech bound right now?
     speech-why   ( -- c-addr u )   why the last speech-open or say failed
     say          ( c-addr u -- )   speak a phrase
@@ -40,17 +41,45 @@ changes nothing, so a redundant call in an `on-start` hook is free.
 Binding happens here rather than at `require` time deliberately: a machine with
 no flite gets an `ior` it can handle, instead of an abort while loading a file.
 
+## speech-close ( -- )
+Give the channel back. Speech goes quiet — `say` becomes a silent no-op — and
+the channel returns to `next-ch`'s rotation for everyone else.
+
+    speech-close                    \ done talking; the channel is free again
+
+Use it when a program has finished with speech but is still playing sound: a
+claimed channel is held until something releases it, and 63 channels is not 64.
+`speech-open` afterwards takes a fresh channel and works as before.
+
+`speech-ch ch-release` does the same thing to the channel, since claims are
+cooperative — but it leaves `speech-ch` pointing at a channel speech no longer
+holds, so `say` would go on queueing onto it. Use `speech-close`, which clears
+both.
+
+It **stops mid-phrase** rather than letting one finish. Releasing a channel
+with audio still on it would put the next caller's sound behind the tail of
+your phrase. Call `speech-ch ch-wait` first if you want it played out:
+
+    speech-ch ch-wait  speech-close
+
+Idempotent, and safe before `speech-open` has ever run. flite stays bound —
+closing is about the channel, and reopening only has to take one again.
+
+`snd-close` is **not** a substitute: a claim outlives a device cycle, so speech
+still holds its channel after a `snd-close`/`snd-open`. That is deliberate —
+there is no window in which the channel quietly becomes someone else's — but it
+does mean the channel stays speech's until speech gives it back.
+
 ## speech-ready? ( -- flag )
-True if speech can actually speak right now: the voice is bound **and** the
-channel it holds still belongs to the open device. `speech-open` is the verb;
+True if speech can actually speak right now: the voice is bound **and** its
+channel is live, which means a device is open. `speech-open` is the verb;
 this is the question, the same pair `snd-open` and `snd-ready?` make.
 
     speech-ready? if  s" ready" say  then
 
-It goes false after `snd-close`, and stays false after a later `snd-open`
-until `speech-open` is called again — closing the device destroys every
-channel, and reopening builds new ones. Call `speech-open` after any
-`snd-open`; it is free when nothing has changed.
+It goes false after `snd-close`, because there is no device to play through,
+and true again after `snd-open` — speech keeps its claim across the cycle, so
+there is nothing to re-take.
 
 ## say ( c-addr u -- )
 Speak a phrase. Queues the audio and returns; the sound plays in the
@@ -84,7 +113,8 @@ channel is a sequential queue, so successive `say`s wait for each other rather
 than talking over themselves, and because it is speech's own channel, a phrase
 never queues up behind a sound effect.
 
-It is never channel 0 — that belongs to `tone`.
+It is never `tone`'s channel: `tone` claims one at `snd-open`, so `next-ch`
+skips it.
 
 `speech-open` **stops** whatever is on the channel it takes. When every channel
 is busy, `next-ch` hands back the least recently used one without clearing it,
@@ -92,10 +122,9 @@ so the channel can arrive with a sound effect still queued — and the first
 phrase would play behind it, which is the thing this channel exists to prevent.
 Taking the channel means taking it over.
 
-A `snd-close` destroys it, so `speech-open` takes a fresh one after the device
-comes back. That re-take is not cosmetic: reopening starts handing the same
-channel numbers out again, so a kept number would collide with whatever
-`next-ch` gives the next caller, and speech would share a queue with it.
+It survives a `snd-close`/`snd-open`: claims belong to whoever took them, not
+to the device, so the same channel is still speech's when the device comes
+back. Only `speech-close` gives it up.
 
 ## speech-voice! ( lib u sym u -- )
 Choose the flite voice: its library and the symbol that registers it. Call
