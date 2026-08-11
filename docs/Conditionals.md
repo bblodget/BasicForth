@@ -97,8 +97,9 @@ After WHILE:   ( begin-addr CF_DEST while-patch CF_ORIG )
 After REPEAT:  ( )  — both consumed
 ```
 
-If a tag doesn't match, the compiler prints `"? mismatched-control-flow"`
-and rolls back the definition.
+If a tag doesn't match, the compiler prints
+`"mismatched control flow: <word>"` — naming the closer you typed — and rolls
+back the definition.
 
 ## Error Detection
 
@@ -108,13 +109,25 @@ Three levels of protection:
    definition prints `"compile only"`.
 
 2. **Tag mismatch**: `BEGIN ... THEN` or `IF ... UNTIL` prints
-   `"? mismatched-control-flow"` and rolls back the definition.
+   `"mismatched control flow: then"` and rolls back the definition. A closer
+   with *nothing* open (`: q THEN ;`) reports the same way — `cf_check_tag`
+   bounds its read by `colon_dsp`, so it never walks off the top of the
+   compile-time stack.
 
 3. **Balance check**: `;` verifies the data stack depth matches what `:`
-   saved. Unresolved forward references (e.g., `IF` without `THEN`)
-   print `"unresolved control flow"` and roll back.
+   saved. Unresolved forward references (e.g., `IF` without `THEN`) print
+   `"unresolved control flow: <name>"` — naming the definition, read off its
+   own half-built header — and roll back. An anonymous definition has no name
+   to give, so a `:NONAME` reports the token instead: `... : ;`.
 
 All three recover cleanly — subsequent definitions work normally.
+
+All three also **stop a file load** at the offending line, and are reported
+with the usual `file:line:` prefix. That matters more than it sounds: a
+definition that fails to compile leaves the rest of the file referring to a
+word that does not exist, so letting the load continue buries the real error
+under a pile of consequential ones, the first of which may be a long way from
+the mistake.
 
 ## Mismatch Recovery
 

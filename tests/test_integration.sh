@@ -465,30 +465,92 @@ assert_output "if else false"      ": test 0 if 42 else 99 then ; test ."     "9
 assert_output "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
 assert_output "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
 assert_output "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
-assert_error  "if without then"  ": test if ;"                               "unresolved control flow"
-assert_error  "begin without until" ": test begin ;"                         "unresolved control flow"
-assert_error  "begin then mismatch" ": test begin then ;"                   "? mismatched-control-flow"
-assert_error  "if until mismatch"  ": test if until ;"                      "? mismatched-control-flow"
+assert_error  "if without then"  ": test if ;"                               "unresolved control flow: test"
+assert_error  "begin without until" ": test begin ;"                         "unresolved control flow: test"
+# :NONAME builds a hidden header with an EMPTY name, so there is nothing to
+# name and the report falls back to the token the interpreter parsed.
+assert_error  "noname without then" ":noname 1 if ;"                         "unresolved control flow: ;"
+assert_error  "begin then mismatch" ": test begin then ;"                   "mismatched control flow: then"
+assert_error  "if until mismatch"  ": test if until ;"                      "mismatched control flow: until"
 # CASE arm bookkeeping. Before 2026-07-29 the CASE family pushed UNTAGGED
 # values, so ENDOF could not tell its own pending OF-branch from a previous
 # arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
 # other's bodies), and closing a non-CASE construct with a CASE word handed
 # patch_forward a tag value as an address and SEGFAULTED the process — fatal
 # during a file load. Found in the Dark Star port.
-assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "? mismatched-control-flow"
-assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "? mismatched-control-flow"
-assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "? mismatched-control-flow"
-assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "? mismatched-control-flow"
-assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "? mismatched-control-flow"
-assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "? mismatched-control-flow"
-assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "? mismatched-control-flow"
+assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "mismatched control flow: endof"
+assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "mismatched control flow: endcase"
+assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "mismatched control flow: endcase"
+assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "mismatched control flow: endcase"
+assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "mismatched control flow: endof"
+assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "mismatched control flow: endcase"
+assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "mismatched control flow: endcase"
 # an IF opened inside an arm and closed out of order — the likeliest typo
-assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "? mismatched-control-flow"
-assert_error  "endcase without case"  ": bad endcase ;"                    "? mismatched-control-flow"
-assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "? mismatched-control-flow"
+assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "mismatched control flow: endof"
+assert_error  "endcase without case"  ": bad endcase ;"                    "mismatched control flow: endcase"
+assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "mismatched control flow: endcase"
+# A closer with NOTHING open. Until 2026-08-11 these read the compile-time
+# stack before checking it, so they walked off the top, hit the guard page, and
+# the fault handler reported "stack underflow" -- naming the DATA stack for what
+# is a compile error, and telling a beginner who typed `then` with no `if` to go
+# look at their stack. Each closer is its own call site, so each is asserted;
+# `while` in particular inlined the tag compare and had to be fixed separately.
+assert_error  "then with nothing open"   ": q then ;"        "mismatched control flow: then"
+assert_error  "else with nothing open"   ": q else ;"        "mismatched control flow: else"
+assert_error  "until with nothing open"  ": q until ;"       "mismatched control flow: until"
+assert_error  "repeat with nothing open" ": q repeat ;"      "mismatched control flow: repeat"
+assert_error  "while with nothing open"  ": q while ;"       "mismatched control flow: while"
+assert_error  "again with nothing open"  ": q again ;"       "mismatched control flow: again"
+assert_error  "loop with nothing open"   ": q loop ;"        "mismatched control flow: loop"
+assert_error  "+loop with nothing open"  ": q +loop ;"       "mismatched control flow: +loop"
+assert_error  "endof with nothing open"  ": q endof ;"       "mismatched control flow: endof"
+assert_error  "endcase with nothing open" ": q endcase ;"    "mismatched control flow: endcase"
+# and none of them leaves the session wedged. Not implied by the message above:
+# the definition-open guard printed correctly while stranding the half-built
+# header as LATEST, which then refused every later definition.
+assert_output "define after a stray then" ": q then ; : ok2 42 . ; ok2"     "42"
+assert_output "define after a stray loop" ": q loop ; : ok3 43 . ; ok3"     "43"
+# Mid-FILE is where a wrong diagnosis costs the most, and it is a different
+# report path: the loader prefixes file:line. Assert the LINE too -- the error
+# is on line 2, and a report that always said line 1 would still contain the
+# message. The file must also not take the session down with it.
+# An UNBALANCED definition in a file: `: Say ... if ... ;` with the THEN left
+# off. Until 2026-08-11 `;` printed "unresolved control flow" bare -- no file,
+# no line, no name -- and then RETURNED, so the file kept loading against a word
+# that never got defined. The only line number you got was from the first CALL
+# to the missing word, 46 lines further on in the real case (Dark Star, typo on
+# 167, reported at 213). Assert all three things that were wrong: the location,
+# the name, and that the load stopped before the later definition.
+cfu_dir="$(mktemp -d)"
+printf ': fine 1 ;\n: say 1 if 2 ;\n: later 7 ;\n99 say\n' > "$cfu_dir/unbal.fs"
+cfu_out=$(printf 's" %s/unbal.fs" included\nlater\n: after 45 . ;\nafter\nbye\n' "$cfu_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+rm -rf "$cfu_dir"
+if [[ "$cfu_out" == *"unbal.fs:2: unresolved control flow: say"* \
+      && "$cfu_out" == *"? later"* && "$cfu_out" == *"45"* \
+      && "$cfu_out" != *"? say"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unbalanced definition in a file → file:line:name, load stops\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unbalanced definition in a file → file:line:name, load stops\n"
+    printf "    Expected: 'unbal.fs:2: unresolved control flow: say', '? later', '45', no '? say'\n    Got: %q\n" "$cfu_out"; ((failed++))
+fi
+
+cfl_dir="$(mktemp -d)"
+printf ': fine 1 ;\n: q then ;\n: later 7 ;\n' > "$cfl_dir/stray.fs"
+cfl_out=$(printf 's" %s/stray.fs" included\n: after 44 . ;\nafter\nbye\n' "$cfl_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+rm -rf "$cfl_dir"
+if [[ "$cfl_out" == *"stray.fs:2: mismatched control flow: then"* && "$cfl_out" == *"44"* ]]; then
+    printf "  ${GREEN}PASS${NC}  stray closer in a file → file:line, session lives\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stray closer in a file → file:line, session lives\n"
+    printf "    Expected: 'stray.fs:2: mismatched control flow: then' and '44'\n    Got: %q\n" "$cfl_out"; ((failed++))
+fi
 # and the well-formed cases still compile and run, including nested both ways
 assert_output "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
 assert_output "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+assert_output "while loop still runs" ": t begin dup while 1- repeat ; 3 t ." "0"
+assert_output "leave still runs"      ": t 10 0 do i . i 3 = if leave then loop ; t" "0 1 2 3"
 
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
@@ -518,15 +580,23 @@ assert_output "stray ; inside evaluate stops that line" \
 # context. Without that, an error raised later in the SAME outer token inherits
 # the inner string's wording. Reaching a wording-less error site at run time
 # takes `execute` on a compile-only word, which skips the compile-only check and
-# lands in cf_check_tag with a bogus tag. Verified: with the bracketing removed
-# the second line below reports "compile only: mismatched-control-flow".
+# lands in cf_check_tag with a bogus tag.
+#
+# NOTE (2026-08-11): cf_check_tag now sets its OWN wording, so it is no longer
+# wording-less and these two can no longer demonstrate the leak -- they assert
+# the wording is right, not that bracketing works. A probe that still bites
+# needs a site that inherits (`.Lsq_no_close` is one); see docs/TODO.md.
+#
+# The TOKEN here is the enclosing word, not `then`: cf_check_tag names whatever
+# the OUTER interpreter last parsed, which is the closer for ordinary source but
+# the caller when a closer is reached at run time through `execute`.
 assert_output "a nested evaluate does not leak its error wording" \
               ": leaky s\" ;\" evaluate  0 99 ' then execute ;
-leaky"                                                      "? mismatched-control-flow"
+leaky"                                                      "mismatched control flow"
 # the same error with no evaluate in front, as the control
 assert_output "control-flow mismatch reports plainly" \
               ": plain 0 99 ' then execute ;
-plain"                                                      "? mismatched-control-flow"
+plain"                                                      "mismatched control flow: plain"
 # and nesting still returns values correctly through two levels
 assert_output "evaluate nests two deep" \
               ": inner s\" 2 3 +\" evaluate ;
@@ -575,7 +645,7 @@ assert_output "leave nested inner" \
 assert_output "leave nested outer" \
     ": test 3 0 do i 1 = if leave then 3 0 do i . loop 32 emit loop ; test"  "0 1 2"
 assert_output "leave +loop"        ": test 20 0 do i 10 > if leave then i . 3 +loop ; test"  "0 3 6 9"
-assert_error  "leave outside do"  ": test leave ;"                                         "? mismatched-control-flow"
+assert_error  "leave outside do"  ": test leave ;"                                         "mismatched control flow: leave"
 
 # =========================================================================
 section "Defining Words"
