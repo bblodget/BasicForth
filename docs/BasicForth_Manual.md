@@ -5,27 +5,17 @@ start coding — games, robots, whatever you want.
 
 ## Prerequisites
 
-### x86-64 (native build)
-
 ```
-sudo apt install binutils gcc make
+sudo apt install git binutils gcc make
 ```
 
-### ARM64 (cross-compile from x86-64)
+That is the whole list — `git` to fetch the source, and `binutils`, `gcc` and
+`make` to build it. The source is assembly, and every library BasicForth can
+use (SDL3, flite, a speech engine) is `dlopen`ed on demand rather than linked,
+so none of them is needed to build or to run.
 
-```
-sudo apt install binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu make qemu-user-static
-```
-
-- `binutils-aarch64-linux-gnu` — cross-assembler and linker (`as`, `ld`)
-- `gcc-aarch64-linux-gnu` — cross-compiler (needed for unit tests)
-- `qemu-user-static` — user-mode emulation to run ARM64 binaries on x86
-
-### ARM64 (native build on ARM64 board)
-
-```
-sudo apt install binutils gcc make
-```
+**[Install.md](Install.md)** covers the rest: the ARM64 cross-compile, the
+optional libraries and what each one buys, and `setup.sh`.
 
 ## Building and Running
 
