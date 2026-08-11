@@ -365,7 +365,7 @@ See **Graphics Direction** (Design Decisions) for the philosophy and roadmap.
 - FFI (dynamic linking + `dlopen`/`dlsym`/`ccall` + struct marshalling) —
   prerequisite for any library
 - SDL3 display backend behind the surface API: window (desktop) or KMSDRM
-  (console/appliance), vsync'd present, keyboard/mouse/gamepad input
+  (console/appliance), timer-paced present, keyboard/mouse/gamepad input
 - Sound output via SDL3 audio (`sound.fs`: queued square-wave tones) — done
 - SDL_GPU 3D backend behind the same surface API
 - Game demos (snake, sprites)
