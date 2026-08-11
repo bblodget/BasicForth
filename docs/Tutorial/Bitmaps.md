@@ -280,7 +280,7 @@ That's why the window blinked. Stamp the alien again to see the new legs:
     f  green inv 40 40 8 8 stamp  s
 
 The reload is also why `on-stop` and `on-start` matter. Without them it
-would forget `sdl-win` while the window itself kept existing, and that
+would forget the window handle while the window itself kept existing, and that
 `stamp` would have failed with `Parameter 'texture' is invalid` — a window
 on screen that nothing could draw to or close. Instead `on-stop` closed it
 properly on the way down and `on-start` opened a fresh one on the way back
