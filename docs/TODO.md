@@ -117,6 +117,27 @@ completed. See Planning.md for high-level vision and design decisions.
   checking `: q1 then ;` at the prompt *and* mid-file, since the file path is
   where a wrong diagnosis costs the most.
 
+  **How to raise it (learned 2026-08-10 doing the definition-open guard).**
+  The protocol is: store the offending token in `err_token_addr`/`err_token_len`
+  and the wording in `err_pfx_addr`/`err_pfx_len`, then jump — the CALLER
+  prints, which is what gets the `file:line` prefix on a load for free.
+  `msg_cf_mismatch` ("mismatched control flow") already exists in both arches
+  and is already used by a site immediately above `.Lcf_abort`, so no new
+  message is needed.
+
+  **Jump to `.Lcf_abort`, not `.Lcf_longjmp`.** A definition is open by
+  definition here. `.Lcf_abort` restores `colon_dsp`/`saved_latest`/
+  `saved_here`, drops the partial header and resets `state`/`do_depth`/
+  `leave_count`; the bare `.Lcf_longjmp` is for interpret-mode errors and
+  leaves the dictionary alone, which would strand the open definition as a
+  hidden LATEST. Note that some sites choose between the two by testing
+  `STATE` — that test is wrong wherever `[` can be in play, since `[`
+  interprets *inside* an open definition.
+
+  **Test obligation:** the message, and that the session can still define a
+  word afterwards. The second is not implied by the first — that is exactly
+  how the definition-open guard first went wrong.
+
 - [x] **`:noname` inside a colon definition wedges a file load.** RESOLVED
   2026-08-10, in two halves and neither was `:noname`. The wedge was fixed
   2026-07-26 (below). The remaining "stack underflow" half was a
