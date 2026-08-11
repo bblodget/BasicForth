@@ -1146,8 +1146,8 @@ else
     fi
 
     # require sdl3.fs pulls its own deps (ffi, graphics), and a second require
-    # under a live window is a no-op: sdl-win must be preserved, not zeroed.
-    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\nsdl-win\nrequire sdl3.fs\nsdl-win swap over = . 0= 0= .\nsdl-close\nbye\n' \
+    # under a live window is a no-op: (sdl-win) must be preserved, not zeroed.
+    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\n(sdl-win)\nrequire sdl3.fs\n(sdl-win) swap over = . 0= 0= .\nsdl-close\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$sdl_rq" | grep -q -- '-1 -1'; then
         printf "  ${GREEN}PASS${NC}  require sdl3.fs: deps auto-load; re-require keeps a live window\n"; ((passed++))
@@ -1393,7 +1393,7 @@ else
     fi
 
     # require pad.fs pulls sdl3.fs (and through it ffi/graphics) on its own.
-    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open sdl-win 0<> . sdl-close pad-closeall depth .\nbye\n' \
+    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open (sdl-win) 0<> . sdl-close pad-closeall depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$pad_rq" | grep -q -- '-1 0'; then
         printf "  ${GREEN}PASS${NC}  require pad.fs pulls sdl3 deps; pad-closeall keeps SDL usable\n"; ((passed++))
@@ -5337,24 +5337,37 @@ else
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
 fi
 
-# The same audit for the AUDIO library words, which the core sweep above cannot
-# see: they only exist after `require wav.fs`, so sound.fs/wavcore.fs/wav.fs
-# could add public names with no help entry and nothing would notice. Found
-# that way -- snd-dev and snd-stream were public-looking names for raw SDL
-# handles. Parenthesised names are internal by convention and skipped, as above.
+# The same audit for the LIBRARY words, which the core sweep above cannot see:
+# they exist only after a `require`, so any library could add a public name
+# with no help entry and nothing would notice. Found that way -- snd-dev and
+# snd-stream were public-looking names for raw SDL handles. Parenthesised names
+# are internal by convention and skipped, as above.
+#
+# Both checks need libSDL3, since most of the libraries will not load without
+# it -- so under qemu, or on a machine with no SDL3, this is the one part of
+# the help contract that goes unverified. Both skips are printed rather than
+# quietly dropped.
 if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
-    printf "  ${YELLOW}SKIP${NC}  every audio library word has a reference entry (needs libSDL3)\n"
+    printf "  ${YELLOW}SKIP${NC}  every library word has a reference entry (needs libSDL3)\n"
+    printf "  ${YELLOW}SKIP${NC}  the library audit loads every src/forth/*.fs (needs libSDL3)\n"
 else
-    # speech.fs too, for the same reason the wav tree was added: a library this
-    # audit does not `require` is invisible to it, so its public names could
-    # ship undocumented. It loads without libflite (the binding is lazy), so
-    # only libSDL3 gates this.
+    # EVERY library in src/forth, for the reason the wav tree was added: a
+    # library this audit does not `require` is invisible to it, so its public
+    # names could ship undocumented. speech.fs loads without libflite (the
+    # binding is lazy), so only libSDL3 gates this.
     #
-    # pad.fs and sdl3.fs are NOT swept yet, and adding them turns this red with
-    # about 40 names -- see docs/TODO.md. Left out deliberately rather than
-    # papered over.
-    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
-        | sed -n '4p' | sed 's/ ok *$//')
+    # The list below is deliberately explicit rather than "these pull in the
+    # rest". Some do -- pad.fs brings sdl3.fs, which brings ffi.fs and
+    # graphics.fs; disasm.fs brings shellutil.fs -- but reasoning that way is
+    # how voice.fs and disasm.fs got left out of the first version of this
+    # sweep while a comment claimed they were covered. Both fonts are listed
+    # because each defines its own selector word.
+    #
+    # If a new .fs lands in src/forth, add it here. That is the whole contract:
+    # ls src/forth/*.fs should have nothing this loop cannot reach.
+    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nrequire pad.fs\nrequire font-terminus-8x16.fs\nrequire font-vga-8x8.fs\nrequire threads.fs\nrequire voice.fs\nrequire disasm.fs\nwords\n' \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 25 $FORTH 2>&1 \
+        | sed -n '10p' | sed 's/ ok *$//')
     lib_core=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
         | sed -n '2p' | sed 's/ ok *$//')
     lib_missing=""
@@ -5367,10 +5380,29 @@ else
     done
     set +f
     if [ -n "$lib_words" ] && [ -z "$lib_missing" ]; then
-        printf "  ${GREEN}PASS${NC}  every audio library word has a reference entry\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  every library word has a reference entry\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  every audio library word has a reference entry\n"
+        printf "  ${RED}FAIL${NC}  every library word has a reference entry\n"
         printf "    Undocumented:%s\n" "${lib_missing:- (no words output)}"; ((failed++))
+    fi
+
+    # ...and that the sweep above really did load every library, rather than a
+    # comment claiming it did. `require` leaves an (inc:<file>) guard word per
+    # file, so the dictionary itself says what was loaded. A new src/forth/*.fs
+    # that nobody added to the list fails HERE, naming the file -- which is the
+    # only way the audit above can be trusted to have swept anything.
+    # core.fs is excluded: it loads at startup, before any require.
+    swept_missing=""
+    for f in "$REPO_ROOT"/src/forth/*.fs; do
+        b=$(basename "$f")
+        [ "$b" = "core.fs" ] && continue
+        case " $lib_words " in *" (inc:$b) "*) ;; *) swept_missing="$swept_missing $b";; esac
+    done
+    if [ -z "$swept_missing" ]; then
+        printf "  ${GREEN}PASS${NC}  the library audit loads every src/forth/*.fs\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  the library audit loads every src/forth/*.fs\n"
+        printf "    Never loaded, so never audited:%s\n" "$swept_missing"; ((failed++))
     fi
 fi
 
@@ -6879,7 +6911,7 @@ thr_check "a finished worker lists its real result, not a stale one" \
 'require threads.fs
 variable t
 : t42   42 throw ;
-: wait  begin t @ (t>ctx) (t-state) (acq@) finished = until ;
+: wait  begin t @ (t>ctx) (t-state) (acq@) (finished) = until ;
 : go    ['"'"'] t42 thread drop t !  wait  threads  t @ join . . ;
 go' \
 "finished  42"
