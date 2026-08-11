@@ -1719,15 +1719,13 @@ err_pfx_conly:    .ascii "compile only: "
 .equ err_pfx_conly_len, . - err_pfx_conly
 msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
-msg_unbalanced: .ascii "unresolved control flow\n"
+msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
-msg_cf_mismatch: .ascii "mismatched control flow\n"
+msg_cf_mismatch: .ascii "mismatched control flow: "
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 msg_redefined: .ascii "redefined "
 .equ msg_redefined_len, . - msg_redefined
 msg_one_space: .ascii " "
-cf_mismatch_name: .ascii "mismatched-control-flow"
-.equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
 msg_undef_defer: .ascii ": uninitialized deferred word\n"
@@ -2506,27 +2504,48 @@ forth_semicolon:
     RET
 
 .Lsemi_unbalanced:
-    // Unresolved control flow — roll back the definition
-    STP X29, X30, [SP, #-16]!
-    ADR X0, msg_unbalanced
-    MOV X1, #msg_unbalanced_len
-    BL platform_write
-    // Restore stack, LATEST, HERE, STATE
-    ADR X9, colon_dsp
-    LDR X19, [X9]
-    ADR X9, saved_latest
-    LDR X22, [X9]
-    ADR X9, saved_here
-    LDR X21, [X9]
-    DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
-    ADR X9, state
-    STR XZR, [X9]
-    ADR X9, do_depth
-    STR XZR, [X9]
-    ADR X9, leave_count
-    STR XZR, [X9]
-    LDP X29, X30, [SP], #16
-    RET
+    // Unresolved control flow. Report through the standard protocol (err_pfx +
+    // err_token) rather than printing here, so a load gets its "file:line:"
+    // prefix -- and that same error return STOPS the load. This label used to
+    // print bare and RET, so the file went on loading against a word that
+    // never got defined: one missing THEN reported with no location at all,
+    // then a second, unrelated-looking "? name" wherever it was first used,
+    // dozens of lines away. (Found 2026-08-11 in the Dark Star port: line 167
+    // was the typo, line 213 was the only line number printed.)
+    //
+    // Name the definition, copied OUT of the partial header -- .Lcf_abort drops
+    // that header and HERE moves back over it, so err_token must not point into
+    // reclaimed space. Two guards: F_HIDDEN, because only a header we opened is
+    // ours to name, and a non-zero length, because :NONAME builds a real hidden
+    // header too (type T_NONAME) with an EMPTY name -- without that test an
+    // anonymous definition reported a bare "unresolved control flow: ". Either
+    // way it falls back to whatever the interpreter parsed, which is `;`.
+    // Name bytes start at +10: the flags byte is at +8 and Flags2 at +9.
+    LDRB W9, [X22, #8]
+    TST W9, #F_HIDDEN
+    B.EQ .Lsemi_ub_say
+    AND X9, X9, #F_LENMASK
+    CBZ X9, .Lsemi_ub_say           // anonymous -- no name to give
+    ADR X10, err_token_len
+    STR X9, [X10]
+    ADD X10, X22, #10               // source: the name bytes
+    ADR X11, err_name_buf
+    ADR X12, err_token_addr
+    STR X11, [X12]
+.Lsemi_ub_copy:
+    LDRB W12, [X10], #1
+    STRB W12, [X11], #1
+    SUBS X9, X9, #1
+    B.NE .Lsemi_ub_copy
+.Lsemi_ub_say:
+    ADR X9, err_pfx_addr
+    ADR X10, msg_unbalanced
+    STR X10, [X9]
+    ADR X9, err_pfx_len
+    MOV X10, #msg_unbalanced_len
+    STR X10, [X9]
+    B .Lcf_abort                    // performs the identical rollback this
+                                    //   label used to open-code
 
 .Lsemi_err:
     // ; reached in interpret mode. The outer interpreter rejects it before
@@ -3473,17 +3492,28 @@ incl_err_open:   .ascii "Error: cannot open "
 // Input: X0 = expected tag.  On mismatch, aborts compilation and
 // jumps directly to repl_loop (does not return to caller).
 cf_check_tag:
+    // Nothing pushed since `:` means no construct is open -- a closer with no
+    // opener. Bound the read by colon_dsp the way ENDCASE does, or we read off
+    // the top of the compile-time stack and the guard-page fault reports a
+    // stack underflow, naming the data stack for what is a compile error.
+    ADR X9, colon_dsp
+    LDR X9, [X9]
+    CMP X19, X9
+    B.HS .Lcf_mismatch
     LDR X9, [X19]
     CMP X9, X0
     B.NE .Lcf_mismatch
     RET
 .Lcf_mismatch:
-    // Set error token for control-flow mismatch
-    ADR X9, err_token_addr
-    ADR X10, cf_mismatch_name
+    // The offending token is already in err_token: forth_interpret_line stores
+    // every word there before FIND. So name the closer the user actually typed
+    // ("then") and supply our own wording, rather than the default "? ", which
+    // is the undefined-word marker and reads as if `then` did not exist.
+    ADR X9, err_pfx_addr
+    ADR X10, msg_cf_mismatch
     STR X10, [X9]
-    ADR X9, err_token_len
-    MOV X10, #cf_mismatch_name_len
+    ADR X9, err_pfx_len
+    MOV X10, #msg_cf_mismatch_len
     STR X10, [X9]
     // Fall through to abort
 .Lcf_abort:
@@ -3617,10 +3647,11 @@ forth_again:
 .global forth_while
 forth_while:
     STP X29, X30, [SP, #-16]!
-    // Verify BEGIN's tag is below (peek, don't consume)
-    LDR X9, [X19]
-    CMP X9, #CF_DEST
-    B.NE .Lcf_mismatch
+    // Verify BEGIN's tag is below (peek, don't consume). cf_check_tag never
+    // consumes either, so call it rather than inlining the compare -- inlining
+    // is how WHILE alone kept reporting a stack underflow with no BEGIN open.
+    MOV X0, #CF_DEST
+    BL cf_check_tag
     BL compile_0branch              // X0 = while-patch
     STR X0, [X19, #-CELL]!         // push while-patch
     MOV X9, #CF_ORIG
@@ -6477,6 +6508,8 @@ err_pfx_len:
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0
+err_name_buf:                       // A name copied out of a header that is
+    .space 32                       //   about to be reclaimed (F_LENMASK = 31)
 .global err_token_addr
 err_token_addr:                     // Address of last error token (set by interpret_line)
     .quad 0

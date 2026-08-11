@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Fixed: a control-flow closer with nothing open blamed the data stack
+
+- `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
+  `while`, `again`, `loop`, `+loop`, `endof` and `endcase` — the whole family.
+  `cf_check_tag` read the top of the compile-time stack before checking
+  anything, so with nothing open it walked off the top, hit the guard page, and
+  the fault handler got there first. The definition rolled back correctly and no
+  wrong code was ever emitted; the message simply named the wrong thing, and
+  sent a beginner who typed `then` with no `if` off to look at their stack.
+  It now bounds the read by `colon_dsp`, the way `ENDCASE` already did.
+- `WHILE` needed its own fix: it inlined the tag compare instead of calling
+  `cf_check_tag` (which only peeks — it never consumed), so it kept reporting a
+  stack underflow after the shared fix landed.
+
+### Fixed: an unbalanced definition reported nowhere, then let the load run on
+
+- `: Say ... if ... ;` with the `then` left off printed a bare
+  `unresolved control flow` — no file, no line, no name — and then **returned**,
+  so the file went on loading against a word that never got defined. The only
+  line number you ever saw came from the first *call* to the missing word.
+  Found in the Dark Star port, where the typo was on line 167 and the sole
+  reported location was 213.
+- It now reports like every other compile error, naming the definition read out
+  of its own half-built header:
+  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  also stops the load at that line instead of producing a second, unrelated
+  looking failure further down. `;` was the last compile error that let a load
+  continue.
+- A `:noname` has no name to give — it builds a hidden header with an empty
+  name — so it reports the token instead: `unresolved control flow: ;`.
+- Names print as the dictionary stores them, which is lower case.
+
+### Changed: control-flow errors name the word you typed
+
+- `? mismatched-control-flow` is now `mismatched control flow: then`. The `?`
+  prefix is BasicForth's *undefined word* marker, so the old report read as
+  though `then` did not exist, and the token position was spent on a fixed
+  string that said nothing the prefix had not. The outer interpreter already
+  banks each word in `err_token` before `FIND`, so naming the actual closer
+  cost nothing — and inside a file you get
+  `game.fs:2: mismatched control flow: then`.
+- One wrinkle worth knowing: the token is the last word the **outer
+  interpreter** parsed. That is the closer for ordinary source, but the
+  enclosing word when a closer is reached at run time through
+  `' then execute` — a construction that is already undefined, since it
+  bypasses the compile-only check.
+
 ### Added: `ch-claim` / `ch-release` — keeping a channel
 
 - `next-ch` treats a channel as busy only while audio is **queued** on it, so a

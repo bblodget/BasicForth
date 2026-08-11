@@ -93,8 +93,62 @@ completed. See Planning.md for high-level vision and design decisions.
   A bounds-checked `execute` would turn the first into a clean error, but that
   is a feature, not a fix.
 
-- [ ] **A control-flow closer with nothing open reports `stack underflow`, not
-  `mismatched-control-flow`.** Noticed 2026-07-29 while fixing the `CASE` bug
+- [x] **A control-flow closer with nothing open reports `stack underflow`, not
+  `mismatched-control-flow`.** RESOLVED 2026-08-11. `cf_check_tag` now bounds
+  its read by `colon_dsp` before comparing, so a closer with nothing open takes
+  the mismatch path instead of walking off the compile-time stack. Two things
+  the plan below did not anticipate:
+
+  **`WHILE` had to be fixed separately.** It inlined the tag compare rather
+  than calling `cf_check_tag` (it only peeks, and the author evidently thought
+  the helper consumes — it does not). So `: q while ;` alone still reported a
+  stack underflow after the one-place fix. It now calls the helper like its
+  siblings. A "one place, both arches" fix is only one place if every caller
+  actually goes through it — grep the jumps to the error label, not just the
+  calls to the helper.
+
+  **The wording changed too, and it uses the token the interpreter already
+  banked.** `forth_interpret_line` stores every word in `err_token` before
+  `FIND`, so at `cf_check_tag` the token is literally `then`. The old code
+  threw that away and overwrote it with the string `"mismatched-control-flow"`,
+  printed under the default `? ` prefix — which is the *undefined-word* marker,
+  so `: q then ;` read as if `then` did not exist. Now `err_pfx` points at
+  `msg_cf_mismatch` (which was defined in both arches and used nowhere) and the
+  token is left alone: `mismatched control flow: then`, and `file:line:` in
+  front on a load. `cf_mismatch_name` is gone.
+
+  **Caveat: the token is the last word the OUTER interpreter parsed.** That is
+  the closer for ordinary source, but the *enclosing* word when a closer is
+  reached at run time via `' then execute` — which reports
+  `mismatched control flow: plain`. Executing a compile-only word outside a
+  definition is already undefined, and naming the closer exactly would mean a
+  name argument at eleven call sites in each arch; judged not worth it. If that
+  ever matters, the cheap route is passing the closer's dictionary entry to
+  `cf_check_tag` and reading the name out of the header — no new strings.
+
+  **A sibling defect, found by using it (2026-08-11).** With the closer fixed,
+  Brandon deleted a `then` from Dark Star and got a bare `unresolved control
+  flow` with no location, followed by `dark-star.fs:213: ? say` — the first
+  *call* to the word whose definition failed on line 167. `.Lsemi_unbalanced`
+  printed with `platform_write` and then `ret`ed, so the line never reported an
+  error: no `file:line:` prefix (the loader prints that only on a non-zero
+  return) and no stop, leaving the rest of the file to compile against a
+  missing word. It now sets `err_pfx`/`err_token` and jumps to `.Lcf_abort`,
+  which already performed the identical rollback the label open-coded.
+  Two things worth keeping:
+  - **The location and the stop are the same bit.** They looked like separable
+    changes and are not; `jnz .Lincl_error` both prints the prefix and ends the
+    load. Any "report it but keep going" variant means a second copy of the
+    reporting code.
+  - **Read a name out of a header only if the header is yours AND has one.**
+    `F_HIDDEN` alone was not enough: `:NONAME` builds a real hidden header with
+    an *empty* name (type `T_NONAME`), so the first version printed a bare
+    `unresolved control flow: `. Name bytes start at **+10** — flags at +8,
+    Flags2 at +9 — and must be copied out before `.Lcf_abort` reclaims them.
+
+  Original report follows.
+
+  Noticed 2026-07-29 while fixing the `CASE` bug
   above, and deliberately left alone there because it is not a `CASE` problem —
   it is uniform across the family:
 
@@ -121,9 +175,12 @@ completed. See Planning.md for high-level vision and design decisions.
   The protocol is: store the offending token in `err_token_addr`/`err_token_len`
   and the wording in `err_pfx_addr`/`err_pfx_len`, then jump — the CALLER
   prints, which is what gets the `file:line` prefix on a load for free.
-  `msg_cf_mismatch` ("mismatched control flow") already exists in both arches
-  and is already used by a site immediately above `.Lcf_abort`, so no new
-  message is needed.
+  `msg_cf_mismatch` ("mismatched control flow") already exists in both arches,
+  so no new message is needed. (This line originally claimed it was "already
+  used by a site immediately above `.Lcf_abort`" — it was not used anywhere;
+  what that site used was the separate `cf_mismatch_name` token string. Wrong
+  in a way that did not matter, but recorded so the entry is not read as
+  evidence for anything.)
 
   **Jump to `.Lcf_abort`, not `.Lcf_longjmp`.** A definition is open by
   definition here. `.Lcf_abort` restores `colon_dsp`/`saved_latest`/
@@ -2440,6 +2497,19 @@ smaller risk surface.
   A stricter follow-up worth considering: make `assert_result` compare the
   result line **exactly** rather than by substring, so a test cannot pass on a
   coincidental match either.
+
+- [ ] **The EVALUATE error-wording bracketing has no probe that still bites.**
+  `assert_output "a nested evaluate does not leak its error wording"` worked by
+  raising a wording-*less* error after a nested `EVALUATE`, and the only such
+  site reachable at run time was `cf_check_tag`. Since 2026-08-11 that site
+  sets its own wording, so it overwrites any leak instead of exposing one —
+  the test now asserts the wording is right, which is worth having but is not
+  what its name claims. To restore the probe, find another site that sets
+  `err_token` but not `err_pfx` and is reachable inside one outer token:
+  `.Lsq_no_close` (unterminated `s"`) is one; `.Lto_not_found` and
+  `.Lpostpone_not_found` are others. Then verify it the only way that counts —
+  remove the bracketing and watch the test go red. Noted rather than fixed
+  because the honest fix is a new test, not an edit to this one.
 
 - [ ] **A stale binary against a new `core.fs` now produces WRONG OUTPUT, not
   an obvious failure — make the mismatch loud.** Found the hard way
