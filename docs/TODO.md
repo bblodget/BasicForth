@@ -1137,11 +1137,20 @@ docs/Graphics.md for the API.
   Then cut the duplication: README and the Manual point at the page instead of
   each carrying their own copy.
 
-  Check before writing, rather than recording what is true on this laptop:
-  what SDL3 install actually works on plain Debian/Ubuntu today (this machine
-  built 3.4.12 from source into `/usr/local`), and the real flite package
-  names — deriving a fact at run time beats writing down what happened to be
-  true on one machine, the trap that produced three defects during the
+  Groundwork done 2026-08-11, on Pop!_OS 22.04 (Ubuntu 22.04 base):
+  - **SDL3 has no apt package here at all** — `apt-cache policy libsdl3-0
+    libsdl3-dev` finds nothing, so building from source is the real answer on
+    this distro, not a preference. Newer releases may package it; the page
+    should tell the reader to *check* rather than assert what their distro
+    has.
+  - **flite is `libflite1`**, which ships the core plus every voice.
+  - `libflite.so.1` is the genuine **SONAME**, even though the file on disk is
+    `libflite.so.2.2` — Debian versions the filename differently. So the name
+    `speech.fs` dlopens is portable, not an artifact of this machine. Verified
+    with `objdump -p`; do not "fix" it to `.so.2`.
+
+  Still derive the rest at run time rather than writing down what happened to
+  be true on one machine — the trap that produced three defects during the
   voice.fs work.
 
 - [x] **REPL "option B": emit the newline lazily, before the first byte of
