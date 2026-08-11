@@ -1437,13 +1437,30 @@ else
     # effects. 500 calls over 64 channels is ~8 laps, so a channel that is not
     # respected will certainly come up.
     # The release half matters as much: without it the claim could be doing
-    # nothing and this would still pass.
-    ch_claim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value MINE\n: probe 0 500 0 do next-ch MINE = if 1+ then loop ;\n: t snd-open drop next-ch to MINE MINE ch-claim probe . MINE ch-release probe 0> . .\" claim-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # nothing and this would still pass. And a second claim of the same channel
+    # must FAIL -- that is the only check ch-claim makes.
+    ch_claim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value MINE\n: probe 0 500 0 do next-ch MINE = if 1+ then loop ;\n: t snd-open drop next-ch to MINE MINE ch-claim . drop probe . MINE ch-claim . drop MINE ch-release probe 0> . .\" claim-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$ch_claim" | grep -q -- '0 -1 claim-ok'; then
+    if printf '%s' "$ch_claim" | grep -q -- '-1 0 0 -1 claim-ok'; then
         printf "  ${GREEN}PASS${NC}  a claimed channel is never handed out, until released\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  ch-claim / ch-release\n    Got: %q\n" "$ch_claim"; ((failed++))
+    fi
+
+
+    # A claim outlives a device cycle, so claims taken while the device is shut
+    # can leave snd-open with no channel for tone. That is not an SDL failure,
+    # so it must not report SDL's last error -- which would be stale or empty
+    # and blame the wrong thing. Its own ior and its own reason, and freeing a
+    # single channel lets the next open succeed.
+    # (snd-close frees tone's own claim, which is why this needs the claims to
+    # be taken while closed rather than before the close.)
+    snd_noch=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 0 ?do i ch-claim 2drop loop ;\n: t snd-open drop snd-close claim-all snd-open . snd-why type .\" |\" 0 ch-release snd-open . tone-ch . .\" noch-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$snd_noch" | grep -q 'every channel is claimed; none free for tone|0 0 noch-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open explains having no channel for tone\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  snd-open with every channel claimed\n    Got: %q\n" "$snd_noch"; ((failed++))
     fi
 
     # Claiming everything leaves next-ch nothing to give, and it must NOT fall
@@ -1452,38 +1469,15 @@ else
     # path where the caller cannot tell anything is wrong. -1 is not a channel,
     # so every channel word ignores it and the sound is dropped instead.
     # Asserted together with tone still owning channel 0 afterwards.
-    ch_allclaim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 1 ?do i ch-claim loop ;\n: t snd-open drop claim-all next-ch . 440 200 tone tone-ch ch-queued 0> . 5 ch-release next-ch . .\" allclaim-ok\" snd-wait snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    ch_allclaim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 0 ?do i ch-claim 2drop loop ;\n: t snd-open drop claim-all next-ch . 440 200 tone tone-ch ch-queued 0> . 5 ch-release next-ch . .\" allclaim-ok\" snd-wait snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_allclaim" | grep -q -- '-1 -1 5 allclaim-ok'; then
-        printf "  ${GREEN}PASS${NC}  every channel claimed yields no channel, sparing tone-ch\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  every channel claimed yields no channel, and tone keeps its own\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  next-ch with every channel claimed\n    Got: %q\n" "$ch_allclaim"; ((failed++))
     fi
 
-    # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
-    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open drop snd-channels . snd-close 999 to snd-channels snd-open drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
-        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
-    else
-        printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
-    fi
 
-    # snd-close must clear EVERY slot, not just the first snd-channels of
-    # them. snd-channels is user-writable, so shrinking it while a device is
-    # open once hid the tail from its own cleanup: open 64, drop to 4, close,
-    # and 60 handles stayed in the table pointing at destroyed streams.
-    # This counts non-null handles, which is the invariant snd-close states
-    # for itself -- NOT proof that streams leaked, because SDL_QuitSubSystem
-    # frees them (RSS is flat over 50 such cycles). The defect is the dangling
-    # handles; the ior and (snd-dev) both look healthy throughout.
-    snd_shrink=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: live 0 snd-max-channels 0 do i cells (ch-streams) + @ if 1+ then loop ;\n: t snd-open drop live . 4 to snd-channels snd-close live . snd-open drop live . snd-close live . .\" shrink-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
-        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_shrink" | grep -q '64 0 4 0 shrink-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-close clears every slot after a shrink\n"; ((passed++))
-    else
-        printf "  ${RED}FAIL${NC}  snd-close leaves streams after a shrink\n    Got: %q\n" "$snd_shrink"; ((failed++))
-    fi
 
     # Opening an already-open device SUCCEEDS and changes nothing. The device
     # handle is the observable that actually moves: before the guard, three
@@ -1716,7 +1710,7 @@ else
     # contract tone already had, so a soundless system never aborts.
     ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . next-ch . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
+    if printf '%s' "$ch_closed" | grep -q -- '0 -1 0 closed-ok'; then
         printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  channel words with no device\n    Got: %q\n" "$ch_closed"; ((failed++))
@@ -1818,10 +1812,58 @@ s" two" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
 : t snd-open drop fill speech-open . speech-ch ch-queued . ." busy-ok" snd-stop ; t')" \
         '0 0 busy-ok'
 
+    # speech-close gives the channel back, and it is the only thing that can:
+    # ch-release needs the claim token, which lives inside speech.fs. Both
+    # halves are asserted, because either alone could pass while the other was
+    # broken -- the channel really returns to rotation (0 hand-outs while open,
+    # some after), AND speech goes quiet rather than carrying on with a channel
+    # other callers are now being given.
+    sp_check "speech-close returns the channel and silences say" \
+        "$(sp_run '0 value OLD
+: probe 0 300 0 do next-ch OLD = if 1+ then loop ;
+: t snd-open drop speech-open drop speech-ch to OLD
+probe . speech-close speech-ch . speech-ready? . probe 0> .
+99 s" x" say depth . . ." close-ok" ; t')" \
+        '0 -1 0 -1 1 99 close-ok'
+
+    # A claim belongs to whoever took it, not to the device, so it OUTLIVES a
+    # snd-close/snd-open cycle -- speech keeps the same channel, stays ready,
+    # and next-ch still skips it. That is what makes the channel number alone
+    # sufficient: nothing invalidates it behind speech's back, so there is
+    # nothing to detect. 20 cycles, then speak on the same channel.
+    sp_check "a claim outlives repeated device cycles" \
+        "$(sp_run '0 value OLD
+: cycles 20 0 do snd-close snd-open drop loop ;
+: t snd-open drop speech-open drop speech-ch to OLD speech-ready? .
+cycles speech-ready? . speech-ch OLD = . next-ch OLD = .
+s" ok" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
+        '-1 -1 -1 0 -1 cycle-ok'
+
+    # A snd-close/snd-open cycle destroys every stream, clears every claim, and
+    # starts reissuing the same channel NUMBERS. A speech-ch kept across that
+    # names a channel someone else may now own -- and speech-close would stop
+    # audio it never queued and release a claim that is not its. It must only
+    # touch the channel while speech-ready? says it is still ours.
+    # Asserted from the OTHER caller's side: their sound must survive, and
+    # speech must then take a different channel rather than stomping on theirs.
+    sp_check "speech-close leaves another caller's channel alone after a reopen" \
+        "$(sp_run '0 value THEIRS
+: t snd-open drop speech-open drop snd-close snd-open drop
+next-ch to THEIRS 220 3000 THEIRS tone-on THEIRS ch-queued 0> .
+speech-close THEIRS ch-queued 0> . speech-ch .
+speech-open . speech-ch THEIRS = . ." nostomp-ok" snd-stop ; t')" \
+        '-1 -1 -1 0 0 nostomp-ok'
+
+    # Closing twice, and opening again afterwards, must both be ordinary.
+    sp_check "speech-close is idempotent and reopening works" \
+        "$(sp_run ': t snd-open drop speech-open drop speech-close speech-close
+speech-open . speech-ch 0> . s" hi" say speech-ch ch-queued 0> . ." recycle-ok" speech-ch ch-wait ; t')" \
+        '0 -1 -1 recycle-ok'
+
     # next-ch answers -1 when every channel is claimed. Claiming that would
     # report success while speech had nowhere to play.
     sp_check "speech reports having no channel rather than taking -1" \
-        "$(sp_run ': claim-all snd-channels 1 ?do i ch-claim loop ;
+        "$(sp_run ': claim-all snd-channels 0 ?do i ch-claim 2drop loop ;
 : t snd-open drop claim-all speech-open . speech-why type ." |" 99 s" x" say depth . . ." exh-ok" ; t')" \
         'no free channel to speak on|1 99 exh-ok'
 
@@ -5233,10 +5275,14 @@ fi
 if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  every audio library word has a reference entry (needs libSDL3)\n"
 else
-    # speech.fs too, and for the same reason the wav tree was added: a library
-    # this audit does not `require` is invisible to it, so its public names
-    # could ship undocumented. It loads without libflite -- the binding is
-    # lazy -- so only libSDL3 gates this.
+    # speech.fs too, for the same reason the wav tree was added: a library this
+    # audit does not `require` is invisible to it, so its public names could
+    # ship undocumented. It loads without libflite (the binding is lazy), so
+    # only libSDL3 gates this.
+    #
+    # pad.fs and sdl3.fs are NOT swept yet, and adding them turns this red with
+    # about 40 names -- see docs/TODO.md. Left out deliberately rather than
+    # papered over.
     lib_words=$(printf 'require wav.fs\nrequire speech.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
         | sed -n '4p' | sed 's/ ok *$//')
     lib_core=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \

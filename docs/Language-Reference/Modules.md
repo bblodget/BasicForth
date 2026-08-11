@@ -148,7 +148,7 @@ It can go anywhere on the line, not just last, and on a line already being
 captured it does nothing. `keep` only acts at the terminal, so the copy written
 into the file is an inert token when the module reloads — nothing to clean up.
 
-## on-start ( -- )  /  on-stop ( -- )
+## on-start on-stop ( -- )
 Not words BasicForth defines — words **you** may define in a module, which it
 then calls at the right moment:
 

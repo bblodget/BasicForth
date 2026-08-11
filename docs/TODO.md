@@ -1089,6 +1089,30 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
+- [ ] **`help <word>` misses about 40 names in `pad.fs` and `sdl3.fs`.** The
+  reference audit sweeps the core dictionary, the wav/audio tree and
+  `speech.fs`, but never `require`s `pad.fs` — so nothing checks those, and a
+  library this audit does not require is invisible to it. Found 2026-08-10 when
+  `help on-stop` answered "no help"; adding `require pad.fs` to the audit turns
+  it red with roughly 40 names, in two groups:
+  - **Described but not indexed** (~30, `pad.fs`): the button, axis and event
+    names — `pad-south`, `pad-east`, `pad-leftx`, `pad-ev-button`, `#pads` and
+    the rest — appear in `Pad.md`'s at-a-glance tables but have no `##` entry,
+    so `help pad-south` fails even though the page explains it. Either give
+    each an entry, or teach the audit that a name listed in an at-a-glance
+    block counts.
+  - **Genuinely undocumented** (~10, `sdl3.fs`): `sdl-win`, `sdl-ren`,
+    `sdl-tex`, `sdl-width`, `sdl-height`, `sdl-event`, `sdl-error`,
+    `xrgb8888`, `tex_streaming`, `scale_nearest`, `sdl_init_video`. Several
+    are raw SDL handles with public-looking names — exactly the shape of
+    `snd-dev` and `snd-stream`, which were parenthesised rather than
+    documented. Decide per name: parenthesise, or document.
+
+  A separate bug from the same session is already fixed: four entries used a
+  `## a ( eff ) / b ( eff )` heading, and the index takes only the first name,
+  so `help pad-closeall`, `help pad-hasaxis?`, `help pad-dy` and
+  `help on-stop` all failed. The supported form is `## a b ( eff )`.
+
 - [ ] **`docs/Install.md` — one page from `git clone` to a working setup.**
   There is no single place that says what BasicForth needs, and the coverage
   is uneven (surveyed 2026-08-10):

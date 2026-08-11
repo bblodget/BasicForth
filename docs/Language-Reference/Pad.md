@@ -153,7 +153,7 @@ It names the *model*, not the individual: two identical controllers give the
 same string. Slots are what tell players apart — don't try to identify a
 player by name.
 
-## pad-close ( -- ) / pad-closeall ( -- )
+## pad-close pad-closeall ( -- )
 Close the selected controller, or all of them. `pad-closeall` also stops the
 gamepad subsystem. Like `sdl-close`, it stops only what it started — a blanket
 `SDL_Quit` would tear down the window `sdl3.fs` opened and the audio device
@@ -193,7 +193,10 @@ True while that button is down. This is state, not an edge — it answers "is it
 down now", so holding the button reads true every frame. For edges, watch
 `ev-pad-down` / `ev-pad-up` through `sdl-poll`.
 
-## pad-has? ( button -- flag ) / pad-hasaxis? ( axis -- flag )
+## pad-has? pad-hasaxis? ( n -- flag )
+`pad-has? ( button -- flag )` for a button, `pad-hasaxis? ( axis -- flag )` for
+a stick or trigger.
+
 Not every controller has every control: no guide button, no right stick,
 digital-only triggers. Ask rather than reading a phantom 0, so a game can
 offer a different binding instead of a control that never responds.
@@ -213,7 +216,7 @@ and the triggers have no d-pad to merge with, so they come through here:
 
     pad-rightx pad-dir      \ -1, 0 or 1 — aim left, centre, right
 
-## pad-dx ( -- -1|0|1 ) / pad-dy ( -- -1|0|1 )
+## pad-dx pad-dy ( -- -1|0|1 )
 The left hand as one answer, whether the player uses the d-pad or the left
 stick. This is what a grid game wants: `pad-dx` is −1 for left, 0 for centred,
 1 for right; `pad-dy` is −1 for up, 1 for down (positive downward, like the
