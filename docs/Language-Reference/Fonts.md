@@ -86,7 +86,7 @@ so it also positions `fill-rect`, `rect` or a sprite on the text grid:
 (The terminal has its own `at-xy`, which really does move a cursor — see
 `help terminal`. This one only does arithmetic.)
 
-## font-w ( -- n ) · font-h ( -- n )
+## font-w font-h ( -- n )
 The current font's cell size in pixels — `8`×`16` for Terminus, `8`×`8` for
 VGA. `>xy` is built on them; use them directly when you need the size itself,
 rather than hard-coding `16`:
@@ -107,7 +107,17 @@ It rides on `stamp-scale`, so scaling is opt-in and costs nothing at `1`. For
 a whole-window zoom instead, `sdl-scale` stretches every pixel at present time;
 the two compose (a `3` font in a `2×` window is 6× on screen).
 
-## font! ( data w h -- ) · font-stride · font-data
+## font-data font-stride ( -- n )
+Where the current font's glyph table starts, and how many bytes one row of one
+glyph occupies (`ceil(font-w / 8)`, so 1 for an 8-wide font). `font!` sets
+both; `>glyph` is these two and `font-h` arithmetic.
+
+You need them to reach a glyph's bits yourself — to edit a glyph in place, or
+to hand one to a word that takes a bitmap:
+
+    : glyph-addr ( ch -- addr )  255 and  font-h font-stride *  *  font-data + ;
+
+## font! ( data w h -- )
 
 The font engine — switching and adding fonts.
 `text`/`glyph`/`font-scale`/`>glyph`/`font-w`/`font-h` live in **`fontcore.fs`**,
@@ -132,6 +142,20 @@ from any 8-pixel-wide PSF console font (it emits the table, the
 `require fontcore.fs`, and the selector) — the file name
 `font-<family>-<size>.fs` gives the selector its name, and the cell height comes
 from the PSF itself.
+
+## terminus-8x16 vga-8x8 ( -- )
+The selector words the two shipped fonts define — make that font current, for
+every `text` and `glyph` afterward. A font file defines one, named after
+itself, and `require`ing the file also *runs* it, so the last font loaded is
+the current one:
+
+    require font-terminus-8x16.fs         \ Terminus current
+    require font-vga-8x8.fs               \ VGA current now
+    terminus-8x16                         \ back to Terminus
+
+Switching is just calling a word — both tables stay loaded, and nothing is
+copied. A font you generate yourself gets its selector's name from the file
+name, so `font-mine-8x8.fs` defines `mine-8x8`.
 
 ## See Also
 

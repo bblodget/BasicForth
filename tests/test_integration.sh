@@ -1146,8 +1146,8 @@ else
     fi
 
     # require sdl3.fs pulls its own deps (ffi, graphics), and a second require
-    # under a live window is a no-op: sdl-win must be preserved, not zeroed.
-    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\nsdl-win\nrequire sdl3.fs\nsdl-win swap over = . 0= 0= .\nsdl-close\nbye\n' \
+    # under a live window is a no-op: (sdl-win) must be preserved, not zeroed.
+    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\n(sdl-win)\nrequire sdl3.fs\n(sdl-win) swap over = . 0= 0= .\nsdl-close\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$sdl_rq" | grep -q -- '-1 -1'; then
         printf "  ${GREEN}PASS${NC}  require sdl3.fs: deps auto-load; re-require keeps a live window\n"; ((passed++))
@@ -1393,7 +1393,7 @@ else
     fi
 
     # require pad.fs pulls sdl3.fs (and through it ffi/graphics) on its own.
-    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open sdl-win 0<> . sdl-close pad-closeall depth .\nbye\n' \
+    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open (sdl-win) 0<> . sdl-close pad-closeall depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$pad_rq" | grep -q -- '-1 0'; then
         printf "  ${GREEN}PASS${NC}  require pad.fs pulls sdl3 deps; pad-closeall keeps SDL usable\n"; ((passed++))
@@ -5337,24 +5337,37 @@ else
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
 fi
 
-# The same audit for the AUDIO library words, which the core sweep above cannot
-# see: they only exist after `require wav.fs`, so sound.fs/wavcore.fs/wav.fs
-# could add public names with no help entry and nothing would notice. Found
-# that way -- snd-dev and snd-stream were public-looking names for raw SDL
-# handles. Parenthesised names are internal by convention and skipped, as above.
+# The same audit for the LIBRARY words, which the core sweep above cannot see:
+# they exist only after a `require`, so any library could add a public name
+# with no help entry and nothing would notice. Found that way -- snd-dev and
+# snd-stream were public-looking names for raw SDL handles. Parenthesised names
+# are internal by convention and skipped, as above.
+#
+# Both checks need libSDL3, since most of the libraries will not load without
+# it -- so under qemu, or on a machine with no SDL3, this is the one part of
+# the help contract that goes unverified. Both skips are printed rather than
+# quietly dropped.
 if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
-    printf "  ${YELLOW}SKIP${NC}  every audio library word has a reference entry (needs libSDL3)\n"
+    printf "  ${YELLOW}SKIP${NC}  every library word has a reference entry (needs libSDL3)\n"
+    printf "  ${YELLOW}SKIP${NC}  the library audit loads every src/forth/*.fs (needs libSDL3)\n"
 else
-    # speech.fs too, for the same reason the wav tree was added: a library this
-    # audit does not `require` is invisible to it, so its public names could
-    # ship undocumented. It loads without libflite (the binding is lazy), so
-    # only libSDL3 gates this.
+    # EVERY library in src/forth, for the reason the wav tree was added: a
+    # library this audit does not `require` is invisible to it, so its public
+    # names could ship undocumented. speech.fs loads without libflite (the
+    # binding is lazy), so only libSDL3 gates this.
     #
-    # pad.fs and sdl3.fs are NOT swept yet, and adding them turns this red with
-    # about 40 names -- see docs/TODO.md. Left out deliberately rather than
-    # papered over.
-    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
-        | sed -n '4p' | sed 's/ ok *$//')
+    # The list below is deliberately explicit rather than "these pull in the
+    # rest". Some do -- pad.fs brings sdl3.fs, which brings ffi.fs and
+    # graphics.fs; disasm.fs brings shellutil.fs -- but reasoning that way is
+    # how voice.fs and disasm.fs got left out of the first version of this
+    # sweep while a comment claimed they were covered. Both fonts are listed
+    # because each defines its own selector word.
+    #
+    # If a new .fs lands in src/forth, add it here. That is the whole contract:
+    # ls src/forth/*.fs should have nothing this loop cannot reach.
+    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nrequire pad.fs\nrequire font-terminus-8x16.fs\nrequire font-vga-8x8.fs\nrequire threads.fs\nrequire voice.fs\nrequire disasm.fs\nwords\n' \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 25 $FORTH 2>&1 \
+        | sed -n '10p' | sed 's/ ok *$//')
     lib_core=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
         | sed -n '2p' | sed 's/ ok *$//')
     lib_missing=""
@@ -5367,10 +5380,29 @@ else
     done
     set +f
     if [ -n "$lib_words" ] && [ -z "$lib_missing" ]; then
-        printf "  ${GREEN}PASS${NC}  every audio library word has a reference entry\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  every library word has a reference entry\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  every audio library word has a reference entry\n"
+        printf "  ${RED}FAIL${NC}  every library word has a reference entry\n"
         printf "    Undocumented:%s\n" "${lib_missing:- (no words output)}"; ((failed++))
+    fi
+
+    # ...and that the sweep above really did load every library, rather than a
+    # comment claiming it did. `require` leaves an (inc:<file>) guard word per
+    # file, so the dictionary itself says what was loaded. A new src/forth/*.fs
+    # that nobody added to the list fails HERE, naming the file -- which is the
+    # only way the audit above can be trusted to have swept anything.
+    # core.fs is excluded: it loads at startup, before any require.
+    swept_missing=""
+    for f in "$REPO_ROOT"/src/forth/*.fs; do
+        b=$(basename "$f")
+        [ "$b" = "core.fs" ] && continue
+        case " $lib_words " in *" (inc:$b) "*) ;; *) swept_missing="$swept_missing $b";; esac
+    done
+    if [ -z "$swept_missing" ]; then
+        printf "  ${GREEN}PASS${NC}  the library audit loads every src/forth/*.fs\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  the library audit loads every src/forth/*.fs\n"
+        printf "    Never loaded, so never audited:%s\n" "$swept_missing"; ((failed++))
     fi
 fi
 
@@ -6879,7 +6911,7 @@ thr_check "a finished worker lists its real result, not a stale one" \
 'require threads.fs
 variable t
 : t42   42 throw ;
-: wait  begin t @ (t>ctx) (t-state) (acq@) finished = until ;
+: wait  begin t @ (t>ctx) (t-state) (acq@) (finished) = until ;
 : go    ['"'"'] t42 thread drop t !  wait  threads  t @ join . . ;
 go' \
 "finished  42"
@@ -6913,6 +6945,101 @@ variable a  variable b  variable t1  variable t2
       t1 @ join 2drop  t2 @ join 2drop  a @ .  b @ . ;
 go' \
 "5000 5000"
+
+# =========================================================================
+section "LOCALS (stage 1: the runtime frame and its unwind contract)"
+# =========================================================================
+# No syntax yet -- `{: ... :}` is stage 2. These drive the frame primitives
+# directly, which is the only way to test the part that actually goes wrong.
+#
+# A separate locals stack is NOT unwound by anything that unwinds the return
+# stack, so every reset path has to release it by hand, and a missed one leaks
+# silently: nothing fails until the locals stack overflows, much later, in
+# unrelated code. So the assertion throughout is not "does it work" but "did
+# LP go back", which is a different question and the only one that fails when
+# a path is missed.
+
+# assert_result, not assert_output, wherever the expected text also occurs in
+# the input: run_forth captures the ECHOED line too, so `assert_output` would
+# match the input and pass against a completely broken engine. That is not
+# hypothetical here -- the first draft of the assignability test below stored
+# with NO frame open, faulted into the guard page, and passed anyway on the
+# echoed "9".
+assert_result "frame: first declared is local 0" \
+              "3 4 5 3 (lframe) 0 (local@) . 1 (local@) . 2 (local@) ."   "3 4 5"
+assert_output "frame: consumes its arguments"    "1 2 3 3 (lframe) depth ."       "0"
+assert_output "frame: costs exactly n cells"     "1 2 3 3 (lframe) (lp0@) (lp@) - ." "24"
+assert_output "frame: teardown restores LP"      "1 2 3 3 (lframe) 3 (lunframe) (lp@) (lp0@) = ." "-1"
+assert_output "frame: a zero-cell frame is a no-op, not a fault" \
+              "0 (lframe) (lp@) (lp0@) = ."                              "-1"
+assert_result "frame: locals are assignable"     "1 1 (lframe) 42 0 (local!) 0 (local@) . 1 (lunframe)" "42"
+assert_output "locals stack is untouched at rest" "(lp@) (lp0@) = ."      "-1"
+# Writing outside the frame hits the guard page rather than scribbling on the
+# caller's locals -- the fence is what makes a stage-2 off-by-one findable.
+assert_output "a store past the frame hits the guard page" \
+              "1 1 (lframe) 42 4 (local!)"                               "locals stack underflow"
+
+# --- the eight reset paths, one assertion each ---------------------------
+# Each opens a frame and leaves it open, then takes the path. The frame is
+# opened and abandoned within ONE line, because LP is restored to the line's
+# ENTRY value -- at the outermost level that is lp0, but saying "one line"
+# keeps the test honest about which invariant it is checking.
+assert_output "unwind: caught throw"   ": t 1 1 (lframe) 99 throw ;
+' t catch . (lp@) (lp0@) = ."                                            "99 -1"
+assert_output "unwind: uncaught throw" ": t 1 1 (lframe) 99 throw ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: QUIT"           ": t 1 1 (lframe) quit ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: aborted definition" ': bad [ 1 1 (lframe) ] nosuchword ;
+(lp@) (lp0@) = .'                                                        "-1"
+assert_output "unwind: data-stack underflow (guard page)" "1 1 (lframe) drop
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: data-stack overflow (guard page)" ": t 1 1 (lframe) begin 1 again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: dictionary full" ": t 1 1 (lframe) begin 1 , again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+
+# --- nesting: the case a blanket "reset to lp0" gets WRONG ----------------
+# interpret_line nests. A compiled word holding a frame can call EVALUATE, and
+# an error inside that evaluation unwinds only the INNER interpret_line -- the
+# caller is still running and its frame is still live. Resetting to lp0 there
+# would hand the caller freed slots. Both error exits are covered because they
+# are separate code paths reached by different errors: an undefined word takes
+# .Lil_err_return, a control-flow abort takes .Lcf_longjmp.
+# Verified non-vacuous: breaking either exit to reset lp0 makes its test report
+# "locals stack underflow" instead, since local 0 then sits in the guard page.
+# A distinctive value, and assert_result so the echo cannot supply it: the
+# local must read back as 4242, not merely as "something". Expecting "1" here
+# would have matched the "-1" from the LP check on the next line.
+assert_result "nesting: undefined word inside evaluate keeps the caller's frame" \
+              ': o 4242 1 (lframe) s" nosuchword" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+assert_result "nesting: control-flow abort inside evaluate keeps it too" \
+              ': o 4242 1 (lframe) s" : q then ;" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+
+# --- per-thread ----------------------------------------------------------
+# A worker gets its own locals stack from its own allocation, so LP is per
+# thread like BASE and the CATCH chain. Neither a worker that uses locals
+# normally nor one that throws mid-frame may disturb the REPL's LP.
+thr_check "a worker's locals stack is its own" \
+'require threads.fs
+: w  7 1 (lframe) 0 (local@) drop 1 (lunframe) ;
+: go ['"'"'] w thread drop join 2drop  (lp@) (lp0@) = . ;
+go' \
+"-1"
+thr_check "a worker throwing mid-frame leaves the REPL's LP alone" \
+'require threads.fs
+: wt 1 1 (lframe) 77 throw ;
+: go ['"'"'] wt thread drop join drop .  (lp@) (lp0@) = . ;
+go' \
+"77 -1"
 
 # =========================================================================
 section "BYE"

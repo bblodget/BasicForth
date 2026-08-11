@@ -1088,6 +1088,29 @@ docs/Graphics.md for the API.
 
 ## Phase 8: Threading and Locals
 
+- [x] **The REPL's data stack was half a worker's.** RESOLVED 2026-08-11.
+  `DATA_STACK_SIZE` was 4096 bytes (512 cells) while `thread-dstack` in
+  `src/forth/threads.fs` was 8192 — two numbers, in two files, in two
+  languages, that nothing explained. Noticed while sizing the locals stack.
+
+  Fixed by making it **one constant, not two equal ones**: `DATA_STACK_SIZE`
+  is 8192 in `src/config.inc` and `threads.fs` reads it back through
+  `(dstack-size)`, so a REPL/worker difference can no longer be expressed.
+  Two constants that are *supposed* to stay equal is the arrangement that
+  produced the drift; one makes it unrepresentable. Raised rather than
+  lowered: no working program breaks by being given more room, whereas
+  halving the workers' could break one that works today.
+
+  `THREAD_RSTACK_SIZE` stays alone — the REPL's return stack is the process
+  stack (~8 MB) from the kernel, so there is nothing to unify it with.
+
+  Nothing in the suites depended on the old figure (the `4096`s in the tests
+  are a page-size fixture, a pty read buffer and a path length); two doc pages
+  stated it and were updated. The worry that made this a separate item — that
+  the guard-page tests fault against this size — turned out not to bite: those
+  tests overflow by looping until they fault, so the size only changes how
+  long they take.
+
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
   - **Researched 2026-08-10: see docs/Locals.md.** Verdict: build it, runtime
     frame, separate stack, `lp` in the existing TLS block. Measured on x86: a
@@ -1169,29 +1192,56 @@ docs/Graphics.md for the API.
 
 ## Future / Usability
 
-- [ ] **`help <word>` misses about 40 names in `pad.fs` and `sdl3.fs`.** The
-  reference audit sweeps the core dictionary, the wav/audio tree and
-  `speech.fs`, but never `require`s `pad.fs` — so nothing checks those, and a
-  library this audit does not require is invisible to it. Found 2026-08-10 when
-  `help on-stop` answered "no help"; adding `require pad.fs` to the audit turns
-  it red with roughly 40 names, in two groups:
-  - **Described but not indexed** (~30, `pad.fs`): the button, axis and event
-    names — `pad-south`, `pad-east`, `pad-leftx`, `pad-ev-button`, `#pads` and
-    the rest — appear in `Pad.md`'s at-a-glance tables but have no `##` entry,
-    so `help pad-south` fails even though the page explains it. Either give
-    each an entry, or teach the audit that a name listed in an at-a-glance
-    block counts.
-  - **Genuinely undocumented** (~10, `sdl3.fs`): `sdl-win`, `sdl-ren`,
-    `sdl-tex`, `sdl-width`, `sdl-height`, `sdl-event`, `sdl-error`,
-    `xrgb8888`, `tex_streaming`, `scale_nearest`, `sdl_init_video`. Several
-    are raw SDL handles with public-looking names — exactly the shape of
-    `snd-dev` and `snd-stream`, which were parenthesised rather than
-    documented. Decide per name: parenthesise, or document.
+- [x] **`help <word>` missed 53 names across six libraries — DONE 2026-08-11**
+  (branch helpcov). The reference audit swept the core dictionary, the
+  wav/audio tree and `speech.fs`, but no further — and a library this audit
+  does not `require` is invisible to it. Found 2026-08-10 when `help on-stop`
+  answered "no help". The real count was **53**, not the ~40 estimated —
+  and not the 51 first claimed here, which was arithmetic over two partial
+  measurements rather than one measurement of the whole. Verified by running
+  the finished audit against a worktree of the pre-change commit:
+  - **31 in `pad.fs`** — the button, axis and event constants, described in
+    `Pad.md`'s at-a-glance block but with no `##` entry. Given **7 grouped
+    headings** (`## pad-south pad-east pad-west pad-north ( -- b )` and so
+    on): a heading indexes every name before its `( `, verified to at least
+    15, so one entry covers a whole family without 31 stubs. Chosen over
+    teaching the audit that at-a-glance names count, which would have turned
+    the audit green while `help pad-south` still failed — the audit is the
+    proxy, `help <word>` is the contract.
+  - **12 raw SDL names** (11 in `sdl3.fs`, plus `SDL_INIT_GAMEPAD` in
+    `pad.fs`), split by the rule below. Documented: `sdl-width`,
+    `sdl-height`, `sdl-event`, `sdl-error`. Parenthesised: `(sdl-win)`,
+    `(sdl-ren)`, `(sdl-tex)` and the five raw SDL enums.
+  - **10 more the estimate never counted**, found by measuring every library
+    rather than the two named: 3 in `fontcore.fs`, 5 in `threads.fs`, and the
+    two font **selector words** `terminus-8x16` / `vga-8x8` — which only
+    became visible once the audit loaded the font files themselves, and are
+    the last two names anyone would guess were missing, since switching fonts
+    is the headline feature of that page. Of those, `running` and `finished`
+    became `(running)`/`(finished)` — internal ctx.state values, and as bare
+    names in a flat dictionary two of the likeliest words for a game to want.
+  - **A third broken heading separator**, the cause of the whole `fontcore`
+    group: `## font-w ( -- n ) · font-h ( -- n )` — a middle dot, where the
+    earlier fix was for `/`. The indexer stops at the first `(`, so every
+    name after it was lost. Only two headings used it; both converted.
 
-  A separate bug from the same session is already fixed: four entries used a
-  `## a ( eff ) / b ( eff )` heading, and the index takes only the first name,
-  so `help pad-closeall`, `help pad-hasaxis?`, `help pad-dy` and
-  `help on-stop` all failed. The supported form is `## a b ( eff )`.
+  The audit now `require`s **every** `src/forth/*.fs`, and a second check
+  proves it rather than asserting it: each `require` leaves an `(inc:<file>)`
+  guard word, so the dictionary reports what was loaded and an unswept file
+  fails by name. Worth knowing why that check exists — the first version of
+  this fix listed five libraries and claimed in a comment that the rest came
+  in transitively. `graphics.fs` did (via `sdl3.fs`); `shellutil.fs`,
+  `voice.fs` and `disasm.fs` were simply never loaded. The hole the audit
+  exists to close had reopened inside the fix for it, hidden behind a comment.
+
+  The rule applied, unchanged from the `snd-dev`/`snd-stream` case: a name a
+  user is expected to pass to something is API and needs a `##` entry; a
+  handle or an internal enum is `(parenthesised)`.
+
+  An earlier bug from the same session was already fixed: four entries used a
+  `## a ( eff ) / b ( eff )` heading, so `help pad-closeall`,
+  `help pad-hasaxis?`, `help pad-dy` and `help on-stop` all failed. The
+  supported form is `## a b ( eff )`.
 
 - [x] **`docs/Install.md` — one page from `git clone` to a working setup —
   DONE 2026-08-11** (branch install). Leads with the property that was
@@ -2471,17 +2521,16 @@ smaller risk surface.
 
 ## Future / Hardening
 
-- [ ] **Sweep the other libraries for public-looking names with no help entry.**
+- [x] **Sweep the other libraries for public-looking names with no help entry
+  — DONE 2026-08-11** (branch helpcov, with the `help`-coverage item above).
   The reference audit only ran over the CORE dictionary, so anything that
   appears after a `require` was invisible to it — `sound.fs` had `snd-dev` and
   `snd-stream`, raw SDL handles with undecorated names and no documentation,
   and nothing noticed. Brandon spotted it by trying `help snd-dev`.
-  Fixed for the audio tree, and there is now an audit covering
-  `require wav.fs`. The same check should be extended to `sdl3.fs`,
-  `graphics.fs`, `fontcore.fs` and `shellutil.fs` — a quick look shows sdl3.fs
-  leaves `SDL_INIT_VIDEO`, `XRGB8888`, `TEX_STREAMING` and `SCALE_NEAREST`
-  bare and undocumented, which is the same shape.
-  The rule to apply: a name a user is expected to pass to something is API and
+  The audit now loads every `src/forth/*.fs`, with a companion check that
+  fails by name if a library is not swept — see the `help`-coverage item for
+  why asserting transitive coverage in a comment was not enough.
+  The rule applied: a name a user is expected to pass to something is API and
   needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**

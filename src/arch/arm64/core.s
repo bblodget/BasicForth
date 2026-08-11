@@ -19,8 +19,9 @@
 // X19-X28 are callee-saved in the AAPCS64 ABI,
 // so C functions won't clobber them.
 
-.equ CELL, 8                    // 64-bit cells
-.equ DATA_STACK_SIZE, 4096      // 512 cells
+// Tunable sizes (CELL, DATA_STACK_SIZE, LOCALS_STACK_SIZE) live in one file
+// shared with the x86-64 build, so a size cannot drift between architectures.
+.include "../../config.inc"
 
 // ---------- Dictionary Entry Layout ----------
 // [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]
@@ -2626,7 +2627,13 @@ forth_interpret_line:
     // Save previous il_sp for nesting (EVALUATE inside INCLUDED etc.)
     ADR X9, il_sp
     LDR X10, [X9]                   // X10 = old il_sp
-    STP X10, XZR, [SP, #-16]!      // push old il_sp (+ padding for alignment)
+    // LP at entry goes in what was the alignment padding -- no extra push.
+    // NOT lp0 on the error paths: interpret_line NESTS, and a compiled word
+    // holding locals can call EVALUATE. Resetting to lp0 on an inner error
+    // would discard the caller's live frame.
+    TLS_ADDR X11, lp
+    LDR X11, [X11]
+    STP X10, X11, [SP, #-16]!       // push old il_sp + LP at entry
     MOV X10, SP
     STR X10, [X9]                   // il_sp = current SP
 
@@ -2749,7 +2756,9 @@ forth_interpret_line:
 
 .Lil_err_return:
     MOV X0, #1                      // return 1 = error
-    LDP X10, X9, [SP], #16          // pop saved il_sp (+ discard padding)
+    LDP X10, X11, [SP], #16         // saved il_sp + LP at entry
+    TLS_ADDR X12, lp                // error exit: release every frame opened
+    STR X11, [X12]                  //   since this interpret_line began
     ADR X9, il_sp
     STR X10, [X9]                   // restore previous il_sp
     LDP X27, X28, [SP], #16
@@ -2762,7 +2771,10 @@ forth_interpret_line:
     // End of line — drop 0 0 from PARSE-WORD
     ADD X19, X19, #2*CELL
     MOV X0, XZR                     // return 0 = success
-    LDP X10, X9, [SP], #16          // pop saved il_sp (+ discard padding)
+    // The saved LP is discarded WITHOUT being applied: a balanced line already
+    // left LP where it found it, and restoring here would repair a leak rather
+    // than let it show.
+    LDP X10, X9, [SP], #16          // pop saved il_sp (+ discard saved LP)
     ADR X9, il_sp
     STR X10, [X9]                   // restore previous il_sp
     LDP X27, X28, [SP], #16
@@ -3557,7 +3569,9 @@ cf_check_tag:
     LDR X10, [X9]
     MOV SP, X10                     // unwind to interpret_line's frame
     MOV X0, #1                      // return error
-    LDP X10, X11, [SP], #16         // pop saved il_sp (+ discard padding)
+    LDP X10, X11, [SP], #16         // saved il_sp + LP at entry
+    TLS_ADDR X12, lp                // release every frame opened since
+    STR X11, [X12]
     STR X10, [X9]                   // restore previous il_sp (nesting)
     LDP X27, X28, [SP], #16         // restore all callee-saved registers
     LDP X25, X26, [SP], #16
@@ -5259,6 +5273,116 @@ forth_source:
 //   [56] source_id      [64] to_in          [72] source_len
 //   [80] source_addr    [88] saved DSP      [96] X29  [104] X30
 
+// ---------- Locals frame primitives ----------
+// Stage 1 of the locals work: the runtime substrate, with no syntax on top.
+// These are the words the unwind tests drive directly; the compiler will emit
+// the same operations inline (see docs/Locals.md -- a local reference that
+// costs a create/does>-class call would make locals SLOWER than the stack
+// juggling they replace, so the compiled form must open-code, not call these).
+//
+// The frame is n cells at LP, first-declared local at offset 0. Teardown is a
+// fixed add, because n is known at compile time -- so no per-frame size field
+// and no saved-LP cell. That is what makes a definition WITHOUT locals cost
+// exactly nothing.
+
+// (lframe) ( x1 .. xn n -- )  Push a frame of n cells; x1 becomes local 0.
+.global forth_lframe
+forth_lframe:
+    LDR X9, [X19], #CELL            // X9 = n
+    CBZ X9, .Llframe_done           // a zero-cell frame is a no-op, not a fault
+    TLS_ADDR X12, lp
+    LDR X10, [X12]                  // X10 = LP
+    SUB X10, X10, X9, LSL #3        // LP -= n cells
+    STR X10, [X12]
+    // x1 is DEEPEST on the data stack ((n-1)*CELL above DSP) and must land at
+    // offset 0, so the copy runs backwards: source j from the top maps to
+    // local (n-1-j).
+    MOV X11, XZR                    // j = 0
+.Llframe_copy:
+    LDR X13, [X19, X11, LSL #3]     // x(n-j)
+    SUB X14, X9, X11
+    SUB X14, X14, #1                // n-1-j
+    STR X13, [X10, X14, LSL #3]
+    ADD X11, X11, #1
+    CMP X11, X9
+    B.LO .Llframe_copy
+    ADD X19, X19, X9, LSL #3        // drop x1..xn
+.Llframe_done:
+    RET
+
+// (lunframe) ( n -- )  Pop a frame of n cells.
+.global forth_lunframe
+forth_lunframe:
+    LDR X9, [X19], #CELL
+    TLS_ADDR X12, lp
+    LDR X10, [X12]
+    ADD X10, X10, X9, LSL #3
+    STR X10, [X12]
+    RET
+
+// (local@) ( i -- x )  Fetch local i of the current frame.
+.global forth_local_fetch
+forth_local_fetch:
+    LDR X9, [X19]
+    TLS_ADDR X12, lp
+    LDR X10, [X12]
+    LDR X11, [X10, X9, LSL #3]
+    STR X11, [X19]
+    RET
+
+// (local!) ( x i -- )  Store to local i. Locals are assignable; this is what
+// `to <local>` will compile to.
+.global forth_local_store
+forth_local_store:
+    LDR X9, [X19], #CELL            // i
+    LDR X11, [X19], #CELL           // x
+    TLS_ADDR X12, lp
+    LDR X10, [X12]
+    STR X11, [X10, X9, LSL #3]
+    RET
+
+// (lp@) ( -- a )  Current locals pointer.
+.global forth_lp_fetch
+forth_lp_fetch:
+    TLS_ADDR X9, lp
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
+// (lp0@) ( -- a )  This thread's empty mark. `(lp@) (lp0@) =` is the assertion
+// every unwind test makes.
+.global forth_lp0_fetch
+forth_lp0_fetch:
+    TLS_ADDR X9, lp0
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
+// (lstack-size) ( -- n )  Bytes per locals stack. threads.fs reads this rather
+// than keeping its own copy, so the worker stacks cannot drift from the REPL's.
+.global forth_lstack_size
+forth_lstack_size:
+    MOV X9, #LOCALS_STACK_SIZE
+    STR X9, [X19, #-CELL]!
+    RET
+
+// (dstack-size) ( -- n )  Bytes of data stack, per thread. threads.fs sizes a
+// worker's from this same constant the REPL's .bss stack uses.
+.global forth_dstack_size
+forth_dstack_size:
+    MOV X9, #DATA_STACK_SIZE
+    STR X9, [X19, #-CELL]!
+    RET
+
+// (thread-rsize) ( -- n )  Bytes of return stack per worker. Both exist so
+// that threads.fs states no size of its own -- every tunable is in
+// src/config.inc.
+.global forth_thread_rsize
+forth_thread_rsize:
+    MOV X9, #THREAD_RSTACK_SIZE
+    STR X9, [X19, #-CELL]!
+    RET
+
 // ---------- Thread trampoline ----------
 // pthread_create starts a thread as a C function on a C stack, with none of the
 // Forth machine state: no DSP, no data stack, no return-stack convention. Hand
@@ -5301,6 +5425,12 @@ forth_thread_tramp:
     STR X19, [X9]                   // so depth/.s measure against OUR stack
     LDR X10, [X0, #16]
     MOV SP, X10                     // return stack = this thread's own
+    LDR X10, [X0, #56]              // ctx.locals-top (the spare cell in the 64
+    TLS_ADDR X9, lp                 //   byte context block, see threads.fs)
+    STR X10, [X9]
+    TLS_ADDR X9, lp0                // a worker's empty mark is its OWN, so an
+    STR X10, [X9]                   //   unwind cannot reset LP onto the REPL
+                                    //   thread's locals stack
 
     // Run the xt through CATCH, not by calling it: an uncaught THROW in a
     // worker would otherwise reset to the REPL, which is meaningless off the
@@ -5373,6 +5503,15 @@ forth_thread_tramp_addr:
 forth_catch:
     LDR X9, [X19], #CELL            // pop xt (saved DSP excludes it)
     STP X29, X30, [SP, #-16]!       // save frame pointer + return address
+    // Frame: locals pointer. The one place a saved LP is unavoidable -- every
+    // other release is a compile-time add of a known frame size, but THROW
+    // unwinds past an arbitrary number of frames and cannot know how many.
+    // It costs a whole PAIR here: SP must stay 16-byte aligned, so the second
+    // slot is padding. Pushed deepest, so the two THROW paths (worker and
+    // REPL) converge on it at .Lthrow_frame.
+    TLS_ADDR X10, lp
+    LDR X10, [X10]
+    STP X10, XZR, [SP, #-16]!
     // The snapshot below is the interpreter's input source and error context --
     // process-wide globals. A worker never interprets (it runs compiled words
     // only), so it has nothing to save, and restoring its snapshot on THROW
@@ -5423,7 +5562,9 @@ forth_catch:
     LDR X10, [SP]                   // normal return: unlink the frame,
     TLS_ADDR X11, handler
     STR X10, [X11]
-    ADD SP, SP, #96                 //   discard the snapshot (globals are live)
+    ADD SP, SP, #112                //   discard the snapshot (globals are live)
+                                    //   -- 112, not 96: the frame gained the
+                                    //   saved-LP pair
     LDP X29, X30, [SP], #16
     STR XZR, [X19, #-CELL]!         // report success
     RET
@@ -5475,6 +5616,9 @@ forth_throw:
     ADD SP, SP, #64                 // four reserved pairs, never written
     LDP X12, X19, [SP], #16         // the DSP still comes back
 .Lthrow_frame:
+    LDP X12, X13, [SP], #16         // saved LP (+ its padding): releases every
+    TLS_ADDR X10, lp                //   frame opened inside the caught word
+    STR X12, [X10]
     LDP X29, X30, [SP], #16         // CATCH's frame record
     STR X9, [X19, #-CELL]!          // push n
 .Lthrow_noop:
@@ -5499,6 +5643,10 @@ forth_throw:
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9                      // reset return stack
+    TLS_ADDR X9, lp0                // reset locals stack -- the return stack
+    LDR X10, [X9]                   //   unwinds itself, this one does not
+    TLS_ADDR X9, lp
+    STR X10, [X9]
     DROP_PARTIAL_HEADER             // uncaught throw abandons any open def
     ADR X9, state
     STR XZR, [X9]                   // reset compile state
@@ -5520,6 +5668,10 @@ forth_quit:
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9                     // reset return stack
+    TLS_ADDR X9, lp0               // and the locals stack with it
+    LDR X10, [X9]
+    TLS_ADDR X9, lp
+    STR X10, [X9]
     ADR X9, state
     STR XZR, [X9]                  // reset compile state
     TLS_ADDR X9, handler
@@ -6327,7 +6479,16 @@ DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
 DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
 DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
 DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
+DEFWORD dict_lframe,      "(lframe)",     forth_lframe,      dict_thr_tramp
+DEFWORD dict_lunframe,    "(lunframe)",   forth_lunframe,    dict_lframe
+DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lunframe
+DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
+DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
+DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
+DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
+DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_lstack_size
+DEFWORD dict_thr_rsize,   "(thread-rsize)", forth_thread_rsize, dict_dstack_size
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_rsize
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -6405,6 +6566,27 @@ data_stack_top:
 guard_page_underflow:
     .space 4096
 
+// ---------- Locals Stack Memory ----------
+// Same shape as the data stack above, and fenced the same way, so overflowing a
+// locals frame is a reported error rather than a silent walk into whatever
+// follows. Only frame setup and teardown touch it: a definition that declares
+// no locals never moves LP.
+//
+// This is the REPL thread's. Each worker gets its own from the block threads.fs
+// allocates, because LP is per-thread (see the .tdata block).
+.balign 4096
+.global lguard_page_overflow
+lguard_page_overflow:
+    .space 4096
+.global locals_stack_bottom
+locals_stack_bottom:
+    .space LOCALS_STACK_SIZE
+.global locals_stack_top
+locals_stack_top:
+.global lguard_page_underflow
+lguard_page_underflow:
+    .space 4096
+
 // ---------- Dictionary Space ----------
 // Page-aligned: made executable at startup with mprotect (STC compiles
 // machine code into it; see platform_init_guard_pages).
@@ -6443,6 +6625,17 @@ is_repl:                            // 1 on the REPL thread, 0 in a worker. The
 thread_ctx:                         // This worker's context block (0 on the REPL
     .quad 0                         //   thread). Holds ctx across the Forth call,
                                     //   where no scratch register survives.
+.global lp
+lp:                                 // Locals pointer: the current frame's first
+    .quad 0                         //   local. Grows down, like the data stack.
+                                    //   In TLS rather than a register: X20 is
+                                    //   free on paper but in live scratch use,
+                                    //   and reclaiming it is its own job.
+.global lp0
+lp0:                                // This thread's empty-locals-stack mark. The
+    .quad 0                         //   unwind contract is "every path that
+                                    //   reaches repl_loop with a reset return
+                                    //   stack resets LP to this".
 .global thread_csp
 thread_csp:                         // The C stack pointer to return on. Kept in
     .quad 0                         //   TLS, NOT in the context block: the

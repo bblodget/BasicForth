@@ -68,7 +68,7 @@ require sdl3.fs
 (pad-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
-$2000 constant SDL_INIT_GAMEPAD
+$2000 constant (SDL_INIT_GAMEPAD)
 
 \ Face buttons, by position on the pad. See the header comment.
 0  constant pad-south       \ bottom  (A on Xbox, B on Nintendo, X on PlayStation)
@@ -108,7 +108,7 @@ create (pad-tab) #pads cells allot   \ SDL_Gamepad* per slot, 0 = empty
 (pad-tab) #pads cells erase
 
 0 value (pad-cur)     \ selected slot
-0 value (pad-init)    \ has SDL_INIT_GAMEPAD been started?
+0 value (pad-init)    \ has (SDL_INIT_GAMEPAD) been started?
 
 \ How far a stick must leave centre before pad-dir/pad-dx/pad-dy call it a
 \ direction. A stick at rest does not read 0 -- it jitters, and a worn one can
@@ -168,7 +168,7 @@ variable (pad-why-len)
 \ Empty after a successful open, so it never reports a stale reason.
 : pad-why ( -- c-addr u )  (pad-why-buf) (pad-why-len) @ ;
 
-\ Start the gamepad subsystem the first time it is needed. SDL_INIT_GAMEPAD
+\ Start the gamepad subsystem the first time it is needed. (SDL_INIT_GAMEPAD)
 \ implies JOYSTICK and EVENTS, so this is all a controller-only program needs
 \ -- no window required.
 \ Two spellings, because the callers differ in what they can say. A word that
@@ -177,7 +177,7 @@ variable (pad-why-len)
 : (pad-init?) ( -- ok? )
     (pad-init) if true exit then
     (pad-err-clear)
-    SDL_INIT_GAMEPAD 1 (SDL_Init) (ccall) (c-bool)
+    (SDL_INIT_GAMEPAD) 1 (SDL_Init) (ccall) (c-bool)
     dup if true to (pad-init) then ;
 
 : (pad-init!) ( -- )                   \ ...the aborting form
@@ -187,7 +187,7 @@ variable (pad-why-len)
 \ (pad-init) flag believes. The two can disagree: anything calling SDL_Quit()
 \ tears down every subsystem behind our back, and our flag would not know.
 : (pad-up?) ( -- flag )
-    SDL_INIT_GAMEPAD 1 (SDL_WasInit) (ccall) $FFFFFFFF and 0<> ;
+    (SDL_INIT_GAMEPAD) 1 (SDL_WasInit) (ccall) $FFFFFFFF and 0<> ;
 
 \ SDL_GetGamepads hands back a malloc'd array that is ours to release.
 : (pad-drop-list) ( -- )
@@ -336,7 +336,7 @@ variable (pad-why-len)
 : pad-closeall ( -- )
     #pads 0 do i (pad-shut) loop
     (pad-init) if
-        SDL_INIT_GAMEPAD 1 (SDL_QuitSubSystem) (ccall) drop
+        (SDL_INIT_GAMEPAD) 1 (SDL_QuitSubSystem) (ccall) drop
         false to (pad-init)
     then
     0 to (pad-cur) ;

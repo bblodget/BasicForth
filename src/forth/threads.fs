@@ -24,25 +24,38 @@ s" libc.so.6" dlopen value (libc)
 (libc) s" pthread_join"   dlsym value (pthread-join)
 
 \ --- context block: layout MUST match forth_thread_tramp in core.s ---
-\   0 xt   8 dtop   16 rtop   24 ior   32 tid   40 state   48 next
+\   0 xt   8 dtop   16 rtop   24 ior   32 tid   40 state   48 next   56 ltop
 64 constant (t-ctx)                         \ bytes of context block
 
-\ One allocation holds both stacks and the context, so one free returns it all.
-\ The stacks are FENCED: a PROT_NONE page sits below the data stack, between the
-\ two stacks, and above the return stack.
+\ One allocation holds all three stacks and the context, so one free returns it
+\ all. The stacks are FENCED: a PROT_NONE page sits below the data stack and
+\ between every pair.
 \
-\     [guard][ data stack ][guard][ return stack ][guard][ context ]
+\   [guard][ data ][guard][ return ][guard][ locals ][guard][ context ]
 \
-\ Both stacks grow down. Without the fences a worker that overflowed its return
+\ All three grow down. Without the fences a worker that overflowed its return
 \ stack walked silently into its own data stack, and a data stack popped past
 \ empty walked into the return stack -- wrong answers, no crash, nothing to
 \ debug. With them every direction hits a dead page and dies loudly: the
 \ SIGSEGV handler only recovers faults inside the MAIN thread's guard pages, so
 \ any other address re-raises with the default handler and dumps core.
-\ The context sits above the top fence, out of reach of both stacks.
+\ The context sits above the top fence, out of reach of every stack.
+\
+\ The locals stack is per-thread for the same reason BASE and the CATCH chain
+\ are: a worker running a word with locals must not write into the frames of
+\ whatever the REPL thread is doing. Its size comes from `(lstack-size)`, which
+\ reads the assembler's LOCALS_STACK_SIZE, so there is no second number here to
+\ drift out of step with src/config.inc.
 4096  constant (t-page)
-8192  constant thread-dstack                \ bytes of data stack per worker
-65536 constant thread-rstack                \ bytes of return stack per worker
+\ Sizes come from src/config.inc via primitives -- see the note there. Keeping
+\ the names, so the rest of this file reads unchanged, but not the numbers:
+\ a worker stack sized differently from what the assembler thinks it is would
+\ fence the wrong pages.
+(dstack-size)  constant thread-dstack       \ bytes of data stack per worker --
+                                            \   the SAME constant the REPL's
+                                            \   stack uses, so depth limits do
+                                            \   not depend on which thread runs
+(thread-rsize) constant thread-rstack       \ bytes of return stack per worker
 
 : (t-pgup)  ( a -- a' )  (t-page) 1- + (t-page) negate and ;   \ round up to a page
 
@@ -54,16 +67,20 @@ s" libc.so.6" dlopen value (libc)
 : (t>rlow)  ( t -- a )  (t>g1) (t-page) + ;
 : (t>rtop)  ( t -- a )  (t>rlow) thread-rstack + ;      \ SP starts here
 : (t>g2)    ( t -- a )  (t>rtop) ;                      \ fence above the return stack
-: (t>ctx)   ( t -- ctx )  (t>g2) (t-page) + ;
+: (t>llow)  ( t -- a )  (t>g2) (t-page) + ;
+: (t>ltop)  ( t -- a )  (t>llow) (lstack-size) + ;      \ LP starts here
+: (t>g3)    ( t -- a )  (t>ltop) ;                      \ fence above the locals stack
+: (t>ctx)   ( t -- ctx )  (t>g3) (t-page) + ;
 : (t-dtop)  ( ctx -- a )   8 + ;
 : (t-rtop)  ( ctx -- a )  16 + ;
 : (t-ior)   ( ctx -- a )  24 + ;
 : (t-tid)   ( ctx -- a )  32 + ;
 : (t-state) ( ctx -- a )  40 + ;
 : (t-next)  ( ctx -- a )  48 + ;
+: (t-ltop)  ( ctx -- a )  56 + ;
 
-1 constant running                          \ ctx.state values; the trampoline
-2 constant finished                         \   publishes `finished` itself
+1 constant (running)                        \ ctx.state values; the trampoline
+2 constant (finished)                       \   publishes `(finished)` itself
 
 \ --- the registry -------------------------------------------------------
 \ Live handles, newest first, linked through the context blocks themselves so
@@ -100,28 +117,30 @@ variable (t-head)
         (t>ctx) (t-next) @
     repeat  2drop ;
 
-\ Fence the three boundary pages, returning 0 or the first errno. Written as
-\ its own word because the handle has to survive all three calls -- computing
+\ Fence the four boundary pages, returning 0 or the first errno. Written as
+\ its own word because the handle has to survive all four calls -- computing
 \ the second and third guard from whatever happened to be under `over` was a
 \ bug that fenced the wrong pages and left the stacks open.
 : (t-fence) ( t -- ior )
     dup (t>g0) (t-page) (prot-none)          ( t ior )
     over (t>g1) (t-page) (prot-none) or      ( t ior )
-    swap (t>g2) (t-page) (prot-none) or ;    ( ior )
+    over (t>g2) (t-page) (prot-none) or      ( t ior )
+    swap (t>g3) (t-page) (prot-none) or ;    ( ior )
 
 : thread ( xt -- t ior )
-    (t-page) 4 * thread-dstack + thread-rstack + (t-ctx) + allocate
+    (t-page) 5 * thread-dstack + thread-rstack + (lstack-size) + (t-ctx) + allocate
     if  2drop  0 -59  exit  then            ( xt t )
     dup (t>ctx)                             ( xt t ctx )
     rot over !                              ( t ctx )   \ xt at ctx+0
     over (t>dtop) over (t-dtop) !           ( t ctx )   \ fenced regions
     over (t>rtop) over (t-rtop) !           ( t ctx )
+    over (t>ltop) over (t-ltop) !           ( t ctx )
     0 over (t-ior) !
     0 over (t-next) !
-    running over (t-state) !                \ before create: the worker may
-                                            \   publish `finished` immediately
+    (running) over (t-state) !              \ before create: the worker may
+                                            \   publish `(finished)` immediately
     over (t-link)
-    \ Fence the three boundary pages. If mprotect fails the thread would run
+    \ Fence the four boundary pages. If mprotect fails the thread would run
     \ unfenced, which is the very thing this prevents -- so refuse to start it.
     over (t-fence)                          ( t ctx ior )
     ?dup if  >r drop dup (t-unlink) free drop  0 r>  exit  then
@@ -178,7 +197,7 @@ variable (t-head)
 \ The state is read with (acq@), an ACQUIRE load, pairing with the store-release
 \ the trampoline uses to publish it. Both halves matter: with a plain fetch here
 \ ARM64 could hoist the result load above the state load and print the initial 0
-\ for a worker that actually threw. With the pair, `finished` implies the result
+\ for a worker that actually threw. With the pair, `(finished)` implies the result
 \ beside it is the real one.
 : (.handle) ( t -- )                        \ addresses read as hex, whatever
     base @ >r  hex  12 u.0r  r> base ! ;    \   base the user is working in
@@ -189,7 +208,7 @@ variable (t-head)
     (t-head) @
     begin  dup while                        ( p )
         dup (.handle)  ."   "
-        dup (t>ctx) (t-state) (acq@) finished = if
+        dup (t>ctx) (t-state) (acq@) (finished) = if
             ." finished  "  dup (t>ctx) (t-ior) @ .
         else
             ." running   -"

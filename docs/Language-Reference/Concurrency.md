@@ -57,7 +57,24 @@ Check `status` first — it is on top — and only read `result` when it is 0.
 
 Status codes follow their source: **positive** values are the system's `errno`
 (`EDEADLK` 35, `EINVAL` 22), **negative** ones are BasicForth's. The one you
-are likely to meet is `-60`, a spent or unknown handle.
+are likely to meet is `bad-handle`, a spent or unknown handle.
+
+## bad-handle ( -- n )
+The `join` status for a handle that is not live — already joined, or never was
+a handle. `-60`, but compare by name:
+
+    : try ( t -- )
+        join                            ( result status )
+        dup bad-handle = if  ." already joined" cr 2drop
+        else                 throw  .   ( the worker's throw code )  then ;
+
+    ' w thread throw value t
+    t try             \ 0    — ran to completion
+    t try             \ already joined
+
+It is the one status you can provoke by mistake rather than by system failure,
+since joining twice is an easy slip and the second call must not touch the
+memory the first one freed.
 
 Every thread must be joined — nothing else frees its memory — and joined
 **exactly once**. A second join is caught and reported as `-60` rather than
@@ -101,6 +118,15 @@ obvious; that is the intent. Worker stacks are a fixed size and do not grow.
     : w   hex ;
     : go  ['] w thread throw  join throw throw  base @ . ;
     go                \ 10
+
+## thread-dstack thread-rstack ( -- n )
+The size in bytes of a worker's data stack and return stack — 8192 and 65536
+as shipped. `constant`s, read when `thread` allocates: they describe what a
+worker gets, and changing them is a source edit, not a `to`.
+
+Worth knowing when a worker recurses deeply, since the fence turns an overrun
+into an immediate death rather than corruption. The return stack is the larger
+of the two because that is the one recursion consumes.
 
 ## Errors come back as a value
 A worker that throws does not reset the prompt — it ends that thread, and the
