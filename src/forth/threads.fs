@@ -62,8 +62,8 @@ s" libc.so.6" dlopen value (libc)
 : (t-state) ( ctx -- a )  40 + ;
 : (t-next)  ( ctx -- a )  48 + ;
 
-1 constant running                          \ ctx.state values; the trampoline
-2 constant finished                         \   publishes `finished` itself
+1 constant (running)                        \ ctx.state values; the trampoline
+2 constant (finished)                       \   publishes `(finished)` itself
 
 \ --- the registry -------------------------------------------------------
 \ Live handles, newest first, linked through the context blocks themselves so
@@ -118,8 +118,8 @@ variable (t-head)
     over (t>rtop) over (t-rtop) !           ( t ctx )
     0 over (t-ior) !
     0 over (t-next) !
-    running over (t-state) !                \ before create: the worker may
-                                            \   publish `finished` immediately
+    (running) over (t-state) !              \ before create: the worker may
+                                            \   publish `(finished)` immediately
     over (t-link)
     \ Fence the three boundary pages. If mprotect fails the thread would run
     \ unfenced, which is the very thing this prevents -- so refuse to start it.
@@ -178,7 +178,7 @@ variable (t-head)
 \ The state is read with (acq@), an ACQUIRE load, pairing with the store-release
 \ the trampoline uses to publish it. Both halves matter: with a plain fetch here
 \ ARM64 could hoist the result load above the state load and print the initial 0
-\ for a worker that actually threw. With the pair, `finished` implies the result
+\ for a worker that actually threw. With the pair, `(finished)` implies the result
 \ beside it is the real one.
 : (.handle) ( t -- )                        \ addresses read as hex, whatever
     base @ >r  hex  12 u.0r  r> base ! ;    \   base the user is working in
@@ -189,7 +189,7 @@ variable (t-head)
     (t-head) @
     begin  dup while                        ( p )
         dup (.handle)  ."   "
-        dup (t>ctx) (t-state) (acq@) finished = if
+        dup (t>ctx) (t-state) (acq@) (finished) = if
             ." finished  "  dup (t>ctx) (t-ior) @ .
         else
             ." running   -"
