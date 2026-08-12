@@ -583,6 +583,8 @@ dict_full:
     LDR X10, [X9]
     TLS_ADDR X9, lp
     STR X10, [X9]
+    ADR X9, locals_count
+    STR XZR, [X9]                   // the names die with the definition
 
     // If we were compiling, abort the definition
     ADR X9, state

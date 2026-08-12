@@ -3286,7 +3286,25 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
 : {: ( "name ... :}" -- )
     state @ 0= if
         ." {: only inside a definition" cr abort  then
-    (loc-clear)
+    \ The compile-time stack must be EMPTY. The frame is built where {: appears
+    \ but released once at `;`, so a {: inside a branch releases a frame that an
+    \ untaken call never built -- LP drifted 8 bytes per call toward the guard
+    \ page, in silence. Inside a loop it is the reverse: a frame per iteration,
+    \ released once. A CLOSED structure before it is fine: the build is still
+    \ unconditional and still happens once.
+    \
+    \ "Empty" is deliberately blunter than "no control structure is open". The
+    \ compile-time stack is just cells -- a marker left by `if` and a value left
+    \ by `[ 5 ]` are indistinguishable -- so this refuses both, and `case`/`of`
+    \ as well. Say so in the message: naming only if/begin/do described a guard
+    \ narrower than the one that is actually here, twice.
+    (cf-open?) if
+        ." {: needs an empty compile-time stack: close any if/begin/do/case"
+        ."  first, and leave nothing behind in [ ]" cr abort  then
+    \ ...and only once. A second {: builds a second frame while `;` still
+    \ releases one, which leaked 8 bytes of LP per call just as quietly.
+    (loc-count) if
+        ." {: already declared in this definition" cr abort  then
     begin
         parse-word dup 0= if                        ( c-addr u )
             ." {: has no closing :}" cr abort  then

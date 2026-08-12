@@ -1,9 +1,39 @@
 # Locals — Design Note
 
-Status: **stage 1 built (2026-08-11): the runtime frame and its unwind
-contract. No syntax yet.** Phase 8 (`docs/TODO.md`, "Threading and Locals").
+Status: **stage 2 built (2026-08-12): `{: … :}` compiles, on both
+architectures, with open-coded references.** Stage 1 (2026-08-11) was the
+runtime frame and its unwind contract. Phase 8 (`docs/TODO.md`, "Threading and Locals").
 This note records what the runtime-frame design costs, where it can go wrong,
 and what still has to be decided.
+
+## What stage 2 shipped
+
+`{: a b c :}` as an immediate word in `core.fs`, name resolution ahead of the
+dictionary in the outer interpreter, and an **open-coded** reference: x86-64
+emits 23 bytes (a TLS load, an offset load, and a push), ARM64 24 bytes / six
+instructions. Neither calls anything. Frame build and release remain ordinary
+calls, since they happen once per invocation rather than once per mention.
+
+**The relocations are not hand-encoded.** Both emitters copy a code template
+written as real instructions, so the assembler and linker fill in the TLS
+offset; x86 then emits the remaining 14 relocation-free bytes directly, and
+ARM64 patches one `imm12` field. On a fixed-width architecture where every
+instruction is a bitfield, copying and patching one field is the difference
+between a mirror and a guess.
+
+**What the frame's shape forced.** The build happens where `{:` appears; the
+release happens once, when the definition returns. That pairing is only safe if
+the build is unconditional and happens once — so `{:` is refused where the
+compile-time stack is non-empty (inside an unclosed `if`/`begin`/`do`/`case`,
+or after a `[ … ]` that left a value), and refused a second time in one
+definition. Each of those cases leaked 8 bytes of LP per call before the guard
+existed. `does>` is refused outright: its body outlives the frame, and read a
+dead slot without crashing.
+
+Three of those four defects came from review rather than from the tests, which
+were green throughout. The tests only covered the *refused* side of the
+placement rule, which let the documented rule drift narrower than the enforced
+one — twice — before a test on the permitted side pinned it.
 
 ## What stage 1 shipped
 

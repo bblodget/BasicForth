@@ -1639,6 +1639,10 @@ msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
+msg_does_locals: .ascii "does> cannot see the defining word's locals: "
+.equ msg_does_locals_len, . - msg_does_locals
+msg_loc_placement: .ascii "locals must be declared before any if/begin/do: "
+.equ msg_loc_placement_len, . - msg_loc_placement
 msg_cf_mismatch: .ascii "mismatched control flow: "
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 msg_redefined: .ascii "redefined "
@@ -4725,6 +4729,17 @@ forth_does_runtime:
 # the does-body. ; will close the does-body with its own RET.
 .global forth_does
 forth_does:
+    # A does> body runs when the CREATED word is executed -- long after the
+    # defining word returned and its frame was popped. A local referenced there
+    # reads a dead slot: `: mk {: v :} create v , does> @ v + ;` did not crash,
+    # it returned a WRONG NUMBER, which is worse. Refuse at compile time.
+    cmpq $0, locals_count(%rip)
+    je .Ldoes_ok
+    lea msg_does_locals(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_does_locals_len, err_pfx_len(%rip)
+    jmp .Lcf_abort
+.Ldoes_ok:
     # Compile CALL forth_does_runtime
     lea forth_does_runtime(%rip), %rax
     call compile_call
@@ -5083,6 +5098,26 @@ forth_loc_add:
 .Lla_no:
     sub $CELL, %r15
     movq $0, (%r15)
+    ret
+
+# (cf-open?) ( -- flag )  Is a control-flow construct open right now?
+# True when anything has been pushed on the compile-time stack since `:`.
+#
+# `{:` uses this to refuse a declaration inside `if`/`begin`/`do`. The frame is
+# built where `{:` appears but released unconditionally at `;`, so a `{:` in a
+# branch that a call does not take releases a frame that call never built --
+# LP drifted 8 bytes per call, toward the guard page, silently. Inside a loop
+# it is the opposite: a frame per iteration, released once.
+.global forth_cf_open
+forth_cf_open:
+    xor %edx, %edx                  # assume nothing open
+    mov colon_dsp(%rip), %rax
+    cmp %rax, %r15                  # compare BEFORE pushing: our own push would
+    jae .Lcfo_done                  #   otherwise look like an open construct
+    mov $-1, %rdx
+.Lcfo_done:
+    sub $CELL, %r15
+    mov %rdx, (%r15)
     ret
 
 # (loc-count) ( -- n )  How many locals the current definition declared.
@@ -6169,7 +6204,8 @@ DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
 DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
-DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_lstack_size
+DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_lstack_size
+DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_cf_open
 DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
 DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
 DEFWORD dict_loc_max,     "(loc-max)",    forth_loc_max,     dict_loc_clear

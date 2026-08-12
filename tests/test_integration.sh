@@ -5195,10 +5195,15 @@ fi
 
 # The real-docs case that motivated multi-entry help: `help begin` must show
 # all three indefinite-loop entries from Language-Reference/Loops.md
-# timeout 5 (not 2): help begin scans the whole Language-Reference corpus,
-# which keeps growing; 2 s is marginal under qemu when the host is loaded.
+# timeout 30 (was 5, was 2): help begin scans the whole Language-Reference
+# corpus, and that corpus keeps growing -- the help-coverage sweep of 2026-08-11
+# alone took the scan to ~9.6 s under qemu, so 5 s started timing out and the
+# test reported "0 '## begin' headings", which reads like a help bug rather than
+# a clock. It is emulation cost, not a real one: the same scan is well under a
+# second natively. 30 s matches the other corpus-scanning tests above; if this
+# ever fires again, measure before believing the docs broke.
 begin_out=$(printf 'help begin\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 5 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 30 $FORTH 2>&1)
 if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
     printf "  ${GREEN}PASS${NC}  help begin shows all three begin entries\n"; ((passed++))
 else
@@ -7125,6 +7130,80 @@ thr_check "a worker throwing mid-frame leaves the REPL's LP alone" \
 : go ['"'"'] wt thread drop join drop .  (lp@) (lp0@) = . ;
 go' \
 "77 -1"
+
+# =========================================================================
+section "LOCALS (stage 2: {: ... :} and open-coded references)"
+# =========================================================================
+
+assert_result "locals: named in stack order"  ": t {: a b :} a . b . ; 1 2 t"   "1 2"
+assert_result "locals: read more than once"   ": u {: x :} x x + ; 21 u ."      "42"
+assert_result "locals: three arguments"       ": c {: n lo hi :} n lo < if lo exit then n hi > if hi exit then n ;
+5 0 10 c . 99 0 10 c . -3 0 10 c ."                                            "5 10 0"
+assert_result "locals: nested calls each get their own frame" \
+              ": n1 {: a :} a 2 * ;
+: n2 {: b :} b n1 b + ;
+10 n2 ."                                                                       "30"
+# Shadowing is the point, and it reaches VERBS: `i` is the natural name for a
+# counter AND the loop index. Not a bug -- but the reason a warning is next.
+assert_result "locals: a local shadows the DO index" ": sh {: i :} 3 0 do i . loop ; 7 sh"  "7 7 7"
+
+# --- the frame must balance, whichever way the word is left ---------------
+assert_output "locals: LP balances after a normal return" ": u {: x :} x ; 1 u drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after an early exit" \
+              ": e {: a :} a 5 > if a exit then 0 ; 9 e drop 1 e drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after exit from a DO loop" \
+              ": d {: n :} 10 0 do i n = if unloop n exit then loop 0 ;
+3 d drop 50 d drop 3 d drop (lp@) (lp0@) = ."                                  "-1"
+
+# --- three ways a frame could be built without being released ------------
+# All found after stage 2 first "worked": each leaked exactly 8 bytes of LP per
+# call, silently, until the locals stack walked into its guard page. The frame
+# is built where `{:` appears but released ONCE at `;`, so anything that makes
+# the build conditional -- or repeats it -- unbalances the pair. Refusing at
+# compile time is the fix; a runtime check would cost every call.
+assert_error "locals: refused inside IF"    ": t 0 if {: a :} then ;"     "needs an empty compile-time stack"
+assert_error "locals: refused inside BEGIN" ": v begin {: a :} again ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside DO"    ": w 3 0 do {: a :} loop ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside CASE"   ": u case 1 of {: a :} endof endcase ;" "needs an empty compile-time stack"
+# No control structure at all -- the guard tests the compile-time STACK, and a
+# value left by [ ] is indistinguishable from a control-flow marker. Asserted
+# so the message can never again describe a narrower guard than the real one.
+assert_error "locals: refused after [ ] leaves a value" ": v [ 5 ] {: a :} ;"  "leave nothing behind"
+assert_error "locals: refused twice over"   ": two {: a :} {: b :} ;"     "already declared"
+# The PERMITTED side of the same boundary, which had no test until the rule in
+# the docs was found to be stricter than the rule in the code. A closed
+# structure before `{:` is fine -- the build is still unconditional and still
+# happens once -- and only a test on this side stops the wording drifting again.
+assert_result "locals: allowed after a CLOSED if" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t"                            "2 7"
+assert_result "locals: allowed after a CLOSED do loop" \
+              ": u 3 0 do i . loop {: a :} a . ; 9 u"                          "0 1 2 9"
+assert_output "locals: LP balances after a closed structure" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t 7 t (lp@) (lp0@) = ."       "-1"
+# ...and the session still compiles afterwards, which is not implied by the
+# message: the definition-open guard printed correctly while wedging LATEST.
+assert_result "locals: a refusal leaves the session usable" \
+              ": t 0 if {: a :} then ;
+: fine {: z :} z 3 * ;
+4 fine ."                                                                      "12"
+assert_output "locals: a refusal leaves LP where it found it" \
+              ": t 0 if {: a :} then ;
+(lp@) (lp0@) = ."                                                              "-1"
+
+# --- does> cannot see them -----------------------------------------------
+# The created word runs long after the defining word returned and its frame was
+# popped. This did not crash -- it returned a WRONG NUMBER from a dead slot,
+# which is why it is refused rather than documented.
+assert_error "locals: does> refuses them" ": mk {: v :} create v , does> @ v + ;"  "does> cannot see"
+assert_result "locals: does> still works without them" \
+              ": mk create , does> @ 2 * ;
+5 mk ten
+ten ."                                                                         "10"
+
+# --- and a definition WITHOUT locals is untouched -------------------------
+# "Pay only if you use it" is the design claim; this is the cheapest check of
+# it that does not depend on a disassembler being installed.
+assert_result "locals: an ordinary definition is unaffected" ": sq dup * ; 7 sq ."  "49"
 
 # =========================================================================
 section "BYE"

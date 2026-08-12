@@ -52,6 +52,31 @@ Nothing is broken there; `i` simply means the local now. Avoid naming a local
 after a word you still need in that definition — `i` and `j` are the ones to
 watch, since they are the natural names for a counter *and* the loop indices.
 
+### Where `{:` may appear
+**Once per definition, and only where the compile-time stack is empty.** Both
+are compile errors, and both exist for the same reason: the frame is built where
+`{:` appears but released once when the definition returns. A `{:` inside a
+branch would be released by calls that never took the branch; inside a loop it
+would build a frame per iteration and release one. Either way the locals stack
+drifts a little on every call, in silence, until it walks into its guard page.
+
+In practice that means: not inside an unclosed `if`, `begin`, `do` or `case`. A
+structure that has already *closed* is fine — the rule is about what is still
+open, not about coming first:
+
+    : blit ( src x y w h -- )  {: s x y w h :}   \ the usual place
+    : t  1 if 2 . then {: a :} a . ;             \ fine: the IF is closed
+    : oops  1 if {: a :} then ;                  \ refused: inside the IF
+
+"Compile-time stack is empty" is blunter than "no control structure is open",
+and deliberately so: that stack holds plain cells, so a marker left by `if` and
+a value left behind by `[ 5 ]` look identical. Both are refused. If you get the
+error with no control structure in sight, look for a `[ … ]` that left something
+on the stack.
+
+In practice the top of the definition is where locals read best anyway, right
+where a stack comment goes.
+
 ### Limits
 At most **16** locals per definition, each name **31 characters** or fewer —
 Forth 2012 requires a system to accept 8. Exceeding either is a compile error
@@ -62,8 +87,17 @@ copy of every local. Going deeper than the stack allows reports
 `locals stack overflow` and returns you to the prompt, like any other stack
 overflow.
 
+### `does>` cannot see them
+A `does>` body runs when the *created* word is executed — long after the
+defining word returned and its frame was released. Referring to a local there
+is a compile error:
+
+    : mk {: v :} create v , does> @ v + ;
+    \ does> cannot see the defining word's locals: does>
+
+This is refused rather than merely discouraged because it did not fail loudly:
+it compiled, ran, and returned a wrong number read from a dead slot.
+
 ### What is not here yet
-Assigning to a local (`to`) is not wired up, and a `does>` body cannot refer to
-the defining word's locals — its frame is gone by the time the created word
-runs. Both are being built; until then a local is read-only within its
+Assigning to a local (`to`) is not wired up, so a local is read-only within its
 definition.

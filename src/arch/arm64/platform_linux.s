@@ -663,6 +663,8 @@ sigsegv_handler:
     LDR X3, [X3]
     TLS_ADDR X4, lp
     STR X3, [X4]
+    ADR X3, locals_count
+    STR XZR, [X3]                      // the names die with the definition
 
     // Always restore LATEST and HERE — a fault during forth_colon may
     // have partially modified X21/X22 before STATE was set to compiling.

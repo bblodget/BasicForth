@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added: local variables — `{: a b c :}`
+
+- Forth 2012 section 13. Names the top n stack items for the rest of the
+  definition, so a word with three or four arguments stops being an exercise in
+  `rot swap over`:
+
+      : clamp ( n lo hi -- n )  {: n lo hi :}
+          n lo < if lo exit then
+          n hi > if hi exit then
+          n ;
+
+- **A local reference is open-coded** — three loads and a store on x86-64, six
+  instructions on ARM64, and no call on either. That was the condition the whole
+  feature rested on: a reference costing a `create`/`does>`-class call would
+  have made locals *slower* than the juggling they replace, and no correctness
+  test would have noticed. Frame build and release are one call each, at the
+  ends, where they run once.
+- **A definition that declares no locals is byte-for-byte unchanged.**
+  `: sq dup * ;` is still 11 bytes on x86-64.
+- Locals live on their own per-thread stack, so they do not interact with
+  `>r`/`r>` or with `do`/`loop` control parameters, and a worker cannot disturb
+  another thread's frames. `see` prints them verbatim; `help {:` documents them.
+- **Locals shadow, including verbs.** `{: i :}` beats the `DO` loop index inside
+  that definition. That is what the standard requires and what every language
+  does for variables, but Forth lets you shadow *verbs*, so it bites harder —
+  `i` and `j` are the names to watch. A warning is planned.
+- **`{:` may appear once per definition, where the compile-time stack is
+  empty** — in practice, not inside an unclosed `if`, `begin`, `do` or `case`. A
+  closed one before it is fine. The frame is built where `{:` appears but
+  released once when the definition returns, so anything that makes the build
+  conditional, or repeats it, unbalances the pair: each of those cases leaked
+  8 bytes of the locals stack per call, silently, until it walked into its guard
+  page.
+- **`does>` cannot refer to them**, and says so at compile time. Its body runs
+  when the *created* word is executed, long after the defining word's frame was
+  released — which did not crash, it returned a wrong number from a dead slot.
+- Not yet: assigning to a local (`to`), so a local is read-only for now.
+
 ### Added: the locals runtime frame (stage 1 — no syntax yet)
 
 - The substrate for local variables: a **separate locals stack**, per thread,
