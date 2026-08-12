@@ -24,6 +24,10 @@ as the code evolves:
 - ARM64_Quick_Reference.md — ARM64 instruction and register reference
 - x86_Quick_Reference.md — x86-64 AT&T syntax reference
 
+docs/dev-notes/ holds notes on the development environment itself — the
+machines, boards and links we build and test on, not the language. It sits
+outside BASICFORTH_DOCS deliberately, so nothing there reaches `help`.
+
 ## Development Environment
 
 - Development on x86 Linux laptop using Claude Code
