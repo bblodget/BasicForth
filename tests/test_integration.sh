@@ -7032,6 +7032,101 @@ go' \
 "5000 5000"
 
 # =========================================================================
+section "LOCALS (stage 1: the runtime frame and its unwind contract)"
+# =========================================================================
+# No syntax yet -- `{: ... :}` is stage 2. These drive the frame primitives
+# directly, which is the only way to test the part that actually goes wrong.
+#
+# A separate locals stack is NOT unwound by anything that unwinds the return
+# stack, so every reset path has to release it by hand, and a missed one leaks
+# silently: nothing fails until the locals stack overflows, much later, in
+# unrelated code. So the assertion throughout is not "does it work" but "did
+# LP go back", which is a different question and the only one that fails when
+# a path is missed.
+
+# assert_result, not assert_output, wherever the expected text also occurs in
+# the input: run_forth captures the ECHOED line too, so `assert_output` would
+# match the input and pass against a completely broken engine. That is not
+# hypothetical here -- the first draft of the assignability test below stored
+# with NO frame open, faulted into the guard page, and passed anyway on the
+# echoed "9".
+assert_result "frame: first declared is local 0" \
+              "3 4 5 3 (lframe) 0 (local@) . 1 (local@) . 2 (local@) ."   "3 4 5"
+assert_output "frame: consumes its arguments"    "1 2 3 3 (lframe) depth ."       "0"
+assert_output "frame: costs exactly n cells"     "1 2 3 3 (lframe) (lp0@) (lp@) - ." "24"
+assert_output "frame: teardown restores LP"      "1 2 3 3 (lframe) 3 (lunframe) (lp@) (lp0@) = ." "-1"
+assert_output "frame: a zero-cell frame is a no-op, not a fault" \
+              "0 (lframe) (lp@) (lp0@) = ."                              "-1"
+assert_result "frame: locals are assignable"     "1 1 (lframe) 42 0 (local!) 0 (local@) . 1 (lunframe)" "42"
+assert_output "locals stack is untouched at rest" "(lp@) (lp0@) = ."      "-1"
+# Writing outside the frame hits the guard page rather than scribbling on the
+# caller's locals -- the fence is what makes a stage-2 off-by-one findable.
+assert_output "a store past the frame hits the guard page" \
+              "1 1 (lframe) 42 4 (local!)"                               "locals stack underflow"
+
+# --- the eight reset paths, one assertion each ---------------------------
+# Each opens a frame and leaves it open, then takes the path. The frame is
+# opened and abandoned within ONE line, because LP is restored to the line's
+# ENTRY value -- at the outermost level that is lp0, but saying "one line"
+# keeps the test honest about which invariant it is checking.
+assert_output "unwind: caught throw"   ": t 1 1 (lframe) 99 throw ;
+' t catch . (lp@) (lp0@) = ."                                            "99 -1"
+assert_output "unwind: uncaught throw" ": t 1 1 (lframe) 99 throw ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: QUIT"           ": t 1 1 (lframe) quit ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: aborted definition" ': bad [ 1 1 (lframe) ] nosuchword ;
+(lp@) (lp0@) = .'                                                        "-1"
+assert_output "unwind: data-stack underflow (guard page)" "1 1 (lframe) drop
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: data-stack overflow (guard page)" ": t 1 1 (lframe) begin 1 again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: dictionary full" ": t 1 1 (lframe) begin 1 , again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+
+# --- nesting: the case a blanket "reset to lp0" gets WRONG ----------------
+# interpret_line nests. A compiled word holding a frame can call EVALUATE, and
+# an error inside that evaluation unwinds only the INNER interpret_line -- the
+# caller is still running and its frame is still live. Resetting to lp0 there
+# would hand the caller freed slots. Both error exits are covered because they
+# are separate code paths reached by different errors: an undefined word takes
+# .Lil_err_return, a control-flow abort takes .Lcf_longjmp.
+# Verified non-vacuous: breaking either exit to reset lp0 makes its test report
+# "locals stack underflow" instead, since local 0 then sits in the guard page.
+# A distinctive value, and assert_result so the echo cannot supply it: the
+# local must read back as 4242, not merely as "something". Expecting "1" here
+# would have matched the "-1" from the LP check on the next line.
+assert_result "nesting: undefined word inside evaluate keeps the caller's frame" \
+              ': o 4242 1 (lframe) s" nosuchword" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+assert_result "nesting: control-flow abort inside evaluate keeps it too" \
+              ': o 4242 1 (lframe) s" : q then ;" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+
+# --- per-thread ----------------------------------------------------------
+# A worker gets its own locals stack from its own allocation, so LP is per
+# thread like BASE and the CATCH chain. Neither a worker that uses locals
+# normally nor one that throws mid-frame may disturb the REPL's LP.
+thr_check "a worker's locals stack is its own" \
+'require threads.fs
+: w  7 1 (lframe) 0 (local@) drop 1 (lunframe) ;
+: go ['"'"'] w thread drop join 2drop  (lp@) (lp0@) = . ;
+go' \
+"-1"
+thr_check "a worker throwing mid-frame leaves the REPL's LP alone" \
+'require threads.fs
+: wt 1 1 (lframe) 77 throw ;
+: go ['"'"'] wt thread drop join drop .  (lp@) (lp0@) = . ;
+go' \
+"77 -1"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 

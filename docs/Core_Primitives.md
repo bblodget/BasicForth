@@ -72,7 +72,7 @@ part of normal memory access, with no extra instructions in the normal case.
 | Parameter       | Value                   | Notes                        |
 |-----------------|-------------------------|------------------------------|
 | CELL            | 8 bytes                 | 64-bit cells, native word    |
-| DATA_STACK_SIZE | 4096                    | 512 cells (4096 / 8)         |
+| DATA_STACK_SIZE | 8192                    | 1024 cells; src/config.inc   |
 | Alignment       | page-aligned            | Required for guard pages     |
 
 ### Register Allocation
@@ -278,7 +278,7 @@ guard_page_overflow:                # mprotect PROT_NONE at startup
     .space 4096
 .balign 4096
 data_stack_bottom:
-    .space DATA_STACK_SIZE          # 4096 bytes = 512 cells
+    .space DATA_STACK_SIZE          # 8192 bytes = 1024 cells
 .global data_stack_top
 data_stack_top:                     # DSP starts here (empty stack)
 .balign 4096

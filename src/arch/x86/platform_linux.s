@@ -403,6 +403,25 @@ platform_init_guard_pages:
     test %rax, %rax
     jnz .Lguard_fail
 
+    # The locals stack is fenced the same way. Its underflow guard catches an
+    # unbalanced teardown (an engine bug, not a user one); its overflow guard
+    # catches recursion deeper than LOCALS_STACK_SIZE allows.
+    mov $SYS_mprotect, %rax
+    lea lguard_page_underflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
+    mov $SYS_mprotect, %rax
+    lea lguard_page_overflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
     # mprotect(dict_space, dict_space_end - dict_space, RWX)
     # STC compiles machine code into the dictionary; the dynamically-linked
     # binary maps .bss read-write only (unlike the old `ld -N` RWX segment).
@@ -487,10 +506,29 @@ sigsegv_handler:
     # Check if fault is in overflow guard page
     lea guard_page_overflow(%rip), %rcx
     cmp %rcx, %rax
-    jb .Lsig_unknown
+    jb .Lsig_check_lunder
     lea guard_page_overflow+PAGE_SIZE(%rip), %rcx
     cmp %rcx, %rax
     jb .Lsig_overflow
+
+.Lsig_check_lunder:
+    # The locals stack's own pair. Named separately from the data stack's so a
+    # report says which stack went, rather than sending someone to look at the
+    # wrong one -- the whole lesson of the control-flow closer errors.
+    lea lguard_page_underflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_check_lover
+    lea lguard_page_underflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_lunderflow
+
+.Lsig_check_lover:
+    lea lguard_page_overflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_unknown
+    lea lguard_page_overflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_loverflow
 
 .Lsig_unknown:
     # Not our guard page — re-raise default SIGSEGV
@@ -530,6 +568,27 @@ sigsegv_handler:
     lea msg_overflow(%rip), %rsi
     mov $msg_overflow_len, %rdx
     syscall
+    jmp .Lsig_recover
+
+.Lsig_lunderflow:
+    # LP went back above lp0: a frame was torn down that was never set up. That
+    # is an engine bug, not a program one, so say so rather than implying the
+    # user did something -- there is no Forth code that can cause it.
+    call pay_pending_nl
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_lunderflow(%rip), %rsi
+    mov $msg_lunderflow_len, %rdx
+    syscall
+    jmp .Lsig_recover
+
+.Lsig_loverflow:
+    call pay_pending_nl
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_loverflow(%rip), %rsi
+    mov $msg_loverflow_len, %rdx
+    syscall
 
 .Lsig_recover:
     # Modify ucontext registers to resume at repl_loop with clean state
@@ -542,6 +601,16 @@ sigsegv_handler:
 
     mov %fs:sp0@tpoff, %rax
     mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
+
+    # LP back to empty. This is one of the eight reset paths, and the awkward
+    # one: recovery here happens by REWRITING the ucontext, not by executing a
+    # reset, which is why grepping for the usual `rp0(%rip), %rsp` idiom does
+    # not find it. LP lives in TLS rather than a register, so the handler can
+    # store to it directly -- no ucontext edit needed, but it does have to be
+    # remembered. A leaked frame is silent until the locals stack overflows,
+    # much later, in unrelated code.
+    mov %fs:lp0@tpoff, %rax
+    mov %rax, %fs:lp@tpoff
 
     # Always restore LATEST and HERE — a fault during forth_colon may
     # have partially modified R12/R13 before STATE was set to compiling.
@@ -562,6 +631,10 @@ msg_underflow:  .ascii "stack underflow\n"
 .equ msg_underflow_len, . - msg_underflow
 msg_overflow:   .ascii "stack overflow\n"
 .equ msg_overflow_len, . - msg_overflow
+msg_loverflow:  .ascii "locals stack overflow\n"
+.equ msg_loverflow_len, . - msg_loverflow
+msg_lunderflow: .ascii "locals stack underflow (engine bug -- please report)\n"
+.equ msg_lunderflow_len, . - msg_lunderflow
 msg_guard_fail: .ascii "fatal: guard page setup failed\n"
 .equ msg_guard_fail_len, . - msg_guard_fail
 

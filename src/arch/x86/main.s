@@ -14,7 +14,10 @@
 
 .global _start
 
-.equ CELL, 8
+# Tunable sizes, shared with core.s and the ARM64 build. CELL comes from
+# here rather than being redefined per file -- three copies of the one value
+# this file exists to keep single is exactly the drift it prevents.
+.include "../../config.inc"
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          # buffer for the absolute startup directory
 .equ F_HIDDEN, 0x40                 # header flags2 bit; must match core.s
@@ -136,6 +139,9 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, %fs:sp0@tpoff             # save initial DSP for .S / guards
     movq $1, %fs:is_repl@tpoff      # this is the REPL thread; workers get 0
+    lea locals_stack_top(%rip), %rax    # LP = lp0 (no frames)
+    mov %rax, %fs:lp@tpoff
+    mov %rax, %fs:lp0@tpoff
     lea dict_space(%rip), %r13      # HERE
     lea dict_throw(%rip), %r12      # LATEST (head of the built-in dictionary chain)
 
@@ -503,9 +509,11 @@ dict_full:
     mov $msg_dict_full_len, %rdx
     call platform_write
 
-    # Reset return stack and data stack
+    # Reset return stack, data stack and locals stack
     mov rp0(%rip), %rsp
     mov %fs:sp0@tpoff, %r15
+    mov %fs:lp0@tpoff, %rax
+    mov %rax, %fs:lp@tpoff
 
     # If we were compiling, abort the definition
     cmpq $0, state(%rip)

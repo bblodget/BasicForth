@@ -23,7 +23,10 @@
 
 .global _start
 
-.equ CELL, 8
+// Tunable sizes, shared with core.s and the x86-64 build. CELL comes from
+// here rather than being redefined per file -- three copies of the one value
+// this file exists to keep single is exactly the drift it prevents.
+.include "../../config.inc"
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          // buffer for the absolute startup directory
 .equ F_HIDDEN, 0x40                 // header flags2 bit; must match core.s
@@ -172,6 +175,11 @@ _start:
     TLS_ADDR X9, is_repl
     MOV X10, #1
     STR X10, [X9]                   // this is the REPL thread; workers get 0
+    ADR X10, locals_stack_top       // LP = lp0 (no frames)
+    TLS_ADDR X9, lp
+    STR X10, [X9]
+    TLS_ADDR X9, lp0
+    STR X10, [X9]
     ADR X21, dict_space             // HERE
     ADR X22, dict_throw             // LATEST (head of the built-in dictionary chain)
 
@@ -565,12 +573,16 @@ dict_full:
     MOV X1, #msg_dict_full_len
     BL platform_write
 
-    // Reset return stack and data stack
+    // Reset return stack, data stack and locals stack
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9
     TLS_ADDR X9, sp0
     LDR X19, [X9]
+    TLS_ADDR X9, lp0
+    LDR X10, [X9]
+    TLS_ADDR X9, lp
+    STR X10, [X9]
 
     // If we were compiling, abort the definition
     ADR X9, state

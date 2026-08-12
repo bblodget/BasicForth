@@ -27,7 +27,11 @@ TEST_BIN = test_basicforth
 $(BIN): $(OBJS)
 	$(CC) -nostartfiles -no-pie -o $@ $(OBJS) -ldl
 
-main.o: main.s version.inc
+main.o: main.s version.inc ../../config.inc
+
+# Shared tunables: a size change must force a rebuild, or the guard pages and
+# the stack they fence would be assembled from different numbers.
+core.o: core.s ../../config.inc
 
 %.o: %.s
 	$(AS) -o $@ $<
