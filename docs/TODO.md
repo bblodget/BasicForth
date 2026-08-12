@@ -1175,18 +1175,89 @@ docs/Graphics.md for the API.
     communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
     nicer report now that fences make the failure loud); per-thread locals
     stack; stack sizing (fixed constants today)
-  - [ ] **`seed` should be thread-local — `random`/`rnd` are unusable from
-    workers today.** Both read-modify-write one global `seed` cell, so N
-    threads calling `rnd` fight over a single cache line: measured 2026-08-06,
-    4 threads ran **4x slower** than 1, and no lock is involved — a line simply
-    cannot be written by two cores at once. The results are also wrong, since
-    the RMW is not atomic and the threads share one stream instead of running
-    independent ones. Step 0's TLS machinery makes the cell itself a one-line
-    change; the real design question is **seeding**: `.tdata` supplies a
-    constant initial image, so every worker would start from the same seed and
-    replay the same sequence unless the trampoline mixes in something
-    per-thread. `examples/dice.fs` works around it by giving each worker a seed
-    in memory it allocated itself.
+  - [x] **`seed` is thread-local — DONE 2026-08-11** (branch tlsseed).
+    `random`/`rnd` are usable from workers now. The cell moved out of the
+    dictionary into the TLS block on both arches, exposed by an ASM word
+    `seed ( -- a-addr )` exactly like `base`, so `42 seed !` and `0 seed !`
+    read and behave as they always did — per thread.
+
+    Both halves of the old defect measured before and after: two workers
+    drawing 2000 values each shared **1707** of them (one interleaved stream,
+    with lost updates, since the read-modify-write was never atomic) and now
+    share **0**. The performance half was the 2026-08-06 finding, 4 threads
+    **4x slower** than 1 from a single contended cache line.
+
+    The design question was seeding, as flagged: `.tdata` is a constant image,
+    so every worker would have started from the same number and replayed the
+    same sequence — independent but identical, which is *harder* to spot than
+    the shared cell, because from inside one thread it looks perfect. The
+    trampoline therefore seeds each worker from `entropy`, falling back to the
+    context-block address scrambled by the golden-ratio constant — a fallback
+    that had to be per-thread too, since a constant there rebuilds the bug.
+
+    The seeding sits **before** the trampoline switches stacks, which is the
+    last point where the C stack's ABI-guaranteed alignment is still in hand.
+    Seeding after the switch calls on the worker's *return* stack, aligned only
+    as far as `ctx.rtop` happens to be — and AArch64 faults on a misaligned
+    `SP` rather than tolerating it. x86-64 also pads by 8 so `RSP` is 16-byte
+    aligned at the `call`; measured at the call site, 8 without the pad and 0
+    with it. Note the engine's Forth-side calls into the platform layer are
+    *deliberately* not SysV-aligned — `RSP` is the Forth return stack there —
+    so an alignment tripwire in `platform_random` fires on ordinary startup and
+    proves nothing about this path.
+
+    Writing the test taught the same lesson twice: the obvious check, "the
+    worker's value differs from the REPL's", **passes with the fix removed** —
+    a single shared seed also hands the worker a different (merely *next*)
+    value. It proved nothing. The real guard is cross-process: run twice and
+    require the worker's first draw to differ between runs.
+
+    `examples/dice.fs` was then simplified onto it: each worker sets its own
+    `seed` instead of `allocate`ing a cell and freeing it. Same results for
+    the same seed, and the same speed (200M battles: 82.1/21.1/6.68 s at
+    1/4/16 workers, against 82.2/21.3/6.69 s before), which is the point worth
+    recording — a TLS cell is per-thread memory, so there is no false sharing
+    to reintroduce.
+
+    **The dictionary is case-insensitive, so dice.fs's `value SEED` had been
+    silently redefining the core `seed` for months.** Harmless until the file
+    wanted the core word, then `seed !` wrote through an integer and
+    segfaulted. Renamed to `RUN-SEED`. Note the redefinition warning is
+    interactive-only — loading from a file says nothing, so a user library can
+    shadow a core word with no sign at all.
+
+- [x] **`random` is splitmix64, not xorshift64 — DONE 2026-08-11** (branch
+  tlsseed). Two reasons, and the first is the one that made it worth doing:
+  - xorshift64 has a **fixed point at 0**, so `0 seed !` killed the generator
+    dead. That needed a special case inside `random` and a paragraph in
+    `help random` explaining why zero was not like other seeds. splitmix64 has
+    no bad state — the guard, the paragraph, and the `1 or` idiom in every
+    seeding example all deleted.
+  - xorshift64 is **F2-linear**: the 64 bits of one output are linear
+    combinations of each other, so slicing one draw into several numbers is
+    wrong. `examples/dice.fs` found it the hard way, with a tail ~50% too
+    heavy while matching on a naive counter, the mean AND the standard
+    deviation.
+
+  Speed is a wash (20M draws: xorshift 1086/1061 ms, splitmix 1221/1027 ms) —
+  in STC you are timing dispatch, not the multiplies. Nothing asserted a
+  literal random value, so no documented output moved.
+
+  Testing it took three attempts, which is the part worth remembering. Property
+  tests (repeats, differs, non-zero) pass on **any** self-consistent generator.
+  A marginal-uniformity test also passes on both, because xorshift64's fields
+  are individually uniform and only jointly dependent — that is exactly why
+  dice.fs's mean and sd looked right while its tail was wrong. What works is
+  (a) the published **reference vectors**, pinning the algorithm itself, and
+  (b) **xor-additivity**: F2-linearity means `f(a) xor f(b) = f(a xor b)`
+  exactly, which xorshift64 satisfies and splitmix64 does not. Instant, and it
+  names the real property.
+
+  `examples/dice.fs` then lost 28 lines and got 13% faster (200M battles:
+  71.8/18.5/6.44 s at 1/4/16 workers, from 82.1/21.1/6.68 s), because it could
+  finally delete its private splitmix64, the state address threaded through
+  `battle`/`4roll`/`escape`, the `allocate`/`free` pair, and a dozen lines of
+  `/dev/urandom` handling that `entropy` replaces with one word.
 
 ---
 
