@@ -519,6 +519,7 @@ dict_full:
     cmpq $0, state(%rip)
     je repl_loop
     movq $0, state(%rip)
+    movq $0, locals_count(%rip)     # the names die with the definition
     mov saved_latest(%rip), %r12
     mov saved_here(%rip), %r13
 

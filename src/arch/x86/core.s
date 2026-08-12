@@ -2308,6 +2308,11 @@ forth_semicolon:
     cmp %rax, %r15
     jne .Lsemi_unbalanced
 
+    # Release the frame BEFORE the RET, then forget the names: the list is
+    # per-definition, and a leftover would silently rename words in the next one.
+    call compile_local_release
+    movq $0, locals_count(%rip)
+
     # Compile RET
     call compile_ret
 
@@ -2469,6 +2474,22 @@ forth_interpret_line:
     mov %rax, err_pfx_addr(%rip)
     movq $err_pfx_question_len, err_pfx_len(%rip)
 
+    # A local in scope beats the dictionary -- that is what "locals shadow"
+    # means, and it has to happen BEFORE find, or `{: i :}` would still get the
+    # DO loop index. Gated on compiling AND a non-empty list, so a definition
+    # that declares no locals pays one compare against zero.
+    cmpq $0, state(%rip)
+    je .Lil_not_local
+    cmpq $0, locals_count(%rip)
+    je .Lil_not_local
+    call locals_lookup              # RAX = index, or -1; args left on the stack
+    cmp $-1, %rax
+    je .Lil_not_local
+    add $2*CELL, %r15               # drop c-addr u
+    call compile_local_fetch
+    jmp .Lil_loop
+.Lil_not_local:
+
     # FIND ( c-addr u -- xt flag | c-addr u 0 )
     call forth_find
 
@@ -2550,6 +2571,7 @@ forth_interpret_line:
     cmpq $0, state(%rip)
     je .Lil_err_return
     movq $0, state(%rip)            # reset to interpret mode
+    movq $0, locals_count(%rip)     # ...and the names it declared
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
@@ -3197,6 +3219,7 @@ cf_check_tag:
     mov saved_here(%rip), %r13      # restore HERE
     call drop_partial_header        # a definition spanning lines leaves one
     movq $0, state(%rip)            # interpret mode
+    movq $0, locals_count(%rip)     # ...and the names it declared
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
 .Lcf_longjmp:
@@ -4794,6 +4817,19 @@ forth_source:
 #   [56] source_id      [64] to_in          [72] source_len
 #   [80] source_addr    [88] saved DSP      [96] CATCH's return address
 
+# The compile-time locals table's shape. LOCALS_MAX 16 comfortably exceeds the
+# 8 that Forth 2012 requires a system to accept; LOCAL_NAME_MAX matches the
+# dictionary's own F_LENMASK, so a name that fits a definition fits a local.
+.equ LOCALS_MAX,      16
+.equ LOCAL_NAME_MAX,  31
+.equ LOCAL_ENTRY,     32            # 1 length byte + 31 name bytes
+
+# The template compile_local_fetch copies. Written as a real instruction so the
+# assembler and linker fill in the TLS offset; the emitter copies the bytes.
+lp_load_tmpl:
+    mov %fs:lp@tpoff, %rax
+.equ LP_LOAD_LEN, . - lp_load_tmpl
+
 # ---------- Locals frame primitives ----------
 # Stage 1 of the locals work: the runtime substrate, with no syntax on top.
 # These are the words the unwind tests drive directly; the compiler will emit
@@ -4888,6 +4924,176 @@ forth_lp0_fetch:
 forth_lstack_size:
     sub $CELL, %r15
     movq $LOCALS_STACK_SIZE, (%r15)
+    ret
+
+# ---------- Locals: compile-time name list ----------
+# Set by `{:` and read by the outer interpreter, which must resolve a local
+# BEFORE consulting the dictionary. That is why this lives here and not in
+# core.fs -- name resolution IS the outer interpreter.
+#
+# This is per-DEFINITION compile-time state, distinct from the runtime LP, and
+# it needs its own reset on every path that abandons a definition. Miss that
+# and the NEXT definition inherits stale names -- which would compile, and be
+# wrong, which is worse than a crash.
+
+# locals_lookup — is this name a local in scope?
+# Input:  ( c-addr u ) on the data stack, NOT consumed.
+# Output: RAX = index, or -1 if no match. Clobbers RCX, RDX, RSI, RDI, R8-R11.
+locals_lookup:
+    mov (%r15), %rcx                # u
+    cmp $LOCAL_NAME_MAX, %rcx
+    ja .Lll_miss                    # too long to be one of ours
+    mov CELL(%r15), %rsi            # c-addr
+    xor %r8, %r8                    # index
+.Lll_entry:
+    cmp locals_count(%rip), %r8
+    jae .Lll_miss
+    mov %r8, %rax
+    shl $5, %rax                    # index * LOCAL_ENTRY
+    lea locals_names(%rip), %rdi
+    add %rax, %rdi                  # RDI = entry
+    movzbq (%rdi), %rdx             # stored length
+    cmp %rcx, %rdx
+    jne .Lll_next
+    inc %rdi                        # name bytes
+    xor %r9, %r9
+.Lll_char:
+    cmp %rcx, %r9
+    jae .Lll_hit                    # all bytes matched
+    movzbl (%rsi,%r9), %eax
+    movzbl (%rdi,%r9), %r10d
+    # Case-insensitive, like the dictionary: fold both to lower.
+    cmp $'A', %al
+    jb 1f
+    cmp $'Z', %al
+    ja 1f
+    add $32, %al
+1:  cmp $'A', %r10b
+    jb 2f
+    cmp $'Z', %r10b
+    ja 2f
+    add $32, %r10b
+2:  cmp %r10b, %al
+    jne .Lll_next
+    inc %r9
+    jmp .Lll_char
+.Lll_next:
+    inc %r8
+    jmp .Lll_entry
+.Lll_hit:
+    mov %r8, %rax
+    ret
+.Lll_miss:
+    mov $-1, %rax
+    ret
+
+# compile_local_fetch — emit an OPEN-CODED read of local RAX.
+#
+# 23 bytes, no call, no dispatch. This is the decision the whole feature rests
+# on (docs/Locals.md): a reference that cost a create/does>-class call would
+# make locals SLOWER than the stack juggling they replace, and no correctness
+# test would ever notice.
+#
+# The first 9 bytes are COPIED from lp_load_tmpl rather than hand-encoded,
+# because `mov %fs:lp@tpoff, %rax` carries a TLS relocation whose value is
+# fixed at link time. Letting the assembler emit it once and copying the bytes
+# gets the relocation right by construction; hand-encoding it would be
+# guessing at a number that is not ours to compute. The remaining 14 bytes
+# have no relocations, so they are emitted directly, as compile_loop_inline
+# already does for DO/LOOP.
+compile_local_fetch:
+    CHECK_DICT 23
+    push %rbx
+    mov %rax, %rbx                  # RBX = index (survives the copy)
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13                  # HERE advanced by the copy
+    movb $0x48, 0(%r13)             # mov disp32(%rax), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x80, 2(%r13)
+    shl $3, %rbx                    # index * CELL
+    mov %ebx, 3(%r13)
+    movb $0x49, 7(%r13)             # sub $8, %r15
+    movb $0x83, 8(%r13)
+    movb $0xEF, 9(%r13)
+    movb $0x08, 10(%r13)
+    movb $0x49, 11(%r13)            # mov %rax, (%r15)
+    movb $0x89, 12(%r13)
+    movb $0x07, 13(%r13)
+    add $14, %r13
+    pop %rbx
+    ret
+
+# compile_local_release — emit `n (lunframe)` if this definition has locals.
+# Unlike a reference, this runs ONCE per exit, so an ordinary call costs
+# nothing worth open-coding for. Emits nothing at all when no locals were
+# declared, which is what keeps an ordinary definition byte-for-byte unchanged.
+compile_local_release:
+    mov locals_count(%rip), %rax
+    test %rax, %rax
+    jz .Lclr_none
+    call compile_literal            # push n
+    lea forth_lunframe(%rip), %rax
+    call compile_call
+.Lclr_none:
+    ret
+
+# (loc-add) ( c-addr u -- flag )  Record a local name. False if the table is
+# full or the name is too long; `{:` reports, so no message here.
+.global forth_loc_add
+forth_loc_add:
+    mov (%r15), %rcx                # u
+    mov CELL(%r15), %rsi            # c-addr
+    add $2*CELL, %r15
+    test %rcx, %rcx
+    jz .Lla_no
+    cmp $LOCAL_NAME_MAX, %rcx
+    ja .Lla_no
+    mov locals_count(%rip), %rax
+    cmp $LOCALS_MAX, %rax
+    jae .Lla_no
+    mov %rax, %rdx
+    shl $5, %rdx
+    lea locals_names(%rip), %rdi
+    add %rdx, %rdi
+    mov %cl, (%rdi)                 # length byte
+    inc %rdi
+    push %rcx
+    cld
+    rep movsb
+    pop %rcx
+    incq locals_count(%rip)
+    sub $CELL, %r15
+    movq $-1, (%r15)
+    ret
+.Lla_no:
+    sub $CELL, %r15
+    movq $0, (%r15)
+    ret
+
+# (loc-count) ( -- n )  How many locals the current definition declared.
+.global forth_loc_count
+forth_loc_count:
+    sub $CELL, %r15
+    mov locals_count(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# (loc-clear) ( -- )  Forget them. `;` calls this, and so does every path that
+# abandons a definition.
+.global forth_loc_clear
+forth_loc_clear:
+    movq $0, locals_count(%rip)
+    ret
+
+# (loc-max) ( -- n )  The table's capacity, so `{:` can report a real limit.
+.global forth_loc_max
+forth_loc_max:
+    sub $CELL, %r15
+    movq $LOCALS_MAX, (%r15)
     ret
 
 # (dstack-size) ( -- n )  Bytes of data stack, per thread. threads.fs sizes a
@@ -5115,6 +5321,7 @@ forth_throw:
     mov %rax, %fs:lp@tpoff          #   unwinds itself, this one does not
     call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
+    movq $0, locals_count(%rip)     # ...and the names it declared
     movq $0, %fs:handler@tpoff          # no live frames on a reset stack
     jmp repl_loop
 
@@ -5152,6 +5359,7 @@ forth_quit:
     mov %rax, %fs:lp@tpoff
     call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
+    movq $0, locals_count(%rip)     # ...and the names it declared
     movq $0, %fs:handler@tpoff          # frames died with the return stack
     jmp repl_loop
 
@@ -5236,8 +5444,9 @@ forth_bracket_char:
 # EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
 .global forth_exit
 forth_exit:
-    call compile_ret
-    ret
+    call compile_local_release      # an early exit leaves through the same door
+    call compile_ret                #   -- but the names stay in scope, since
+    ret                             #   the definition is still being compiled
 
 # COMPILE, ( xt -- )  Compile a call to xt into the current definition.
 .global forth_compile_comma
@@ -5911,7 +6120,11 @@ DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
 DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
-DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_lstack_size
+DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_lstack_size
+DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
+DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
+DEFWORD dict_loc_max,     "(loc-max)",    forth_loc_max,     dict_loc_clear
+DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_loc_max
 DEFWORD dict_thr_rsize,   "(thread-rsize)", forth_thread_rsize, dict_dstack_size
 DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_rsize
 .global dict_include
@@ -5993,6 +6206,15 @@ data_stack_top:
 .global guard_page_underflow
 guard_page_underflow:
     .space 4096
+
+# Compile-time locals list. Per DEFINITION, not per thread: only the REPL
+# thread compiles (see the rule in threads.fs), so this is not TLS.
+.global locals_count
+locals_count:
+    .space 8
+.global locals_names
+locals_names:
+    .space LOCALS_MAX * LOCAL_ENTRY
 
 # ---------- Locals Stack Memory ----------
 # Same shape as the data stack above, and fenced the same way, so overflowing a

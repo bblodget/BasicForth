@@ -3247,6 +3247,39 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     (inc-mark)
     r> (ldg-n) ! ;
 
+\ --- Local variables: {: a b c :} ------------------------------------------
+\ Forth 2012 section 13. Names the top n stack items, innermost first, for the
+\ rest of the definition:
+\
+\     : blit ( src x y w h -- )  {: s x y w h :}  ... s x y w h by name ...
+\
+\ The names this parses are NOT compiled as calls. The outer interpreter
+\ resolves a local before it consults the dictionary, and open-codes the read
+\ (compile_local_fetch in core.s), so a reference costs a load rather than a
+\ call. That is the whole reason locals are worth having -- see docs/Locals.md.
+
+\ Emit the frame build: `n (lframe)`, taking the values already on the stack.
+\ Both parts are POSTPONEd so they run when {: runs -- i.e. while the user's
+\ definition is being compiled -- rather than when {: itself was compiled.
+: (loc-frame!) ( -- )
+    (loc-count) postpone literal  postpone (lframe) ;
+
+\ `:}` closes the list; anything else is a name. A missing `:}` would eat the
+\ rest of the definition, so it is caught by the table filling up.
+: {: ( "name ... :}" -- )
+    state @ 0= if
+        ." {: only inside a definition" cr abort  then
+    (loc-clear)
+    begin
+        parse-word dup 0= if                        ( c-addr u )
+            ." {: has no closing :}" cr abort  then
+        2dup s" :}" compare 0= if
+            2drop (loc-frame!) exit  then
+        (loc-add) 0= if
+            ." {: needs a name of 31 characters or fewer, and at most "
+            (loc-max) . ." locals" cr abort  then
+    again ; immediate
+
 : include ( "name" -- )
     parse-word dup 0= if  2drop ." usage: include <file>" cr exit  then
     included ;
