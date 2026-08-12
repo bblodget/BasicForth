@@ -2726,14 +2726,38 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 assert_result "entropy succeeds"     'entropy nip .'                       "0"
 assert_result "entropy twice differs" 'entropy drop entropy drop = .'      "0"
 
-# A zero seed is xorshift's fixed point -- every output would be 0 forever, and
 # `0 seed !` is the obvious thing to type after reading that a known seed makes
-# runs repeatable. It must behave like any other seed instead: nonzero output,
-# and the same stream both times.
+# runs repeatable, and it must behave like any other seed: nonzero output, same
+# stream both times. splitmix64 gives that for free -- it has no bad state --
+# where its predecessor xorshift64 had a fixed point at 0 and needed a special
+# case in `random` to avoid dying there. Kept as a guard on the property, not
+# on the mechanism, so it outlives the next change of generator too.
 assert_result "zero seed still runs" '0 seed ! random 0= .'                "0"
 assert_result "zero seed repeats"    '0 seed ! random 0 seed ! random = .' "-1"
 assert_result "known seed repeats"   '42 seed ! random 42 seed ! random = .' "-1"
 assert_result "known seeds differ"   '42 seed ! random 43 seed ! random = .' "0"
+
+# splitmix64 against the published reference vectors: seeded 0, the first two
+# outputs are 0xE220A8397B1DCDAF and 0x6E789E6AA1B965F4. A generator that is
+# merely self-consistent passes every test above -- these pin it to the actual
+# algorithm, so a mistyped constant or a wrong shift cannot slip through.
+assert_result "splitmix64 matches the reference" \
+    '0 seed ! random $E220A8397B1DCDAF = . random $6E789E6AA1B965F4 = .' "-1 -1"
+
+# The property that motivated moving off xorshift64: the generator must not be
+# F2-LINEAR, or the bits within one output are linear combinations of each
+# other and slicing one draw into several numbers goes wrong. examples/dice.fs
+# packs 32 two-bit fields into one draw and saw a tail ~50% too heavy that way,
+# while matching on mean, standard deviation and a bit-exact naive counter.
+#
+# Testing it via marginal uniformity does NOT work -- xorshift64's fields are
+# individually uniform, and a count-the-values test passes on both generators
+# (tried; it was vacuous). What F2-linearity actually implies is that the
+# generator is ADDITIVE OVER XOR: f(a) xor f(b) = f(a xor b), exactly. That is
+# instant to check and false for any generator with a nonlinear mixing step.
+# 0x1111 xor 0x2222 = 0x3333. On xorshift64 this printed -1.
+assert_result "random is not F2-linear (xor-additive)" \
+    '$1111 seed ! random  $2222 seed ! random  xor  $3333 seed ! random  = .' "0"
 
 # The regression that started this: seeding from ms@ gave every process started
 # in the SAME MILLISECOND an identical stream -- 200 parallel launches produced
@@ -2749,6 +2773,67 @@ if [ "$ent_distinct" -eq "$ent_n" ]; then
 else
     printf "  ${RED}FAIL${NC}  parallel launches get independent streams\n"
     printf "    %d of %d launches produced a distinct first value\n" "$ent_distinct" "$ent_n"; ((failed++))
+fi
+
+# `seed` is PER-THREAD (TLS), so two workers draw independent streams. It used
+# to be one shared cell that both read-modify-wrote without atomicity, which
+# was wrong twice over: the two threads walked ONE interleaved sequence, and
+# updates were lost outright. Measured before the fix, 1707 of 2000 values
+# drawn by the second worker also appeared in the first; after, 0.
+#
+# The overlap count is the assertion because it fails for BOTH defects. Two
+# threads sharing a cell overlap heavily; two threads seeded from a constant
+# .tdata image would overlap COMPLETELY -- and that second one is the trap,
+# since per-thread-but-identical streams look correct from inside one thread.
+# A tolerance of 0 is safe: independent xorshift64 streams colliding at all in
+# 2x2000 draws from 2^64 is a once-in-the-heat-death event.
+thr_rng=$(printf 'require threads.fs
+400 constant #n
+create bufa #n cells allot
+create bufb #n cells allot
+: filla  #n 0 ?do random bufa i cells + ! loop ;
+: fillb  #n 0 ?do random bufb i cells + ! loop ;
+: run2   [char] a drop
+         \x27 filla thread throw  \x27 fillb thread throw
+         join drop throw  join drop throw ;
+: overlap 0 #n 0 ?do bufb i cells + @
+         #n 0 ?do dup bufa i cells + @ = if swap 1+ swap leave then loop
+         drop loop ;
+run2 ." OVERLAP=" overlap . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $FORTH 2>&1)
+if printf '%s' "$thr_rng" | grep -q 'OVERLAP=0 '; then
+    printf "  ${GREEN}PASS${NC}  two threads draw independent random streams\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  two threads draw independent random streams\n"
+    printf "    Got: %s\n" "$(printf '%s' "$thr_rng" | grep -o 'OVERLAP=[0-9-]*' || printf '%s' "$thr_rng" | tail -2)"
+    ((failed++))
+fi
+
+# ...and the worker's seed must come from the KERNEL, not from the .tdata
+# image. That image is a constant, so a trampoline that failed to seed would
+# start every worker in every process from the same number -- caught here by
+# running the same program twice and requiring the worker's first draw to
+# differ between runs.
+#
+# This has to be cross-PROCESS. The obvious in-process check, "the worker's
+# value differs from the REPL's", passes whether or not the fix is present: a
+# single shared seed also hands the worker a different (merely *next*) value.
+# It was written that way first and proved nothing.
+thr_ent_a=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+thr_ent_b=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+if [ -n "$thr_ent_a" ] && [ "$thr_ent_a" != "$thr_ent_b" ]; then
+    printf "  ${GREEN}PASS${NC}  a worker is seeded from the kernel, not the .tdata image\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a worker is seeded from the kernel, not the .tdata image\n"
+    printf "    Two runs gave the worker the same first value: %q / %q\n" "$thr_ent_a" "$thr_ent_b"; ((failed++))
 fi
 
 # INCLUDE (parse-word + included)

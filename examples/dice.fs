@@ -6,9 +6,45 @@
 \ Throw a 4-sided die 231 times and count how many 1s come up. That is one
 \ "battle". Run a billion battles and ask: what is the most 1s you ever saw?
 \
-\ The answer is around 100 (the mean is 57.75, so ~6.5 standard deviations
-\ out), and finding it is pure brute force — which makes it a good showcase
-\ for threads, and a good lesson in what makes threaded code fast or slow.
+\ ---------------------------------------------------------------------------
+\ Where this comes from: Pokémon soft-lock picking. A run can strand itself
+\ with no way forward except a specific string of luck in one long battle —
+\ 231 turns, and the escape needs 177 of them to go your way, each a 1-in-4
+\ chance. The question the video asks is whether brute force can find it, with
+\ a Python script that rolls 231 d4s a million times and reports its best:
+\
+\     while numbers[0] < 177 and rolls < 1000000:   \ it never gets there
+\
+\ It never gets there, and neither will this. P(177 or better) is 1.2e-60 —
+\ one battle in 8.3e59. This program manages 3.5e7 battles a second on 16
+\ cores, so expecting a single hit takes 7.5e44 years, about 5e34 times the
+\ age of the universe. The script's million battles typically peak around 91.
+\
+\ That is the honest answer to the challenge, and it is what makes this a good
+\ benchmark rather than a good search: the target is unreachable, the work is
+\ embarrassingly parallel, and every core you add buys real throughput against
+\ a number that will not move. The mean is 57.75 and a standard deviation is
+\ 6.58, so ~100 is already 6.5 sigma out; 100x the battles buys about 3 more.
+\
+\ Video: https://www.youtube.com/watch?v=M8C8dHQE2Ro
+\ ---------------------------------------------------------------------------
+\
+\ What `Best` should come out as. Exact binomial(231, 1/4), so it is what the
+\ program is supposed to find, not a measurement of this one:
+\
+\     BATTLES        typical   usual     look into it outside
+\     100 thousand      88     86–90            84–97
+\     1 million         91     89–94            88–100
+\     10 million        94     93–97            91–102
+\     100 million       97     96–100           94–105
+\     1 billion        100     99–102           97–107
+\     10 billion       103     101–105          100–109
+\
+\ `Best` is a maximum, so it jumps around. Landing outside the "usual" column
+\ is UNREMARKABLE — it happens somewhere between 1 run in 6 and 1 run in 17,
+\ depending on the row (`Best` is a whole number, so these bands snap outward
+\ to integers and are wider than the 80% they are built from). Only the last
+\ column is diagnostic: chance puts a run outside it about once in a thousand.
 \
 \ Usage (interactive):
 \
@@ -20,26 +56,18 @@
 \ `doit ( #threads -- )` divides BATTLES between the workers, so every thread
 \ count does the same work and the wall times compare directly.
 \
-\ Three things make this fast, in descending order of how much they matter:
+\ Three things make it fast, in descending order of how much they matter:
 \
-\   1. Every worker owns its random seed, in memory it allocated itself. One
-\      shared seed made 4 threads run 4x SLOWER than 1 — not from locking,
-\      there is none, but because a single cache line cannot be written by
-\      two cores at once. Results go in one cache line per worker for the
-\      same reason, and each is written exactly once, at the end.
-\   2. A d4 needs 2 bits, so one 64-bit random value holds 32 throws. We
-\      never want the throws themselves, only how many were 1s, and `popcount`
-\      answers that for all 32 at once. Worth ~20x.
+\   1. Nothing is shared between workers. Each has its own `seed` (thread-local
+\      already) and its own cache line for the result, written once at the end.
+\      Sharing one seed made 4 threads run 4x SLOWER than 1 — no locking
+\      involved, just one cache line two cores both wanted.
+\   2. A d4 needs 2 bits, so one 64-bit `random` holds 32 throws, and
+\      `popcount` counts the 1s in all 32 at once. Worth ~20x.
 \   3. Threads, worth ~11x on 8 cores — the least of the three, and the only
 \      one most people would think of.
 \
-\ It is also a lesson in verifying a fast version. Batching 32 throws out of
-\ one xorshift64 value passed every check — bit-exact against a naive counter,
-\ correct mean, correct standard deviation — and was still wrong, because
-\ xorshift64 is F2-linear and those 32 fields are not independent. Only the
-\ far tail suffered, by ~50% at 85+, which is the sole region this program
-\ cares about. splitmix64 mixes its output and fixes it. `battle-slow` is
-\ kept below as the reference the fast one is checked against.
+\ `battle-slow` is kept as the obvious version the fast one is checked against.
 
 require threads.fs
 
@@ -62,26 +90,12 @@ create num_ones  #w LINE * allot
 : best ( n -- max )  0 swap 0 do  i nth @ max  loop ;
 
 \ ---------------------------------------------------------------- the die
-\ splitmix64 on whatever cell the caller hands it, so each worker can own its
-\ seed. Sharing one seed made 4 threads run 4x SLOWER than 1 — every roll
-\ fought for the same cache line.
-\
-\ This was xorshift64, which is F2-linear: the 64 bits of one output are
-\ linear combinations of each other. That is invisible while you use two bits
-\ per value, and fatal once you slice one value into 32 rolls — the mean and
-\ sd stayed right while the far tail came out ~50% too heavy at 85+, which is
-\ the only region this program cares about. splitmix64 advances by a constant
-\ and then MIXES, so the bits within one output stand on their own.
-\ `$` literals, not [ hex ] … [ decimal ] — the bracket form would leave BASE
-\ decimal for whoever loaded this file, whatever base they were working in.
-: (mix) ( z -- z' )
-    dup 30 rshift xor  $BF58476D1CE4E5B9 *
-    dup 27 rshift xor  $94D049BB133111EB *
-    dup 31 rshift xor ;
-: (next) ( sa -- n )
-    dup @  $9E3779B97F4A7C15 +  dup rot !  (mix) ;
-
-: 4roll ( sa -- 1..4 )  (next) 4 mod abs 1+ ;
+\ `random` is splitmix64 and `seed` is thread-local, so a worker just calls it:
+\ its own stream, its own cell, nothing to allocate. This file used to carry
+\ its own splitmix64 because the built-in was xorshift64 -- F2-linear, and so
+\ wrong for the trick below of slicing one value into 32 rolls. That moved
+\ into the core (see `help random`), and ~20 lines left this file with it.
+: roll ( -- 1..4 )  4 rnd 1+ ;
 
 \ ------------------------------------------------------------- 32 at a time
 \ A d4 needs 2 bits, so one 64-bit value holds 32 rolls and we were throwing
@@ -89,7 +103,8 @@ create num_ones  #w LINE * allot
 \ came up 1 — and a 2-bit field is a 1 exactly when it is 00. So OR each field
 \ with itself shifted down, invert, keep the low bit of each field, and count
 \ the bits that survive. 231 rolls = 7 whole cells + 7 leftover fields.
-: (ones-in) ( x -- n )  dup 1 rshift or invert  $5555555555555555 and  popcount ;
+: (ones-in) ( x -- n )
+    dup 1 rshift or invert  $5555555555555555 and  popcount ;
 
 ROLLS 32 /   constant (full)        \ whole cells per battle
 ROLLS 32 mod constant (rem)         \ rolls left over
@@ -98,53 +113,47 @@ ROLLS 32 mod constant (rem)         \ rolls left over
 : (ones-r) ( x -- n )  dup 1 rshift or invert (maskr) and popcount ;
 
 \ ---------------------------------------------------------------- seeding
-\ Ask the kernel once, at load: read(2) on /dev/urandom. Worker seeds are
-\ derived from it, so a run is unpredictable but reproducible — fix SEED with
-\ `to SEED` and every worker replays exactly.
-create (seedbuf) 8 allot
-: os-random ( -- u )
-    s" /dev/urandom" r/o bin open-file throw   ( fid )
-    >r  (seedbuf) 8 r@ read-file throw         ( u2 )
-    8 <> abort" short read from /dev/urandom"
-    r> close-file throw
-    (seedbuf) @ ;
+\ One number from the kernel at load; every worker's seed is derived from it,
+\ so a run is unpredictable but reproducible — `to RUN-SEED` and every worker
+\ replays exactly. `entropy` is the whole of what used to be a dozen lines of
+\ open/read/close on /dev/urandom.
+\
+\ Named RUN-SEED, not SEED, because the dictionary is CASE-INSENSITIVE: a
+\ `value SEED` here would silently redefine the core `seed` (this file did
+\ exactly that for months, harmlessly, until it started using it). Loading
+\ from a file prints no warning — the redefinition notice is interactive-only.
+: os-random ( -- u )  entropy if drop ms@ then ;
+os-random value RUN-SEED
+: seed-for ( i -- u )  2654435761 * RUN-SEED + ;
 
-os-random value SEED
-: seed-for ( i -- u )  2654435761 * SEED +  1 or ;
-
-\ Each run moves SEED on, so repeated runs explore new battles instead of
-\ replaying the same ones. Setting SEED by hand still replays exactly: the
+\ Each run moves RUN-SEED on, so repeated runs explore new battles instead of
+\ replaying the same ones. Setting RUN-SEED by hand still replays exactly: the
 \ next run is a pure function of the value you put there.
 : (bump-seed) ( -- )
-    SEED 6364136223846793005 *  1442695040888963407 +  to SEED ;
-
-\ a seed of our own so `roll` works at the prompt, with no worker involved
-create seed0  1 cells allot
-#w seed-for seed0 !
-: roll ( -- 1..4 )  seed0 4roll ;
+    RUN-SEED 6364136223846793005 *  1442695040888963407 +  to RUN-SEED ;
 
 \ ---------------------------------------------------------------- the work
 \ one roll at a time — kept so the fast one has something to be checked against
-: battle-slow ( sa -- n )
-    0 swap
-    ROLLS 0 do  dup 4roll 1 = if swap 1+ swap then  loop
-    drop ;
+: battle-slow ( -- n )
+    0  ROLLS 0 do  roll 1 = if 1+ then  loop ;
 
-: battle ( sa -- n )
-    0 swap
-    (full) 0 ?do  dup (next) (ones-in) rot + swap  loop
-    (rem) if  (next) (ones-r) +  else  drop  then ;
+: battle ( -- n )
+    0  (full) 0 ?do  random (ones-in) +  loop
+    (rem) if  random (ones-r) +  then ;
 
 \ The running max rides this thread's own stack, and num_ones is written once
 \ at the very end. Reading the result back each round would put every worker
 \ on the same line again.
+\
+\ Setting this thread's own `seed` from the index is what makes a run
+\ reproducible — every worker starts kernel-seeded and unpredictable
+\ otherwise, which is right for a game and wrong for a benchmark you want to
+\ repeat.
 : escape ( idx -- )
-    8 allocate throw                       ( idx sa )
-    over seed-for  over !                  ( idx sa )
-    0                                      ( idx sa max )
-    BATTLES_PER_THREAD 0 do  over battle  max  loop
-    rot nth !                              ( sa )
-    free throw ;
+    dup seed-for  seed !                   ( idx )
+    0                                      ( idx max )
+    BATTLES_PER_THREAD 0 do  battle max  loop
+    swap nth ! ;
 
 \ A thread starts with nothing on its stack, so each worker needs its index
 \ baked in. Sixteen one-liners, and a table of their xts for doit to pick from.

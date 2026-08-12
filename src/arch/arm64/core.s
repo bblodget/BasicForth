@@ -4725,8 +4725,8 @@ forth_getenv:
 
 // entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
 // success; non-zero means X0 is meaningless, not that it is a bad number. The
-// failure value cannot be folded into x: 0 is a legal random value and is also
-// exactly the seed that stops xorshift dead, so the two must stay separate.
+// failure value cannot be folded into x: 0 is a legal random value, so a caller
+// could not tell "unlucky" from "broken".
 //
 // Two STRs rather than one STP: STP would put its FIRST operand at the LOW
 // address, which is TOS here, so the pair reads backwards from the stack
@@ -5190,6 +5190,15 @@ forth_base:
     STR X9, [X19, #-CELL]!
     RET
 
+// SEED ( -- a-addr )  Push the address of THIS thread's RNG state.
+// An address, not a value, so `42 seed !` and `seed @` read exactly as they did
+// when this was a Forth `variable` -- the cell simply moved into TLS.
+.global forth_seed
+forth_seed:
+    TLS_ADDR X9, seed
+    STR X9, [X19, #-CELL]!
+    RET
+
 // PAD ( -- c-addr )  Push address of PAD scratch buffer.
 .global forth_pad
 forth_pad:
@@ -5295,6 +5304,39 @@ forth_thread_tramp:
     TLS_ADDR X9, thread_csp         //   register does, and the engine
     MOV X10, SP                     //   registers are all spoken for
     STR X10, [X9]                   // our way back, out of the worker's reach
+
+    // Seed this worker's RNG, BEFORE the stacks are switched below -- this is
+    // the last point at which SP is still the C stack glibc gave us, and so
+    // the last point where its 16-byte alignment is guaranteed. Seeding after
+    // the switch would run platform_random (which does SUB SP, SP, #16) on the
+    // worker's RETURN stack, whose alignment comes from ctx.rtop: an
+    // allocation-derived address this code does not control, and AArch64
+    // FAULTS on a misaligned SP access rather than tolerating it.
+    //
+    // It must happen somewhere, rather than in the .tdata image, because that
+    // image is a constant: every worker would otherwise start from the same
+    // number and replay the same sequence -- independent streams that are
+    // identical, which is harder to notice than the shared cell it replaces.
+    // One getrandom next to an mmap, a pthread_create and three mprotects.
+    //
+    // ctx rides in X20 across the call: it is callee-saved, this function
+    // already spilled it above, and platform_random touches only X0-X2/X8.
+    // No scratch register would survive, and X19/X21/X22 are engine registers.
+    MOV X20, X0
+    BL platform_random              // X0 = value, X1 = ior (0 = ok)
+    CBZ X1, 1f
+    // No kernel entropy (early boot, or no getrandom). Fall back to something
+    // PER-THREAD -- a constant here would rebuild the bug this code exists to
+    // fix. The context block is a separate allocation per worker, so its
+    // address differs; scramble it so nearby blocks don't give nearby seeds.
+    MOVZ X3, #0x7C15
+    MOVK X3, #0x7F4A, LSL #16
+    MOVK X3, #0x79B9, LSL #32
+    MOVK X3, #0x9E37, LSL #48
+    EOR X0, X20, X3
+1:  TLS_ADDR X9, seed               // any value will do: splitmix64 has no bad
+    STR X0, [X9]                    //   state, 0 included
+    MOV X0, X20                     // ctx back where the rest of this expects it
 
     LDR X19, [X0, #8]               // DSP = this thread's own data stack
     TLS_ADDR X9, sp0
@@ -6221,7 +6263,8 @@ DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
 DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
 DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
 DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
-DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_seed,       "seed",       forth_seed,        dict_base
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_seed
 DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
 DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
@@ -6449,6 +6492,24 @@ thread_csp:                         // The C stack pointer to return on. Kept in
                                     //   worker's data stack grows down toward
                                     //   its context, so an overflow there would
                                     //   otherwise rewrite our way back to glibc.
+.global seed
+seed:                               // splitmix64 state for THIS thread. Shared,
+    .quad 0                         //   it was both wrong and slow: two threads
+                                    //   read-modify-write one cell, so they draw
+                                    //   from one interleaved stream (measured:
+                                    //   1707 of 2000 values common to both) and
+                                    //   lose updates, and the contended line ran
+                                    //   4 threads 4x slower than 1.
+                                    //
+                                    //   The image here is a CONSTANT, so a
+                                    //   worker starting from it would replay the
+                                    //   REPL's sequence exactly -- independent
+                                    //   but identical, which looks correct and
+                                    //   is not. The trampoline therefore seeds
+                                    //   every worker; 0 here means "nobody has
+                                    //   seeded me yet", which only the REPL
+                                    //   thread ever sees, and core.fs's
+                                    //   (reseed) fixes that before first use.
 
 // ---------- Variables ----------
 .data

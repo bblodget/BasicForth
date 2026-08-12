@@ -4291,8 +4291,8 @@ forth_getenv:
 
 # entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
 # success; non-zero means x is meaningless, not that x is a bad number. The
-# failure value cannot be folded into x: 0 is a legal random value and is also
-# exactly the seed that stops xorshift dead, so the two must stay separate.
+# failure value cannot be folded into x: 0 is a legal random value, so a caller
+# could not tell "unlucky" from "broken".
 .global forth_entropy
 forth_entropy:
     call platform_random            # RAX = value, RDX = ior
@@ -4705,6 +4705,17 @@ forth_base:
     mov %rax, (%r15)
     ret
 
+# SEED ( -- a-addr )  Push the address of THIS thread's RNG state.
+# An address, not a value, so `42 seed !` and `seed @` read exactly as they did
+# when this was a Forth `variable` -- the cell simply moved into TLS.
+.global forth_seed
+forth_seed:
+    sub $CELL, %r15
+    mov %fs:0, %rax                 # thread pointer (TCB self-pointer)
+    lea seed@tpoff(%rax), %rax      # this thread's own seed cell
+    mov %rax, (%r15)
+    ret
+
 # PAD ( -- c-addr )  Push address of PAD scratch buffer.
 .global forth_pad
 forth_pad:
@@ -4812,6 +4823,43 @@ forth_thread_tramp:
                                     #   registers are all spoken for
     mov %rsp, %fs:thread_csp@tpoff  # our way back, kept out of the worker's
                                     #   reach (see thread_csp in the TLS block)
+
+    # Seed this worker's RNG, BEFORE the stacks are switched below -- this is
+    # the last point at which we are still on the C stack glibc gave us, and
+    # so the last point where the SysV alignment guarantee holds. Seeding after
+    # the switch would call on the worker's RETURN stack, whose alignment comes
+    # from ctx.rtop: an allocation-derived address this code does not control.
+    #
+    # It must happen somewhere, rather than in the .tdata image, because that
+    # image is a constant: every worker would otherwise start from the same
+    # number and replay the same sequence -- independent streams that are
+    # identical, which is harder to notice than the shared cell it replaces.
+    # One getrandom next to an mmap, a pthread_create and three mprotects.
+    #
+    # ctx rides in RBX: callee-saved, already spilled above, and not an engine
+    # register (those are R15/R13/R12). No scratch register survives a call,
+    # and RDI is clobbered by platform_random itself.
+    mov %rdi, %rbx
+    sub $8, %rsp                    # SysV wants RSP 16-byte aligned AT the
+                                    #   call. Entry leaves it 8 mod 16 (the
+                                    #   caller's return address) and six 8-byte
+                                    #   pushes preserve that, so pad by 8.
+    call platform_random            # RAX = value, RDX = ior (0 = ok)
+    add $8, %rsp
+    test %rdx, %rdx
+    jz .Ltramp_seed
+    # No kernel entropy (early boot, or no getrandom). Fall back to something
+    # PER-THREAD -- a constant here would rebuild the bug this code exists to
+    # fix. The context block is a separate allocation per worker, so its
+    # address differs; scramble it so nearby blocks don't give nearby seeds.
+    mov %rbx, %rax
+    movabs $0x9E3779B97F4A7C15, %rdx
+    xor %rdx, %rax
+.Ltramp_seed:
+    mov %rax, %fs:seed@tpoff        # any value will do: splitmix64 has no bad
+                                    #   state, 0 included
+    mov %rbx, %rdi                  # ctx back where the rest of this expects it
+
     mov 8(%rdi), %r15               # DSP = this thread's own data stack
     mov %r15, %fs:sp0@tpoff         # so depth/.s measure against OUR stack
     mov 16(%rdi), %rsp              # return stack = this thread's own
@@ -5651,7 +5699,8 @@ DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
 DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
 DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
 DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
-DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_seed,       "seed",       forth_seed,        dict_base
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_seed
 DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
 DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
@@ -5882,6 +5931,24 @@ thread_csp:                         # The C stack pointer to return on. Kept in
                                     #   worker's data stack grows down toward
                                     #   its context, so an overflow there would
                                     #   otherwise rewrite our way back to glibc.
+.global seed
+seed:                               # splitmix64 state for THIS thread. Shared,
+    .quad 0                         #   it was both wrong and slow: two threads
+                                    #   read-modify-write one cell, so they draw
+                                    #   from one interleaved stream (measured:
+                                    #   1707 of 2000 values common to both) and
+                                    #   lose updates, and the contended line ran
+                                    #   4 threads 4x slower than 1.
+                                    #
+                                    #   The image below is a CONSTANT, so a
+                                    #   worker starting from it would replay the
+                                    #   REPL's sequence exactly -- independent
+                                    #   but identical, which looks correct and
+                                    #   is not. The trampoline therefore seeds
+                                    #   every worker; 0 here means "nobody has
+                                    #   seeded me yet", which only the REPL
+                                    #   thread ever sees, and core.fs's
+                                    #   (reseed) fixes that before first use.
 
 # ---------- Variables ----------
 .data

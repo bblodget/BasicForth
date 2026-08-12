@@ -178,6 +178,94 @@
   `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
   immediately.
 
+### Changed: `random` is splitmix64, and has no bad seed
+
+- xorshift64 had a **fixed point at 0** — the state stayed there and every draw
+  was 0 forever — so `0 seed !`, the obvious thing to type after reading that a
+  known seed makes runs repeatable, quietly killed the generator. That needed a
+  special case inside `random` and a paragraph explaining it in `help random`.
+  splitmix64 has no bad state, so the guard, the paragraph and the `1 or` idiom
+  in the seeding examples are all gone.
+- The deeper reason: xorshift64 is **F2-linear**, so the 64 bits of one output
+  are linear combinations of each other. Invisible while you take a couple of
+  bits per draw, and wrong the moment you slice one draw into several numbers —
+  `examples/dice.fs` packs 32 two-bit rolls into one value and got a tail ~50%
+  too heavy, while matching bit-for-bit on a naive counter, on the mean and on
+  the standard deviation. A generator you can slice is worth more here than one
+  saved instruction.
+- Speed is a wash: 20M draws, alternating, xorshift 1086/1061 ms against
+  splitmix 1221/1027 ms. In an STC threaded interpreter the two multiplies
+  disappear into dispatch cost.
+- Sequences change for a given seed. Nothing depended on a literal value —
+  every test and example asserted a property (repeats, differs, non-zero) — so
+  no documented output moved.
+- Two new tests. One pins the algorithm to the **published reference vectors**
+  (seed 0 gives `E220A8397B1DCDAF`, `6E789E6AA1B965F4`), since a
+  merely-self-consistent generator passes every property test. The other checks
+  the generator is **not xor-additive**: F2-linearity means
+  `f(a) xor f(b) = f(a xor b)` exactly, which xorshift64 satisfies and
+  splitmix64 does not. A marginal-uniformity test was written first and thrown
+  away — both generators pass it, because the fields are individually uniform
+  and only jointly dependent.
+
+### Fixed: `seed` is per-thread, so `random` works from a worker
+
+- `random` and `rnd` read one global `seed` cell, mixed it, and wrote it back
+  — with no atomicity and no per-thread state. Two workers therefore drew from
+  a **single interleaved stream** and lost each other's updates: measured,
+  1707 of one worker's 2000 values also appeared in the other's, and a
+  duplicate appeared *inside* a single worker's own draws, which xorshift64
+  cannot produce in 2000 tries. It was also slow — 4 threads ran **4× slower**
+  than 1, purely from two cores writing one cache line, no lock involved.
+- The cell moves into thread-local storage on both architectures, exposed by
+  an ASM word `seed ( -- a-addr )` in the same shape as `base`. Nothing about
+  the API changes: `42 seed !`, `0 seed !` and `seed @` behave exactly as
+  before, per thread. Overlap between two workers is now **0 of 2000**.
+- **Each worker is seeded in the thread trampoline**, not by the `.tdata`
+  image. That image is a constant, so seeding from it would start every worker
+  at the same number and replay the same sequence — independent streams that
+  are identical, which is harder to notice than the shared cell it replaces,
+  since from inside one thread it looks perfect. Entropy failure falls back to
+  the context-block address scrambled by the golden-ratio constant, which is
+  per-thread for the same reason: a constant fallback would rebuild the bug.
+- The seeding happens **before** the trampoline switches to the worker's
+  stacks — the last point where the C stack, and therefore its ABI-guaranteed
+  alignment, is still in hand. Seeding afterwards would have called on the
+  worker's *return* stack, whose alignment derives from `ctx.rtop`, an
+  allocation address this code does not control; on ARM64 a misaligned `SP`
+  faults outright. x86-64 additionally pads by 8 so `RSP` is 16-byte aligned
+  at the `call`, as SysV requires. Measured at the call site: 8 without the
+  pad, 0 with it.
+- A worker still cannot be made repeatable from outside, since no thread can
+  reach another's cell — `help random` shows the pattern for a worker that
+  seeds itself from a number the parent leaves for it.
+- The test for this was written wrong first, in a way worth recording: "the
+  worker's value differs from the REPL's" **passes with the fix removed**,
+  because a shared seed also hands the worker a different (merely next) value.
+  Both shipped tests were checked against a deliberately broken build.
+- `examples/dice.fs` is **28 lines shorter and 13% faster**, because the two
+  changes above let it delete what it was carrying: its private splitmix64
+  (`(mix)`, `(next)`), the state-address threaded through `battle`, `4roll`,
+  and `escape`'s `allocate`/`free` pair, and a dozen lines of open/read/close
+  on `/dev/urandom` that `entropy` now does in one word. `battle` is a loop
+  over `random`. 200M battles at 1/4/16 workers: 71.8/18.5/6.44 s, against
+  82.1/21.1/6.68 s — dropping the address-passing dropped real per-iteration
+  stack shuffling.
+- It also says where the problem comes from — Pokémon soft-lock picking, and
+  the Python script that brute-forces it — and what the escape actually costs:
+  P(177 or better in 231 rolls) is **1.2e-60**, one battle in 8.3e59, so at the
+  3.5e7 battles/second this reaches on 16 cores a single hit is 7.5e44 years
+  away, about 5e34 times the age of the universe. Plus a table of what `Best`
+  should be at each battle count, with the caveat that `Best` is a *maximum*
+  and wanders: only the outer column, the 1-in-1000 bound, means anything is
+  wrong.
+- Its value `SEED` is renamed `RUN-SEED`. The dictionary is case-insensitive,
+  so it had been silently redefining the core `seed` for months; harmless
+  until the file wanted to use the core word, then `seed !` wrote through an
+  integer and segfaulted. Worth knowing generally: the redefinition warning is
+  **interactive-only**, so a library loaded with `require` can shadow a core
+  word with no sign at all.
+
 ### Fixed: `help <word>` missed 53 names across six libraries
 
 - The reference audit swept the core dictionary, the wav/audio tree and
