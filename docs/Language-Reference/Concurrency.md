@@ -108,7 +108,16 @@ Once a thread reads `finished`, its `result` is the real one — the listing and
 A worker does not share the prompt's stacks. It is handed a fresh data stack
 and return stack, so `depth` inside a worker starts at 0 and its arithmetic
 cannot disturb yours. `BASE` is per-thread too — a worker calling `hex` leaves
-the prompt in decimal.
+the prompt in decimal — and so is `seed`, so `random` and `rnd` give every
+worker an independent sequence (`help random`).
+
+`seed` earns its place there twice over. Shared, it was not merely slow but
+**wrong**: `random` reads the cell, mixes, and writes it back, and two threads
+doing that without atomicity walk one interleaved sequence and lose each
+other's updates — measured, 1707 of one worker's 2000 draws also appeared in
+the other's. It was slow as well, because a cache line cannot be written by
+two cores at once: four threads ran four times slower than one, with no lock
+anywhere in sight.
 
 Those stacks are **fenced**: run off either end — too deep a recursion, or one
 `drop` too many — and the thread dies at once rather than quietly reading and

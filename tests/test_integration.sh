@@ -2726,14 +2726,38 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 assert_result "entropy succeeds"     'entropy nip .'                       "0"
 assert_result "entropy twice differs" 'entropy drop entropy drop = .'      "0"
 
-# A zero seed is xorshift's fixed point -- every output would be 0 forever, and
 # `0 seed !` is the obvious thing to type after reading that a known seed makes
-# runs repeatable. It must behave like any other seed instead: nonzero output,
-# and the same stream both times.
+# runs repeatable, and it must behave like any other seed: nonzero output, same
+# stream both times. splitmix64 gives that for free -- it has no bad state --
+# where its predecessor xorshift64 had a fixed point at 0 and needed a special
+# case in `random` to avoid dying there. Kept as a guard on the property, not
+# on the mechanism, so it outlives the next change of generator too.
 assert_result "zero seed still runs" '0 seed ! random 0= .'                "0"
 assert_result "zero seed repeats"    '0 seed ! random 0 seed ! random = .' "-1"
 assert_result "known seed repeats"   '42 seed ! random 42 seed ! random = .' "-1"
 assert_result "known seeds differ"   '42 seed ! random 43 seed ! random = .' "0"
+
+# splitmix64 against the published reference vectors: seeded 0, the first two
+# outputs are 0xE220A8397B1DCDAF and 0x6E789E6AA1B965F4. A generator that is
+# merely self-consistent passes every test above -- these pin it to the actual
+# algorithm, so a mistyped constant or a wrong shift cannot slip through.
+assert_result "splitmix64 matches the reference" \
+    '0 seed ! random $E220A8397B1DCDAF = . random $6E789E6AA1B965F4 = .' "-1 -1"
+
+# The property that motivated moving off xorshift64: the generator must not be
+# F2-LINEAR, or the bits within one output are linear combinations of each
+# other and slicing one draw into several numbers goes wrong. examples/dice.fs
+# packs 32 two-bit fields into one draw and saw a tail ~50% too heavy that way,
+# while matching on mean, standard deviation and a bit-exact naive counter.
+#
+# Testing it via marginal uniformity does NOT work -- xorshift64's fields are
+# individually uniform, and a count-the-values test passes on both generators
+# (tried; it was vacuous). What F2-linearity actually implies is that the
+# generator is ADDITIVE OVER XOR: f(a) xor f(b) = f(a xor b), exactly. That is
+# instant to check and false for any generator with a nonlinear mixing step.
+# 0x1111 xor 0x2222 = 0x3333. On xorshift64 this printed -1.
+assert_result "random is not F2-linear (xor-additive)" \
+    '$1111 seed ! random  $2222 seed ! random  xor  $3333 seed ! random  = .' "0"
 
 # The regression that started this: seeding from ms@ gave every process started
 # in the SAME MILLISECOND an identical stream -- 200 parallel launches produced
@@ -2749,6 +2773,67 @@ if [ "$ent_distinct" -eq "$ent_n" ]; then
 else
     printf "  ${RED}FAIL${NC}  parallel launches get independent streams\n"
     printf "    %d of %d launches produced a distinct first value\n" "$ent_distinct" "$ent_n"; ((failed++))
+fi
+
+# `seed` is PER-THREAD (TLS), so two workers draw independent streams. It used
+# to be one shared cell that both read-modify-wrote without atomicity, which
+# was wrong twice over: the two threads walked ONE interleaved sequence, and
+# updates were lost outright. Measured before the fix, 1707 of 2000 values
+# drawn by the second worker also appeared in the first; after, 0.
+#
+# The overlap count is the assertion because it fails for BOTH defects. Two
+# threads sharing a cell overlap heavily; two threads seeded from a constant
+# .tdata image would overlap COMPLETELY -- and that second one is the trap,
+# since per-thread-but-identical streams look correct from inside one thread.
+# A tolerance of 0 is safe: independent xorshift64 streams colliding at all in
+# 2x2000 draws from 2^64 is a once-in-the-heat-death event.
+thr_rng=$(printf 'require threads.fs
+400 constant #n
+create bufa #n cells allot
+create bufb #n cells allot
+: filla  #n 0 ?do random bufa i cells + ! loop ;
+: fillb  #n 0 ?do random bufb i cells + ! loop ;
+: run2   [char] a drop
+         \x27 filla thread throw  \x27 fillb thread throw
+         join drop throw  join drop throw ;
+: overlap 0 #n 0 ?do bufb i cells + @
+         #n 0 ?do dup bufa i cells + @ = if swap 1+ swap leave then loop
+         drop loop ;
+run2 ." OVERLAP=" overlap . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $FORTH 2>&1)
+if printf '%s' "$thr_rng" | grep -q 'OVERLAP=0 '; then
+    printf "  ${GREEN}PASS${NC}  two threads draw independent random streams\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  two threads draw independent random streams\n"
+    printf "    Got: %s\n" "$(printf '%s' "$thr_rng" | grep -o 'OVERLAP=[0-9-]*' || printf '%s' "$thr_rng" | tail -2)"
+    ((failed++))
+fi
+
+# ...and the worker's seed must come from the KERNEL, not from the .tdata
+# image. That image is a constant, so a trampoline that failed to seed would
+# start every worker in every process from the same number -- caught here by
+# running the same program twice and requiring the worker's first draw to
+# differ between runs.
+#
+# This has to be cross-PROCESS. The obvious in-process check, "the worker's
+# value differs from the REPL's", passes whether or not the fix is present: a
+# single shared seed also hands the worker a different (merely *next*) value.
+# It was written that way first and proved nothing.
+thr_ent_a=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+thr_ent_b=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+if [ -n "$thr_ent_a" ] && [ "$thr_ent_a" != "$thr_ent_b" ]; then
+    printf "  ${GREEN}PASS${NC}  a worker is seeded from the kernel, not the .tdata image\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a worker is seeded from the kernel, not the .tdata image\n"
+    printf "    Two runs gave the worker the same first value: %q / %q\n" "$thr_ent_a" "$thr_ent_b"; ((failed++))
 fi
 
 # INCLUDE (parse-word + included)
@@ -5110,10 +5195,15 @@ fi
 
 # The real-docs case that motivated multi-entry help: `help begin` must show
 # all three indefinite-loop entries from Language-Reference/Loops.md
-# timeout 5 (not 2): help begin scans the whole Language-Reference corpus,
-# which keeps growing; 2 s is marginal under qemu when the host is loaded.
+# timeout 30 (was 5, was 2): help begin scans the whole Language-Reference
+# corpus, and that corpus keeps growing -- the help-coverage sweep of 2026-08-11
+# alone took the scan to ~9.6 s under qemu, so 5 s started timing out and the
+# test reported "0 '## begin' headings", which reads like a help bug rather than
+# a clock. It is emulation cost, not a real one: the same scan is well under a
+# second natively. 30 s matches the other corpus-scanning tests above; if this
+# ever fires again, measure before believing the docs broke.
 begin_out=$(printf 'help begin\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 5 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 30 $FORTH 2>&1)
 if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
     printf "  ${GREEN}PASS${NC}  help begin shows all three begin entries\n"; ((passed++))
 else
@@ -7040,6 +7130,80 @@ thr_check "a worker throwing mid-frame leaves the REPL's LP alone" \
 : go ['"'"'] wt thread drop join drop .  (lp@) (lp0@) = . ;
 go' \
 "77 -1"
+
+# =========================================================================
+section "LOCALS (stage 2: {: ... :} and open-coded references)"
+# =========================================================================
+
+assert_result "locals: named in stack order"  ": t {: a b :} a . b . ; 1 2 t"   "1 2"
+assert_result "locals: read more than once"   ": u {: x :} x x + ; 21 u ."      "42"
+assert_result "locals: three arguments"       ": c {: n lo hi :} n lo < if lo exit then n hi > if hi exit then n ;
+5 0 10 c . 99 0 10 c . -3 0 10 c ."                                            "5 10 0"
+assert_result "locals: nested calls each get their own frame" \
+              ": n1 {: a :} a 2 * ;
+: n2 {: b :} b n1 b + ;
+10 n2 ."                                                                       "30"
+# Shadowing is the point, and it reaches VERBS: `i` is the natural name for a
+# counter AND the loop index. Not a bug -- but the reason a warning is next.
+assert_result "locals: a local shadows the DO index" ": sh {: i :} 3 0 do i . loop ; 7 sh"  "7 7 7"
+
+# --- the frame must balance, whichever way the word is left ---------------
+assert_output "locals: LP balances after a normal return" ": u {: x :} x ; 1 u drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after an early exit" \
+              ": e {: a :} a 5 > if a exit then 0 ; 9 e drop 1 e drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after exit from a DO loop" \
+              ": d {: n :} 10 0 do i n = if unloop n exit then loop 0 ;
+3 d drop 50 d drop 3 d drop (lp@) (lp0@) = ."                                  "-1"
+
+# --- three ways a frame could be built without being released ------------
+# All found after stage 2 first "worked": each leaked exactly 8 bytes of LP per
+# call, silently, until the locals stack walked into its guard page. The frame
+# is built where `{:` appears but released ONCE at `;`, so anything that makes
+# the build conditional -- or repeats it -- unbalances the pair. Refusing at
+# compile time is the fix; a runtime check would cost every call.
+assert_error "locals: refused inside IF"    ": t 0 if {: a :} then ;"     "needs an empty compile-time stack"
+assert_error "locals: refused inside BEGIN" ": v begin {: a :} again ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside DO"    ": w 3 0 do {: a :} loop ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside CASE"   ": u case 1 of {: a :} endof endcase ;" "needs an empty compile-time stack"
+# No control structure at all -- the guard tests the compile-time STACK, and a
+# value left by [ ] is indistinguishable from a control-flow marker. Asserted
+# so the message can never again describe a narrower guard than the real one.
+assert_error "locals: refused after [ ] leaves a value" ": v [ 5 ] {: a :} ;"  "leave nothing behind"
+assert_error "locals: refused twice over"   ": two {: a :} {: b :} ;"     "already declared"
+# The PERMITTED side of the same boundary, which had no test until the rule in
+# the docs was found to be stricter than the rule in the code. A closed
+# structure before `{:` is fine -- the build is still unconditional and still
+# happens once -- and only a test on this side stops the wording drifting again.
+assert_result "locals: allowed after a CLOSED if" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t"                            "2 7"
+assert_result "locals: allowed after a CLOSED do loop" \
+              ": u 3 0 do i . loop {: a :} a . ; 9 u"                          "0 1 2 9"
+assert_output "locals: LP balances after a closed structure" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t 7 t (lp@) (lp0@) = ."       "-1"
+# ...and the session still compiles afterwards, which is not implied by the
+# message: the definition-open guard printed correctly while wedging LATEST.
+assert_result "locals: a refusal leaves the session usable" \
+              ": t 0 if {: a :} then ;
+: fine {: z :} z 3 * ;
+4 fine ."                                                                      "12"
+assert_output "locals: a refusal leaves LP where it found it" \
+              ": t 0 if {: a :} then ;
+(lp@) (lp0@) = ."                                                              "-1"
+
+# --- does> cannot see them -----------------------------------------------
+# The created word runs long after the defining word returned and its frame was
+# popped. This did not crash -- it returned a WRONG NUMBER from a dead slot,
+# which is why it is refused rather than documented.
+assert_error "locals: does> refuses them" ": mk {: v :} create v , does> @ v + ;"  "does> cannot see"
+assert_result "locals: does> still works without them" \
+              ": mk create , does> @ 2 * ;
+5 mk ten
+ten ."                                                                         "10"
+
+# --- and a definition WITHOUT locals is untouched -------------------------
+# "Pay only if you use it" is the design claim; this is the cheapest check of
+# it that does not depend on a disassembler being installed.
+assert_result "locals: an ordinary definition is unaffected" ": sq dup * ; 7 sq ."  "49"
 
 # =========================================================================
 section "BYE"

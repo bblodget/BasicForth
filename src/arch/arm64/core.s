@@ -1722,6 +1722,8 @@ msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
+msg_does_locals: .ascii "does> cannot see the defining word's locals: "
+.equ msg_does_locals_len, . - msg_does_locals
 msg_cf_mismatch: .ascii "mismatched control flow: "
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 msg_redefined: .ascii "redefined "
@@ -2459,6 +2461,12 @@ forth_semicolon:
 
     STP X29, X30, [SP, #-16]!
 
+    // Release the frame BEFORE the RET, then forget the names: the list is
+    // per-definition, and a leftover would silently rename words in the next.
+    BL compile_local_release
+    ADR X9, locals_count
+    STR XZR, [X9]
+
     // Compile RET
     BL compile_ret
 
@@ -2659,6 +2667,24 @@ forth_interpret_line:
     ADR X10, err_pfx_len
     STR X9, [X10]
 
+    // A local in scope beats the dictionary -- that is what "locals shadow"
+    // means, and it has to happen BEFORE find, or `{: i :}` would still get the
+    // DO loop index. Gated on compiling AND a non-empty list, so a definition
+    // that declares no locals pays one compare against zero.
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, .Lil_not_local
+    ADR X9, locals_count
+    LDR X9, [X9]
+    CBZ X9, .Lil_not_local
+    BL locals_lookup                // X0 = index, or -1; args left on the stack
+    CMN X0, #1
+    B.EQ .Lil_not_local
+    ADD X19, X19, #2*CELL           // drop c-addr u
+    BL compile_local_fetch
+    B .Lil_loop
+.Lil_not_local:
+
     // FIND ( c-addr u -- xt flag | c-addr u 0 )
     BL forth_find
 
@@ -2742,6 +2768,8 @@ forth_interpret_line:
     LDR X10, [X9]
     CBZ X10, .Lil_err_return
     STR XZR, [X9]                   // reset to interpret mode
+    ADR X9, locals_count
+    STR XZR, [X9]                   // ...and the names it declared
     ADR X9, colon_dsp
     LDR X19, [X9]                   // restore DSP (drop compile-time stack)
     ADR X9, saved_latest
@@ -3540,6 +3568,8 @@ cf_check_tag:
     DROP_PARTIAL_HEADER             // a definition spanning lines leaves one
     ADR X9, state
     STR XZR, [X9]                   // interpret mode
+    ADR X9, locals_count
+    STR XZR, [X9]                   // ...and the names it declared
     ADR X9, do_depth
     STR XZR, [X9]                   // reset DO nesting
     ADR X9, leave_count
@@ -4739,8 +4769,8 @@ forth_getenv:
 
 // entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
 // success; non-zero means X0 is meaningless, not that it is a bad number. The
-// failure value cannot be folded into x: 0 is a legal random value and is also
-// exactly the seed that stops xorshift dead, so the two must stay separate.
+// failure value cannot be folded into x: 0 is a legal random value, so a caller
+// could not tell "unlucky" from "broken".
 //
 // Two STRs rather than one STP: STP would put its FIRST operand at the LOW
 // address, which is TOS here, so the pair reads backwards from the stack
@@ -5182,6 +5212,20 @@ forth_does_runtime:
 // the does-body. ; will close the does-body with its own epilog+RET.
 .global forth_does
 forth_does:
+    // A does> body runs when the CREATED word is executed -- long after the
+    // defining word returned and its frame was popped. A local referenced there
+    // reads a dead slot: it did not crash, it returned a WRONG NUMBER.
+    ADR X9, locals_count
+    LDR X9, [X9]
+    CBZ X9, .Ldoes_ok
+    ADR X9, err_pfx_addr
+    ADR X10, msg_does_locals
+    STR X10, [X9]
+    ADR X9, err_pfx_len
+    MOV X10, #msg_does_locals_len
+    STR X10, [X9]
+    B .Lcf_abort
+.Ldoes_ok:
     STP X29, X30, [SP, #-16]!
     // Compile BL forth_does_runtime
     ADR X0, forth_does_runtime
@@ -5201,6 +5245,15 @@ forth_does:
 .global forth_base
 forth_base:
     TLS_ADDR X9, base
+    STR X9, [X19, #-CELL]!
+    RET
+
+// SEED ( -- a-addr )  Push the address of THIS thread's RNG state.
+// An address, not a value, so `42 seed !` and `seed @` read exactly as they did
+// when this was a Forth `variable` -- the cell simply moved into TLS.
+.global forth_seed
+forth_seed:
+    TLS_ADDR X9, seed
     STR X9, [X19, #-CELL]!
     RET
 
@@ -5272,6 +5325,30 @@ forth_source:
 //   [32] file_name_len  [40] file_name_addr [48] il_sp
 //   [56] source_id      [64] to_in          [72] source_len
 //   [80] source_addr    [88] saved DSP      [96] X29  [104] X30
+
+// The compile-time locals table's shape. LOCALS_MAX 16 comfortably exceeds the
+// 8 that Forth 2012 requires a system to accept; LOCAL_NAME_MAX matches the
+// dictionary's own F_LENMASK, so a name that fits a definition fits a local.
+.equ LOCALS_MAX,      16
+.equ LOCAL_NAME_MAX,  31
+.equ LOCAL_ENTRY,     32            // 1 length byte + 31 name bytes
+
+// The template compile_local_fetch copies, written as real instructions so the
+// assembler and linker resolve the TLS relocations. Six instructions:
+//   0..2  TLS_ADDR X9, lp      -- address of this thread's LP
+//   3     LDR X9, [X9]         -- LP itself
+//   4     LDR X9, [X9]         -- the local; imm12 PATCHED with the index
+//   5     STR X9, [X19, #-8]!  -- push
+// Only word 4 is patched, and only its imm12 field, so nothing here is
+// hand-encoded -- the whole point of copying a template rather than emitting
+// bytes on an architecture where every instruction is a bitfield.
+local_fetch_tmpl:
+    TLS_ADDR X9, lp
+    LDR X9, [X9]
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+.equ LOCAL_FETCH_LEN, . - local_fetch_tmpl
+.equ LOCAL_FETCH_PATCH, 4           // index of the word whose imm12 we set
 
 // ---------- Locals frame primitives ----------
 // Stage 1 of the locals work: the runtime substrate, with no syntax on top.
@@ -5366,6 +5443,175 @@ forth_lstack_size:
     STR X9, [X19, #-CELL]!
     RET
 
+// ---------- Locals: compile-time name list ----------
+// Set by `{:` and read by the outer interpreter, which must resolve a local
+// BEFORE consulting the dictionary. Per DEFINITION compile-time state, distinct
+// from the runtime LP, needing its own reset wherever a definition is
+// abandoned -- miss that and the NEXT definition inherits stale names, which
+// would compile, and be wrong.
+
+// locals_lookup — is this name a local in scope?
+// Input:  ( c-addr u ) on the data stack, NOT consumed.
+// Output: X0 = index, or -1 if no match. Clobbers X9-X14.
+locals_lookup:
+    LDR X10, [X19]                  // u
+    CMP X10, #LOCAL_NAME_MAX
+    B.HI .Lll_miss                  // too long to be one of ours
+    LDR X11, [X19, #CELL]           // c-addr
+    ADR X12, locals_count
+    LDR X12, [X12]
+    MOV X13, XZR                    // index
+.Lll_entry:
+    CMP X13, X12
+    B.HS .Lll_miss
+    ADR X14, locals_names
+    ADD X14, X14, X13, LSL #5       // + index * LOCAL_ENTRY
+    LDRB W9, [X14]                  // stored length
+    CMP X9, X10
+    B.NE .Lll_next
+    ADD X14, X14, #1                // name bytes
+    MOV X0, XZR                     // char index
+.Lll_char:
+    CMP X0, X10
+    B.HS .Lll_hit                   // every byte matched
+    LDRB W1, [X11, X0]
+    LDRB W2, [X14, X0]
+    // Case-insensitive, like the dictionary: fold both to lower.
+    SUB W3, W1, #'A'
+    CMP W3, #25
+    B.HI 1f
+    ADD W1, W1, #32
+1:  SUB W3, W2, #'A'
+    CMP W3, #25
+    B.HI 2f
+    ADD W2, W2, #32
+2:  CMP W1, W2
+    B.NE .Lll_next
+    ADD X0, X0, #1
+    B .Lll_char
+.Lll_next:
+    ADD X13, X13, #1
+    B .Lll_entry
+.Lll_hit:
+    MOV X0, X13
+    RET
+.Lll_miss:
+    MOV X0, #-1
+    RET
+
+// compile_local_fetch — emit an OPEN-CODED read of local X0.
+//
+// 24 bytes, no call, no dispatch. This is the decision the whole feature rests
+// on (docs/Locals.md): a reference costing a create/does>-class call would make
+// locals SLOWER than the juggling they replace, and no correctness test would
+// notice. The template is copied whole and one imm12 field patched.
+compile_local_fetch:
+    CHECK_DICT LOCAL_FETCH_LEN
+    ADR X9, local_fetch_tmpl
+    MOV X10, X21                    // HERE
+    MOV X11, #LOCAL_FETCH_LEN
+.Lclf_copy:
+    LDR W12, [X9], #4
+    STR W12, [X10], #4
+    SUBS X11, X11, #4
+    B.NE .Lclf_copy
+    // Patch the index into the second LDR's imm12. The offset is scaled by 8
+    // for a 64-bit load, so the field IS the index -- no shift of our own.
+    ADD X10, X21, #(LOCAL_FETCH_PATCH * 4)
+    LDR W12, [X10]
+    ORR W12, W12, W0, LSL #10
+    STR W12, [X10]
+    ADD X21, X21, #LOCAL_FETCH_LEN
+    RET
+
+// compile_local_release — emit `n (lunframe)` if this definition has locals.
+// Once per exit, so an ordinary call costs nothing worth open-coding for.
+// Emits nothing at all when none were declared, which is what keeps an
+// ordinary definition byte-for-byte unchanged.
+compile_local_release:
+    STP X29, X30, [SP, #-16]!
+    ADR X9, locals_count
+    LDR X0, [X9]
+    CBZ X0, .Lclr_none
+    BL compile_literal
+    ADR X0, forth_lunframe
+    BL compile_call
+.Lclr_none:
+    LDP X29, X30, [SP], #16
+    RET
+
+// (cf-open?) ( -- flag )  Is anything on the compile-time stack?
+// `{:` uses this: the frame is built where {: appears but released once at `;`,
+// so a {: reached conditionally unbalances the pair.
+.global forth_cf_open
+forth_cf_open:
+    MOV X10, XZR                    // assume nothing open
+    ADR X9, colon_dsp
+    LDR X9, [X9]
+    CMP X19, X9                     // compare BEFORE pushing
+    B.HS .Lcfo_done
+    MOV X10, #-1
+.Lcfo_done:
+    STR X10, [X19, #-CELL]!
+    RET
+
+// (loc-add) ( c-addr u -- flag )  Record a local name. False if the table is
+// full or the name too long; `{:` reports, so no message here.
+.global forth_loc_add
+forth_loc_add:
+    LDR X10, [X19], #CELL           // u
+    LDR X11, [X19], #CELL           // c-addr
+    CBZ X10, .Lla_no
+    CMP X10, #LOCAL_NAME_MAX
+    B.HI .Lla_no
+    ADR X12, locals_count
+    LDR X13, [X12]
+    CMP X13, #LOCALS_MAX
+    B.HS .Lla_no
+    ADR X14, locals_names
+    ADD X14, X14, X13, LSL #5
+    STRB W10, [X14]                 // length byte
+    ADD X14, X14, #1
+    MOV X0, XZR
+.Lla_copy:
+    CMP X0, X10
+    B.HS .Lla_done
+    LDRB W9, [X11, X0]
+    STRB W9, [X14, X0]
+    ADD X0, X0, #1
+    B .Lla_copy
+.Lla_done:
+    ADD X13, X13, #1
+    STR X13, [X12]
+    MOV X9, #-1
+    STR X9, [X19, #-CELL]!
+    RET
+.Lla_no:
+    STR XZR, [X19, #-CELL]!
+    RET
+
+// (loc-count) ( -- n )  How many locals the current definition declared.
+.global forth_loc_count
+forth_loc_count:
+    ADR X9, locals_count
+    LDR X9, [X9]
+    STR X9, [X19, #-CELL]!
+    RET
+
+// (loc-clear) ( -- )  Forget them.
+.global forth_loc_clear
+forth_loc_clear:
+    ADR X9, locals_count
+    STR XZR, [X9]
+    RET
+
+// (loc-max) ( -- n )  The table's capacity, so `{:` can report a real limit.
+.global forth_loc_max
+forth_loc_max:
+    MOV X9, #LOCALS_MAX
+    STR X9, [X19, #-CELL]!
+    RET
+
 // (dstack-size) ( -- n )  Bytes of data stack, per thread. threads.fs sizes a
 // worker's from this same constant the REPL's .bss stack uses.
 .global forth_dstack_size
@@ -5419,6 +5665,39 @@ forth_thread_tramp:
     TLS_ADDR X9, thread_csp         //   register does, and the engine
     MOV X10, SP                     //   registers are all spoken for
     STR X10, [X9]                   // our way back, out of the worker's reach
+
+    // Seed this worker's RNG, BEFORE the stacks are switched below -- this is
+    // the last point at which SP is still the C stack glibc gave us, and so
+    // the last point where its 16-byte alignment is guaranteed. Seeding after
+    // the switch would run platform_random (which does SUB SP, SP, #16) on the
+    // worker's RETURN stack, whose alignment comes from ctx.rtop: an
+    // allocation-derived address this code does not control, and AArch64
+    // FAULTS on a misaligned SP access rather than tolerating it.
+    //
+    // It must happen somewhere, rather than in the .tdata image, because that
+    // image is a constant: every worker would otherwise start from the same
+    // number and replay the same sequence -- independent streams that are
+    // identical, which is harder to notice than the shared cell it replaces.
+    // One getrandom next to an mmap, a pthread_create and three mprotects.
+    //
+    // ctx rides in X20 across the call: it is callee-saved, this function
+    // already spilled it above, and platform_random touches only X0-X2/X8.
+    // No scratch register would survive, and X19/X21/X22 are engine registers.
+    MOV X20, X0
+    BL platform_random              // X0 = value, X1 = ior (0 = ok)
+    CBZ X1, 1f
+    // No kernel entropy (early boot, or no getrandom). Fall back to something
+    // PER-THREAD -- a constant here would rebuild the bug this code exists to
+    // fix. The context block is a separate allocation per worker, so its
+    // address differs; scramble it so nearby blocks don't give nearby seeds.
+    MOVZ X3, #0x7C15
+    MOVK X3, #0x7F4A, LSL #16
+    MOVK X3, #0x79B9, LSL #32
+    MOVK X3, #0x9E37, LSL #48
+    EOR X0, X20, X3
+1:  TLS_ADDR X9, seed               // any value will do: splitmix64 has no bad
+    STR X0, [X9]                    //   state, 0 included
+    MOV X0, X20                     // ctx back where the rest of this expects it
 
     LDR X19, [X0, #8]               // DSP = this thread's own data stack
     TLS_ADDR X9, sp0
@@ -5649,7 +5928,9 @@ forth_throw:
     STR X10, [X9]
     DROP_PARTIAL_HEADER             // uncaught throw abandons any open def
     ADR X9, state
-    STR XZR, [X9]                   // reset compile state
+    STR XZR, [X9]
+    ADR X9, locals_count
+    STR XZR, [X9]                   // ...and the names it declared                   // reset compile state
     TLS_ADDR X9, handler
     STR XZR, [X9]                   // no live frames on a reset stack
     B repl_loop
@@ -5674,6 +5955,8 @@ forth_quit:
     STR X10, [X9]
     ADR X9, state
     STR XZR, [X9]                  // reset compile state
+    ADR X9, locals_count
+    STR XZR, [X9]                  // ...and the names it declared
     TLS_ADDR X9, handler
     STR XZR, [X9]                  // frames died with the return stack
     B repl_loop
@@ -5759,7 +6042,9 @@ forth_bracket_char:
 .global forth_exit
 forth_exit:
     STP X29, X30, [SP, #-16]!
-    BL compile_ret
+    BL compile_local_release        // an early exit leaves through the same door
+    BL compile_ret                  //   -- but the names stay in scope, since
+                                    //   the definition is still being compiled
     LDP X29, X30, [SP], #16
     RET
 
@@ -6373,7 +6658,8 @@ DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
 DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
 DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
 DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
-DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_seed,       "seed",       forth_seed,        dict_base
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_seed
 DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
 DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
@@ -6486,7 +6772,12 @@ DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
 DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
-DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_lstack_size
+DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_lstack_size
+DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_cf_open
+DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
+DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
+DEFWORD dict_loc_max,     "(loc-max)",    forth_loc_max,     dict_loc_clear
+DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_loc_max
 DEFWORD dict_thr_rsize,   "(thread-rsize)", forth_thread_rsize, dict_dstack_size
 DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_rsize
 .global dict_include
@@ -6566,6 +6857,15 @@ data_stack_top:
 guard_page_underflow:
     .space 4096
 
+// Compile-time locals list. Per DEFINITION, not per thread: only the REPL
+// thread compiles (see the rule in threads.fs), so this is not TLS.
+.global locals_count
+locals_count:
+    .space 8
+.global locals_names
+locals_names:
+    .space LOCALS_MAX * LOCAL_ENTRY
+
 // ---------- Locals Stack Memory ----------
 // Same shape as the data stack above, and fenced the same way, so overflowing a
 // locals frame is a reported error rather than a silent walk into whatever
@@ -6642,6 +6942,24 @@ thread_csp:                         // The C stack pointer to return on. Kept in
                                     //   worker's data stack grows down toward
                                     //   its context, so an overflow there would
                                     //   otherwise rewrite our way back to glibc.
+.global seed
+seed:                               // splitmix64 state for THIS thread. Shared,
+    .quad 0                         //   it was both wrong and slow: two threads
+                                    //   read-modify-write one cell, so they draw
+                                    //   from one interleaved stream (measured:
+                                    //   1707 of 2000 values common to both) and
+                                    //   lose updates, and the contended line ran
+                                    //   4 threads 4x slower than 1.
+                                    //
+                                    //   The image here is a CONSTANT, so a
+                                    //   worker starting from it would replay the
+                                    //   REPL's sequence exactly -- independent
+                                    //   but identical, which looks correct and
+                                    //   is not. The trampoline therefore seeds
+                                    //   every worker; 0 here means "nobody has
+                                    //   seeded me yet", which only the REPL
+                                    //   thread ever sees, and core.fs's
+                                    //   (reseed) fixes that before first use.
 
 // ---------- Variables ----------
 .data

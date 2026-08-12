@@ -349,30 +349,47 @@ variable (dump-addr)  variable (dump-len)
 131 constant KEY_RIGHT
 132 constant KEY_LEFT
 
-\ Random number generator (Linear Congruential Generator)
-\ xorshift64 (Marsaglia): every bit of the output is well-mixed. The previous
-\ LCG returned its raw seed, whose LOW bits have tiny periods (bit 0 simply
-\ alternates) — and rnd's mod uses the low bits, so 2 rnd flip-flopped.
-\ Seeded from the kernel, not the clock. ms@ alone gave two processes started in
-\ the same millisecond the SAME stream — 200 parallel launches produced 87
-\ distinct first values — and made that first value nearly linear in the launch
-\ time, since one xorshift round does not hide the structure of a seed that only
-\ varies in its low bits. entropy fails closed (early boot, or a kernel without
+\ Random number generator: splitmix64 (Steele/Lea/Flood). The state is a plain
+\ counter advanced by a fixed odd constant, and the OUTPUT is that counter run
+\ through two multiply-xorshift mixing rounds. Two properties earn it its place
+\ over the xorshift64 that came before:
+\
+\   * Every seed works, 0 included. xorshift64 has a fixed point at 0 — the
+\     state stays there and every draw is 0 forever — so `0 seed !`, the
+\     obvious thing to type after reading "store a known value to make runs
+\     repeatable", killed the generator. That needed a special case here and a
+\     paragraph of explanation in `help random`. splitmix64 has no bad state,
+\     so both are gone.
+\   * The bits of one output are independent of each other. xorshift64 is
+\     F2-linear: its 64 output bits are linear combinations, which is
+\     invisible while you take a couple of bits per draw and fatal the moment
+\     you slice one draw into several numbers. examples/dice.fs packs 32
+\     two-bit rolls into one value and got a tail ~50% too heavy that way,
+\     while matching bit-for-bit on the mean and the standard deviation.
+\
+\ The previous generator before that was an LCG, which returned its raw state:
+\ the LOW bits have tiny periods (bit 0 simply alternates) and rnd's mod reads
+\ exactly those, so `2 rnd` flip-flopped.
+\
+\ Seeded from the kernel, not the clock. ms@ alone gave two processes started
+\ in the same millisecond the SAME stream — 200 parallel launches produced 87
+\ distinct first values. entropy fails closed (early boot, or a kernel without
 \ getrandom), so the clock remains the fallback rather than the plan.
+\
+\ `seed` is NOT a variable here: it is a per-thread cell in TLS, pushed by an
+\ ASM word (see `seed` in core.s). One shared cell was both wrong and slow --
+\ two threads read-modify-write it, so they draw from a single interleaved
+\ stream and lose updates, and the contended cache line ran 4 threads 4x slower
+\ than 1. Workers are seeded by the thread trampoline; this seeds the REPL's own
+\ copy, whose .tdata image is 0 -- which splitmix64 is perfectly happy with.
 \ In a definition because `if` is compile-only: this line runs as core.fs loads.
-variable seed
-: (reseed) ( -- )  entropy if drop ms@ then  1 or seed ! ;
+: (reseed) ( -- )  entropy if drop ms@ then  seed ! ;
 (reseed)
-\ A zero state is xorshift's fixed point: every output would be 0 forever, and
-\ `0 seed !` is the obvious thing to type after reading "store a known value to
-\ make runs repeatable". Fold it to a constant instead, so 0 names an ordinary
-\ repeatable stream like any other value. Every nonzero seed is untouched.
 : random ( -- n )
-    seed @ ?dup 0= if $9E3779B97F4A7C15 then
-    dup 13 lshift xor
-    dup  7 rshift xor
-    dup 17 lshift xor
-    dup seed ! ;
+    seed @ $9E3779B97F4A7C15 +  dup seed !
+    dup 30 rshift xor  $BF58476D1CE4E5B9 *
+    dup 27 rshift xor  $94D049BB133111EB *
+    dup 31 rshift xor ;
 : rnd    ( n -- 0..n-1 ) random swap mod abs ;
 
 \ Double-Number words (8)
@@ -3246,6 +3263,57 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     then
     (inc-mark)
     r> (ldg-n) ! ;
+
+\ --- Local variables: {: a b c :} ------------------------------------------
+\ Forth 2012 section 13. Names the top n stack items, innermost first, for the
+\ rest of the definition:
+\
+\     : blit ( src x y w h -- )  {: s x y w h :}  ... s x y w h by name ...
+\
+\ The names this parses are NOT compiled as calls. The outer interpreter
+\ resolves a local before it consults the dictionary, and open-codes the read
+\ (compile_local_fetch in core.s), so a reference costs a load rather than a
+\ call. That is the whole reason locals are worth having -- see docs/Locals.md.
+
+\ Emit the frame build: `n (lframe)`, taking the values already on the stack.
+\ Both parts are POSTPONEd so they run when {: runs -- i.e. while the user's
+\ definition is being compiled -- rather than when {: itself was compiled.
+: (loc-frame!) ( -- )
+    (loc-count) postpone literal  postpone (lframe) ;
+
+\ `:}` closes the list; anything else is a name. A missing `:}` would eat the
+\ rest of the definition, so it is caught by the table filling up.
+: {: ( "name ... :}" -- )
+    state @ 0= if
+        ." {: only inside a definition" cr abort  then
+    \ The compile-time stack must be EMPTY. The frame is built where {: appears
+    \ but released once at `;`, so a {: inside a branch releases a frame that an
+    \ untaken call never built -- LP drifted 8 bytes per call toward the guard
+    \ page, in silence. Inside a loop it is the reverse: a frame per iteration,
+    \ released once. A CLOSED structure before it is fine: the build is still
+    \ unconditional and still happens once.
+    \
+    \ "Empty" is deliberately blunter than "no control structure is open". The
+    \ compile-time stack is just cells -- a marker left by `if` and a value left
+    \ by `[ 5 ]` are indistinguishable -- so this refuses both, and `case`/`of`
+    \ as well. Say so in the message: naming only if/begin/do described a guard
+    \ narrower than the one that is actually here, twice.
+    (cf-open?) if
+        ." {: needs an empty compile-time stack: close any if/begin/do/case"
+        ."  first, and leave nothing behind in [ ]" cr abort  then
+    \ ...and only once. A second {: builds a second frame while `;` still
+    \ releases one, which leaked 8 bytes of LP per call just as quietly.
+    (loc-count) if
+        ." {: already declared in this definition" cr abort  then
+    begin
+        parse-word dup 0= if                        ( c-addr u )
+            ." {: has no closing :}" cr abort  then
+        2dup s" :}" compare 0= if
+            2drop (loc-frame!) exit  then
+        (loc-add) 0= if
+            ." {: needs a name of 31 characters or fewer, and at most "
+            (loc-max) . ." locals" cr abort  then
+    again ; immediate
 
 : include ( "name" -- )
     parse-word dup 0= if  2drop ." usage: include <file>" cr exit  then
