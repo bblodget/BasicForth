@@ -302,11 +302,17 @@
 - It also says where the problem comes from — Pokémon soft-lock picking, and
   the Python script that brute-forces it — and what the escape actually costs:
   P(177 or better in 231 rolls) is **1.2e-60**, one battle in 8.3e59, so at the
-  3.5e7 battles/second this reaches on 16 cores a single hit is 7.5e44 years
-  away, about 5e34 times the age of the universe. Plus a table of what `Best`
-  should be at each battle count, with the caveat that `Best` is a *maximum*
-  and wanders: only the outer column, the 1-in-1000 bound, means anything is
-  wrong.
+  3.5e7 battles/second this reaches on 8 cores a single hit is 7.5e44 years
+  away, about 5e34 times the age of the universe.
+- And what the speedup really is, measured rather than claimed: the video's
+  Python script does 1,447 battles/s (a billion in ~8 days), one worker here
+  does 2,824,021, and 16 workers do 35,335,689 — a billion in 28 s, 24,400x.
+  Only **12.5x of that is threads** (good scaling for 8 cores with SMT); the
+  other 1,950x is one worker against one Python process. Threading is the
+  multiplier people reach for first and the smallest one here.
+- Plus a table of what `Best` should be at each battle count, with the caveat
+  that `Best` is a *maximum* and wanders: only the outer column, the 1-in-1000
+  bound, means anything is wrong.
 - Its value `SEED` is renamed `RUN-SEED`. The dictionary is case-insensitive,
   so it had been silently redefining the core `seed` for months; harmless
   until the file wanted to use the core word, then `seed !` wrote through an

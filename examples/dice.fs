@@ -16,15 +16,32 @@
 \     while numbers[0] < 177 and rolls < 1000000:   \ it never gets there
 \
 \ It never gets there, and neither will this. P(177 or better) is 1.2e-60 —
-\ one battle in 8.3e59. This program manages 3.5e7 battles a second on 16
-\ cores, so expecting a single hit takes 7.5e44 years, about 5e34 times the
-\ age of the universe. The script's million battles typically peak around 91.
+\ one battle in 8.3e59. This program manages 3.5e7 battles a second on 8 cores,
+\ so expecting a single hit takes 7.5e44 years, about 5e34 times the age of
+\ the universe. The script's million battles typically peak around 91.
 \
 \ That is the honest answer to the challenge, and it is what makes this a good
 \ benchmark rather than a good search: the target is unreachable, the work is
 \ embarrassingly parallel, and every core you add buys real throughput against
 \ a number that will not move. The mean is 57.75 and a standard deviation is
 \ 6.58, so ~100 is already 6.5 sigma out; 100x the battles buys about 3 more.
+\
+\ The video reports a billion battles taking the Python script about 8 DAYS.
+\ This does a billion in 28 seconds on a laptop — 8 cores, 16 threads. All
+\ measured, on the same size of job:
+\
+\     python, per the video      1,447 battles/s
+\     one worker here        2,824,021 battles/s      1,950x
+\     16 workers            35,335,689 battles/s     24,400x
+\
+\ Note where that comes from. Threads are worth 12.5x of it — good scaling
+\ for 8 cores, since SMT is real but not a second core. The other 1,950x is
+\ one worker against one Python process: compiled Forth instead of an
+\ interpreter, and the two tricks below, of which packing 32 rolls into one
+\ draw is worth ~20x on its own for three lines of code.
+\
+\ Which is the lesson. Threading is the multiplier everyone reaches for first
+\ and the smallest one here.
 \
 \ Video: https://www.youtube.com/watch?v=M8C8dHQE2Ro
 \ ---------------------------------------------------------------------------
@@ -64,15 +81,18 @@
 \      involved, just one cache line two cores both wanted.
 \   2. A d4 needs 2 bits, so one 64-bit `random` holds 32 throws, and
 \      `popcount` counts the 1s in all 32 at once. Worth ~20x.
-\   3. Threads, worth ~11x on 8 cores — the least of the three, and the only
-\      one most people would think of.
+\   3. Threads, worth 12.5x on 8 cores (16 threads) — the least of the three,
+\      and the only one most people would think of.
 \
 \ `battle-slow` is kept as the obvious version the fast one is checked against.
 
 require threads.fs
 
 64 constant LINE                    \ bytes per cache line
-16 constant #w                      \ most workers we can start (= nproc here)
+16 constant #w                      \ most workers we can start. nproc counts
+                                    \ LOGICAL cpus, so this is 8 cores x SMT --
+                                    \ 16 workers really is the useful maximum
+                                    \ here, but they are not 16 cores' worth
 231 constant ROLLS                  \ throws per battle
 
 1000000000 value BATTLES            \ battles in total, across all workers
@@ -207,7 +227,7 @@ create handles #w cells allot
 
 \ ---------------------------------------------------------------- demo
 \ A small run when this file is executed. Raise BATTLES for a real hunt:
-\ a billion battles takes about 40 seconds on 8 cores.
+\ a billion battles takes about 28 seconds on 8 cores (16 threads).
 \ No `bye`: run it as a script and you land at the prompt with everything
 \ loaded, ready to type a bigger run; `require dice.fs` from a session behaves
 \ the same way instead of ending it.
