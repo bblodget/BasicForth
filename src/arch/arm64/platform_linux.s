@@ -373,8 +373,15 @@ platform_flush_icache:
     MOV X5, #4
     LSL X4, X5, X4                  // X4 = D-cache line size
 
-    // Clean each cache line from D-cache to point of unification
-    MOV X2, X0
+    // Clean each cache line from D-cache to point of unification.
+    // Start at the LINE the range begins in, not at the address itself: DC
+    // operates on whole lines, so stepping by the line size from an unaligned
+    // start walks past the final line whenever the last byte of the range
+    // lands beyond the last address visited. Callers pass a code start that is
+    // only 4-byte aligned, so that is the common case, not a corner one --
+    // and the line it misses is the tail of a freshly compiled word.
+    SUB X6, X4, #1                  // X6 = line size - 1
+    BIC X2, X0, X6                  // X2 = start, aligned down to a line
 1:  DC CVAU, X2
     ADD X2, X2, X4
     CMP X2, X1
@@ -385,8 +392,11 @@ platform_flush_icache:
     UBFX X4, X3, #0, #4            // X4 = IminLine
     LSL X4, X5, X4                  // X4 = I-cache line size
 
-    // Invalidate each cache line in I-cache
-    MOV X2, X0
+    // Invalidate each cache line in I-cache. Aligned down for the same reason,
+    // and against IminLine -- the two caches may report different line sizes,
+    // so each loop must use its own.
+    SUB X6, X4, #1                  // X6 = line size - 1
+    BIC X2, X0, X6                  // X2 = start, aligned down to a line
 2:  IC IVAU, X2
     ADD X2, X2, X4
     CMP X2, X1
