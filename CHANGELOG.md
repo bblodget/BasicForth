@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added: a file can say what it needs from the machine
+
+- `needs-cmd <name>` and `needs-lib <soname>` go at the top of a file with its
+  `require` lines. If the command is not on `PATH`, or the library will not
+  `dlopen`, the load stops **there** — before any of the file's definitions
+  exist, so a package never half-loads. It is a `-2 throw`, like `abort"`, so
+  `catch` sees it.
+- Everything after the name is a hint for whoever has to fix it, which is the
+  point: `objdump` does not say "binutils", and `libSDL3.so.0` does not say
+  "on Debian you build it from source". The hint stops at a `\`, so an ordinary
+  trailing comment still works.
+
+      needs-cmd objdump         install binutils
+      needs-lib libSDL3.so.0    see help install
+
+      disasm.fs: needs the command objdump -- install binutils
+
+- What counts as a command is what a shell would accept: a **regular file this
+  user can execute**. Both halves matter and each has its own test — `X_OK`
+  alone accepts a *directory* (on a directory it means "searchable", so `/bin`
+  passes), and the mode bits alone ignore ownership, ACLs and mount flags. The
+  new `(exec?)` primitive asks `faccessat` and `newfstatat` and requires both.
+- The `PATH` walk follows the shell's rules, including the two that catch
+  people out: an **empty element means the current directory** (and `PATH` has
+  one more element than it has colons, so `:x`, `x:`, `x::y` and `""` all
+  contain one), while an **unset** `PATH` falls back to `/bin:/usr/bin` and
+  does not search the current directory. Both were measured against `/bin/sh`
+  rather than read off the spec, because the shell is what ends up running the
+  command — a walk that stopped when the characters ran out would report a
+  command missing that `(cmd-run)` would then happily run.
+- `needs-lib` probes by actually opening the library, so it answers the
+  question that matters — will this load, here, now — rather than guessing from
+  a filename. The handle is kept and handed to the next `dlopen` of the same
+  name, so declaring a library costs nothing over binding it, and the library
+  that was checked is the one that gets bound.
+- `dlopen` now names the library it could not load. "cannot load library" in a
+  session that has required three of them says nothing.
+
 ### Added: the locals runtime frame (stage 1 — no syntax yet)
 
 - The substrate for local variables: a **separate locals stack**, per thread,

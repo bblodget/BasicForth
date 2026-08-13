@@ -50,8 +50,19 @@ create (zbuf) (z-max) 1+ allot
 \ version strings, anything a C function hands back by address).
 : ztype ( zaddr -- )  begin dup c@ ?dup while emit 1+ repeat drop ;
 
-: dlopen ( c-addr u -- handle )  >z (dlopen)
-    dup 0= abort" dlopen: cannot load library" ;
+\ A file that declared `needs-lib libfoo.so.1` already has it open, and the
+\ probe kept the handle -- so the usual dep-block-then-bind pair costs one
+\ dlopen, not two. Beyond saving the call, it guarantees the two agree: the
+\ library the load was checked against is the library that gets bound.
+\
+\ The failure names the library, because "cannot load library" in a session
+\ that has required three of them says nothing. NEEDS-LIB says more still,
+\ which is the reason to declare one.
+: dlopen ( c-addr u -- handle )
+    2dup (lib-probed) ?dup if  nip nip exit  then
+    2dup >z (dlopen) ?dup 0= if
+        ." dlopen: cannot load " type cr  -2 throw  then
+    nip nip ;
 
 : dlsym ( handle c-addr u -- fnptr )  >z (dlsym)
     dup 0= abort" dlsym: symbol not found" ;

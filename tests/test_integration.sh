@@ -1110,7 +1110,7 @@ assert_output "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlop
 assert_output "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
 assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
 assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
-assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
+assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "cannot load libnosuch.so.99"
 
 # --- float arguments ---
 # libm is the oracle: exact, well-defined functions, so a wrong register or a
@@ -3569,6 +3569,164 @@ if [[ "$inc_rest" == *"7"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  tokens after include\n    Expected 7\n    Got: %q\n" "$inc_rest"; ((failed++))
 fi
+
+# =========================================================================
+# NEEDS-CMD / NEEDS-LIB — what a file needs from the machine
+# =========================================================================
+# The PATH walk is exercised against a directory we build, not against
+# whatever this machine happens to have installed: an executable, a file with
+# the same name but no execute bit, and a DIRECTORY with the same name. The
+# last two are the interesting ones — each is found by exactly one half of
+# (exec?), so dropping either the faccessat or the newfstatat turns one of
+# these tests red.
+nd_dir="$(mktemp -d)"
+nd_forth="${FORTH/.\//$PWD/}"           # absolute: these subshells set PATH
+mkdir -p "$nd_dir/bin" "$nd_dir/plain" "$nd_dir/asdir"
+printf '#!/bin/sh\necho hi\n' > "$nd_dir/bin/nd-tool"      ; chmod 755 "$nd_dir/bin/nd-tool"
+printf 'not executable\n'     > "$nd_dir/plain/nd-tool"    ; chmod 644 "$nd_dir/plain/nd-tool"
+mkdir -p "$nd_dir/asdir/nd-tool"                           # a directory, X_OK passes
+# Resolve the runner to an absolute path BEFORE anyone touches PATH. On ARM64
+# $FORTH is "qemu-aarch64-static -L <sysroot> <binary>", and a test PATH that
+# does not contain qemu makes `env` fail to find it — which looks exactly like
+# a BasicForth answer of "not found" to every negative test here.
+read -r -a nd_cmd <<< "$nd_forth"
+nd_cmd[0]="$(command -v "${nd_cmd[0]}" 2>/dev/null || printf '%s' "${nd_cmd[0]}")"
+
+nd_run() {                              # nd_run <PATH value|UNSET> <forth input>
+    # PATH goes to the forth process only, via env: setting it for the whole
+    # command would hide `timeout` itself, and every test would "pass" on a
+    # shell error instead of on BasicForth's answer.
+    # Drop the prompt echoes, as assert_result does: the REPL echoes each input
+    # line, so a marker word written in the INPUT would otherwise satisfy a test
+    # looking for it in the OUTPUT.
+    local envset=(env PATH="$1")
+    [ "$1" = UNSET ] && envset=(env -u PATH)
+    printf '%s\n' "$2" | timeout 5 "${envset[@]}" BASICFORTH_PATH="$FORTH_LIB" "${nd_cmd[@]}" 2>&1 \
+        | sed '/^> /d; /^>$/d'
+}
+# Every case goes through a FILE, because that is where a dep block lives and
+# because only a file shows the whole effect: at the prompt a failure abandons
+# one line, but in a file it must stop the load with the definitions below it
+# never reached. FOUND is printed by the line after the requirement.
+cat > "$nd_dir/probe.fs" <<'NDEOF'
+needs-cmd nd-tool     chmod it   \ this comment must not reach the message
+." FOUND" cr
+: nd-word  ." NDWORD" cr ;
+NDEOF
+printf 'needs-cmd %s/bin/nd-tool\n." FOUND" cr\n' "$nd_dir" > "$nd_dir/abs.fs"
+printf 'needs-cmd %s/bin/nope\n." FOUND" cr\n'    "$nd_dir" > "$nd_dir/absmiss.fs"
+nd_load() {                             # nd_load <PATH value> <file>
+    # FIND, not the word's own output: `: nd-word ." NDWORD" ;` would not print
+    # anything at load time even if it HAD been compiled, so only asking the
+    # dictionary shows whether the load got that far. Printing a word ("DEFINED")
+    # rather than the raw flag — an xt that happens to end in 0 would match a
+    # substring test for "0".
+    # `if` is compile-only, so the lookup lives in a definition; it parses the
+    # name at RUN time, which is why the name follows the call.
+    nd_run "$1" "require $nd_dir/$2
+: nd? parse-name find if drop .\" DEFINED\" cr else 2drop then ;
+nd? nd-word
+bye"
+}
+nd_found=$(nd_load  "$nd_dir/bin"    probe.fs)
+nd_noexec=$(nd_load "$nd_dir/plain"  probe.fs)
+nd_isdir=$(nd_load  "$nd_dir/asdir"  probe.fs)
+nd_later=$(nd_load  "$nd_dir/plain:$nd_dir/asdir:$nd_dir/bin" probe.fs)
+# A name with a / is used as-is: no search, so an empty PATH cannot hide it,
+# and a PATH holding a same-named executable cannot supply a missing one.
+nd_abs=$(nd_load     "/nowhere"    abs.fs)
+nd_absmiss=$(nd_load "$nd_dir/bin" absmiss.fs)
+
+# An EMPTY PATH element means the current directory, in every position — this
+# is measured behaviour of /bin/sh, not a reading of the spec, and it matters
+# because the shell is what will actually run the command. PATH holds one more
+# element than it has colons, so "a:" and ":" and "" all end in an empty one
+# and a walk that stops when the characters run out never sees it.
+nd_cd_load() {                          # nd_cd_load <PATH value> <file>
+    ( cd "$nd_dir/bin" && nd_load "$1" "$2" )
+}
+nd_empty_only=$(nd_cd_load  ""                    probe.fs)   # "" is one empty element
+nd_empty_lead=$(nd_cd_load  ":/nowhere"           probe.fs)
+nd_empty_mid=$(nd_cd_load   "/nowhere::/nowhere2" probe.fs)
+nd_empty_tail=$(nd_cd_load  "/nowhere:"           probe.fs)
+# UNSET is not the same as empty: the shell falls back to a built-in default
+# and does NOT search the current directory. A tool sitting right there must
+# NOT be found, while a system command still is.
+nd_unset_cwd=$(nd_cd_load  UNSET probe.fs)
+printf 'needs-cmd sh\n." FOUND" cr\n' > "$nd_dir/shprobe.fs"
+nd_unset_sys=$(nd_cd_load  UNSET shprobe.fs)
+rm -rf "$nd_dir"
+
+if [[ "$nd_found" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  needs-cmd finds an executable on PATH\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  needs-cmd missed an executable on PATH\n    Got: %q\n" "$nd_found"; ((failed++))
+fi
+if [[ "$nd_noexec" != *FOUND* && "$nd_noexec" == *"needs the command nd-tool -- chmod it"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file on PATH without the execute bit is not a command\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  non-executable accepted (or hint lost)\n    Got: %q\n" "$nd_noexec"; ((failed++))
+fi
+# Every negative test demands the MESSAGE, not just the absence of FOUND: a
+# harness slip that stops forth from running at all produces neither.
+if [[ "$nd_isdir" != *FOUND* && "$nd_isdir" == *"needs the command nd-tool"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a DIRECTORY on PATH is not a command (X_OK alone says yes)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a directory was accepted as a command\n    Got: %q\n" "$nd_isdir"; ((failed++))
+fi
+if [[ "$nd_later" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  the search continues past unusable matches to a later PATH element\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  search stopped at the first same-named entry\n    Got: %q\n" "$nd_later"; ((failed++))
+fi
+nd_empty_bad=""                         # collect EVERY failing position, not the last
+for nd_case in "only:$nd_empty_only" "lead:$nd_empty_lead" "mid:$nd_empty_mid" "tail:$nd_empty_tail"; do
+    [[ "${nd_case#*:}" == *FOUND* ]] || nd_empty_bad+=" ${nd_case%%:*}"
+done
+if [ -z "$nd_empty_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  an empty PATH element means the current directory (all four positions)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  empty PATH element ignored at:%s\n    Got: %q\n" \
+        "$nd_empty_bad" "$nd_empty_only$nd_empty_lead$nd_empty_mid$nd_empty_tail"; ((failed++))
+fi
+if [[ "$nd_unset_cwd" != *FOUND* && "$nd_unset_cwd" == *"needs the command nd-tool"* \
+   && "$nd_unset_sys" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  an UNSET PATH uses the default, and does not search the CWD\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unset-PATH fallback\n    Got: %q / %q\n" "$nd_unset_cwd" "$nd_unset_sys"; ((failed++))
+fi
+if [[ "$nd_abs" == *FOUND* \
+   && "$nd_absmiss" != *FOUND* && "$nd_absmiss" == *"needs the command "*"/nope"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a name with a / is used as-is, with no PATH search\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  path-name handling\n    Got: %q / %q\n" "$nd_abs" "$nd_absmiss"; ((failed++))
+fi
+# The failing load names the file it came from, keeps the author's hint, drops
+# the trailing comment, and never reaches the definition below it — `find`
+# printing 0 is that definition's absence.
+if [[ "$nd_noexec" == *"probe.fs: needs the command nd-tool -- chmod it"* \
+   && "$nd_noexec" != *"must not reach"* && "$nd_noexec" != *DEFINED* ]]; then
+    printf "  ${GREEN}PASS${NC}  a failed requirement names the file, cuts the comment, and stops the load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  dep-block failure in a file\n    Got: %q\n" "$nd_noexec"; ((failed++))
+fi
+
+assert_result "needs-lib finds a library that loads"  "needs-lib libc.so.6  should be everywhere
+.\" NLOK\" cr"  "NLOK"
+assert_result "needs-lib reports one that does not"   "needs-lib libnosuch.so.99  no such thing"  \
+    "needs the library libnosuch.so.99 -- no such thing"
+# The probe keeps its handle for the DLOPEN that follows, and only for the
+# name it actually probed — a cache that answered for any name would hand a
+# library the handle of a different one.
+assert_result "needs-lib hands its handle to dlopen"  \
+    "needs-lib libc.so.6
+include $FFI
+s\" libc.so.6\" dlopen  s\" libc.so.6\" (lib-probed) =  . cr"  "-1"
+# 0=, not the raw value: a cache that wrongly answered would print a handle
+# address, and a substring test for "0" matches most addresses.
+assert_result "the probe cache answers only for its own name"  \
+    "needs-lib libc.so.6
+s\" libm.so.6\" (lib-probed) 0= . cr"  "-1"
 
 # READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
 # blank line returns u2=0/flag=true, the last line without a trailing newline
