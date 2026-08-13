@@ -1689,8 +1689,14 @@ docs/Graphics.md for the API.
   Implementation stages (each independently useful, in order):
   - [x] exec primitive — landed as shellutil.fs ((cmd-run)/(cmd-open)/
     (cmd-line1) over `open-pipe`, quoted interpolation via (cmd+q))
-  - [ ] `needs-cmd` / `needs-lib` — polite system-requirement probes at
-    load time (useful today: sdl3.fs, sound.fs, future disasm.fs)
+  - [x] `needs-cmd` / `needs-lib` — polite system-requirement probes at
+    load time. Done 2026-08-13 (branch needslib). The name is one word and
+    the rest of the line is an install hint, cut at a `\` so ordinary
+    comments still work. New `(exec?)` primitive (faccessat X_OK **and**
+    newfstatat S_IFREG — X_OK alone accepts a directory); `needs-lib`
+    probes with a real `dlopen` and keeps the handle for the bind that
+    follows. Not yet adopted by the built-in libraries — that is its own
+    step, since each one currently fails its own way.
   - [ ] `deps <name>` — soft-check a file's leading dep block without
     loading it; report all missing requirements at once
   - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to

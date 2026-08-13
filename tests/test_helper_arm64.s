@@ -134,6 +134,11 @@ platform_chdir:
     MOV X0, #0                      // pretend success
     RET
 
+.global platform_exec_q
+platform_exec_q:
+    MOV X0, #-2                     // -ENOENT: nothing is executable in the unit tests
+    RET
+
 .global platform_mmap_file
 platform_mmap_file:
     MOV X0, #-1                     // return MAP_FAILED

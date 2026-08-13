@@ -238,6 +238,11 @@ platform_chdir:
     xor %eax, %eax              # pretend success
     ret
 
+.global platform_exec_q
+platform_exec_q:
+    mov $-2, %rax               # -ENOENT: nothing is executable in the unit tests
+    ret
+
 # BASICFORTH_PATH variables (defined in main.s, needed by forth_included)
 .data
 .align 8

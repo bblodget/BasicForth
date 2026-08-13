@@ -29,6 +29,8 @@ At a glance:
     included        ( c u -- )                include, name on the stack
     require <name>  ( "name" -- )             include, only if not yet loaded
     required        ( c u -- )                require, name on the stack
+    needs-cmd <cmd> ( "name" ccc -- )         this file needs a system command
+    needs-lib <so>  ( "name" ccc -- )         this file needs a shared library
     open-pipe       ( c u fam -- fid ior )    pipe over a shell command
     close-pipe      ( fid -- wret wior )      finish a pipe, reap the child
     stdin stdout stderr  ( -- fileid )        the standard streams
@@ -142,6 +144,52 @@ otherwise meet that as an unexplained `? name` further down:
 Like `require`, with the filename as a string on the stack.
 
     \ s" sdl3.fs" required
+
+## needs-cmd ( "name" ccc -- )
+State that this file needs an external command, and stop the load if it is not
+on `PATH`. Goes at the top of a file with the `require` lines — together they
+are its **dep block**, everything it needs before its first definition.
+
+    needs-cmd objdump         install binutils
+
+The name is one word. Everything after it on the line is a hint for whoever
+has to fix it — the part the name itself cannot tell them, since `objdump`
+does not say "binutils". The hint is optional, and stops at a `\` so an
+ordinary trailing comment still works.
+
+    disasm.fs: needs the command objdump -- install binutils
+
+The load stops **there**, before any of the file's definitions exist, so a
+package never half-loads: you either have the words or you have the reason you
+do not. It is a `-2 throw`, the same as `abort"`, so `catch` sees it.
+
+A name containing `/` is taken as a path and used as-is, with no search. What
+counts as found is what a shell would accept: a regular file this user can
+execute. A directory does not count, however searchable it is.
+
+The `PATH` walk follows the shell's rules exactly, including the two that
+surprise people. An **empty element means the current directory** — and `PATH`
+holds one more element than it has colons, so `:/usr/bin`, `/usr/bin:`,
+`/bin::/usr/bin` and the empty string all contain one. An **unset** `PATH` is
+different from an empty one: it falls back to `/bin:/usr/bin` and does not
+search the current directory at all.
+
+## needs-lib ( "name" ccc -- )
+The same, for a shared library — the ones the FFI opens by soname.
+
+    needs-lib libSDL3.so.0    see help install
+
+    sdl3.fs: needs the library libSDL3.so.0 -- see help install
+
+The probe is a real `dlopen`, so it answers the question that matters (will
+this library load, here, now) rather than guessing from a filename. The handle
+is kept and handed to the next `dlopen` of the same name, so declaring a
+library costs nothing over binding it — and guarantees the library that was
+checked is the library that gets bound.
+
+Declaring is worth it even though `dlopen` fails perfectly well on its own,
+because the two failures say different things. `dlopen` can only report what
+it tried; `needs-lib` reports what you should do about it.
 
 ## open-pipe ( c-addr u fam -- fileid ior )
 Run a shell command with a pipe over its stdout (`r/o`: read what it prints)

@@ -3275,6 +3275,160 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     parse-word dup 0= if  2drop ." usage: require <file>" cr exit  then
     required ;
 
+\ ------------------------------------------------------ system requirements
+\ A library states what it needs from the machine at the top of its file, the
+\ same way it states `require ffi.fs`:
+\
+\     needs-cmd objdump         install binutils
+\     needs-lib libSDL3.so.0    see help install
+\
+\ The name is one word; the rest of the line is a hint for whoever has to fix
+\ it -- the part the name cannot tell them. "objdump" does not say "binutils",
+\ and "libSDL3.so.0" does not say "on Debian you build it from source". The
+\ hint is optional and stops at a `\` so an ordinary comment still works.
+\
+\ A missing requirement stops the load THERE, before any of the file's
+\ definitions exist, so a package never half-loads: you either have the word
+\ or you have the reason you do not.
+
+\ --- the hint: everything after the name, minus a trailing comment ---
+variable (nh-a)  variable (nh-u)            \ where the last hint was, and how long
+variable (nh-end)
+
+: (nh-cut) ( c-addr u -- c-addr u' )        \ stop at a backslash comment
+    dup (nh-end) !
+    dup 0 ?do
+        over i + c@ [char] \ = if  i (nh-end) !  leave  then
+    loop
+    drop (nh-end) @ ;
+
+: (nh-triml) ( c-addr u -- c-addr u )
+    begin  dup  while  over c@ bl > if  exit  then  1 /string  repeat ;
+: (nh-trimr) ( c-addr u -- c-addr u )
+    begin  dup  while  2dup + 1- c@ bl > if  exit  then  1-  repeat ;
+
+: (nh-rest) ( -- )                          \ take the rest of the line as a hint
+    source >in @ /string                    ( a u )
+    source nip >in !                        \ and consume it, comment included
+    (nh-cut) (nh-triml) (nh-trimr)
+    (nh-u) !  (nh-a) ! ;
+
+: (nh.) ( -- )                              \ print the hint, if there was one
+    (nh-u) @ if  ."  -- " (nh-a) @ (nh-u) @ type  then ;
+
+\ --- is the command on PATH? ---
+1024 constant (nb-max)
+create (nb) (nb-max) allot                  \ one candidate: dir + "/" + command
+variable (nb-p)                             \ append cursor into (nb)
+variable (nb-cmd-a)  variable (nb-cmd-u)    \ the command being looked for
+variable (nb-path-a) variable (nb-path-u)   \ what is left of PATH to search
+
+: (nb0)  ( -- )  (nb) (nb-p) ! ;
+: (nb+)  ( c-addr u -- )                    \ append, or drop it if it will not fit
+    (nb-p) @ (nb) - over + (nb-max) < if
+        (nb-p) @ swap dup >r cmove  r> (nb-p) +!
+    else  2drop  then ;
+: (nb+c) ( ch -- )  (nb-p) @ c!  1 (nb-p) +! ;
+: (nb$)  ( -- c-addr u )  (nb) (nb-p) @ over - ;
+
+: (nb-dir?) ( dir du -- flag )              \ is the command runnable in this dir?
+    (nb0) (nb+)  [char] / (nb+c)
+    (nb-cmd-a) @ (nb-cmd-u) @ (nb+)
+    (nb$) (exec?) ;
+
+: (nb-seg) ( c-addr u -- n )                \ characters before the first ':'
+    dup 0 ?do  over i + c@ [char] : = if  2drop i unloop exit  then  loop  nip ;
+
+\ PATH holds one more element than it has colons, and the extra ones can be
+\ EMPTY -- ":a", "a:", "a::b" and "" all contain an empty element, and to a
+\ shell every one of them means the current directory (measured against
+\ /bin/sh, all five forms). So "no characters left" is not the same question
+\ as "no elements left": a trailing colon still owes us one final, empty
+\ element. (nb-more) carries that distinction, which a length alone cannot.
+variable (nb-more)                          \ is another element still owed?
+
+: (nb-next) ( -- c-addr u flag )            \ next PATH element; false when done
+    (nb-more) @ 0= if  0 0 false exit  then
+    (nb-path-a) @ (nb-path-u) @             ( a u )
+    over >r                                 ( a u  R: a )
+    2dup (nb-seg) dup >r                    ( a u n  R: a n )
+    over r@ = if  false (nb-more) !  then   \ no ':' left: this is the last one
+    /string                                 ( rest  R: a n )
+    dup if  1 /string  then                 \ step over the ':'
+    (nb-path-u) !  (nb-path-a) !
+    r> r> swap  true ;                      ( a n true )
+
+: (nb-slash?) ( c-addr u -- flag )          \ a path rather than a bare name?
+    0 ?do  dup i + c@ [char] / = if  drop true unloop exit  then  loop
+    drop false ;
+
+\ An empty element means the current directory, so the bare name is the whole
+\ path to probe -- (exec?) resolves a relative name against the CWD, which is
+\ what the shell would do with it.
+: (nb-cwd?) ( -- flag )  (nb-cmd-a) @ (nb-cmd-u) @ (exec?) ;
+
+: (on-path?) ( c-addr u -- flag )           \ can we run this command?
+    2dup (nb-slash?) if  (exec?) exit  then \ already a path: no search to do
+    (nb-cmd-u) !  (nb-cmd-a) !
+    s" PATH" getenv                         ( a u )
+    over 0= if                              \ UNSET, not empty: the shell falls
+        2drop  s" /bin:/usr/bin"            \ back to the confstr default, and
+    then                                    \ notably does NOT search the CWD
+    (nb-path-u) !  (nb-path-a) !
+    true (nb-more) !
+    begin (nb-next) while                   ( seg-a seg-u )
+        dup if  (nb-dir?)  else  2drop (nb-cwd?)  then
+        if  true exit  then
+    repeat  2drop  false ;
+
+\ --- will the library load? ---
+\ The probe keeps its handle, and FFI's DLOPEN asks for it, so a library that
+\ declares itself is opened once rather than twice. Only the most recent probe
+\ is remembered: a dep block's NEEDS-LIB is a line or two above the DLOPEN it
+\ is vouching for, and a stale hit would be worse than no cache at all.
+create (nl-buf) 256 allot                   \ NUL-terminated name for (dlopen)
+variable (nl-a)  variable (nl-u)  variable (nl-h)
+
+: (nl-z) ( c-addr u -- z-addr )             \ copy and NUL-terminate
+    dup 255 > if  2drop  (nl-buf) 0 over c!  0 (nl-u) !  exit  then
+    dup >r  (nl-buf) swap cmove  0 (nl-buf) r> + c!  (nl-buf) ;
+
+\ Remember OUR copy of the name, never the caller's address. The name a dep
+\ block passes points into the source file's mapping, and INCLUDED unmaps that
+\ when the load ends -- so a cache holding it would hand a later DLOPEN a
+\ pointer into freed memory to compare against.
+: (lib-there?) ( c-addr u -- handle )       \ 0 if the library will not load
+    dup (nl-u) !                            \ length first: (nl-z) consumes it
+    (nl-z) dup (nl-a) !
+    (dlopen) dup (nl-h) ! ;
+
+: (lib-probed) ( c-addr u -- handle )       \ what NEEDS-LIB opened, or 0
+    (nl-h) @ 0= if  2drop 0 exit  then
+    (nl-a) @ (nl-u) @ compare 0= if  (nl-h) @  else  0  then ;
+
+\ --- saying what is missing ---
+: (nh-where) ( -- )                         \ name the file, if one is loading
+    (cur-src) dup 0= if  drop exit  then
+    (source-path) dup 0= if  2drop exit  then
+    (inc-basename) type ." : " ;
+
+: (needs-say) ( name-a name-u kind-a kind-u -- )
+    (nh-where)  ." needs the " type  space type  (nh.)  cr  -2 throw ;
+
+: needs-cmd ( "name" ccc -- )
+    parse-word dup 0= if
+        2drop (nh-rest) ." usage: needs-cmd <command> [hint]" cr exit  then
+    (nh-rest)                               \ consume the hint whether or not we fail
+    2dup (on-path?) if  2drop exit  then
+    s" command" (needs-say) ;
+
+: needs-lib ( "soname" ccc -- )
+    parse-word dup 0= if
+        2drop (nh-rest) ." usage: needs-lib <soname> [hint]" cr exit  then
+    (nh-rest)
+    2dup (lib-there?) if  2drop exit  then
+    s" library" (needs-say) ;
+
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST
                                             \ here, so they forget the whole module (keep last!)
