@@ -1188,6 +1188,36 @@ else
         printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
     fi
 
+    # The DEGRADED path, on a machine that HAS SDL3: hide the library with
+    # bwrap and check the dep block does its job. This is the run a new user
+    # gets, and it is the one no suite could see before — the qemu sysroot has
+    # no libSDL3 either, but there the SDL tests are skipped wholesale, so
+    # "missing library" was never actually asserted anywhere.
+    # Mask the library FILES, never their directory. A from-source SDL3 lands
+    # in /usr/local/lib here, but a packaged one lives in /usr/lib/<triplet>
+    # beside libc and ld.so — a --tmpfs over that directory stops the binary
+    # from exec'ing at all, which tests nothing and reads like a real failure.
+    # Paths come from ldconfig, never assumed; every libSDL3 entry is covered
+    # because dlopen resolves the soname through that same cache.
+    sdl_libs=()
+    while read -r p; do sdl_libs+=(--ro-bind /dev/null "$p"); done < <(
+        ldconfig -p 2>/dev/null | awk '/libSDL3\.so/ {print $NF}' | sort -u)
+    if ! command -v bwrap >/dev/null 2>&1; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (no bwrap to hide it with)\n"
+    elif [ ${#sdl_libs[@]} -eq 0 ]; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (cannot locate libSDL3 to hide)\n"
+    else
+        sdl_miss=$(printf 'require sdl3.fs\n2 3 + . cr\nparse-name sdl-open find if drop ." STILL-DEFINED" else 2drop then\nbye\n' \
+            | timeout 10 bwrap --dev-bind / / "${sdl_libs[@]}" \
+                --setenv BASICFORTH_PATH "$FORTH_LIB" $FORTH 2>&1 | sed '/^> /d; /^>$/d')
+        if [[ "$sdl_miss" == *"sdl3.fs: needs the library libSDL3.so.0 -- see help install"* \
+           && "$sdl_miss" == *"5"* && "$sdl_miss" != *STILL-DEFINED* ]]; then
+            printf "  ${GREEN}PASS${NC}  a missing libSDL3 names the file and the fix, and the session survives\n"; ((passed++))
+        else
+            printf "  ${RED}FAIL${NC}  missing-libSDL3 dep block\n    Got: %q\n" "$sdl_miss"; ((failed++))
+        fi
+    fi
+
     # sdl-scale: the window is scaled but the drawing surface stays logical
     sdl_sc=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 4 to sdl-scale 48 20 sdl-open sdl-frame gr-width @ u. gr-height @ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
@@ -5635,6 +5665,104 @@ if [ -n "$audit_words" ] && [ -z "$audit_missing" ]; then
 else
     printf "  ${RED}FAIL${NC}  every word has a Language-Reference entry\n"
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
+fi
+
+# A needs-cmd/needs-lib hint that says "see help <x>" is a promise the help
+# system has to keep. `help install` was such a promise and did NOT resolve:
+# Install.md lived in docs/, which is design documentation and deliberately
+# not on BASICFORTH_DOCS. Nothing caught it, because prose asserting a
+# capability is not checked by anything -- so check it here. Every `help <x>`
+# named by a dep block in src/forth must answer.
+hint_bad=""
+hint_seen=""
+# DERIVED from setup.sh, never restated here. Checking against a wider path
+# would pass on pages the user cannot reach; checking against a copy of the
+# path would keep passing after setup.sh changed, which is the same bug one
+# level up. Sourced in a subshell so its exports do not leak into the suite,
+# which stays environment-independent.
+hint_docs=$(cd "$REPO_ROOT" && . ./setup.sh >/dev/null 2>&1 && printf '%s' "$BASICFORTH_DOCS")
+while read -r topic; do
+    hint_seen="$hint_seen $topic"
+    hint_out=$(printf 'help %s\nbye\n' "$topic" \
+        | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 5 $FORTH 2>&1)
+    printf '%s' "$hint_out" | grep -q "no help for" && hint_bad="$hint_bad $topic"
+done < <(grep -hoE '^(needs-cmd|needs-lib)[^\\]*help [a-zA-Z0-9_-]+' "$FORTH_LIB"/*.fs \
+         | grep -oE 'help [a-zA-Z0-9_-]+$' | awk '{print $2}' | sort -u)
+# A Guides page is narrative, so its "## " headings ARE its help sub-topics --
+# and the indexer takes EVERY word of a heading as a topic name. "## Get the
+# source" therefore published `help Get` and `help source`, the second of which
+# collides with a real word. So a Guides heading must be a single token, and it
+# must answer with its own page rather than something that shadows it.
+# (Language-Reference is exempt: there a heading legitimately names several
+# words before its stack effect.)
+guide_bad=""
+guide_n=0
+# What the other sections already answer. Checked against the FILES, not by
+# asking help: on a collision help does not lose, it APPENDS -- `help allot`
+# would print Memory's real entry AND a slab of the install guide, so a test
+# that only asked "did my page come back" sees nothing wrong.
+#
+# The two lookups fold differently, and the gate has to match each or it
+# rejects headings that are actually fine. Measured against the binary:
+#   page name   `-` and `_` are equivalent   defining_words -> Defining-Words.md
+#   word entry  they are NOT                 next_ch -> no help, only next-ch
+#   neither     separators are never dropped definingwords -> no help
+guide_page_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_' '-'; }
+guide_word_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md \
+               "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null \
+            | xargs -n1 basename | sed 's/\.md$//' | tr 'A-Z' 'a-z' | tr '_' '-' | sort -u)
+# Tutorial "## " headings are lesson steps, not word entries, and the indexer
+# skips them -- so they are not names anything answers.
+# This mirrors (head-word?) in core.fs, token for token, because every
+# approximation of it has been wrong in a different way:
+#   - cutting at the first "(" loses PARENTHESIZED words -- "## (dlopen) ( ... )"
+#     yields nothing, though `help (dlopen)` answers FFI:
+#   - cutting at the first " (" is still wrong where the effect does not open
+#     with a bare paren: "## Number prefixes ($ hex, % binary, # decimal)"
+#     really does publish `%`, `hex,` and `decimal)` as topics
+# The rule: split on whitespace and stop at a token that is EXACTLY "(" --
+# except as the first token, where "(" is the word itself.
+ref_words=$(grep -h "^## " "$REPO_ROOT"/docs/Language-Reference/*.md | sed 's/^## //' \
+            | awk '{ for (i = 1; i <= NF; i++) {
+                         if ($i == "(") { if (i == 1) print $i; break }
+                         print $i } }' \
+            | tr 'A-Z' 'a-z' | grep -v '^$' | sort -u)
+while read -r file; do
+    page=$(basename "$file" .md)
+    while read -r head; do
+        guide_n=$((guide_n + 1))
+        if [ "$(printf '%s' "$head" | wc -w)" -ne 1 ]; then
+            guide_bad="$guide_bad ${page}:'${head}'(multi-word)"
+            continue
+        fi
+        got=$(printf 'help %s\nbye\n' "$head" \
+            | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 5 $FORTH 2>&1)
+        printf '%s' "$got" | grep -q "^${page}:" || guide_bad="$guide_bad ${page}:${head}(unreachable)"
+        printf '%s\n' "$ref_pages" | grep -qxF "$(guide_page_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a page name)"
+        printf '%s\n' "$ref_words" | grep -qxF "$(guide_word_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a reference word entry)"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_n" -gt 0 ] && [ -z "$guide_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every Guides heading is a reachable one-word help topic (%d)\n" "$guide_n"; ((passed++))
+elif [ "$guide_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides headings (no pages found)\n"
+else
+    printf "  ${RED}FAIL${NC}  a Guides heading is not a usable help topic\n"
+    printf "    Bad:%s\n" "$guide_bad"; ((failed++))
+fi
+
+if [ -z "$hint_docs" ]; then
+    printf "  ${RED}FAIL${NC}  dep-block help hints: could not read BASICFORTH_DOCS from setup.sh\n"; ((failed++))
+elif [ -n "$hint_seen" ] && [ -z "$hint_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every 'see help <x>' in a dep block resolves (%s)\n" "${hint_seen# }"; ((passed++))
+elif [ -z "$hint_seen" ]; then
+    printf "  ${YELLOW}SKIP${NC}  dep-block help hints (no dep block names one)\n"
+else
+    printf "  ${RED}FAIL${NC}  a dep block promises help that does not resolve\n"
+    printf "    Unresolved:%s\n" "$hint_bad"; ((failed++))
 fi
 
 # The same audit for the LIBRARY words, which the core sweep above cannot see:

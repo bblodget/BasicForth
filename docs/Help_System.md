@@ -51,6 +51,21 @@ The browser does no Markdown parsing; it leans on the layout every
 
 Keep new pages to this shape and they are automatically browsable.
 
+### Guides pages
+
+`docs/Guides` holds the user-facing pages that are neither word references nor
+lessons — installing, and whatever joins it. They follow the same shape for the
+same reason: the preamble is what `help install` prints, so it has to work as a
+summary, and it lists the sub-topics the way a reference page lists its words.
+
+The difference is the headings. A reference entry names words and then opens a
+stack effect, and the token scan stops at the `(`. A Guide has no stack effect
+to stop at, so **every word of the heading becomes a topic name**. `## Get the
+source` published `help Get` and `help source` — the second colliding with a
+real word — which is why a Guide's headings are single tokens: `## clone`,
+`## build`, `## libraries`. Pick one that no reference page already answers
+(`next` belongs to Tools). The integration suite checks both properties.
+
 ## Sections
 
 Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
@@ -62,7 +77,7 @@ listing it, so lessons don't crowd the reference topics.
 A typical setup:
 
 ```
-$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
 ```
 
 ## Configuration
@@ -86,6 +101,8 @@ Language-Reference
   Arithmetic           Comparison           Compiler
   Conditionals         Defining-Words       FFI
   ...
+Guides
+  Install
 Tutorial:  type  tutorials  to list the interactive tutorials.
 
 help <topic>  - that topic's summary       (help stack)

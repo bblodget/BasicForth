@@ -149,7 +149,7 @@ a file it was never able to replace.
 `speech.fs` puts `say` at the prompt, synthesizing into memory through the FFI
 and playing on a `sound.fs` channel — no file, no shell, and `talking?`
 answered by the channel itself. On Debian and Ubuntu the engine and its voices
-are one package, `libflite1` ([Install.md](Install.md)). flite suits the job:
+are one package, `libflite1` ([Install.md](Guides/Install.md)). flite suits the job:
 `flite_text_to_wave` takes two arguments and hands back a `cst_wave`
 (`sample_rate@8`, `num_samples@12`, `num_channels@16`, `samples*@24`, verified
 by calling it), which fits the FFI as it stands and needs no callback. The

@@ -4,7 +4,26 @@ From `git clone` to a working prompt. Everything on this page was run on
 Pop!_OS 22.04 (an Ubuntu 22.04 base); other distributions differ in package
 names, not in shape.
 
-## The short version
+Building needs `binutils`, `gcc` and `make`. Running needs libc. Everything
+else — graphics, sound, speech — is `dlopen`ed on demand, so a missing library
+costs exactly one feature and never the build.
+
+At a glance — each of these is `help <topic>`:
+
+    quickstart      four commands, if you just want it running
+    requirements    what is genuinely needed, to build and to run
+    clone           getting the source
+    build           x86-64, ARM64 cross-compile, or both
+    verify          the four test suites
+    path            setup.sh, and what it exports
+    first-run       your first prompt
+    libraries       SDL3, flite, piper — the optional half
+    layout          where things live in the tree
+
+For one library's own page rather than its install: `help sdl3`, `help sound`,
+`help speech`, `help voice`.
+
+## quickstart
 
     sudo apt install git binutils gcc make      # git fetches, the rest builds
     git clone https://github.com/bblodget/BasicForth.git
@@ -14,10 +33,10 @@ names, not in shape.
     basicforth
 
 That is a complete installation. Graphics, sound and speech need libraries,
-but nothing on this page below "Optional libraries" is needed to build
+but nothing under `help libraries` is needed to build
 BasicForth or to run it.
 
-## What BasicForth actually requires
+## requirements
 
 **To build: an assembler, a linker, and `make`.** The source is assembly, so
 there is no compiler in the usual sense — `as` assembles it and `gcc` links
@@ -42,19 +61,23 @@ the build, cannot stop the binary starting, and cannot affect any feature but
 its own:
 
     > require sdl3.fs
-    dlopen: cannot load library
+    sdl3.fs: needs the library libSDL3.so.0 -- see help install
     > 2 3 + .
     5  ok
 
 The session carries on. What it does *not* do is define the words that file
 would have defined — loading stops where the library was needed, so a later
 `snd-open` reports `? snd-open`. If a word you expected is missing, look back
-for the `dlopen` line rather than at the word.
+for that line rather than at the word.
+
+A library states its requirement at the top of its file with `needs-lib`,
+which is why the message names both the file that wanted it and what to do
+about it (`help needs-lib`).
 
 This is why the install is in two halves: get BasicForth running first, add
 capabilities when you want them.
 
-## Get the source
+## clone
 
     sudo apt install git
     git clone https://github.com/bblodget/BasicForth.git
@@ -64,7 +87,7 @@ capabilities when you want them.
 release tarball from GitHub works as well. It is worth having anyway: the
 SDL3 install below clones too.
 
-## Build
+## build
 
 ### x86-64 (native)
 
@@ -92,9 +115,9 @@ SDL3 install below clones too.
 Makefile reads `uname -m` and dispatches. `make all` builds both.
 
 The binary lands in `src/arch/x86/basicforth` or `src/arch/arm64/basicforth`.
-There is no `make install` — see "Putting basicforth on PATH" below.
+There is no `make install` — see `help path`.
 
-## Check the build
+## verify
 
     make run-test           # unit tests (C harness, native arch)
     make run-integration    # integration suite — expect 0 failures
@@ -109,7 +132,7 @@ The suites set their own environment, so they pass in a bare shell without
 library you have not installed report `SKIP` with a reason rather than
 failing.
 
-## Putting basicforth on PATH
+## path
 
     . ./setup.sh
 
@@ -127,9 +150,9 @@ any worktree with no editing, and it sets:
   (`src/forth`, then `examples`)
 - `BASICFORTH_DOCS` — where `help`, `apropos` and `tutorial` find their pages
 - `VOICE_ENGINE_CMD` — a piper command line, if piper is on your `PATH`
-  (see "Speech engines" below); cleared if it is not
+  (see "Speech engines" under `help libraries`); cleared if it is not
 - `XMODIFIERS=@im=none` — skips the X input-method handshake, which can hang
-  `SDL_Init` on a desktop with a wedged ibus (see [Graphics.md](Graphics.md))
+  `SDL_Init` on a desktop with a wedged ibus (see [Graphics.md](../Graphics.md))
 
 For a permanent setup, source it from your shell profile, using the path to
 your own checkout:
@@ -141,7 +164,7 @@ not find anything, so pass the paths yourself:
 
     BASICFORTH_PATH=src/forth src/arch/x86/basicforth
 
-## First run
+## first-run
 
     $ basicforth
     *** BasicForth v0.15.1 (Linux/x86-64) ***
@@ -161,7 +184,7 @@ If `help` or `tutorial` answers `(BASICFORTH_DOCS not set)`, `setup.sh` has
 not been sourced in this shell — that is what points `BASICFORTH_DOCS` at the
 pages.
 
-## Optional libraries
+## libraries
 
 Each of these adds one capability. Skipping one costs exactly that
 capability.
@@ -170,7 +193,7 @@ capability.
 |---|---|---|
 | **SDL3** | from source, see below | windows, graphics, all audio, gamepads |
 | **flite** | `sudo apt install libflite1` | `say` — speaking immediately |
-| **TTS engine** (piper) | see [Speech.md](Speech.md) | `voice-render` — text to WAV |
+| **TTS engine** (piper) | see [Speech.md](../Speech.md) | `voice-render` — text to WAV |
 
 `objdump`, which the `dis` disassembler shells out to, comes with `binutils`
 and is therefore already present from the build step.
@@ -250,26 +273,27 @@ Speech plays through a sound channel, so it needs SDL3 as well.
 `voice.fs` renders text to a WAV file by running an external text-to-speech
 program, which it takes as a command template — so it is tied to no
 particular engine. Piper is a good default (neural, offline, permissively
-licensed); [Speech.md](Speech.md) has the install, and `setup.sh` picks piper
+licensed); [Speech.md](../Speech.md) has the install, and `setup.sh` picks piper
 up automatically if it is on your `PATH`.
 
 This is the path a game wants: render the phrases once, ship the WAVs, and
 play them with `wav.fs` at run time. It needs neither SDL3 nor flite to
 render — only to play the result back.
 
-## Where things are
+## layout
 
     src/arch/x86/       the x86-64 binary and its build
     src/arch/arm64/     the ARM64 binary and its build
     src/forth/          core.fs and the libraries `require` loads
     examples/           runnable programs
     docs/               design documentation
+    docs/Guides/        task pages (this one) that `help` reads
     docs/Tutorial/      the lessons `tutorial` reads
     docs/Language-Reference/   the pages `help` reads
 
-## Next steps
+## next-steps
 
-- `tutorial` at the prompt, and the [Manual](BasicForth_Manual.md)
-- [Graphics.md](Graphics.md) for the surface model, [Sound.md](Sound.md) for
-  audio, [Speech.md](Speech.md) for both halves of speech
-- [Planning.md](Planning.md) for the project's direction
+- `tutorial` at the prompt, and the [Manual](../BasicForth_Manual.md)
+- [Graphics.md](../Graphics.md) for the surface model, [Sound.md](../Sound.md) for
+  audio, [Speech.md](../Speech.md) for both halves of speech
+- [Planning.md](../Planning.md) for the project's direction
