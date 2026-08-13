@@ -19,8 +19,13 @@
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
 
+\ --- dep block: what this file needs before any of it exists ---
+\ SDL3 is not packaged on Debian/Ubuntu yet, so "install libsdl3" is not the
+\ advice — hence the pointer to the page that has the cmake recipe. The probe
+\ keeps its handle for (sdl-bind) below, so declaring it costs no extra dlopen.
 require ffi.fs
 require graphics.fs
+needs-lib libSDL3.so.0    see help install
 
 \ --- library ---
 \ The strings live in one binding word that runs at include time (bottom of

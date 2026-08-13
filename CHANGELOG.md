@@ -55,6 +55,53 @@
   `note: local i shadows an existing word`. A note, not an error: shadowing is
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
+
+### Changed: sdl3.fs and sound.fs declare the library they need
+
+- Both now open with a dep block, so a machine without SDL3 is told which file
+  wanted the library and what to do about it, instead of being told only that
+  something could not be loaded:
+
+      require sdl3.fs
+      sdl3.fs: needs the library libSDL3.so.0 -- see help install
+
+  The pointer earns its place here: SDL3 is not packaged on Debian or Ubuntu
+  yet, so "install libsdl3" is not advice anyone can act on, and `help install`
+  has the cmake recipe.
+- The failure point is unchanged — `dlopen` already aborted the load — and the
+  probe hands its handle to the bind that follows, so declaring the
+  requirement costs no second `dlopen`.
+- **Deliberately not adopted** by `speech.fs`, `voice.fs` and `disasm.fs`.
+  Those three do not abort today: they return an `ior`, or probe at first use
+  and retry, so a game runs without flite and installing binutils mid-session
+  works. `needs-lib` stops the load, which would turn `require speech.fs` into
+  a hard failure on any machine without flite and break a published stack
+  effect. `disasm.fs` now *words* its message like `needs-cmd` — same
+  sentence, same shape — while still firing at first use, not at load.
+- `docs/Guides/` is a third help section, and `Install.md` moved into it. The
+  hint says `see help install`, and that has to be true at the prompt where
+  the error appears — but `docs/` itself is design and implementation notes,
+  which `help` should never offer, so the page had nowhere reachable to live.
+  `setup.sh` exports the new section; `help install` answers; `help` lists
+  Guides beside Language-Reference and Tutorial. Guides is for user-facing
+  pages that are neither word references nor lessons, and installing is only
+  the first.
+- A dep block that promises `help <x>` is now **checked**: the suite extracts
+  every such hint from `src/forth/*.fs` and asks the help system, against the
+  docs path *read from* `setup.sh` rather than a copy of it — a copy would keep
+  passing after `setup.sh` changed, which is the same bug one level up.
+  `help install` had been a broken promise from the moment it was written, and
+  prose asserting a capability is not checked by anything unless you check it.
+- Guides headings are checked too: each must be one token, and one that no
+  reference page already answers. `help` does not *lose* a collision, it
+  appends — a `## allot` in a guide would leave `help allot` printing Memory's
+  entry with a slab of the install guide after it.
+- The degraded path is now tested where it is actually used. It ran only under
+  QEMU before, where the SDL tests are skipped wholesale, so "library missing"
+  was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
+  machine that has it, and checks the message, the surviving session, and the
+  absent words.
+
 ### Fixed: `make` now refreshes the build directory's copy of `core.fs`
 
 - The binary reads `core.fs` at startup from beside itself, and that copy was

@@ -12,7 +12,7 @@ system like the Pumpkin board. Frames are paced by a timer (`sdl-fps`), not
 by vsync — see "Frame pacing" below. See the **Graphics
 Direction** design decision in [Planning.md](Planning.md) for how this fits
 the project philosophy and the path to GPU/3D via SDL_GPU. SDL3 is loaded on
-demand and is not needed to build BasicForth — [Install.md](Install.md) has
+demand and is not needed to build BasicForth — [Install.md](Guides/Install.md) has
 the install, including building it from source on distributions that do not
 package it yet.
 

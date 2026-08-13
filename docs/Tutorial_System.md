@@ -124,7 +124,7 @@ exist, BasicForth says so rather than failing silently.
   a common layout is a `Tutorial` section alongside `Language-Reference`:
 
   ```
-  $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+  $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
   ```
 
 ## How It Works

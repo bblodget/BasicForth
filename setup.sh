@@ -58,8 +58,12 @@ unset _bf_arch
 # Library search for INCLUDE / REQUIRE: core.fs and friends, then the examples
 export BASICFORTH_PATH="$BASICFORTH_HOME/src/forth:$BASICFORTH_HOME/examples"
 
-# Topics for help / tutorials / apropos
-export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial"
+# Topics for help / tutorials / apropos. Three sections, and only three: the
+# rest of docs/ is design and implementation notes, which `help` should never
+# offer. Guides holds the user-facing pages that are neither word references
+# nor lessons (installing, and whatever joins it) — a library's `needs-lib`
+# hint can then say "see help install" and be telling the truth.
+export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial:$BASICFORTH_HOME/docs/Guides"
 
 # Skip the X input method (XIM) handshake: a wedged ibus-x11 silently freezes
 # SDL_Init (see docs/Graphics.md "Troubleshooting"). Costs nothing for
