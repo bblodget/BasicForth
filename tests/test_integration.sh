@@ -19,6 +19,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 
+# core.fs runs the editor as ${VISUAL:-${EDITOR:-vi}}, so VISUAL OUTRANKS the
+# EDITOR each edit/define test sets for itself. Inherited from the developer's
+# environment it wins every time, the real editor opens, waits for a human, and
+# 18 tests fail with output no one would connect to their shell profile.
+# Clearing it is enough: ${VISUAL:-...} treats empty as unset.
+unset VISUAL
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
@@ -43,6 +50,51 @@ SLOW_THRESHOLD_MS=100
 run_forth() {
     printf '%s\n' "$1" | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1
 }
+
+# Smoke check: does the binary run at all?
+#
+# Every assertion below compares captured output against an expectation, so a
+# binary that dies on startup produces ~1000 failures that all read
+# "Expected: 7  ok / Got:" and never say why. That is a genuinely bad first
+# experience -- it looks exactly like core.fs not being found, which sends you
+# off to check BASICFORTH_PATH and setup.sh. It cost real time when the ARM64
+# I-cache bug made basicforth die with SIGILL before printing a byte.
+#
+# One trivial run first, and a specific message for each way it can fail.
+smoke_out=$(printf 'bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+smoke_status=$?
+if [ $smoke_status -ne 0 ] || [ -z "$smoke_out" ]; then
+    printf "${RED}FATAL${NC}  %s does not run; the suite would report every test as a\n" "$FORTH"
+    printf "       failure without saying why, so it is not being run.\n\n"
+    if [ $smoke_status -gt 128 ]; then
+        sig=$((smoke_status - 128))
+        printf "       Killed by signal %d (%s).\n" "$sig" "$(kill -l $sig 2>/dev/null || echo unknown)"
+        printf "       A binary that dies before printing anything is usually built\n"
+        printf "       for another architecture, or hitting an instruction this CPU\n"
+        printf "       does not implement.\n"
+    elif [ $smoke_status -eq 124 ]; then
+        printf "       Timed out after 10s without exiting on 'bye'.\n"
+    elif [ -z "$smoke_out" ]; then
+        printf "       Exited %d and printed nothing.\n" "$smoke_status"
+    else
+        printf "       Exited %d. Output was:\n" "$smoke_status"
+        printf '%s\n' "$smoke_out" | sed 's/^/         /'
+    fi
+    exit 1
+fi
+
+# The binary starts, but without core.fs only the built-in primitives exist, so
+# most assertions will fail. That is a library-path problem, not a broken
+# binary -- and the two look identical once you are staring at a wall of
+# failures. Say which one it is up front. Not fatal: `3 4 + .` genuinely works
+# in this state, so the run is still informative.
+case "$smoke_out" in
+    *"core.fs not found"*)
+        printf "${YELLOW}WARNING${NC}  the binary reports \"core.fs not found\", so only built-in\n"
+        printf "         primitives are available and most tests below will fail.\n"
+        printf "         This is a library path problem, not a broken binary.\n"
+        printf "         BASICFORTH_PATH is set to %s\n\n" "$FORTH_LIB" ;;
+esac
 
 # elapsed_ms: compute milliseconds between two %s.%N timestamps
 elapsed_ms() {

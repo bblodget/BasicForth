@@ -88,6 +88,28 @@
   on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
   return stack is the process stack handed over by the kernel.
 
+### Fixed: ARM64 could not run at all on a Cortex-A72
+
+- `platform_flush_icache` stepped from the caller's start address by the cache
+  line size. `DC CVAU` and `IC IVAU` act on the whole line containing an
+  address, so from an unaligned start the loop walked past the **final** line
+  whenever the range's last byte fell beyond the last address visited — leaving
+  it neither cleaned to the point of unification nor invalidated. Both loops
+  now align the start down, each against its own cache's line size.
+- Callers pass a code start that is only 4-byte aligned, so this was the common
+  case, and the line it missed was the tail of a word about to be called. On a
+  Raspberry Pi 400 `basicforth` died with `SIGILL` while loading `core.fs`,
+  before printing anything: `dict_space` is BSS, and the all-zero word is a
+  permanently undefined encoding on AArch64.
+- **Nothing could have caught this in emulation.** qemu does not model an
+  incoherent instruction cache, x86-64 keeps its caches coherent in hardware
+  and needs no maintenance at all, and the C unit tests write one small
+  function into a cold region and call it once — the pattern that happens to be
+  safe. It is microarchitecture dependent, which is why an earlier ARM board
+  ran the interpreter fine.
+- All four suites now pass on the hardware: 123 unit, 1022 integration, 36 pty,
+  23 lessons (8 skipped for libSDL3).
+
 ### Fixed: a control-flow closer with nothing open blamed the data stack
 
 - `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
