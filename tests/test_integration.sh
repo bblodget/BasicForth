@@ -19,6 +19,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 
+# core.fs runs the editor as ${VISUAL:-${EDITOR:-vi}}, so VISUAL OUTRANKS the
+# EDITOR each edit/define test sets for itself. Inherited from the developer's
+# environment it wins every time, the real editor opens, waits for a human, and
+# 18 tests fail with output no one would connect to their shell profile.
+# Clearing it is enough: ${VISUAL:-...} treats empty as unset.
+unset VISUAL
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
