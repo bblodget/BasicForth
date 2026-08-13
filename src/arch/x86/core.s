@@ -1639,10 +1639,10 @@ msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
+msg_is_local: .ascii "is: that name is a local, not a deferred word: "
+.equ msg_is_local_len, . - msg_is_local
 msg_does_locals: .ascii "does> cannot see the defining word's locals: "
 .equ msg_does_locals_len, . - msg_does_locals
-msg_loc_placement: .ascii "locals must be declared before any if/begin/do: "
-.equ msg_loc_placement_len, . - msg_loc_placement
 msg_cf_mismatch: .ascii "mismatched control flow: "
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 msg_redefined: .ascii "redefined "
@@ -2090,7 +2090,7 @@ build_header:
     # Gated OFF inside included (cur_source_id != 0): core.fs redefines
     # words on purpose at startup, module reloads replay whole files, and
     # skipping the gate first means file loads never pay for the scan.
-    cmpq $0, cur_source_id(%rip)
+    cmpq $0, in_load(%rip)
     jne .Lbh_build
     cmpq $0, redef_quiet(%rip)      # :e armed a one-shot skip?
     je .Lbh_dowarn
@@ -2721,6 +2721,14 @@ forth_included:
     push %rbp
     push %r14
     push %r8                        # for line_start scratch
+    pushq in_load(%rip)             # "a file is loading" -- saved/restored like
+    pushq $0                        #   the source context, so nesting works.
+                                    #   PAIRED with a pad: the line loop below
+                                    #   counts its own alignment from here ("3
+                                    #   pushes + an 8-byte pad"), so an odd
+                                    #   number of entry pushes silently flips
+                                    #   what that padding achieves.
+    movq $1, in_load(%rip)
     pushq cur_source_id(%rip)       # save source context (restored in .Lincl_pop_regs)
     pushq cur_line_off(%rip)        #   so nested includes don't clobber the parent's
     pushq incl_entry_latest(%rip)   # and what was open before this load began,
@@ -2932,6 +2940,8 @@ forth_included:
     popq incl_entry_latest(%rip)
     popq cur_line_off(%rip)         # restore source context saved at entry
     popq cur_source_id(%rip)
+    add $8, %rsp                    # the pad pushed with in_load at entry
+    popq in_load(%rip)
     pop %r8
     pop %r14
     pop %rbp
@@ -3590,6 +3600,38 @@ forth_to:
 .Ltois_body:
     push %rbx
     call forth_parse_word           # ( -- c-addr u )
+
+    # A local in scope beats a VALUE of the same name, exactly as it does when
+    # read -- `to x` must not store into a global x that the local is shadowing.
+    # `is` is excluded: it targets deferred words, and a local is not one.
+    cmpq $0, state(%rip)
+    je .Lto_not_local
+    cmpq $0, locals_count(%rip)
+    je .Lto_not_local
+    call locals_lookup              # RAX = index, or -1; args left on the stack
+    cmp $-1, %rax
+    je .Lto_not_local
+    # It IS a local. `is` targets deferred words and a local is not one -- but
+    # falling through would find the SHADOWED global and write that instead,
+    # silently, which is the same shape of bug as does> reading a dead frame.
+    cmpq $0, tois_mode(%rip)
+    jne .Lto_is_local
+    add $2*CELL, %r15               # drop the name
+    call compile_local_store
+    pop %rbx
+    ret
+.Lto_is_local:
+    mov (%r15), %rax
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15
+    lea msg_is_local(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_is_local_len, err_pfx_len(%rip)
+    jmp .Lcf_abort
+.Lto_not_local:
+
     # Stash the name for the type-error message (find consumes it)
     mov CELL(%r15), %rax
     mov %rax, tois_name(%rip)
@@ -5082,6 +5124,37 @@ compile_local_fetch:
     pop %rbx
     ret
 
+# compile_local_store — emit an OPEN-CODED write to local RAX.
+#
+# 23 bytes, the mirror of compile_local_fetch, and open-coded for the same
+# reason: `to x` inside a loop is as hot as reading x. Same template trick for
+# the one instruction carrying a TLS relocation.
+compile_local_store:
+    CHECK_DICT 23
+    push %rbx
+    mov %rax, %rbx                  # RBX = index (survives the copy)
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x49, 0(%r13)             # mov (%r15), %rdx      -- the value
+    movb $0x8B, 1(%r13)
+    movb $0x17, 2(%r13)
+    movb $0x49, 3(%r13)             # add $8, %r15          -- consume it
+    movb $0x83, 4(%r13)
+    movb $0xC7, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x48, 7(%r13)             # mov %rdx, disp32(%rax)
+    movb $0x89, 8(%r13)
+    movb $0x90, 9(%r13)
+    shl $3, %rbx                    # index * CELL
+    mov %ebx, 10(%r13)
+    add $14, %r13
+    pop %rbx
+    ret
+
 # compile_local_release — emit `n (lunframe)` if this definition has locals.
 # Unlike a reference, this runs ONCE per exit, so an ordinary call costs
 # nothing worth open-coding for. Emits nothing at all when no locals were
@@ -5147,6 +5220,25 @@ forth_cf_open:
 .Lcfo_done:
     sub $CELL, %r15
     mov %rdx, (%r15)
+    ret
+
+# (loading?) ( -- flag )  Is a file being loaded right now?
+#
+# in_load, a flag the loader sets. Three plausible alternatives are all wrong:
+# source-id answers 0 inside an included file as well as at the prompt (see
+# docs/TODO.md); (ldg-n) is pushed by the FORTH `included` wrapper only, so a
+# script named on the command line bypasses it; and cur_source_id is SEE
+# metadata from a 64-entry table, so src_register answers 0 once it is full and
+# the 65th file would load with the flag clear. `redefined` gates on the same
+# flag -- one notion of "loading", not three approximations.
+.global forth_loading
+forth_loading:
+    sub $CELL, %r15
+    movq $0, (%r15)
+    cmpq $0, in_load(%rip)
+    je .Lloading_done
+    movq $-1, (%r15)
+.Lloading_done:
     ret
 
 # (loc-count) ( -- n )  How many locals the current definition declared.
@@ -5434,6 +5526,8 @@ forth_throw:
     call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
     movq $0, locals_count(%rip)     # ...and the names it declared
+    movq $0, in_load(%rip)          # ...and the loader's frame went with it, so
+                                    #   its saved flag will never be restored
     movq $0, %fs:handler@tpoff          # no live frames on a reset stack
     jmp repl_loop
 
@@ -5455,6 +5549,7 @@ forth_abort:
 # Safe because only `:`/`:noname` set F_HIDDEN and only `;` clears it, so
 # hidden ⇒ incomplete. Call this ONLY on abort paths: during a live `[ ... ]`
 # inside a definition, STATE is 0 and the header is legitimately still hidden.
+.global drop_partial_header
 drop_partial_header:
     testb $F_HIDDEN, 8(%r12)
     jz .Ldph_done
@@ -5472,6 +5567,7 @@ forth_quit:
     call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
     movq $0, locals_count(%rip)     # ...and the names it declared
+    movq $0, in_load(%rip)          # ...and any abandoned loader frame
     movq $0, %fs:handler@tpoff          # frames died with the return stack
     jmp repl_loop
 
@@ -6234,7 +6330,8 @@ DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
 DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
-DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_lstack_size
+DEFWORD dict_loading,     "(loading?)",   forth_loading,     dict_lstack_size
+DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_loading
 DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_cf_open
 DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
 DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
@@ -6491,6 +6588,13 @@ err_pfx_len:
 .global il_rsp
 il_rsp:                             # RSP at interpret_line entry (for cf longjmp)
     .quad 0
+.global in_load
+in_load:                            # 1 while forth_included is running a file.
+    .space 8                        #   NOT cur_source_id: that is SEE metadata
+                                    #   from a 64-entry table, and src_register
+                                    #   answers 0 once the table is full -- so a
+                                    #   65th file would load with the flag clear
+                                    #   and every load-time warning would fire.
 err_name_buf:                       # A name copied out of a header that is
     .space 32                       #   about to be reclaimed (F_LENMASK = 31)
 .global err_token_addr

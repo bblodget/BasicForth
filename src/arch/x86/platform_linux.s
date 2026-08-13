@@ -616,6 +616,7 @@ sigsegv_handler:
     # have partially modified R12/R13 before STATE was set to compiling.
     movq $0, state(%rip)
     movq $0, locals_count(%rip)         # the names die with the definition
+    movq $0, in_load(%rip)              # and any abandoned loader frame
     mov saved_latest(%rip), %rax
     mov %rax, GREGS_R12(%rbx)           # R12 = saved LATEST
     mov saved_here(%rip), %rax

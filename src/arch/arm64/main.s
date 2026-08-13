@@ -583,18 +583,42 @@ dict_full:
     LDR X10, [X9]
     TLS_ADDR X9, lp
     STR X10, [X9]
+    // UNCONDITIONAL, above the STATE test below: we are going to repl_loop
+    // either way, and neither of these is tied to being mid-definition.
+    // in_load is not about compiling at all, and `[` makes STATE 0 *inside* an
+    // open definition, so gating either on STATE skips exactly the cases that
+    // need them.
     ADR X9, locals_count
     STR XZR, [X9]                   // the names die with the definition
+    ADR X9, in_load
+    STR XZR, [X9]                   // and any abandoned loader frame
 
-    // If we were compiling, abort the definition
+    // Roll back an open definition. STATE alone cannot decide -- `[` interprets
+    // INSIDE an open definition -- so also check LATEST's hidden bit, the same
+    // pair the ` ok` suppression uses. Gating on STATE alone left the partial
+    // header alive when the dictionary ran out inside `[ ... ]`, and the
+    // definition-open guard then refused every LATER definition: the session
+    // was wedged, with nothing on screen to explain it.
     ADR X9, state
     LDR X10, [X9]
-    CBZ X10, repl_loop
+    CBNZ X10, .Ldf_rollback
+    LDRB W10, [X22, #8]                 // definition open but interpreting?
+    TST W10, #F_HIDDEN
+    B.EQ repl_loop
+.Ldf_rollback:
     STR XZR, [X9]
     ADR X9, saved_latest
     LDR X22, [X9]
     ADR X9, saved_here
     LDR X21, [X9]
+    // Drop the partial header the anchor may still point AT (core.s's
+    // DROP_PARTIAL_HEADER macro, hand-written: it is not visible here).
+    LDRB W9, [X22, #8]
+    TST W9, #F_HIDDEN
+    B.EQ .Ldf_done
+    MOV X21, X22
+    LDR X22, [X22]
+.Ldf_done:
 
     B repl_loop
 

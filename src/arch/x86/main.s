@@ -515,13 +515,30 @@ dict_full:
     mov %fs:lp0@tpoff, %rax
     mov %rax, %fs:lp@tpoff
 
-    # If we were compiling, abort the definition
-    cmpq $0, state(%rip)
-    je repl_loop
-    movq $0, state(%rip)
+    # UNCONDITIONAL, above the STATE test below: we are going to repl_loop
+    # either way, and neither of these is tied to being mid-definition.
+    # in_load is not about compiling at all, and `[` makes STATE 0 *inside* an
+    # open definition, so gating either on STATE skips exactly the cases that
+    # need them -- a dictionary exhausted while interpreting a file left
+    # "a file is loading" set for the rest of the session.
     movq $0, locals_count(%rip)     # the names die with the definition
+    movq $0, in_load(%rip)          # and any abandoned loader frame
+
+    # Roll back an open definition. STATE alone cannot decide -- `[` interprets
+    # INSIDE an open definition -- so also check LATEST's hidden bit, the same
+    # pair the ` ok` suppression above uses. Gating on STATE alone left the
+    # partial header alive when the dictionary ran out inside `[ ... ]`, and
+    # the definition-open guard then refused every LATER definition: the
+    # session was wedged, with nothing on screen to explain it.
+    cmpq $0, state(%rip)
+    jne .Ldf_rollback
+    testb $F_HIDDEN, 8(%r12)            # definition open but interpreting?
+    jz repl_loop
+.Ldf_rollback:
+    movq $0, state(%rip)
     mov saved_latest(%rip), %r12
     mov saved_here(%rip), %r13
+    call drop_partial_header            # the anchor may still point AT it
 
     jmp repl_loop
 
