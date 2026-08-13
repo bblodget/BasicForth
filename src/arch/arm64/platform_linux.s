@@ -373,8 +373,15 @@ platform_flush_icache:
     MOV X5, #4
     LSL X4, X5, X4                  // X4 = D-cache line size
 
-    // Clean each cache line from D-cache to point of unification
-    MOV X2, X0
+    // Clean each cache line from D-cache to point of unification.
+    // Start at the LINE the range begins in, not at the address itself: DC
+    // operates on whole lines, so stepping by the line size from an unaligned
+    // start walks past the final line whenever the last byte of the range
+    // lands beyond the last address visited. Callers pass a code start that is
+    // only 4-byte aligned, so that is the common case, not a corner one --
+    // and the line it misses is the tail of a freshly compiled word.
+    SUB X6, X4, #1                  // X6 = line size - 1
+    BIC X2, X0, X6                  // X2 = start, aligned down to a line
 1:  DC CVAU, X2
     ADD X2, X2, X4
     CMP X2, X1
@@ -385,8 +392,11 @@ platform_flush_icache:
     UBFX X4, X3, #0, #4            // X4 = IminLine
     LSL X4, X5, X4                  // X4 = I-cache line size
 
-    // Invalidate each cache line in I-cache
-    MOV X2, X0
+    // Invalidate each cache line in I-cache. Aligned down for the same reason,
+    // and against IminLine -- the two caches may report different line sizes,
+    // so each loop must use its own.
+    SUB X6, X4, #1                  // X6 = line size - 1
+    BIC X2, X0, X6                  // X2 = start, aligned down to a line
 2:  IC IVAU, X2
     ADD X2, X2, X4
     CMP X2, X1
@@ -734,8 +744,11 @@ stat_buf:
 .equ SYS_getcwd,  17
 .equ SYS_chdir,   49
 .equ SYS_renameat, 38
+.equ SYS_faccessat, 48
+.equ SYS_newfstatat, 79
 
 .equ AT_FDCWD,    -100
+.equ X_OK,        1         // faccessat: test for execute permission
 .equ O_RDONLY,    0
 .equ O_WRONLY,    1
 .equ O_RDWR,      2
@@ -750,6 +763,9 @@ stat_buf:
 
 // st_size is at offset 48 in struct stat (ARM64)
 .equ STAT_ST_SIZE, 48
+.equ STAT_ST_MODE, 16       // aarch64 struct stat: st_mode precedes st_nlink
+.equ S_IFMT,       0xF000
+.equ S_IFREG,      0x8000
 
 .text
 
@@ -1267,6 +1283,46 @@ platform_getcwd:
 platform_chdir:
     MOV X8, #SYS_chdir
     SVC #0
+    RET
+
+// platform_exec_q ( X0=path -- X0=0 if runnable, else nonzero )
+// "Is there a command here?" -- two questions, because either alone answers
+// wrongly:
+//   faccessat(X_OK)  can THIS process execute it (ownership, ACLs, mount
+//                    flags), which mode bits alone cannot tell you. It tests
+//                    the REAL uid, exactly as a shell's PATH search does.
+//   newfstatat       is it a regular FILE. X_OK on a directory means
+//                    "searchable", so /bin passes X_OK and `needs-cmd bin`
+//                    would find a directory and report a command.
+// Both follow symlinks, so a dangling link fails at the stat. AArch64 has no
+// bare access(2) or stat(2); the *at forms are the only spelling.
+.global platform_exec_q
+platform_exec_q:
+    // No frame: nothing here is a call, and the kernel preserves everything
+    // but X0 across an SVC, so X9-X11 are free scratch.
+    MOV X9, X0                      // keep pathname across both syscalls
+    MOV X1, X0                      // pathname
+    MOV X0, #AT_FDCWD
+    MOV X2, #X_OK
+    MOV X8, #SYS_faccessat
+    SVC #0
+    CBNZ X0, .Lexq_ret              // not executable → -errno
+    MOV X0, #AT_FDCWD
+    MOV X1, X9
+    ADR X2, stat_buf
+    MOV X3, #0                      // flags = 0 (follow symlinks)
+    MOV X8, #SYS_newfstatat
+    SVC #0
+    CBNZ X0, .Lexq_ret              // stat failed → -errno
+    ADR X9, stat_buf
+    LDR W10, [X9, #STAT_ST_MODE]
+    MOV W11, #S_IFMT
+    AND W10, W10, W11
+    MOV W11, #S_IFREG
+    CMP W10, W11
+    B.EQ .Lexq_ret                  // X0 is already 0 from the stat
+    MOV X0, #1                      // executable, but not a regular file
+.Lexq_ret:
     RET
 
 // platform_mmap_file ( X0=fd X1=size -- X0=addr )

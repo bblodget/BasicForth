@@ -678,8 +678,11 @@ stat_buf:
 .equ SYS_chdir,   80
 .equ SYS_openat,  257
 .equ SYS_renameat, 264
+.equ SYS_faccessat, 269
+.equ SYS_newfstatat, 262
 
 .equ AT_FDCWD,    -100
+.equ X_OK,        1         # faccessat: test for execute permission
 .equ O_RDONLY,    0
 .equ O_WRONLY,    1
 .equ O_RDWR,      2
@@ -694,6 +697,9 @@ stat_buf:
 
 # st_size is at offset 48 in struct stat (x86-64)
 .equ STAT_ST_SIZE, 48
+.equ STAT_ST_MODE, 24       # x86-64 struct stat: st_mode follows st_nlink
+.equ S_IFMT,       0xF000
+.equ S_IFREG,      0x8000
 
 .text
 
@@ -1159,6 +1165,47 @@ platform_getcwd:
 platform_chdir:
     mov $SYS_chdir, %rax
     syscall
+    ret
+
+# platform_exec_q ( RDI=path -- RAX=0 if runnable, else nonzero )
+# "Is there a command here?" — two questions, because either alone answers
+# wrongly:
+#   faccessat(X_OK)  can THIS process execute it (ownership, ACLs, mount
+#                    flags), which mode bits alone cannot tell you. It tests
+#                    the REAL uid, exactly as a shell's PATH search does.
+#   newfstatat       is it a regular FILE. X_OK on a directory means
+#                    "searchable", so /bin passes X_OK and `needs-cmd bin`
+#                    would find a directory and report a command.
+# Both follow symlinks, so a dangling link fails at the stat.
+.global platform_exec_q
+platform_exec_q:
+    push %rbx
+    mov %rdi, %rbx                  # keep pathname across both syscalls
+    mov %rdi, %rsi                  # pathname
+    mov $AT_FDCWD, %rdi
+    mov $X_OK, %rdx
+    mov $SYS_faccessat, %rax
+    syscall
+    test %rax, %rax
+    jnz .Lexq_ret                   # not executable → -errno
+    mov $AT_FDCWD, %rdi
+    mov %rbx, %rsi
+    lea stat_buf(%rip), %rdx
+    xor %r10d, %r10d                # flags = 0 (follow symlinks)
+    mov $SYS_newfstatat, %rax
+    syscall
+    test %rax, %rax
+    jnz .Lexq_ret                   # stat failed → -errno
+    movl stat_buf+STAT_ST_MODE(%rip), %eax
+    and $S_IFMT, %eax
+    cmp $S_IFREG, %eax
+    je .Lexq_yes
+    mov $1, %rax                    # executable, but not a regular file
+    jmp .Lexq_ret
+.Lexq_yes:
+    xor %eax, %eax
+.Lexq_ret:
+    pop %rbx
     ret
 
 # platform_mmap_file ( RDI=fd RSI=size -- RAX=addr )

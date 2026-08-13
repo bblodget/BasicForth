@@ -39,6 +39,68 @@
   when the *created* word is executed, long after the defining word's frame was
   released — which did not crash, it returned a wrong number from a dead slot.
 - Not yet: assigning to a local (`to`), so a local is read-only for now.
+### Fixed: `make` now refreshes the build directory's copy of `core.fs`
+
+- The binary reads `core.fs` at startup from beside itself, and that copy was
+  made by a `cp` line inside each `run-*` target. So a plain `make` left it
+  alone: edit `src/forth/core.fs`, run the binary directly, and you were
+  testing new machine code against an old core — with nothing on screen to say
+  so. It is now a real rule, `core.fs: $(FORTH_DIR)/core.fs`, and the default
+  goal builds it alongside the binary.
+- The copy was also `cp ... 2>/dev/null || true`, so a copy that *failed* said
+  nothing either, and the same line appearing in five targets meant two
+  concurrent `run-*` targets could copy over the file the other was reading.
+  One rule fixes all three, and a failure now stops the build.
+- The rule compares by **content**, not by timestamp. A timestamp rule misses
+  an edit made in the same clock tick as the previous copy — the kernel's
+  coarse clock gives both files the identical mtime and `make` reads "not
+  older" as "up to date". Measured while building this: two of three
+  back-to-back edits were skipped. Scripts write files back to back and people
+  do not, which is exactly what would make it an hour lost to a phantom bug.
+- Deliberate behaviour change: a missing `src/forth/core.fs` is now a build
+  error rather than a silent skip. The binary cannot start without it, so the
+  build had nothing to gain by continuing.
+- The binary is **not** made to depend on `core.fs`. It genuinely does not —
+  saying otherwise would relink on every edit to a `.fs` file and assert a
+  relationship that is not there.
+
+### Added: a file can say what it needs from the machine
+
+- `needs-cmd <name>` and `needs-lib <soname>` go at the top of a file with its
+  `require` lines. If the command is not on `PATH`, or the library will not
+  `dlopen`, the load stops **there** — before any of the file's definitions
+  exist, so a package never half-loads. It is a `-2 throw`, like `abort"`, so
+  `catch` sees it.
+- Everything after the name is a hint for whoever has to fix it, which is the
+  point: `objdump` does not say "binutils", and `libSDL3.so.0` does not say
+  "on Debian you build it from source". The hint stops at a `\`, so an ordinary
+  trailing comment still works.
+
+      needs-cmd objdump         install binutils
+      needs-lib libSDL3.so.0    see help install
+
+      disasm.fs: needs the command objdump -- install binutils
+
+- What counts as a command is what a shell would accept: a **regular file this
+  user can execute**. Both halves matter and each has its own test — `X_OK`
+  alone accepts a *directory* (on a directory it means "searchable", so `/bin`
+  passes), and the mode bits alone ignore ownership, ACLs and mount flags. The
+  new `(exec?)` primitive asks `faccessat` and `newfstatat` and requires both.
+- The `PATH` walk follows the shell's rules, including the two that catch
+  people out: an **empty element means the current directory** (and `PATH` has
+  one more element than it has colons, so `:x`, `x:`, `x::y` and `""` all
+  contain one), while an **unset** `PATH` falls back to `/bin:/usr/bin` and
+  does not search the current directory. Both were measured against `/bin/sh`
+  rather than read off the spec, because the shell is what ends up running the
+  command — a walk that stopped when the characters ran out would report a
+  command missing that `(cmd-run)` would then happily run.
+- `needs-lib` probes by actually opening the library, so it answers the
+  question that matters — will this load, here, now — rather than guessing from
+  a filename. The handle is kept and handed to the next `dlopen` of the same
+  name, so declaring a library costs nothing over binding it, and the library
+  that was checked is the one that gets bound.
+- `dlopen` now names the library it could not load. "cannot load library" in a
+  session that has required three of them says nothing.
 
 ### Added: the locals runtime frame (stage 1 — no syntax yet)
 
@@ -87,6 +149,28 @@
   what a computation can hold, and how deep it can recurse, should not depend
   on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
   return stack is the process stack handed over by the kernel.
+
+### Fixed: ARM64 could not run at all on a Cortex-A72
+
+- `platform_flush_icache` stepped from the caller's start address by the cache
+  line size. `DC CVAU` and `IC IVAU` act on the whole line containing an
+  address, so from an unaligned start the loop walked past the **final** line
+  whenever the range's last byte fell beyond the last address visited — leaving
+  it neither cleaned to the point of unification nor invalidated. Both loops
+  now align the start down, each against its own cache's line size.
+- Callers pass a code start that is only 4-byte aligned, so this was the common
+  case, and the line it missed was the tail of a word about to be called. On a
+  Raspberry Pi 400 `basicforth` died with `SIGILL` while loading `core.fs`,
+  before printing anything: `dict_space` is BSS, and the all-zero word is a
+  permanently undefined encoding on AArch64.
+- **Nothing could have caught this in emulation.** qemu does not model an
+  incoherent instruction cache, x86-64 keeps its caches coherent in hardware
+  and needs no maintenance at all, and the C unit tests write one small
+  function into a cold region and call it once — the pattern that happens to be
+  safe. It is microarchitecture dependent, which is why an earlier ARM board
+  ran the interpreter fine.
+- All four suites now pass on the hardware: 123 unit, 1022 integration, 36 pty,
+  23 lessons (8 skipped for libSDL3).
 
 ### Fixed: a control-flow closer with nothing open blamed the data stack
 

@@ -4221,6 +4221,35 @@ forth_chdir:
     movq $-36, (%r15)               # -ENAMETOOLONG
     ret
 
+# (exec?) ( c-addr u -- flag )  true if the path names a file this process can
+# execute. Backs NEEDS-CMD's PATH walk, which asks this once per PATH element
+# and wants a plain yes/no: every failure (absent, not executable, a directory,
+# a dangling symlink) means the same thing to a search — keep looking. A path
+# too long for the buffer answers false for the same reason; there is nothing
+# runnable at a name we cannot even form.
+.global forth_exec_q
+forth_exec_q:
+    mov (%r15), %rdx                # u (length)
+    mov CELL(%r15), %rsi            # c-addr
+    add $CELL, %r15                 # pop u; TOS slot ← flag
+    cmp $ABS_PATH_MAX, %rdx
+    jae .Lexecq_no                  # no room for path + NUL
+    lea access_buf(%rip), %rdi
+    push %rdi                       # save buffer start across the copy
+    mov %rdx, %rcx
+    cld
+    rep movsb                       # RDI advances to the end
+    movb $0, (%rdi)                 # NUL-terminate
+    pop %rdi                        # RDI = buffer start
+    call platform_exec_q            # RAX = 0 if executable
+    test %rax, %rax
+    jnz .Lexecq_no
+    movq $-1, (%r15)                # true
+    ret
+.Lexecq_no:
+    movq $0, (%r15)                 # false
+    ret
+
 # (startup-dir) ( -- c-addr u )  absolute directory BasicForth was launched in
 # (u = 0 if getcwd failed at boot). Backs bare `cd` and session.fs pinning.
 .global forth_startup_dir
@@ -6169,7 +6198,8 @@ DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_is,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
-DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
+DEFWORD dict_exec_q,      "(exec?)",      forth_exec_q,      dict_chdir
+DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_exec_q
 DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
 DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
@@ -6251,6 +6281,12 @@ incl_path_buf:
 # NUL-terminated scratch path for chdir (the syscall needs a C string).
 .align 8
 chdir_buf:
+    .space ABS_PATH_MAX
+
+# NUL-terminated scratch path for (exec?). Its own buffer, not chdir's: a PATH
+# walk probes many candidates and must not disturb an unrelated pending path.
+.align 8
+access_buf:
     .space ABS_PATH_MAX
 
 # Static buffer for (cwd)/pwd getcwd results.
