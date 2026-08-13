@@ -135,12 +135,8 @@ x86 under qemu, and are not what you want here:
     make run-pty                 # terminal/editor behaviour
     make run-lessons             # replays every tutorial + examples/*.fs
 
-Two things that bite:
+One thing that bites:
 
-- **Plain `make` does not refresh the build directory's copy of `core.fs`.**
-  The `run-*` targets do. After editing `src/forth/core.fs`, run one of those
-  (or copy it across) before concluding anything about behaviour — otherwise
-  you are testing a new binary against an old core.
 - Ad-hoc runs need `BASICFORTH_PATH=src/forth`. The suites themselves are
   environment-independent, which can be confirmed with `env -u BASICFORTH_PATH`.
   Interactive setup is `. ./setup.sh` from the repo root.
