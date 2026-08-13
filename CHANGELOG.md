@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed: `make` now refreshes the build directory's copy of `core.fs`
+
+- The binary reads `core.fs` at startup from beside itself, and that copy was
+  made by a `cp` line inside each `run-*` target. So a plain `make` left it
+  alone: edit `src/forth/core.fs`, run the binary directly, and you were
+  testing new machine code against an old core — with nothing on screen to say
+  so. It is now a real rule, `core.fs: $(FORTH_DIR)/core.fs`, and the default
+  goal builds it alongside the binary.
+- The copy was also `cp ... 2>/dev/null || true`, so a copy that *failed* said
+  nothing either, and the same line appearing in five targets meant two
+  concurrent `run-*` targets could copy over the file the other was reading.
+  One rule fixes all three, and a failure now stops the build.
+- The rule compares by **content**, not by timestamp. A timestamp rule misses
+  an edit made in the same clock tick as the previous copy — the kernel's
+  coarse clock gives both files the identical mtime and `make` reads "not
+  older" as "up to date". Measured while building this: two of three
+  back-to-back edits were skipped. Scripts write files back to back and people
+  do not, which is exactly what would make it an hour lost to a phantom bug.
+- Deliberate behaviour change: a missing `src/forth/core.fs` is now a build
+  error rather than a silent skip. The binary cannot start without it, so the
+  build had nothing to gain by continuing.
+- The binary is **not** made to depend on `core.fs`. It genuinely does not —
+  saying otherwise would relink on every edit to a `.fs` file and assert a
+  relationship that is not there.
+
 ### Added: a file can say what it needs from the machine
 
 - `needs-cmd <name>` and `needs-lib <soname>` go at the top of a file with its
