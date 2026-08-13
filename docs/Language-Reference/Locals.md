@@ -10,9 +10,16 @@ At a glance:
     a                        ( -- x )          read one, by name
 
 ## {: … :} ( x1 … xn -- )
-**Compile-only.** Takes the top n items off the stack and gives them names for
-the rest of the definition. Names are listed **in stack order**, so the deepest
-item named comes first — the same order you write a stack comment in:
+**Compile-only.** Names the top stack items for the rest of the definition:
+
+    {: <arg>… [| <val>…] [-- <comment>…] :}
+
+Names before `|` are taken from the stack. Names after it are **locals of your
+own**, taking nothing from the stack and starting at zero. Everything after
+`--` is ignored, so a declaration can carry its own stack comment.
+
+Arguments are listed **in stack order**, so the deepest item named comes
+first — the same order you write a stack comment in:
 
     : blit ( src x y w h -- )  {: s x y w h :}
         s x y w h ... ;
@@ -20,7 +27,10 @@ item named comes first — the same order you write a stack comment in:
     : mid ( a b -- n )  {: a b :}  a b + 2/ ;
     10 20 mid .            \ 15
 
-The list ends at `:}`. Everything between is a name.
+The list ends at `:}`. A declaration can also document itself, which is what
+`--` is for — the names after it are a comment, not locals:
+
+    : hyp ( a b -- c )  {: a b -- c :}  a a *  b b *  + ;
 
 Naming pays off most where a value is used more than once, or out of order —
 the case that otherwise costs a `dup` and a `rot` to set up:
@@ -51,6 +61,15 @@ Forth lets you shadow verbs too, which is sharper:
 Nothing is broken there; `i` simply means the local now. Avoid naming a local
 after a word you still need in that definition — `i` and `j` are the ones to
 watch, since they are the natural names for a counter *and* the loop indices.
+
+So the compiler says when it happens:
+
+    : oops  {: i :}  3 0 do i . loop ;
+    note: local i shadows an existing word
+
+A note, not an error — shadowing is what locals are for. It appears only when
+you type, like the `redefined` warning, so neither a `require`d library nor a
+script run from the command line nags about its own locals.
 
 ### Where `{:` may appear
 **Once per definition, and only where the compile-time stack is empty.** Both
@@ -98,6 +117,22 @@ is a compile error:
 This is refused rather than merely discouraged because it did not fail loudly:
 it compiled, ran, and returned a wrong number read from a dead slot.
 
-### What is not here yet
-Assigning to a local (`to`) is not wired up, so a local is read-only within its
-definition.
+### Assigning: `to`
+`to` writes a local, and follows the same resolution order as reading one — a
+local in scope wins over a `value` of the same name, so `to` can never write
+through a shadow to the global by mistake:
+
+    : running ( n -- sum )  {: n | acc :}
+        n 0 do  acc i +  to acc  loop  acc ;
+    5 running .            \ 10
+
+`acc` is after the `|`, so it is not an argument — `running` still takes one
+value. That is what `|` is for: a counter, an accumulator or a scratch value
+that belongs to the word rather than to its caller.
+
+Writing is open-coded like reading — a store, not a call — because `to x` in a
+loop is as hot as reading `x`.
+
+`is` is the exception: it targets *deferred* words, and a local is not one, so
+`is` on a local name is a compile error rather than a silent write to whatever
+global it was shadowing.

@@ -38,7 +38,23 @@
 - **`does>` cannot refer to them**, and says so at compile time. Its body runs
   when the *created* word is executed, long after the defining word's frame was
   released — which did not crash, it returned a wrong number from a dead slot.
-- Not yet: assigning to a local (`to`), so a local is read-only for now.
+- **The full Forth 2012 declaration**: `{: <arg>… [| <val>…] [-- comment] :}`.
+  Names after `|` take nothing from the stack and start at zero — a counter or
+  accumulator that belongs to the word rather than its caller — and everything
+  after `--` is ignored, so a declaration can carry its own stack comment.
+  Without `|` an accumulator had to be faked by pushing a `0` before `{:`,
+  which reads like idiom but is a workaround, and quietly makes the word take
+  an argument it does not want.
+- **`to` writes a local**, following the same resolution order as reading one,
+  so it can never write through a shadow to a global `value` of the same name.
+  The write is open-coded like the read — `to x` in a loop is as hot as reading
+  `x`. `is` is the exception: it targets deferred words, and a local is not one,
+  so `is` on a local name is a compile error rather than a silent write to
+  whatever it was shadowing.
+- **The compiler says when a local shadows an existing word** —
+  `note: local i shadows an existing word`. A note, not an error: shadowing is
+  what locals are for. Prompt only, like the `redefined` warning, so a library
+  declaring a local named `i` does not nag on every load.
 ### Fixed: `make` now refreshes the build directory's copy of `core.fs`
 
 - The binary reads `core.fs` at startup from beside itself, and that copy was

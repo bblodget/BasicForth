@@ -7415,6 +7415,151 @@ ten ."                                                                         "
 # it that does not depend on a disassembler being installed.
 assert_result "locals: an ordinary definition is unaffected" ": sq dup * ; 7 sq ."  "49"
 
+# --- stage 3: assignment ---------------------------------------------------
+assert_result "locals: to writes a local"      ": t {: a :} 5 to a a . ; 9 t"   "5"
+assert_result "locals: to accumulates in a loop" \
+              ": s2 {: n acc :} n 0 do acc i + to acc loop acc ;
+5 0 s2 . 10 0 s2 ."                                                            "10 45"
+# The case that decides whether `to` follows the same resolution order as a
+# read: writing through a shadow to the GLOBAL would be silent and wrong.
+assert_result "locals: to writes the local, not the value it shadows" \
+              "0 value v
+7 to v
+: shadow {: v :} 99 to v v . ;
+1 shadow v ."                                                                  "99 7"
+assert_result "locals: to still writes an ordinary value" "0 value q  8 to q  q ."  "8"
+# `is` targets deferred words; a local is not one. Falling through would have
+# found the SHADOWED global and written that instead -- silently, which is the
+# shape of the does> bug.
+assert_error "locals: is refuses a local" "defer d
+: t {: d :} 5 is d ;"                                                          "is: that name is a local"
+assert_result "locals: is still works on a real defer" \
+              "defer d
+: impl 42 . ;
+' impl is d
+d"                                                                             "42"
+
+# --- stage 3: | and -- , the rest of the Forth 2012 declaration ------------
+# `|` separates names taken from the stack from UNINITIALISED locals; `--`
+# starts a stack comment ignored to `:}`. Without `|` an accumulator had to be
+# faked by pushing a 0 before `{:`, which reads like idiom but is really a
+# workaround -- and made the documented stack comment wrong, since the word
+# then took an argument it did not want.
+assert_result "locals: | gives an uninitialised local" \
+              ": running ( n -- sum )  {: n | acc :}
+    n 0 do  acc i +  to acc  loop  acc ;
+5 running . 10 running ."                                                      "10 45"
+assert_result "locals: an uninitialised local starts at zero" ": z {: | q :} q . ; z"  "0"
+assert_result "locals: -- is a comment inside the declaration" ": c {: a b -- sum :} a b + . ; 3 4 c"  "7"
+assert_result "locals: | and -- together"  ": d {: n | acc -- sum :} n acc + . ; 6 d"  "6"
+# The names after `--` are documentation, NOT locals: referring to one must
+# fall through to the dictionary and miss.
+assert_error  "locals: -- names are not locals" ": e {: a -- sum :} sum ;"     "? sum"
+assert_result "locals: | with no names after it is allowed" ": f {: a | :} a . ; 9 f"  "9"
+assert_error  "locals: only one | per declaration" ": g {: a | b | c :} ;"     "only one |"
+
+# --- stage 3: the shadow warning -------------------------------------------
+# Shadowing is what locals are FOR, so this is a note, not an error -- but
+# Forth lets you shadow verbs, and `{: i :}` silently costs you the DO index.
+assert_output "locals: a shadowing name is called out" ": oops {: i :} 3 0 do i . loop ;"  "note: local i shadows an existing word"
+assert_result "locals: ...and the definition still works" ": oops {: i :} 3 0 do i . loop ; 7 oops"  "7 7 7"
+assert_result "locals: an ordinary name draws no note" ": fine {: n lo hi :} n . ; 1 2 3 fine"  "1"
+# Prompt only, like `redefined`: a library declaring a local named `i` must not
+# nag on every load.
+lw_dir="$(mktemp -d)"
+printf ': loaded {: i :} i ;\n' > "$lw_dir/w.fs"
+lw_out=$(printf 's" %s/w.fs" included\n3 loaded .\nbye\n' "$lw_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | sed '/^> /d; /^\.\.\. /d')
+rm -rf "$lw_dir"
+if [[ "$lw_out" == *"3"* && "$lw_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: the shadow note stays quiet during a file load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: the shadow note stays quiet during a file load\n    Got: %q\n" "$lw_out"; ((failed++))
+fi
+# ...and during a script named on the COMMAND LINE, which is a different path:
+# it goes straight to the loader, bypassing the Forth `included` wrapper. Two
+# plausible gates (source-id, and the wrapper's own counter) both let the note
+# through here while looking correct for `included`. Assert the path, not the
+# mechanism.
+ls_dir="$(mktemp -d)"
+printf ': t {: i :} i ;\n3 t .\n' > "$ls_dir/s.fs"
+ls_out=$(printf 'bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH "$ls_dir/s.fs" 2>&1)
+rm -rf "$ls_dir"
+if [[ "$ls_out" == *"3"* && "$ls_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...and during a command-line script\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...and during a command-line script\n    Got: %q\n" "$ls_out"; ((failed++))
+fi
+# ...and still after the 64-entry SOURCE TABLE is full. That table is SEE
+# metadata: src_register answers 0 once it overflows, so a gate reading
+# cur_source_id goes quiet-side-up and the 65th file loads as if typed. The
+# same trap applied to the `redefined` warning, which had gated on it for
+# months. Both now read a flag the loader sets, which cannot run out.
+lf_dir="$(mktemp -d)"
+for lf_i in $(seq 1 70); do printf ': lfw%d %d ;\n' "$lf_i" "$lf_i" > "$lf_dir/f$lf_i.fs"; done
+printf ': lft {: i :} i ;\n3 lft .\n' > "$lf_dir/last.fs"
+lf_in=""
+for lf_i in $(seq 1 70); do lf_in+="s\" $lf_dir/f$lf_i.fs\" included"$'\n'; done
+lf_in+="s\" $lf_dir/last.fs\" included"$'\n'"bye"$'\n'
+lf_out=$(printf '%s' "$lf_in" | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1 \
+    | sed '/^> /d; /^\.\.\. /d')
+rm -rf "$lf_dir"
+if [[ "$lf_out" == *"3"* && "$lf_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...and after the source table is full\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...and after the source table is full\n    Got: %q\n" "$(echo "$lf_out" | tail -3)"; ((failed++))
+fi
+# The flag is saved on the loader's frame, and an uncaught THROW abandons that
+# frame without restoring it -- so an aborted load left "a file is loading" set
+# for the rest of the session, silencing the note (and `redefined`) at the
+# prompt. Same shape as a leaked locals frame: an abort path that skips the
+# restore. Cleared on the paths that reset to the REPL.
+lb_dir="$(mktemp -d)"
+printf ': lbboom 99 throw ;\nlbboom\n' > "$lb_dir/b.fs"
+lb_out=$(printf 's" %s/b.fs" included\n: lbafter {: i :} i ;\nbye\n' "$lb_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+rm -rf "$lb_dir"
+if [[ "$lb_out" == *"note: local i"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: an aborted load does not wedge the loading flag\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: an aborted load does not wedge the loading flag\n    Got: %q\n" "$lb_out"; ((failed++))
+fi
+# ...nor does a dictionary exhausted MID-LOAD while interpreting. dict_full
+# returns to the REPL by two routes, and the "were we compiling?" test guards
+# only one of them -- so clearing the flag under that test skipped exactly the
+# interpreting case. `[` also makes STATE 0 inside an open definition, so the
+# same test is the wrong home for the locals list too. Both clears are now
+# unconditional, above it.
+ld_dir="$(mktemp -d)"
+printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+rm -rf "$ld_dir"
+if [[ "$ld_out" == *"dictionary full"* && "$ld_out" == *"note: local i"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...nor a dictionary exhausted mid-load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...nor a dictionary exhausted mid-load\n    Got: %q\n" "$ld_out"; ((failed++))
+fi
+# dict_full rolls back the OPEN DEFINITION too, not just the compile state.
+# `[` interprets inside an open definition, so a dictionary exhausted there
+# left the partial header alive: the definition-open guard then refused every
+# later definition and the session was wedged, with nothing on screen saying
+# why. STATE alone cannot answer "is a definition open" -- LATEST's hidden bit
+# has to be checked with it, as the ` ok` suppression already does.
+dw_out=$(printf ': dwfill 40000 0 do 1 , loop ;
+: dwt {: a :} [ dwfill dwfill dwfill dwfill dwfill dwfill dwfill dwfill ] a ;
+: dwnext 5 . ;
+dwnext
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1 | sed '/^> /d; /^\.\.\. /d')
+# Echo stripped above: run_forth captures the ECHOED input too, and
+# `: dwnext 5 . ;` contains a "5" -- so this passed without dwnext ever running.
+if [[ "$dw_out" == *"dictionary full"* && "$dw_out" == *"5"* \
+      && "$dw_out" != *"definition still open"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: dictionary full inside [ ] does not wedge the session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: dictionary full inside [ ] does not wedge the session\n    Got: %q\n" "$(echo "$dw_out" | tail -4)"; ((failed++))
+fi
+
 # =========================================================================
 section "BYE"
 # =========================================================================

@@ -3275,11 +3275,60 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
 \ (compile_local_fetch in core.s), so a reference costs a load rather than a
 \ call. That is the whole reason locals are worth having -- see docs/Locals.md.
 
+\ Is this name already a word? `find` is asymmetric -- a hit REPLACES the name
+\ with ( xt flag ), a miss KEEPS it -- so the two arms clean up differently.
+: (loc-shadow?) ( c-addr u -- c-addr u flag )
+    2dup find if  drop true  else  2drop false  then ;
+
+\ Say so when a local hides a word. Not an error: shadowing is what locals are
+\ FOR, and the standard requires it. But Forth lets you shadow verbs, not just
+\ data, so `{: i :}` quietly costs you the DO index for the rest of the
+\ definition -- and that reads as a bug in your loop, not a consequence of your
+\ name. Prompt only, matching the `redefined` warning: a library that declares
+\ a local named `i` should not nag on every load.
+\
+\ The gate is `(loading?)`, which reads the same cur_source_id the `redefined`
+\ warning uses. Two plausible alternatives are both wrong: SOURCE-ID answers 0
+\ inside an INCLUDED file as well as at the prompt (docs/TODO.md), and (ldg-n)
+\ is pushed by the Forth `included` wrapper only -- so a script named on the
+\ command line bypasses it and looks exactly like someone typing.
+: (loc-warn) ( c-addr u -- c-addr u )
+    (loading?) 0= if
+        (loc-shadow?) if
+            ." note: local " 2dup type ."  shadows an existing word" cr
+        then
+    then ;
+
 \ Emit the frame build: `n (lframe)`, taking the values already on the stack.
 \ Both parts are POSTPONEd so they run when {: runs -- i.e. while the user's
 \ definition is being compiled -- rather than when {: itself was compiled.
+\ How many names came before `|`; -1 until one is seen. Everything after it is
+\ an UNINITIALISED local -- a name that takes nothing from the stack. Recording
+\ the split as a count means the difference gives the number of them, with no
+\ second flag to keep in step.
+variable (loc-args)
+
+\ Emit the frame build. Uninitialised locals get a compiled `0` push each,
+\ immediately before it: the last-declared local sits at the TOP of the stack,
+\ so pushing the zeros last lands them exactly on the val names' slots. The
+\ standard says such locals are merely uninitialised; zeroing them costs one
+\ instruction each and turns "whatever was there" into something you can rely
+\ on.
 : (loc-frame!) ( -- )
+    (loc-args) @ dup 0< if  drop 0  else  (loc-count) swap -  then   ( nvals )
+    0 ?do  0 postpone literal  loop
     (loc-count) postpone literal  postpone (lframe) ;
+
+\ `--` starts a stack comment inside the declaration: ignore everything up to
+\ `:}` (Forth 2012 -- "this eases documentation by allowing a complete stack
+\ comment").
+: (loc-skip) ( -- )
+    begin
+        parse-word dup 0= if
+            ." {: has no closing :}" cr abort  then
+        2dup s" :}" compare 0= if  2drop exit  then
+        2drop
+    again ;
 
 \ `:}` closes the list; anything else is a name. A missing `:}` would eat the
 \ rest of the definition, so it is caught by the table filling up.
@@ -3305,14 +3354,25 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     \ releases one, which leaked 8 bytes of LP per call just as quietly.
     (loc-count) if
         ." {: already declared in this definition" cr abort  then
+    -1 (loc-args) !                             \ no `|` seen yet
     begin
         parse-word dup 0= if                        ( c-addr u )
             ." {: has no closing :}" cr abort  then
         2dup s" :}" compare 0= if
             2drop (loc-frame!) exit  then
-        (loc-add) 0= if
-            ." {: needs a name of 31 characters or fewer, and at most "
-            (loc-max) . ." locals" cr abort  then
+        2dup s" --" compare 0= if                   \ the rest is a comment
+            2drop (loc-skip) (loc-frame!) exit  then
+        2dup s" |" compare 0= if                    \ uninitialised from here
+            2drop
+            (loc-args) @ 0< 0= if
+                ." {: only one | in a declaration" cr abort  then
+            (loc-count) (loc-args) !
+        else
+            (loc-warn)
+            (loc-add) 0= if
+                ." {: needs a name of 31 characters or fewer, and at most "
+                (loc-max) . ." locals" cr abort  then
+        then
     again ; immediate
 
 : include ( "name" -- )

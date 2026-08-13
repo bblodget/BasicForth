@@ -128,6 +128,13 @@ Per the existing sketch, unchanged:
 originally sketched. Decided 2026-08-10: matching the standard costs two
 characters and leaves `{` free for something else later.
 
+The whole declaration, not just the arg list: `{: <arg>… [| <val>…]
+[-- comment] :}`. Stage 3 shipped the arg list first and claimed conformance on
+that alone — which Brandon caught by reading a stack comment that no longer
+matched its word, because the missing `|` had been worked around by pushing a
+`0` before `{:`. Worth remembering that a subset of a standard syntax is not
+the standard syntax, and the gap shows up first in the examples.
+
 - **A separate locals stack**, not the return stack. This is the decision that
   removes most of the danger: no interaction with `>r`/`r>`, and none with
   `do`/`loop` control parameters, which live on the return stack.

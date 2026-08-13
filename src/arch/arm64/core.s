@@ -1722,6 +1722,8 @@ msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
 msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
+msg_is_local: .ascii "is: that name is a local, not a deferred word: "
+.equ msg_is_local_len, . - msg_is_local
 msg_does_locals: .ascii "does> cannot see the defining word's locals: "
 .equ msg_does_locals_len, . - msg_does_locals
 msg_cf_mismatch: .ascii "mismatched control flow: "
@@ -2221,10 +2223,11 @@ build_header:
     CBZ X24, .Lbh_err
 
     // Interactive redefinition warning ("redefined foo", gforth's text).
-    // Gated OFF inside included (cur_source_id != 0): core.fs redefines
-    // words on purpose at startup, module reloads replay whole files, and
-    // skipping the gate first means file loads never pay for the scan.
-    ADR X9, cur_source_id
+    // Gated OFF inside included: core.fs redefines words on purpose at
+    // startup, module reloads replay whole files, and skipping the gate first
+    // means file loads never pay for the scan. in_load, not cur_source_id --
+    // that is SEE metadata from a 64-entry table, and answers 0 once full.
+    ADR X9, in_load
     LDR X9, [X9]
     CBNZ X9, .Lbh_build
     ADR X9, redef_quiet             // :e armed a one-shot skip?
@@ -2955,6 +2958,13 @@ forth_included:
     ADR X9, cur_line_off
     LDR X11, [X9]
     STP X10, X11, [SP, #-16]!
+    // "A file is loading", saved and restored the same way so nesting works.
+    // A whole pair, since SP must stay 16-byte aligned.
+    ADR X9, in_load
+    LDR X10, [X9]
+    STP X10, XZR, [SP, #-16]!
+    MOV X10, #1
+    STR X10, [X9]
     // And what was already open before this load began, for the
     // unclosed-definition check at EOF (same nesting discipline).
     ADR X9, incl_entry_latest
@@ -3213,6 +3223,9 @@ forth_included:
     STR X10, [X9]
     ADR X9, incl_entry_state
     STR X11, [X9]
+    LDP X10, X11, [SP], #16         // in_load (+ its padding)
+    ADR X9, in_load
+    STR X10, [X9]
     LDP X10, X11, [SP], #16         // restore source context saved at entry
     ADR X9, cur_source_id
     STR X10, [X9]
@@ -3959,6 +3972,47 @@ forth_to:
     STP X29, X30, [SP, #-16]!
     STP X23, X24, [SP, #-16]!
     BL forth_parse_word
+
+    // A local in scope beats a VALUE of the same name, exactly as it does when
+    // read -- `to x` must not store into a global x the local is shadowing.
+    // `is` is excluded: it targets deferred words, and a local is not one.
+    ADR X9, state
+    LDR X9, [X9]
+    CBZ X9, .Lto_not_local
+    ADR X9, locals_count
+    LDR X9, [X9]
+    CBZ X9, .Lto_not_local
+    BL locals_lookup                // X0 = index, or -1; args left on the stack
+    CMN X0, #1
+    B.EQ .Lto_not_local
+    // It IS a local. `is` targets deferred words and a local is not one -- but
+    // falling through would find the SHADOWED global and write that instead,
+    // silently, which is the same shape of bug as does> reading a dead frame.
+    ADR X9, tois_mode
+    LDR X9, [X9]
+    CBNZ X9, .Lto_is_local
+    ADD X19, X19, #2*CELL           // drop the name
+    BL compile_local_store
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+.Lto_is_local:
+    LDR X9, [X19]
+    ADR X10, err_token_len
+    STR X9, [X10]
+    LDR X9, [X19, #CELL]
+    ADR X10, err_token_addr
+    STR X9, [X10]
+    ADD X19, X19, #2*CELL
+    ADR X9, err_pfx_addr
+    ADR X10, msg_is_local
+    STR X10, [X9]
+    ADR X9, err_pfx_len
+    MOV X10, #msg_is_local_len
+    STR X10, [X9]
+    B .Lcf_abort
+.Lto_not_local:
+
     // Stash the name for the type-error message (find consumes it)
     LDR X9, [X19, #CELL]
     ADR X10, tois_name
@@ -5387,6 +5441,19 @@ local_fetch_tmpl:
 .equ LOCAL_FETCH_LEN, . - local_fetch_tmpl
 .equ LOCAL_FETCH_PATCH, 4           // index of the word whose imm12 we set
 
+// The write side, same shape: word 5's imm12 carries the index.
+//   0..2  TLS_ADDR X9, lp
+//   3     LDR X9, [X9]         -- LP
+//   4     LDR X10, [X19], #8   -- pop the value
+//   5     STR X10, [X9]        -- imm12 PATCHED with the index
+local_store_tmpl:
+    TLS_ADDR X9, lp
+    LDR X9, [X9]
+    LDR X10, [X19], #CELL
+    STR X10, [X9]
+.equ LOCAL_STORE_LEN, . - local_store_tmpl
+.equ LOCAL_STORE_PATCH, 5
+
 // ---------- Locals frame primitives ----------
 // Stage 1 of the locals work: the runtime substrate, with no syntax on top.
 // These are the words the unwind tests drive directly; the compiler will emit
@@ -5561,6 +5628,28 @@ compile_local_fetch:
     ADD X21, X21, #LOCAL_FETCH_LEN
     RET
 
+// compile_local_store — emit an OPEN-CODED write to local X0.
+// The mirror of compile_local_fetch, open-coded for the same reason: `to x`
+// inside a loop is as hot as reading x.
+compile_local_store:
+    CHECK_DICT LOCAL_STORE_LEN
+    ADR X9, local_store_tmpl
+    MOV X10, X21                    // HERE
+    MOV X11, #LOCAL_STORE_LEN
+.Lcls_copy:
+    LDR W12, [X9], #4
+    STR W12, [X10], #4
+    SUBS X11, X11, #4
+    B.NE .Lcls_copy
+    // Patch the index into the STR's imm12 -- scaled by 8 for a 64-bit store,
+    // so the field IS the index.
+    ADD X10, X21, #(LOCAL_STORE_PATCH * 4)
+    LDR W12, [X10]
+    ORR W12, W12, W0, LSL #10
+    STR W12, [X10]
+    ADD X21, X21, #LOCAL_STORE_LEN
+    RET
+
 // compile_local_release — emit `n (lunframe)` if this definition has locals.
 // Once per exit, so an ordinary call costs nothing worth open-coding for.
 // Emits nothing at all when none were declared, which is what keeps an
@@ -5625,6 +5714,23 @@ forth_loc_add:
     RET
 .Lla_no:
     STR XZR, [X19, #-CELL]!
+    RET
+
+// (loading?) ( -- flag )  Is a file being loaded right now?
+//
+// in_load, a flag the loader sets. Three plausible alternatives are all wrong:
+// source-id answers 0 inside an included file as well as at the prompt (see
+// docs/TODO.md); (ldg-n) is pushed by the FORTH `included` wrapper only, so a
+// script named on the command line bypasses it; and cur_source_id is SEE
+// metadata from a 64-entry table, so src_register answers 0 once it is full
+// and the 65th file loads with the flag clear.
+.global forth_loading
+forth_loading:
+    ADR X9, in_load
+    LDR X9, [X9]
+    CMP X9, XZR
+    CSETM X9, NE                    // -1 when loading, 0 otherwise
+    STR X9, [X19, #-CELL]!
     RET
 
 // (loc-count) ( -- n )  How many locals the current definition declared.
@@ -5967,7 +6073,9 @@ forth_throw:
     ADR X9, state
     STR XZR, [X9]
     ADR X9, locals_count
-    STR XZR, [X9]                   // ...and the names it declared                   // reset compile state
+    STR XZR, [X9]                   // ...and the names it declared
+    ADR X9, in_load
+    STR XZR, [X9]                   // ...and any abandoned loader frame
     TLS_ADDR X9, handler
     STR XZR, [X9]                   // no live frames on a reset stack
     B repl_loop
@@ -5994,6 +6102,8 @@ forth_quit:
     STR XZR, [X9]                  // reset compile state
     ADR X9, locals_count
     STR XZR, [X9]                  // ...and the names it declared
+    ADR X9, in_load
+    STR XZR, [X9]                  // ...and any abandoned loader frame
     TLS_ADDR X9, handler
     STR XZR, [X9]                  // frames died with the return stack
     B repl_loop
@@ -6810,7 +6920,8 @@ DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
 DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
-DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_lstack_size
+DEFWORD dict_loading,     "(loading?)",   forth_loading,     dict_lstack_size
+DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_loading
 DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_cf_open
 DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
 DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
@@ -7063,6 +7174,9 @@ err_pfx_len:
 .global il_sp
 il_sp:                              // SP at interpret_line entry (for cf longjmp)
     .quad 0
+.global in_load
+in_load:                            // 1 while forth_included is running a file
+    .space 8
 err_name_buf:                       // A name copied out of a header that is
     .space 32                       //   about to be reclaimed (F_LENMASK = 31)
 .global err_token_addr

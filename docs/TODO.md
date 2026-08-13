@@ -2610,6 +2610,61 @@ smaller risk surface.
   The rule applied: a name a user is expected to pass to something is API and
   needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
 
+- [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
+  gating the locals shadow warning: it returns 0 at the prompt *and* during a
+  file load, so it cannot distinguish the two, which is most of what the word
+  is for. Forth 2012 says SOURCE-ID is 0 for the user input device, -1 for
+  EVALUATE, and a file id when INCLUDED-ing.
+  Nothing depends on the broken behaviour today — both the `redefined` and the
+  locals shadow warning gate on the internal `cur_source_id`, now reachable
+  from Forth as `(loading?)`. So this is a conformance gap rather than a live
+  bug, but it is a trap: the obvious word for "am I loading a file" silently
+  answers no.
+  **Three plausible substitutes are all wrong**, worth recording since each
+  looks right under casual testing:
+  - `(ldg-n)` is pushed by the *Forth* `included` wrapper, so a script named on
+    the command line bypasses it and reads as though someone were typing.
+  - `cur_source_id` is SEE metadata from a 64-entry table; `src_register`
+    answers 0 once it is full, so the 65th file of a session loads with the
+    flag clear. **The `redefined` warning had gated on this for months** and
+    would have started firing mid-load on a big enough session.
+  - `source-id` itself, per the entry above.
+
+  All three now read `in_load`, a flag `forth_included` sets and restores
+  around each file, exposed to Forth as `(loading?)`. It cannot run out and it
+  covers every path a file arrives by. Each wrong gate passed a test against
+  `included`; only testing the *other* paths — command line, and a session past
+  64 files — separated them.
+
+  Two things `in_load` itself needed, both the same shape as bugs the locals
+  work already hit:
+  - **It is saved on the loader's frame, and an uncaught `THROW` abandons that
+    frame.** An aborted load left the flag set for the rest of the session,
+    silencing both warnings at the prompt. Cleared on the paths that reset to
+    the REPL, exactly like `locals_count`.
+  - **`dict_full` reaches the REPL by two routes**, and its "were we
+    compiling?" test guards only one. Clearing the flag under that test skipped
+    the interpreting case, so a dictionary exhausted mid-load wedged it. Both
+    clears are unconditional now. x86 only: ARM64 already had them above.
+  - **...and that test was wrong for the ROLLBACK too**, which is the bigger
+    find. `[` interprets *inside* an open definition, so a dictionary exhausted
+    within `[ … ]` left the partial header alive — and the definition-open
+    guard then refused **every later definition**, wedging the session with
+    nothing on screen to explain it. A pre-existing bug, older than the locals
+    work, exposed only because moving the locals clear raised the question of
+    what else that test was guarding. `dict_full` now checks LATEST's hidden
+    bit alongside `STATE` and drops the header, as `.Lcf_abort` does. Fixed on
+    both arches. This is [[state-is-not-definition-open]] for the third time in
+    a week: **"are we compiling" is never the same question as "is a definition
+    open"**, and every place that conflates them is a latent wedge.
+  - **On x86 the save changed the parity of `forth_included`'s entry pushes**,
+    and the line loop counts its own 16-byte alignment from there ("3 pushes +
+    an 8-byte pad"). An odd push silently inverts what that padding achieves,
+    so the flag is pushed as a pair. ARM64 was unaffected — `STP` is already a
+    16-byte pair, which is the rare case where the fixed-width architecture is
+    the more forgiving one. Fixing it means returning the file id from the
+  loader, and checking `EVALUATE` reports -1 while it is at it.
+
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
   input** along with the output (`> 5 5 <= .` then `-1  ok`). So any assertion
