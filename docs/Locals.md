@@ -13,6 +13,25 @@ supported — deliberately, see below.
 This note records what the runtime-frame design costs, where it can go wrong,
 and what the building of it corrected.
 
+## What stage 3 shipped
+
+`to <local>`, open-coded like the read (a `to x` in a loop is as hot as reading
+`x`); the shadow note when a local hides an existing word; `is` refused on a
+local; and the rest of the declaration, `|` and `--`.
+
+`|` needs no new primitive: uninitialised locals get one compiled `0` push
+each, immediately before the frame build. The last-declared local sits at the
+top of the stack, so the zeros land exactly on those slots — the same trick the
+`0 {: n acc :}` workaround used, moved into the compiler where it cannot leak
+into the word's stack effect.
+
+The hard part was none of that. It was answering "am I loading a file?", which
+took four attempts — `source-id` (answers 0 inside an included file too),
+`(ldg-n)` (misses command-line scripts), `cur_source_id` (a 64-entry table that
+answers 0 once full, which `redefined` had gated on for months), and finally
+`in_load`, a flag the loader sets. Each wrong one passed a test against
+`included`; only walking the other paths a file can arrive by separated them.
+
 ## What stage 2 shipped
 
 `{: a b c :}` as an immediate word in `core.fs`, name resolution ahead of the
@@ -56,8 +75,9 @@ could be tested before `{: … :}` existed:
 | `(lp@)` `(lp0@)` | `( -- a )` | the pointer, and this thread's empty mark |
 | `(lstack-size)` | `( -- n )` | bytes per locals stack |
 
-These are the **testing** surface, not the compiled one. Stage 2 must open-code
-the reference, not call `(local@)` — see "The one thing that decides this".
+These are the **testing** surface, not the compiled one: stage 2 open-coded the
+reference rather than calling `(local@)`, which is what "The one thing that
+decides this" below insisted on.
 
 Sizes moved to **`src/config.inc`**, included by both architectures, so a
 tunable cannot drift between them. `LOCALS_STACK_SIZE` is 16 KB (2048 cells)
@@ -98,7 +118,11 @@ open**, which faulted cleanly instead of scribbling on the REPL's memory. It
 had been passing anyway, on the echoed input — see the vacuous-assertion note
 in `docs/TODO.md`.
 
-## Recommendation
+## The original recommendation (2026-08-10)
+
+*Everything from here down is the pre-build research note, kept because its
+reasoning is what the stages were built against. Where building it proved the
+note wrong, the correction is marked in place.*
 
 Build it, with a **separate locals stack and a runtime frame**, as the TODO
 already sketches. The measurements below say the frame is affordable, and the
@@ -136,11 +160,12 @@ originally sketched. Decided 2026-08-10: matching the standard costs two
 characters and leaves `{` free for something else later.
 
 The whole declaration, not just the arg list: `{: <arg>… [| <val>…]
-[-- comment] :}`. Stage 3 shipped the arg list first and claimed conformance on
-that alone — which Brandon caught by reading a stack comment that no longer
-matched its word, because the missing `|` had been worked around by pushing a
-`0` before `{:`. Worth remembering that a subset of a standard syntax is not
-the standard syntax, and the gap shows up first in the examples.
+[-- comment] :}`. **Stage 2 shipped the arg list and claimed conformance on
+that alone**; stage 3 added `|` and `--`. Brandon caught the gap by reading a
+stack comment that no longer matched its word — the missing `|` had been
+worked around by pushing a `0` before `{:`, which silently made the word take
+an argument it did not want. Worth remembering that a subset of a standard
+syntax is not the standard syntax, and the gap shows up first in the examples.
 
 - **A separate locals stack**, not the return stack. This is the decision that
   removes most of the danger: no interaction with `>r`/`r>`, and none with
@@ -303,7 +328,13 @@ None blocking. The three that were here are resolved above or below:
 assignable (yes), `does>` (reject), `see` (already free — it replays captured
 source text rather than decompiling, so `{: s x y w h :}` prints verbatim).
 
-## Two edges that need deciding at compile time
+## Two edges that needed deciding at compile time
+
+> **Both decided and shipped.** `does>` is a compile-time error (it did not
+> fail loudly — it returned a wrong number from a dead frame). `:noname` takes
+> locals and works: `:noname {: a :} a 2 * . ;  21 swap execute` prints 42 with
+> LP balanced. The "ninth thing to reset" below was right, and is cleared on
+> every path that abandons a definition.
 
 **`does>` must reject local references.** The body after `does>` runs when the
 *created* word is executed — long after the defining word returned and its
