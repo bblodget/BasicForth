@@ -102,6 +102,41 @@
   machine that has it, and checks the message, the surviving session, and the
   absent words.
 
+### Fixed: the integration suite assumed the machine it was written on
+
+Three defects, all found by running the suite on a Raspberry Pi 400 the day
+SDL3 was installed there. Each reported something other than itself, which is
+what made them worth fixing rather than merely correcting.
+
+- **Two `wav-play` tests loaded `/usr/share/sounds/sound-icons/pipe.wav`** — a
+  file from Debian's `sound-icons` package, which the suite never installs and
+  Raspberry Pi OS does not ship. Without it `wav-load` failed, both `wav-play`
+  calls returned the same inert channel, and the failure read as a fault in a
+  perfectly good SDL3. The sample now lives in the repo as
+  `tests/sample-16k-mono.wav`, so it cannot be missing and cannot fail to
+  build. (The `wavcore.fs` fixtures next to it are still built in Forth, for a
+  reason that does not apply here: there the byte layout *is* what is under
+  test, malformed chunks and all, while this one only has to be a valid sample
+  of a known length.) It is deliberately 16 kHz against a 44100 device, because
+  a sample that agreed with the device would make the format assertion vacuous.
+  Both expected strings are unchanged, which is what shows this was an
+  environment fix rather than a re-baseline.
+- **The no-libflite test hard-coded `/lib/x86_64-linux-gnu/libflite.so.1`.**
+  On any other architecture `bwrap` failed to bind over a file that was not
+  there and the test reported *that* as the speech output — so the degraded
+  path went untested on precisely the machines it was not written on. The path
+  now comes from `ldconfig`, which is not merely portable but correct:
+  `speech.fs` dlopens the bare SONAME, so the file `ldconfig` names is by
+  construction the one the loader would have opened.
+- **Every "is this library installed" gate read `ldconfig` off `$PATH`, and
+  failed silently to good news.** `ldconfig` lives in `/sbin`, which is not on
+  every developer's `PATH` — and `! ldconfig -p | grep -q libSDL3` is *true*
+  when the command is missing, so the SDL, sound and speech sections all
+  skipped and the run still ended `0 failed`. Nothing was red; the tests simply
+  did not happen. Resolved once now, by absolute path when the bare name is not
+  found. This was invisible on both machines' interactive shells and appeared
+  only over `ssh`, which is how the ARM64 runs are driven.
+
 ### Fixed: `make` now refreshes the build directory's copy of `core.fs`
 
 - The binary reads `core.fs` at startup from beside itself, and that copy was
