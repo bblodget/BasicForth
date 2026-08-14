@@ -171,7 +171,7 @@ basicforth
 
 Nothing else is needed to build or to run: SDL3, flite and a speech engine
 are all `dlopen`ed on demand, so a missing one costs exactly its own feature
-and nothing else. See **[docs/Install.md](docs/Install.md)** for the ARM64
+and nothing else. See **[docs/Guides/Install.md](docs/Guides/Install.md)** for the ARM64
 cross-compile, the optional libraries, and what `setup.sh` does.
 
 ### Build Commands
@@ -309,7 +309,7 @@ BasicForth/
     echo.fs / hello.fs      `#!` script utilities
     lines.fs                stdout/stderr split demo
   docs/                     Design documentation
-    Install.md              Clone to working prompt, and the optional libraries
+    Guides/                 Task pages, readable at the prompt (help install)
     Tutorial/               Interactive tutorials (tutorial Snake)
     Language-Reference/     Per-topic reference (help stack, …)
 ```

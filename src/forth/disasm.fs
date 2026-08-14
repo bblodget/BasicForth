@@ -155,7 +155,11 @@ create (d-od) 64 allot     variable (d-od#)     \ which objdump to run
 : (d-probe) ( -- f )                        \ true when dis is usable
     (d-ready) if true exit then
     (cmd0) s" command -v objdump" (cmd+)
-    (cmd-line1) 0= if ." dis: needs objdump (binutils) on PATH" cr false exit then
+    \ Same wording as needs-cmd, deliberately -- but NOT needs-cmd itself:
+    \ that aborts the load, and this probe is re-run on every dis, so
+    \ installing objdump mid-session works without reloading the file.
+    (cmd-line1) 0= if
+        ." dis: needs the command objdump -- install binutils" cr false exit then
     drop
     (d-find-bin) 0= if
         ." dis: cannot identify the running binary" cr false exit then

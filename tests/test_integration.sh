@@ -26,6 +26,14 @@ FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 # Clearing it is enough: ${VISUAL:-...} treats empty as unset.
 unset VISUAL
 
+# Every "is this library installed" gate below asks ldconfig, which lives in
+# /sbin -- on root's PATH, but not on every developer's. That failure is
+# SILENT and reads as good news: `! ldconfig -p | grep -q libSDL3` is TRUE when
+# the command is missing, so the SDL, sound and speech sections all SKIP and
+# the run still ends "0 failed". Resolve it once, by absolute path when the
+# bare name is not found, so a green run means the tests actually ran.
+LDCONFIG="$(command -v ldconfig || echo /sbin/ldconfig)"
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
@@ -1177,7 +1185,7 @@ assert_result "ccallf with no floats == ccall" \
 # under QEMU (no aarch64 libSDL3 in the -L sysroot).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (libSDL3 not installed)\n"
 else
     sdl_px=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 64 32 sdl-open sdl-frame red clear gr-base @ l@ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
@@ -1186,6 +1194,36 @@ else
         printf "  ${GREEN}PASS${NC}  SDL3 open+draw+readback (red pixel via dummy video driver)\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
+    fi
+
+    # The DEGRADED path, on a machine that HAS SDL3: hide the library with
+    # bwrap and check the dep block does its job. This is the run a new user
+    # gets, and it is the one no suite could see before — the qemu sysroot has
+    # no libSDL3 either, but there the SDL tests are skipped wholesale, so
+    # "missing library" was never actually asserted anywhere.
+    # Mask the library FILES, never their directory. A from-source SDL3 lands
+    # in /usr/local/lib here, but a packaged one lives in /usr/lib/<triplet>
+    # beside libc and ld.so — a --tmpfs over that directory stops the binary
+    # from exec'ing at all, which tests nothing and reads like a real failure.
+    # Paths come from ldconfig, never assumed; every libSDL3 entry is covered
+    # because dlopen resolves the soname through that same cache.
+    sdl_libs=()
+    while read -r p; do sdl_libs+=(--ro-bind /dev/null "$p"); done < <(
+        "$LDCONFIG" -p 2>/dev/null | awk '/libSDL3\.so/ {print $NF}' | sort -u)
+    if ! command -v bwrap >/dev/null 2>&1; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (no bwrap to hide it with)\n"
+    elif [ ${#sdl_libs[@]} -eq 0 ]; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (cannot locate libSDL3 to hide)\n"
+    else
+        sdl_miss=$(printf 'require sdl3.fs\n2 3 + . cr\nparse-name sdl-open find if drop ." STILL-DEFINED" else 2drop then\nbye\n' \
+            | timeout 10 bwrap --dev-bind / / "${sdl_libs[@]}" \
+                --setenv BASICFORTH_PATH "$FORTH_LIB" $FORTH 2>&1 | sed '/^> /d; /^>$/d')
+        if [[ "$sdl_miss" == *"sdl3.fs: needs the library libSDL3.so.0 -- see help install"* \
+           && "$sdl_miss" == *"5"* && "$sdl_miss" != *STILL-DEFINED* ]]; then
+            printf "  ${GREEN}PASS${NC}  a missing libSDL3 names the file and the fix, and the session survives\n"; ((passed++))
+        else
+            printf "  ${RED}FAIL${NC}  missing-libSDL3 dep block\n    Got: %q\n" "$sdl_miss"; ((failed++))
+        fi
     fi
 
     # sdl-scale: the window is scaled but the drawing surface stays logical
@@ -1266,7 +1304,7 @@ fi
 # (examples/gamepad.fs is the readout for it).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (libSDL3 not installed)\n"
 else
     # Dead zone: |n| < pad-dead is centre, |n| >= pad-dead is a direction. The
@@ -1460,7 +1498,7 @@ fi
 # snd-error if SDL_PutAudioStreamData fails).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
 else
     snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
@@ -1796,21 +1834,35 @@ else
     fi
 
     # --- playing loaded samples (wav.fs) ---
+    # The sample is checked in beside this script. Both tests used to load
+    # /usr/share/sounds/sound-icons/pipe.wav -- a file from Debian's
+    # `sound-icons` package, which the suite never installs and Raspberry Pi OS
+    # does not ship. On a machine without it wav-load failed, both wav-play
+    # calls returned the same inert channel, and two tests blamed a perfectly
+    # good SDL3 for a missing fixture. Nothing here may depend on a file the
+    # repo does not carry.
+    #
+    # sample-16k-mono.wav is 12288 frames of 16-bit mono PCM at 16 kHz --
+    # exactly 768 ms, which is the 768 the first test reads back. The rate is
+    # deliberately NOT the device's 44100: the format test below can only see
+    # wav-play set the channel rate if the sample disagrees with the device.
+    play_wav="$REPO_ROOT/tests/sample-16k-mono.wav"
+
     # A wav plays on a channel; two plays land on different channels and both
     # sound at once; the queued byte count is the sample's own size, which is
     # what proves nothing was converted or copied on the way in.
-    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_play" | grep -q -- '-1 -1 -1 -1 768 play-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play mixes two sounds, queueing the sample untouched\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  wav-play\n    Got: %q\n" "$wav_play"; ((failed++))
     fi
-    # wav-play must tell the channel what is coming: pipe.wav is 16 kHz mono
+    # wav-play must tell the channel what is coming: the sample is 16 kHz mono
     # 16-bit (format 32784 = 0x8010), against a device side of 44100. Reading
     # the format back is the direct check -- the queued byte count is identical
     # whether or not the format was set, so it cannot catch this.
-    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_fmt" | grep -q '44100 1 32784 16000 1 32784 44100 1 32784 fmt-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play sets the channel format; tone-on sets it back\n"; ((passed++))
@@ -1860,9 +1912,9 @@ sp_check() { # sp_check <name> <output> <grep pattern>
 
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (no aarch64 libSDL3/libflite in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (libSDL3 not installed)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (libflite not installed)\n"
 else
     sp_check "speech-open succeeds, and is idempotent" \
@@ -2000,11 +2052,23 @@ speech-open . speech-ch 0> . s" hi" say speech-ch ch-queued 0> . ." recycle-ok" 
     # The missing-libflite path cannot be reached natively on a machine that
     # has libflite, so mask the library. Without this the ior-1 branch and the
     # promise that `require speech.fs` never aborts are both untested.
-    if command -v bwrap >/dev/null 2>&1; then
-        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null /lib/x86_64-linux-gnu/libflite.so.1 \
+    #
+    # Ask ldconfig where the library actually is rather than naming a path.
+    # This used to hard-code /lib/x86_64-linux-gnu/libflite.so.1, which does
+    # not exist on any other architecture: on ARM64 bwrap failed to bind over
+    # a missing file and the test reported that failure as the speech output,
+    # so the case went untested on precisely the machines it was not written
+    # on. ldconfig is also the RIGHT source, not merely a portable one --
+    # speech.fs dlopens the bare SONAME, so the file ldconfig names is by
+    # construction the one the loader would have opened.
+    flite_so=$("$LDCONFIG" -p 2>/dev/null | awk '/libflite\.so\.1 /{print $NF; exit}')
+    if command -v bwrap >/dev/null 2>&1 && [ -n "$flite_so" ]; then
+        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null "$flite_so" \
             sh -c "$(declare -f sp_run); FORTH_LIB='$FORTH_LIB'; FORTH='$FORTH'; sp_run ': t snd-open drop speech-open . speech-why type .\" |\" 99 s\" hi\" say depth . . .\" noflite-ok\" ; t'" 2>&1)
         sp_check "no libflite: an ior and a reason, and say stays a no-op" \
             "$sp_noflite" 'no libflite.so.1 on this machine|1 99 noflite-ok'
+    elif [ -z "$flite_so" ]; then
+        printf "  ${YELLOW}SKIP${NC}  no-libflite path (ldconfig does not name libflite.so.1)\n"
     else
         printf "  ${YELLOW}SKIP${NC}  no-libflite path (needs bwrap to mask the library)\n"
     fi
@@ -5637,6 +5701,116 @@ else
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
 fi
 
+# A needs-cmd/needs-lib hint that says "see help <x>" is a promise the help
+# system has to keep. `help install` was such a promise and did NOT resolve:
+# Install.md lived in docs/, which is design documentation and deliberately
+# not on BASICFORTH_DOCS. Nothing caught it, because prose asserting a
+# capability is not checked by anything -- so check it here. Every `help <x>`
+# named by a dep block in src/forth must answer.
+hint_bad=""
+hint_seen=""
+# DERIVED from setup.sh, never restated here. Checking against a wider path
+# would pass on pages the user cannot reach; checking against a copy of the
+# path would keep passing after setup.sh changed, which is the same bug one
+# level up. Sourced in a subshell so its exports do not leak into the suite,
+# which stays environment-independent.
+hint_docs=$(cd "$REPO_ROOT" && . ./setup.sh >/dev/null 2>&1 && printf '%s' "$BASICFORTH_DOCS")
+while read -r topic; do
+    hint_seen="$hint_seen $topic"
+    hint_out=$(printf 'help %s\nbye\n' "$topic" \
+        | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 5 $FORTH 2>&1)
+    printf '%s' "$hint_out" | grep -q "no help for" && hint_bad="$hint_bad $topic"
+done < <(grep -hoE '^(needs-cmd|needs-lib)[^\\]*help [a-zA-Z0-9_-]+' "$FORTH_LIB"/*.fs \
+         | grep -oE 'help [a-zA-Z0-9_-]+$' | awk '{print $2}' | sort -u)
+# A Guides page is narrative, so its "## " headings ARE its help sub-topics --
+# and the indexer takes EVERY word of a heading as a topic name. "## Get the
+# source" therefore published `help Get` and `help source`, the second of which
+# collides with a real word. So a Guides heading must be a single token, and it
+# must answer with its own page rather than something that shadows it.
+# (Language-Reference is exempt: there a heading legitimately names several
+# words before its stack effect.)
+guide_bad=""
+guide_n=0
+# What the other sections already answer. Checked against the FILES, not by
+# asking help: on a collision help does not lose, it APPENDS -- `help allot`
+# would print Memory's real entry AND a slab of the install guide, so a test
+# that only asked "did my page come back" sees nothing wrong.
+#
+# The two lookups fold differently, and the gate has to match each or it
+# rejects headings that are actually fine. Measured against the binary:
+#   page name   `-` and `_` are equivalent   defining_words -> Defining-Words.md
+#   word entry  they are NOT                 next_ch -> no help, only next-ch
+#   neither     separators are never dropped definingwords -> no help
+guide_page_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_' '-'; }
+guide_word_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md \
+               "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null \
+            | xargs -n1 basename | sed 's/\.md$//' | tr 'A-Z' 'a-z' | tr '_' '-' | sort -u)
+# Tutorial "## " headings are lesson steps, not word entries, and the indexer
+# skips them -- so they are not names anything answers.
+# This mirrors (head-word?) in core.fs, token for token, because every
+# approximation of it has been wrong in a different way:
+#   - cutting at the first "(" loses PARENTHESIZED words -- "## (dlopen) ( ... )"
+#     yields nothing, though `help (dlopen)` answers FFI:
+#   - cutting at the first " (" is still wrong where the effect does not open
+#     with a bare paren: "## Number prefixes ($ hex, % binary, # decimal)"
+#     really does publish `%`, `hex,` and `decimal)` as topics
+# The rule: split on whitespace and stop at a token that is EXACTLY "(" --
+# except as the first token, where "(" is the word itself.
+ref_words=$(grep -h "^## " "$REPO_ROOT"/docs/Language-Reference/*.md | sed 's/^## //' \
+            | awk '{ for (i = 1; i <= NF; i++) {
+                         if ($i == "(") { if (i == 1) print $i; break }
+                         print $i } }' \
+            | tr 'A-Z' 'a-z' | grep -v '^$' | sort -u)
+while read -r file; do
+    page=$(basename "$file" .md)
+    while read -r head; do
+        guide_n=$((guide_n + 1))
+        if [ "$(printf '%s' "$head" | wc -w)" -ne 1 ]; then
+            guide_bad="$guide_bad ${page}:'${head}'(multi-word)"
+            continue
+        fi
+        # Ask the binary whether the heading is really reachable -- but NOT
+        # under emulation. `help <word>` scans every "## " heading in every
+        # doc file, which costs 10s per call under qemu against 0.08s for the
+        # file-name lookup above; ten headings would add ~100s to the ARM64
+        # run to re-check a property of the DOCUMENTATION, identical on both
+        # architectures. It still runs natively, including on an ARM64 board.
+        if [[ "$FORTH" != *qemu* ]]; then
+            got=$(printf 'help %s\nbye\n' "$head" \
+                | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 20 $FORTH 2>&1)
+            printf '%s' "$got" | grep -q "^${page}:" || guide_bad="$guide_bad ${page}:${head}(unreachable)"
+        fi
+        printf '%s\n' "$ref_pages" | grep -qxF "$(guide_page_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a page name)"
+        printf '%s\n' "$ref_words" | grep -qxF "$(guide_word_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a reference word entry)"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_n" -gt 0 ] && [ -z "$guide_bad" ]; then
+    if [[ "$FORTH" == *qemu* ]]; then
+        printf "  ${GREEN}PASS${NC}  every Guides heading is a one-word topic no reference page answers (%d; reachability checked natively)\n" "$guide_n"; ((passed++))
+    else
+        printf "  ${GREEN}PASS${NC}  every Guides heading is a reachable one-word help topic (%d)\n" "$guide_n"; ((passed++))
+    fi
+elif [ "$guide_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides headings (no pages found)\n"
+else
+    printf "  ${RED}FAIL${NC}  a Guides heading is not a usable help topic\n"
+    printf "    Bad:%s\n" "$guide_bad"; ((failed++))
+fi
+
+if [ -z "$hint_docs" ]; then
+    printf "  ${RED}FAIL${NC}  dep-block help hints: could not read BASICFORTH_DOCS from setup.sh\n"; ((failed++))
+elif [ -n "$hint_seen" ] && [ -z "$hint_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every 'see help <x>' in a dep block resolves (%s)\n" "${hint_seen# }"; ((passed++))
+elif [ -z "$hint_seen" ]; then
+    printf "  ${YELLOW}SKIP${NC}  dep-block help hints (no dep block names one)\n"
+else
+    printf "  ${RED}FAIL${NC}  a dep block promises help that does not resolve\n"
+    printf "    Unresolved:%s\n" "$hint_bad"; ((failed++))
+fi
+
 # The same audit for the LIBRARY words, which the core sweep above cannot see:
 # they exist only after a `require`, so any library could add a public name
 # with no help entry and nothing would notice. Found that way -- snd-dev and
@@ -5647,7 +5821,7 @@ fi
 # it -- so under qemu, or on a machine with no SDL3, this is the one part of
 # the help contract that goes unverified. Both skips are printed rather than
 # quietly dropped.
-if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+if [[ "$FORTH" == *qemu* ]] || ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  every library word has a reference entry (needs libSDL3)\n"
     printf "  ${YELLOW}SKIP${NC}  the library audit loads every src/forth/*.fs (needs libSDL3)\n"
 else

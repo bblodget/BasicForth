@@ -55,6 +55,88 @@
   `note: local i shadows an existing word`. A note, not an error: shadowing is
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
+
+### Changed: sdl3.fs and sound.fs declare the library they need
+
+- Both now open with a dep block, so a machine without SDL3 is told which file
+  wanted the library and what to do about it, instead of being told only that
+  something could not be loaded:
+
+      require sdl3.fs
+      sdl3.fs: needs the library libSDL3.so.0 -- see help install
+
+  The pointer earns its place here: SDL3 is not packaged on Debian or Ubuntu
+  yet, so "install libsdl3" is not advice anyone can act on, and `help install`
+  has the cmake recipe.
+- The failure point is unchanged — `dlopen` already aborted the load — and the
+  probe hands its handle to the bind that follows, so declaring the
+  requirement costs no second `dlopen`.
+- **Deliberately not adopted** by `speech.fs`, `voice.fs` and `disasm.fs`.
+  Those three do not abort today: they return an `ior`, or probe at first use
+  and retry, so a game runs without flite and installing binutils mid-session
+  works. `needs-lib` stops the load, which would turn `require speech.fs` into
+  a hard failure on any machine without flite and break a published stack
+  effect. `disasm.fs` now *words* its message like `needs-cmd` — same
+  sentence, same shape — while still firing at first use, not at load.
+- `docs/Guides/` is a third help section, and `Install.md` moved into it. The
+  hint says `see help install`, and that has to be true at the prompt where
+  the error appears — but `docs/` itself is design and implementation notes,
+  which `help` should never offer, so the page had nowhere reachable to live.
+  `setup.sh` exports the new section; `help install` answers; `help` lists
+  Guides beside Language-Reference and Tutorial. Guides is for user-facing
+  pages that are neither word references nor lessons, and installing is only
+  the first.
+- A dep block that promises `help <x>` is now **checked**: the suite extracts
+  every such hint from `src/forth/*.fs` and asks the help system, against the
+  docs path *read from* `setup.sh` rather than a copy of it — a copy would keep
+  passing after `setup.sh` changed, which is the same bug one level up.
+  `help install` had been a broken promise from the moment it was written, and
+  prose asserting a capability is not checked by anything unless you check it.
+- Guides headings are checked too: each must be one token, and one that no
+  reference page already answers. `help` does not *lose* a collision, it
+  appends — a `## allot` in a guide would leave `help allot` printing Memory's
+  entry with a slab of the install guide after it.
+- The degraded path is now tested where it is actually used. It ran only under
+  QEMU before, where the SDL tests are skipped wholesale, so "library missing"
+  was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
+  machine that has it, and checks the message, the surviving session, and the
+  absent words.
+
+### Fixed: the integration suite assumed the machine it was written on
+
+Three defects, all found by running the suite on a Raspberry Pi 400 the day
+SDL3 was installed there. Each reported something other than itself, which is
+what made them worth fixing rather than merely correcting.
+
+- **Two `wav-play` tests loaded `/usr/share/sounds/sound-icons/pipe.wav`** — a
+  file from Debian's `sound-icons` package, which the suite never installs and
+  Raspberry Pi OS does not ship. Without it `wav-load` failed, both `wav-play`
+  calls returned the same inert channel, and the failure read as a fault in a
+  perfectly good SDL3. The sample now lives in the repo as
+  `tests/sample-16k-mono.wav`, so it cannot be missing and cannot fail to
+  build. (The `wavcore.fs` fixtures next to it are still built in Forth, for a
+  reason that does not apply here: there the byte layout *is* what is under
+  test, malformed chunks and all, while this one only has to be a valid sample
+  of a known length.) It is deliberately 16 kHz against a 44100 device, because
+  a sample that agreed with the device would make the format assertion vacuous.
+  Both expected strings are unchanged, which is what shows this was an
+  environment fix rather than a re-baseline.
+- **The no-libflite test hard-coded `/lib/x86_64-linux-gnu/libflite.so.1`.**
+  On any other architecture `bwrap` failed to bind over a file that was not
+  there and the test reported *that* as the speech output — so the degraded
+  path went untested on precisely the machines it was not written on. The path
+  now comes from `ldconfig`, which is not merely portable but correct:
+  `speech.fs` dlopens the bare SONAME, so the file `ldconfig` names is by
+  construction the one the loader would have opened.
+- **Every "is this library installed" gate read `ldconfig` off `$PATH`, and
+  failed silently to good news.** `ldconfig` lives in `/sbin`, which is not on
+  every developer's `PATH` — and `! ldconfig -p | grep -q libSDL3` is *true*
+  when the command is missing, so the SDL, sound and speech sections all
+  skipped and the run still ended `0 failed`. Nothing was red; the tests simply
+  did not happen. Resolved once now, by absolute path when the bare name is not
+  found. This was invisible on both machines' interactive shells and appeared
+  only over `ssh`, which is how the ARM64 runs are driven.
+
 ### Fixed: `make` now refreshes the build directory's copy of `core.fs`
 
 - The binary reads `core.fs` at startup from beside itself, and that copy was

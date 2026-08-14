@@ -50,7 +50,11 @@
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
 
+\ --- dep block: what this file needs before any of it exists ---
+\ Audio comes from the same SDL3 as the display, so the requirement (and the
+\ from-source build behind it) is the same one sdl3.fs states.
 require ffi.fs
+needs-lib libSDL3.so.0    see help install
 
 \ --- library ---
 \ sdl3.fs binds some of these names too; the rebindings are identical, so

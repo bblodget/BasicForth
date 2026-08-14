@@ -14,7 +14,7 @@ That is the whole list — `git` to fetch the source, and `binutils`, `gcc` and
 use (SDL3, flite, a speech engine) is `dlopen`ed on demand rather than linked,
 so none of them is needed to build or to run.
 
-**[Install.md](Install.md)** covers the rest: the ARM64 cross-compile, the
+**[Install.md](Guides/Install.md)** covers the rest: the ARM64 cross-compile, the
 optional libraries and what each one buys, and `setup.sh`.
 
 ## Building and Running
@@ -789,11 +789,13 @@ BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
 more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
 
 ```
-$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
 > help                           \ list the topics, three to a row
 Language-Reference
   Arithmetic           Comparison           Compiler
   ...
+Guides
+  Install
 Tutorial:  type  tutorials  to list the interactive tutorials.
 
 help <topic>  - that topic's summary       (help stack)

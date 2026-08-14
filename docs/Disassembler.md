@@ -122,8 +122,13 @@ never syntax. See docs/Shelling_Out.md.
 
 The probes run once, on first use, and are retried until they succeed — so
 installing binutils mid-session just works. Without objdump, `dis` prints
-`dis: needs objdump (binutils) on PATH` and returns; it is never loaded on
-a system where you don't ask for it (`require disasm.fs`).
+`dis: needs the command objdump -- install binutils` and returns; it is never
+loaded on a system where you don't ask for it (`require disasm.fs`).
+
+That reads like `needs-cmd`, and says the same thing on purpose — but it is
+deliberately *not* `needs-cmd`, which stops the load. A requirement checked at
+load time cannot be satisfied without reloading the file, and retrying is the
+whole point here.
 
 ## Limits
 

@@ -1352,8 +1352,10 @@ docs/Graphics.md for the API.
     `docs/README-linux.md` has the per-distribution package list, so the page
     points at it rather than copying a list that would rot.
   - **A missing library does not degrade gracefully in the way you might
-    assume.** `require sdl3.fs` prints `dlopen: cannot load library` and the
-    session continues — but loading *stops there*, so the words are simply
+    assume.** `require sdl3.fs` prints `sdl3.fs: needs the library
+    libSDL3.so.0 -- see help install` (it was `dlopen: cannot load library`
+    before `needs-lib`) and the session continues — but loading *stops
+    there*, so the words are simply
     absent and a later `snd-open` reports `? snd-open`. Verified under
     `bwrap` with `/usr/local/lib` hidden. The page says so, since "why is
     this word missing" is the question that actually gets asked.
@@ -1710,7 +1712,20 @@ docs/Graphics.md for the API.
     follows. Not yet adopted by the built-in libraries — that is its own
     step, since each one currently fails its own way.
   - [ ] `deps <name>` — soft-check a file's leading dep block without
-    loading it; report all missing requirements at once
+    loading it; report all missing requirements at once.
+    **Design this together with a SOFT dependency form** (decided
+    2026-08-13, adopting needs-lib). `needs-cmd`/`needs-lib` abort the
+    load, which is right for sdl3.fs and sound.fs — they already failed
+    there — but wrong for speech.fs, voice.fs and disasm.fs, which
+    deliberately keep running without flite/piper/objdump and report
+    through an `ior` or a retried probe. Those three therefore have no dep
+    block at all, so `deps speech` would report *nothing* about exactly
+    the optional dependency worth checking before you install something.
+    A soft form (`wants-lib`? `wants-cmd`?) would record the requirement
+    for `deps` to read without stopping the load. Getting this wrong in
+    the other direction is worse: making the three abort would break
+    `speech-open ( -- ior )`'s published contract and every
+    degraded-environment lesson run.
   - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
     BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
     third-party packages)
