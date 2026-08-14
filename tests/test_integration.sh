@@ -26,6 +26,14 @@ FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 # Clearing it is enough: ${VISUAL:-...} treats empty as unset.
 unset VISUAL
 
+# Every "is this library installed" gate below asks ldconfig, which lives in
+# /sbin -- on root's PATH, but not on every developer's. That failure is
+# SILENT and reads as good news: `! ldconfig -p | grep -q libSDL3` is TRUE when
+# the command is missing, so the SDL, sound and speech sections all SKIP and
+# the run still ends "0 failed". Resolve it once, by absolute path when the
+# bare name is not found, so a green run means the tests actually ran.
+LDCONFIG="$(command -v ldconfig || echo /sbin/ldconfig)"
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
@@ -1177,7 +1185,7 @@ assert_result "ccallf with no floats == ccall" \
 # under QEMU (no aarch64 libSDL3 in the -L sysroot).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (libSDL3 not installed)\n"
 else
     sdl_px=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 64 32 sdl-open sdl-frame red clear gr-base @ l@ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
@@ -1201,7 +1209,7 @@ else
     # because dlopen resolves the soname through that same cache.
     sdl_libs=()
     while read -r p; do sdl_libs+=(--ro-bind /dev/null "$p"); done < <(
-        ldconfig -p 2>/dev/null | awk '/libSDL3\.so/ {print $NF}' | sort -u)
+        "$LDCONFIG" -p 2>/dev/null | awk '/libSDL3\.so/ {print $NF}' | sort -u)
     if ! command -v bwrap >/dev/null 2>&1; then
         printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (no bwrap to hide it with)\n"
     elif [ ${#sdl_libs[@]} -eq 0 ]; then
@@ -1296,7 +1304,7 @@ fi
 # (examples/gamepad.fs is the readout for it).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (libSDL3 not installed)\n"
 else
     # Dead zone: |n| < pad-dead is centre, |n| >= pad-dead is a direction. The
@@ -1490,7 +1498,7 @@ fi
 # snd-error if SDL_PutAudioStreamData fails).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
 else
     snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
@@ -1826,21 +1834,35 @@ else
     fi
 
     # --- playing loaded samples (wav.fs) ---
+    # The sample is checked in beside this script. Both tests used to load
+    # /usr/share/sounds/sound-icons/pipe.wav -- a file from Debian's
+    # `sound-icons` package, which the suite never installs and Raspberry Pi OS
+    # does not ship. On a machine without it wav-load failed, both wav-play
+    # calls returned the same inert channel, and two tests blamed a perfectly
+    # good SDL3 for a missing fixture. Nothing here may depend on a file the
+    # repo does not carry.
+    #
+    # sample-16k-mono.wav is 12288 frames of 16-bit mono PCM at 16 kHz --
+    # exactly 768 ms, which is the 768 the first test reads back. The rate is
+    # deliberately NOT the device's 44100: the format test below can only see
+    # wav-play set the channel rate if the sample disagrees with the device.
+    play_wav="$REPO_ROOT/tests/sample-16k-mono.wav"
+
     # A wav plays on a channel; two plays land on different channels and both
     # sound at once; the queued byte count is the sample's own size, which is
     # what proves nothing was converted or copied on the way in.
-    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_play" | grep -q -- '-1 -1 -1 -1 768 play-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play mixes two sounds, queueing the sample untouched\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  wav-play\n    Got: %q\n" "$wav_play"; ((failed++))
     fi
-    # wav-play must tell the channel what is coming: pipe.wav is 16 kHz mono
+    # wav-play must tell the channel what is coming: the sample is 16 kHz mono
     # 16-bit (format 32784 = 0x8010), against a device side of 44100. Reading
     # the format back is the direct check -- the queued byte count is identical
     # whether or not the format was set, so it cannot catch this.
-    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_fmt" | grep -q '44100 1 32784 16000 1 32784 44100 1 32784 fmt-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play sets the channel format; tone-on sets it back\n"; ((passed++))
@@ -1890,9 +1912,9 @@ sp_check() { # sp_check <name> <output> <grep pattern>
 
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (no aarch64 libSDL3/libflite in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (libSDL3 not installed)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
     printf "  ${YELLOW}SKIP${NC}  speech.fs (libflite not installed)\n"
 else
     sp_check "speech-open succeeds, and is idempotent" \
@@ -2030,11 +2052,23 @@ speech-open . speech-ch 0> . s" hi" say speech-ch ch-queued 0> . ." recycle-ok" 
     # The missing-libflite path cannot be reached natively on a machine that
     # has libflite, so mask the library. Without this the ior-1 branch and the
     # promise that `require speech.fs` never aborts are both untested.
-    if command -v bwrap >/dev/null 2>&1; then
-        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null /lib/x86_64-linux-gnu/libflite.so.1 \
+    #
+    # Ask ldconfig where the library actually is rather than naming a path.
+    # This used to hard-code /lib/x86_64-linux-gnu/libflite.so.1, which does
+    # not exist on any other architecture: on ARM64 bwrap failed to bind over
+    # a missing file and the test reported that failure as the speech output,
+    # so the case went untested on precisely the machines it was not written
+    # on. ldconfig is also the RIGHT source, not merely a portable one --
+    # speech.fs dlopens the bare SONAME, so the file ldconfig names is by
+    # construction the one the loader would have opened.
+    flite_so=$("$LDCONFIG" -p 2>/dev/null | awk '/libflite\.so\.1 /{print $NF; exit}')
+    if command -v bwrap >/dev/null 2>&1 && [ -n "$flite_so" ]; then
+        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null "$flite_so" \
             sh -c "$(declare -f sp_run); FORTH_LIB='$FORTH_LIB'; FORTH='$FORTH'; sp_run ': t snd-open drop speech-open . speech-why type .\" |\" 99 s\" hi\" say depth . . .\" noflite-ok\" ; t'" 2>&1)
         sp_check "no libflite: an ior and a reason, and say stays a no-op" \
             "$sp_noflite" 'no libflite.so.1 on this machine|1 99 noflite-ok'
+    elif [ -z "$flite_so" ]; then
+        printf "  ${YELLOW}SKIP${NC}  no-libflite path (ldconfig does not name libflite.so.1)\n"
     else
         printf "  ${YELLOW}SKIP${NC}  no-libflite path (needs bwrap to mask the library)\n"
     fi
@@ -5787,7 +5821,7 @@ fi
 # it -- so under qemu, or on a machine with no SDL3, this is the one part of
 # the help contract that goes unverified. Both skips are printed rather than
 # quietly dropped.
-if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+if [[ "$FORTH" == *qemu* ]] || ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  every library word has a reference entry (needs libSDL3)\n"
     printf "  ${YELLOW}SKIP${NC}  the library audit loads every src/forth/*.fs (needs libSDL3)\n"
 else
