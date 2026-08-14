@@ -1111,6 +1111,18 @@ docs/Graphics.md for the API.
   tests overflow by looping until they fault, so the size only changes how
   long they take.
 
+- [x] **Locals word set (section 13).** SHIPPED 2026-08-11..13, both arches, in
+  three stages: the runtime frame and its unwind contract; `{: … :}` with
+  open-coded references; then `to`, the shadow note, and the rest of the
+  declaration (`|`, `--`). See docs/Locals.md for what the building of it
+  corrected in the design, and docs/Language-Reference/Locals.md for the user
+  page. `does>` is refused, deliberately.
+  **Still open:** ARM64 timings. A reference is six instructions there against
+  x86's four (ARM64 needs three to reach TLS where x86 needs one), so the
+  "open-coding beats a call" claim is measured on x86 only. Worth an hour on
+  the Pi 400 now that it runs natively.
+  Original research entry follows.
+
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
   - **Researched 2026-08-10: see docs/Locals.md.** Verdict: build it, runtime
     frame, separate stack, `lp` in the existing TLS block. Measured on x86: a
@@ -2609,6 +2621,16 @@ smaller risk surface.
   why asserting transitive coverage in a comment was not enough.
   The rule applied: a name a user is expected to pass to something is API and
   needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
+
+- [ ] **Sweep for `STATE`-only tests that mean "is a definition open".** Three
+  wedges in one week came from conflating them, because `[` interprets *inside*
+  an open definition: the definition-open guard (2026-08-10), the locals-list
+  clears, and `dict_full`'s rollback (2026-08-13) — the last of which left a
+  partial header alive and then refused every subsequent definition, silently.
+  The correct test is `STATE` **or** `F_HIDDEN` on LATEST; `main.s` has had the
+  right idiom, with the reasoning in a comment, since the ` ok` suppression was
+  written. Grep both arches for `state` reads that decide whether to roll back,
+  abort, or suppress, and check each against `: t [ … ] ;`.
 
 - [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
   gating the locals shadow warning: it returns 0 at the prompt *and* during a

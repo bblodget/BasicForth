@@ -1,10 +1,17 @@
 # Locals — Design Note
 
-Status: **stage 2 built (2026-08-12): `{: … :}` compiles, on both
-architectures, with open-coded references.** Stage 1 (2026-08-11) was the
-runtime frame and its unwind contract. Phase 8 (`docs/TODO.md`, "Threading and Locals").
+Status: **BUILT, stages 1-3 (2026-08-11 to 08-13), on both architectures.**
+Stage 1 was the runtime frame and its unwind contract, stage 2 `{: … :}` with
+open-coded references, stage 3 assignment (`to`), the shadow note, and the rest
+of the Forth 2012 declaration (`|`, `--`). Phase 8 (`docs/TODO.md`, "Threading
+and Locals").
+
+Still open: the ARM64 timings (a reference is six instructions there to x86's
+four, and only x86 has been measured), and `does>` is refused rather than
+supported — deliberately, see below.
+
 This note records what the runtime-frame design costs, where it can go wrong,
-and what still has to be decided.
+and what the building of it corrected.
 
 ## What stage 2 shipped
 
