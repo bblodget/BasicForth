@@ -30,7 +30,7 @@
 \ substitutions are QUOTED, so a phrase containing an apostrophe, a $ or a
 \ semicolon is data and never syntax:
 \
-\   s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!    \ the default
+\   s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!    \ the default
 \   s" espeak-ng -w %o -- %t" voice-cmd!
 \   s" printf '%s' %t | some-engine --out %o" voice-cmd!       \ stdin engines
 \
@@ -39,7 +39,12 @@
 \ The engine's own output stays on the terminal -- when a render fails, its
 \ complaint is usually more specific than voice-why.
 
+\ --- dep block: what this file needs before any of it exists ---
+\ The engine is a DEFAULT, not a requirement -- voice-cmd! takes any command
+\ template, so this file is useful on a machine with no piper at all. Declared
+\ softly so `deps voice` names the default rather than staying silent about it.
 require shellutil.fs
+wants-cmd piper           the default engine; voice-cmd! takes another
 
 \ --- the engine command ---
 \ 512 is far more than any real template needs (the piper default is 41
@@ -55,7 +60,7 @@ variable (vc-#)
     dup (vc-max) > if 2drop 0 (vc-#) ! exit then
     dup (vc-#) !  (vc-buf) swap cmove ;
 
-s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!
+s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!
 
 \ ...but $VOICE_ENGINE_CMD wins, because the default above can only guess. It
 \ names piper with no --data-dir, so it finds a voice only where piper happens

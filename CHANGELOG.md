@@ -56,6 +56,61 @@
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
 
+### Added: `deps <file>` — what a file needs, without loading it
+
+- `deps sdl3` reads a file's leading dep block and reports each requirement
+  against this machine, without running a line of the file:
+
+      deps sdl3
+      sdl3.fs
+        require ffi.fs            loaded
+        require graphics.fs       found
+        needs-lib libSDL3.so.0    MISSING -- see help install
+      sdl3.fs will not load: 1 requirement missing.
+
+  `.fs` is added if you leave it off, and the file is looked for in the current
+  directory first and then on `BASICFORTH_PATH` — the same order `require`
+  uses, so `deps` answers for the file the load would actually pick.
+- **One parser, not two.** `deps` re-runs the block with a mode flag set, and
+  each word takes a reporting branch through the same parse and the same probe
+  it uses at load time. A second implementation of the syntax would have been
+  free to drift from the first, and would eventually have said a file loads
+  when it does not.
+- **It follows `require`,** because the flat answer can lie: `require sound.fs
+  found` is no comfort on a machine where sound.fs itself cannot load for want
+  of SDL3. Nested files print **only if something in them is missing**, so a
+  healthy machine sees one short list and a broken one sees exactly the section
+  that explains itself. A file already loaded is not followed — it is in
+  memory, so its requirements were met when it got there.
+- A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
+  too — all met, will-load-but-degraded, and will-not-load.
+- **The traversal is bounded at 64 files, and says so when it runs out** rather
+  than reporting on the part it managed to read. dark-star.fs already follows
+  11 files, so the bound is reachable, and a quiet truncation would have
+  produced the one thing this word exists to prevent — a confident "all
+  requirements met" from a check that stopped looking.
+
+### Added: `wants-cmd` / `wants-lib` — requirements a file can live without
+
+- Same syntax as `needs-cmd`/`needs-lib`, opposite behaviour: no probe, no
+  message, and the load never stops. A soft requirement is a **declaration,
+  not a check** — it exists to be read by `deps`.
+
+      wants-cmd piper           the default engine; voice-cmd! takes another
+      wants-lib libflite.so.1   install flite
+
+- `disasm.fs`, `speech.fs` and `voice.fs` now carry a dep block for the first
+  time. Each deliberately keeps working without its dependency — `disasm.fs`
+  re-probes for objdump on every `dis`, so installing binutils mid-session
+  works without a reload; `voice.fs` treats piper as a default that
+  `voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )`. Using
+  `needs-*` in any of them would have broken a contract the file publishes on
+  purpose, which is why they had no dep block at all until now — and why
+  `deps speech` used to be able to say nothing about the one optional
+  dependency worth checking.
+- The silence is deliberate. A warning on every load would nag every user who
+  is running perfectly well without the thing.
+
 ### Changed: sdl3.fs and sound.fs declare the library they need
 
 - Both now open with a dep block, so a machine without SDL3 is told which file
@@ -101,6 +156,70 @@
   was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
   machine that has it, and checks the message, the surviving session, and the
   absent words.
+
+### Changed: `help libraries` leads with the one command that usually works
+
+- **SDL3 is packaged now**, on Debian 13 (trixie) and Raspberry Pi OS 64-bit
+  among others, so the optional half of the install is `sudo apt install
+  libsdl3-dev libflite1` and nothing else. The page used to say "from source,
+  see below" unconditionally and then spend fifty lines on cmake — a build
+  most readers no longer need, presented as the only route.
+- The from-source recipe is intact, moved to its own topic: `help
+  sdl3-source`. Nothing was cut, only reordered so the common case is not
+  behind the rare one. flite and the speech engines moved out the same way, to
+  `help flite` and `help engines`. **A `###` subsection does not end a `help`
+  topic** — the page is read to the next `##` — so a detail section only stops
+  padding the overview once it becomes a topic in its own right. `help
+  libraries` is 37 source lines where it was 96.
+- **`help install` now answers with the commands, not with a table of
+  contents.** The complete install — build tools, clone, `make`, `setup.sh`,
+  and the one `apt` line that buys graphics, sound, gamepads and `say` — is in
+  the first screen, before the topic list. `help quickstart` carries the same
+  commands with a line on what each is for.
+- **`help engines` carries the piper install itself.** It used to point at
+  `docs/Speech.md`, which is design documentation and deliberately off
+  `BASICFORTH_DOCS` — so from the prompt, where the reader is, the pointer went
+  nowhere. Same broken promise `help install` was created to fix. Speech.md
+  keeps the reasoning; the guide keeps the commands and the one trap that
+  silently costs you the engine (`pipx ensurepath` needs a fresh shell).
+### Changed: the default piper voice is `en_US-libritts-high`
+
+- **The old default was the wrong thing to point people at.** It is trained on
+  the Blizzard Challenge 2013 Lessac data, whose licence restricts use to
+  "Research Purposes" and excludes "any commercial purpose" — while the
+  workflow these pages recommend is to render a vocabulary once and *ship the
+  WAVs*. Whatever one concludes about generated audio specifically, a default
+  should not put that question in front of every user.
+- `en_US-libritts-high` is **trained from scratch** on LibriTTS
+  (openslr.org/60), which is **CC BY 4.0**. Switched everywhere the old voice
+  was named — `setup.sh`, `voice.fs`'s built-in template, three suite
+  assertions and four documentation pages.
+- **A permissive dataset licence is not enough on its own, which is the trap
+  worth writing down.** Most piper voices are *fine-tuned from* the Lessac
+  model, so the restriction travels into voices whose own dataset is
+  perfectly free: `en_US-libritts_r-medium` advertises CC BY 4.0 and is
+  "fine-tuned from English lessac medium". The first replacement chosen here
+  was that voice, for exactly that reason. A voice is clear only if its
+  dataset licence *and* its training lineage are both clear, and the docs now
+  say so.
+- **The docs record where the terms are, and stop reasoning about how they
+  combine.** Three things carry their own — the engine (`piper-tts`,
+  GPL-3.0-or-later by its package metadata), the voice model, and its training
+  data — and what that means for generated audio is a question for the reader,
+  not for an install guide. Earlier drafts of this entry answered it three
+  different ways and each was an overreach, so the pages now give the facts
+  and the sources: `pip show piper-tts`, and the model cards at
+  huggingface.co/rhasspy/piper-voices, which `download_voices` does not
+  fetch.
+- `voice.fs` runs the engine as a separate program and never links against it,
+  which is stated as the architectural fact it is, without the conclusion the
+  earlier drafts drew from it.
+- **The version gap is documented as checked rather than hoped.** Debian ships
+  3.2.10 where BasicForth is developed against 3.4.12: every SDL function the
+  Forth side binds is present in 3.2.10, and all 51 constants and struct
+  offsets are identical between the two. `tools/sdl3off.c` is what settles
+  this, and `help sdl3-source` now says so, since the question recurs with
+  every distribution.
 
 ### Fixed: the integration suite assumed the machine it was written on
 

@@ -1711,21 +1711,26 @@ docs/Graphics.md for the API.
     probes with a real `dlopen` and keeps the handle for the bind that
     follows. Not yet adopted by the built-in libraries — that is its own
     step, since each one currently fails its own way.
-  - [ ] `deps <name>` — soft-check a file's leading dep block without
-    loading it; report all missing requirements at once.
-    **Design this together with a SOFT dependency form** (decided
-    2026-08-13, adopting needs-lib). `needs-cmd`/`needs-lib` abort the
-    load, which is right for sdl3.fs and sound.fs — they already failed
-    there — but wrong for speech.fs, voice.fs and disasm.fs, which
-    deliberately keep running without flite/piper/objdump and report
-    through an `ior` or a retried probe. Those three therefore have no dep
-    block at all, so `deps speech` would report *nothing* about exactly
-    the optional dependency worth checking before you install something.
-    A soft form (`wants-lib`? `wants-cmd`?) would record the requirement
-    for `deps` to read without stopping the load. Getting this wrong in
-    the other direction is worse: making the three abort would break
-    `speech-open ( -- ior )`'s published contract and every
-    degraded-environment lesson run.
+  - [x] `deps <name>` + the soft forms `wants-cmd` / `wants-lib`. Done
+    2026-08-14 (branch deps). A soft requirement is a **declaration, not a
+    check**: it parses its line and does nothing else — no probe, no
+    message, no abort — so speech.fs keeps answering `speech-open
+    ( -- ior )`, voice.fs keeps treating piper as a default that
+    `voice-cmd!` replaces, and disasm.fs keeps re-probing for objdump on
+    every `dis` (installing binutils mid-session still works without a
+    reload). All three now carry a dep block; `needs-*` in any of them
+    would have broken a published contract.
+    `deps` re-runs the block with a mode flag set, so the same word that
+    would act at load time reports instead — one parser, not two. It
+    follows `require` into the files named there, because the flat answer
+    can lie (`require sound.fs  found` is no comfort where sound.fs itself
+    cannot load), and nested files print **only if something in them is
+    missing**. File-only resolution for now: `.fs` appended if absent,
+    CWD then BASICFORTH_PATH. A word-name fallback via the header's
+    srcid — `deps dis` finding disasm.fs the way `see` does — was
+    considered and deferred: it can only answer for words you already
+    have, and the main question ("what will this need *before* I load
+    it?") can only go through the file.
   - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
     BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
     third-party packages)

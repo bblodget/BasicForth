@@ -130,6 +130,15 @@ deliberately *not* `needs-cmd`, which stops the load. A requirement checked at
 load time cannot be satisfied without reloading the file, and retrying is the
 whole point here.
 
+The file's dep block therefore declares objdump *softly*:
+
+    wants-cmd objdump         install binutils
+
+`wants-cmd` does nothing at load time — no probe, no message, no abort. The two
+do different jobs and both are needed: the runtime probe is what lets `dis`
+recover when you install binutils mid-session, and the declaration is what lets
+`deps disasm` tell you objdump is missing before you wonder why.
+
 ## Limits
 
 - **`:noname` code has no header**, so there is no `CodeLen` to bound it

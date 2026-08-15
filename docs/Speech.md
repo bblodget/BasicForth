@@ -37,7 +37,7 @@ nothing a sound effect does not already cost.
 
 The engine is named by a command template, not baked in:
 
-    s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!
+    s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!
 
 `%t` expands to the text and `%o` to the output path, both **quoted**, so a
 phrase containing an apostrophe or a `$` is data rather than shell syntax.
@@ -52,7 +52,26 @@ at all, including the board and the QEMU aarch64 test run.
 ## Installing an engine
 
 Nothing here ships an engine; the machine provides one. Piper is a good
-default: neural, offline, small, and permissively licensed.
+default: neural, offline, and small.
+
+Rendering a vocabulary and shipping the WAVs makes the licensing worth a look
+before you commit to a voice. Three things carry their own terms — the engine,
+the voice model, and its training data — and how they bear on generated audio
+is a question for you and not for this page. Where to read them:
+
+`piper-tts` declares GPL-3.0-or-later in its package metadata. Each voice has
+a card at `huggingface.co/rhasspy/piper-voices` giving the training dataset,
+that dataset's licence, and what the model was trained *from* — read the last
+two together, because many piper voices are fine-tuned from a research-only
+model and a permissive dataset line alone will not show that.
+`download_voices` fetches the model without its card.
+
+`en_US-libritts-high` is *"Trained from scratch on train-clean-360"* with
+dataset LibriTTS under CC BY 4.0. It is the default because neither its data
+nor its lineage carries a use restriction, which keeps the question out of the
+way for most projects.
+
+`voice.fs` runs the engine as a separate program and never links against it.
 
     sudo apt install pipx                 # or your distribution's package
     pipx ensurepath                       # once: puts ~/.local/bin on PATH
@@ -62,7 +81,7 @@ default: neural, offline, small, and permissively licensed.
     mkdir -p ~/.local/share/piper-voices
     "$(dirname "$(readlink -f "$(command -v piper)")")/python" \
         -m piper.download_voices \
-        --data-dir ~/.local/share/piper-voices en_US-lessac-medium
+        --data-dir ~/.local/share/piper-voices en_US-libritts-high
 
 **`pipx ensurepath` matters, and it needs a fresh shell.** It edits a shell
 profile (`~/.bashrc` or similar), so the change reaches the shell you are
@@ -87,7 +106,7 @@ is a module rather than an app. Hence the incantation above — it follows the
 beside it, rather than naming a pipx directory. That matters because pipx has
 moved its venvs (older versions used `~/.local/pipx/venvs`, newer ones
 `~/.local/share/pipx/venvs`), and a written-down path is right only for the
-version you happened to test. The voice is about 60 MB; `--data-dir` is what
+version you happened to test. The voice is about 130 MB; `--data-dir` is what
 both commands call it.
 
 `setup.sh` builds the template from whatever `piper` is on `PATH` and exports
@@ -122,7 +141,7 @@ distributions:
 
 Both are robotic next to a neural voice, and both are useful precisely
 because they are tiny and always available — good for a smoke test that a
-template is wired up correctly before downloading a 60 MB model.
+template is wired up correctly before downloading a 130 MB model.
 
 ## Checking a render worked
 

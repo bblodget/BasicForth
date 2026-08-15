@@ -1,11 +1,20 @@
 # Testing on Real ARM64 Hardware
 
 Day to day, the ARM64 build is cross-compiled on an x86-64 laptop and exercised
-under `qemu-aarch64`. That catches most things, but **qemu does not reproduce
-ARM64's weak memory ordering**: it will happily run code whose loads and stores
-are only correct under x86-64's stronger TSO model. The threading and audio
-channel code is exactly the kind that can pass every suite in emulation and
-still be wrong on hardware.
+under `qemu-aarch64`. That catches most things, but qemu models the
+*instruction set*, not the *machine*. Two gaps matter:
+
+- **Weak memory ordering.** qemu will happily run code whose loads and stores
+  are only correct under x86-64's stronger TSO model. The threading and audio
+  channel code is exactly the kind that can pass every suite in emulation and
+  still be wrong on hardware.
+- **An incoherent instruction cache.** ARM64's I-cache is not coherent with
+  the D-cache; qemu's is, in effect, because it re-translates. Any code that
+  *writes* code — which for a Forth is `;`, `:noname` and every machine-code
+  word — depends on a cache maintenance sequence that emulation never tests.
+
+The second one is not hypothetical: it is what the board found on its first
+run (see Status), after years of green ARM64 suites.
 
 So the suites are also run on a real board.
 
@@ -46,6 +55,39 @@ The Python suites (`tests/test_lessons.py`, `tests/test_line_editor_pty.py`)
 import **stdlib only** — `pty`, `select`, `termios`, `struct`, `fcntl`. No
 pytest, no pexpect.
 
+Only build **native** here. `make all` also tries the x86 target and fails on
+a board with no x86 assembler; `make` alone reads `uname -m` and does the
+right thing. There is no reason to want a cross-compiler on the board.
+
+## Optional libraries
+
+Installed 2026-08-15, and worth doing: without them the board silently tests
+*less* than the laptop rather than differently.
+
+    sudo apt install libsdl3-dev libflite1
+
+That is the whole of it on Debian 13 (trixie) — **SDL3 is packaged**, so the
+from-source build in `help sdl3-source` is not needed here. It unblocks the
+SDL, audio, speech and gamepad sections of the integration suite (69 tests
+that qemu skips wholesale for lack of a sysroot libSDL3) and the 8 tutorial
+lessons that need a window.
+
+**The packaged 3.2.10 was checked against the 3.4.12 the laptop builds from
+source**, rather than assumed compatible, because `sdl3.fs` hard-codes
+constants and struct offsets verified against the newer headers. Build
+`tools/sdl3off.c` against each and diff:
+
+    cc -o /tmp/sdl3off tools/sdl3off.c && /tmp/sdl3off
+
+All 51 constants and offsets were identical, and all 49 SDL symbols the Forth
+side binds are present in 3.2.10 (`nm -D` on the library, stripping the
+`@@SDL3_0.0.0` version suffixes — without that every symbol appears missing).
+Use the same two checks for any other SDL version.
+
+A TTS engine is deliberately **not** installed on the board. Games ship
+pre-rendered WAVs precisely so they do not need one, and the board is where
+that claim gets tested.
+
 ## Getting the source onto the board
 
 **Do not rsync a git worktree.** We develop in several worktrees at once
@@ -62,6 +104,31 @@ at. Use an explicit revision, and check what you actually have:
 
     git -C <worktree> rev-parse --short HEAD
     git -C <worktree> status -sb | head -1        # "## HEAD (no branch)" if detached
+
+**For anything already merged and pushed, pulling on the board is the normal
+path** and the rest of this section covers what pulling cannot do. But pull
+*from a branch*, explicitly:
+
+    git checkout staging && git pull
+
+**`git pull` needs a branch**, and the bundle workflow below leaves the board
+on a detached HEAD. From there a bare pull refuses and changes nothing:
+
+    You are not currently on a branch.
+    Please specify which branch you want to merge with.
+
+Which is the good outcome — it stops rather than guessing. Check where the
+board is standing when a pull does nothing, before assuming the remote had
+nothing to give:
+
+    git -C ~/Dev/BasicForth status -sb | head -1
+    # "## staging...origin/staging"  good
+    # "## HEAD (no branch)"          check out the branch you meant first
+
+For a change that is not committed at all, `scp` the changed files into the
+board's tree, run, then `git checkout <path>` to restore it. That suits a
+test-only edit; anything touching `.s` or `core.fs` needs a rebuild there
+anyway.
 
 The repo is public, so the board can clone anonymously and keep a usable
 `origin` for later. Clone rather than bundle the bulk of it — **the clone is
@@ -104,6 +171,11 @@ then fails on the next bundle, because git refuses to fetch into a branch that
 is currently checked out. Detaching sidesteps branch bookkeeping entirely,
 which is right here — the board is a test target, not somewhere work happens.
 
+**It does leave the board detached**, so put it back on a branch when you next
+want to pull — a bare `git pull` from here refuses, as above:
+
+    git checkout staging && git pull
+
 `git bundle verify` is worth running first: a bundle only carries the commits
 *after* its prerequisite, so if the board's `origin/main` is older than the
 laptop's it will list the commits it cannot find. The fix is `git fetch origin`
@@ -141,6 +213,22 @@ One thing that bites:
   environment-independent, which can be confirmed with `env -u BASICFORTH_PATH`.
   Interactive setup is `. ./setup.sh` from the repo root.
 
+### The board is not faster than qemu
+
+Measured 2026-08-15, the same integration suite both ways:
+
+    qemu-aarch64 on the laptop    83 s     1080 tests
+    Pi 400, native               111 s     1149 tests
+
+About **26% slower per test on the board**. A Cortex-A72 at 1.8 GHz loses to a
+JIT running on a modern x86, so there is no speed argument for moving ARM64
+testing here — and the count difference is the point rather than a footnote:
+the board runs 69 tests qemu cannot.
+
+**Run both.** One is local and one is remote, so they overlap for free, and
+they answer different questions: qemu says "does it work", the board says
+"does it work on this microarchitecture".
+
 ## Shell gotcha when driving the board over ssh
 
 Debian's `~/.bashrc` returns early when not interactive:
@@ -157,5 +245,33 @@ and type it but not when run over ssh non-interactively, this is why.
 
 ## Status
 
-Environment set up 2026-08-12. **The suites have not yet been run on the
-board** — that is the next step, and the reason it exists.
+Environment set up 2026-08-12; SDL3 added 2026-08-15. All four suites pass
+natively, and the board now covers graphics, audio, gamepads and speech
+playback as well as the core.
+
+**It paid for itself on the first run.** BasicForth would not start at all on
+this Cortex-A72 — `Illegal instruction` before the prompt — while every qemu
+suite had been green for months. The cause was `platform_flush_icache`
+stepping by the cache line size from the *caller's* address rather than from
+the start of the line containing it: `DC`/`IC` act on whole lines, so the
+final line of a range was never maintained, and stale bytes in the I-cache
+were executed as a zeroed word, which AArch64 defines as permanently
+undefined. Fixed by aligning the range down with `BIC` before each loop
+(`5af401e`). qemu could not have found it — see the two gaps at the top of
+this page.
+
+It also exposed three defects in the suite itself, all of the same family —
+the suite quietly assuming the machine it was written on:
+
+- `VISUAL` in the developer's environment outranked the `EDITOR` each `edit`
+  test sets, so 18 tests failed with output mentioning neither (`86410e6`).
+- A binary that could not start produced ~1000 assertion failures and never
+  said why; there is a smoke run before the suite now (`1d931d4`).
+- Two `wav-play` tests loaded a file from a Debian package the board does not
+  ship, the no-libflite test hard-coded an x86-64 library path, and every
+  "is this library installed" gate read `ldconfig` off `$PATH` — which lives
+  in `/sbin`, so over `ssh` those gates **skipped** and the run still reported
+  `0 failed` (`9baa419`).
+
+That last one is the pattern worth remembering: a second machine mostly finds
+bugs in your *tests*, and the dangerous ones fail toward green.

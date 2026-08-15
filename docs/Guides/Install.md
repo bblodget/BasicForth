@@ -1,16 +1,32 @@
 # Installing BasicForth
 
-From `git clone` to a working prompt. Everything on this page was run on
-Pop!_OS 22.04 (an Ubuntu 22.04 base); other distributions differ in package
-names, not in shape.
+From `git clone` to a working prompt. The commands here were run on Raspberry
+Pi OS 64-bit (a Debian 13 base) and on Pop!_OS 22.04 (an Ubuntu 22.04 base) —
+which between them cover both cases, because 22.04 is old enough to predate
+the SDL3 package and needs `help sdl3-source` instead. Other distributions
+differ in package names, not in shape.
 
 Building needs `binutils`, `gcc` and `make`. Running needs libc. Everything
 else — graphics, sound, speech — is `dlopen`ed on demand, so a missing library
 costs exactly one feature and never the build.
 
+The whole thing, on a current Debian or Ubuntu:
+
+    sudo apt install git binutils gcc make
+    git clone https://github.com/bblodget/BasicForth.git
+    cd BasicForth
+    make
+    . ./setup.sh
+    sudo apt install libsdl3-dev libflite1    # graphics, sound, gamepads, say
+    basicforth
+
+The last `apt` line is the optional half: skip it and everything still builds
+and runs, without a window or a sound. If `apt` has no `libsdl3-dev`, see
+`help sdl3-source`; for rendering speech to WAV files, `help engines`.
+
 At a glance — each of these is `help <topic>`:
 
-    quickstart      four commands, if you just want it running
+    quickstart      the commands above, with what each one is for
     requirements    what is genuinely needed, to build and to run
     clone           getting the source
     build           x86-64, ARM64 cross-compile, or both
@@ -18,6 +34,9 @@ At a glance — each of these is `help <topic>`:
     path            setup.sh, and what it exports
     first-run       your first prompt
     libraries       SDL3, flite, piper — the optional half
+    flite           `say`, speaking immediately
+    engines         `voice-render`, text to a WAV file
+    sdl3-source     building SDL3 yourself, if apt has no package
     layout          where things live in the tree
 
 For one library's own page rather than its install: `help sdl3`, `help sound`,
@@ -32,9 +51,19 @@ For one library's own page rather than its install: `help sdl3`, `help sound`,
     . ./setup.sh
     basicforth
 
-That is a complete installation. Graphics, sound and speech need libraries,
-but nothing under `help libraries` is needed to build
-BasicForth or to run it.
+That is a complete installation, and a silent one. For graphics, sound,
+gamepads and `say`, one more command:
+
+    sudo apt install libsdl3-dev libflite1
+
+Those two are the whole of it on a current distribution. If `apt` reports no
+`libsdl3-dev`, yours predates SDL3 and builds it instead — `help sdl3-source`.
+Rendering speech to a WAV file needs a separate engine, which is a longer
+story: `help engines`.
+
+Nothing in that second command is needed to build BasicForth or to run it.
+Each library buys exactly one capability and costs exactly that capability
+when it is missing — `help libraries` is the table.
 
 ## requirements
 
@@ -150,7 +179,7 @@ any worktree with no editing, and it sets:
   (`src/forth`, then `examples`)
 - `BASICFORTH_DOCS` — where `help`, `apropos` and `tutorial` find their pages
 - `VOICE_ENGINE_CMD` — a piper command line, if piper is on your `PATH`
-  (see "Speech engines" under `help libraries`); cleared if it is not
+  (see `help engines`); cleared if it is not
 - `XMODIFIERS=@im=none` — skips the X input-method handshake, which can hang
   `SDL_Init` on a desktop with a wedged ibus (see [Graphics.md](../Graphics.md))
 
@@ -187,31 +216,114 @@ pages.
 ## libraries
 
 Each of these adds one capability. Skipping one costs exactly that
-capability.
+capability, and never the build.
 
 | Library | Install | Without it you lose |
 |---|---|---|
-| **SDL3** | from source, see below | windows, graphics, all audio, gamepads |
+| **SDL3** | `sudo apt install libsdl3-dev` | windows, graphics, all audio, gamepads |
 | **flite** | `sudo apt install libflite1` | `say` — speaking immediately |
-| **TTS engine** (piper) | see [Speech.md](../Speech.md) | `voice-render` — text to WAV |
+| **TTS engine** (piper) | `help engines` | `voice-render` — text to WAV |
+
+On a distribution that packages SDL3, the whole optional half is one command:
+
+    sudo apt install libsdl3-dev libflite1
+
+**If `apt` cannot find `libsdl3-dev`, your distribution is older than SDL3.**
+Ubuntu 22.04 and Debian bookworm both are. Check with
+
+    apt-cache policy libsdl3-dev
+
+and if it reports no candidate, build SDL3 yourself: `help sdl3-source`.
 
 `objdump`, which the `dis` disassembler shells out to, comes with `binutils`
 and is therefore already present from the build step.
-
-### SDL3 — graphics, sound and gamepads
 
 SDL3 is the big one: it is the window, the audio device, and the gamepad
 layer, so `sdl3.fs`, `sound.fs`, `wav.fs`, `pad.fs` and `speech.fs` all need
 it. (The drawing words in `graphics.fs` are pure Forth and work without it —
 you can draw into a surface, you just cannot show it on screen.)
 
-**Check your distribution first.** SDL3 is recent enough that many stable
-releases do not package it yet:
+**Your distribution's package is fine — it does not have to match the version
+BasicForth is developed against.** Debian 13 (trixie) and Raspberry Pi OS
+64-bit ship 3.2.10, and it was checked against the 3.4.12 the laptop builds
+from source: every SDL function BasicForth binds is present, and every
+constant and struct offset the Forth side hard-codes is identical between the
+two. Any SDL 3.x should work for the same reason — 3.x is one stable ABI.
 
-    apt-cache policy libsdl3-0 libsdl3-dev
+## flite
 
-If that prints nothing — as it does on Ubuntu 22.04 and Debian bookworm —
-build it from source:
+`say` speaks text immediately, synthesizing in memory. It needs flite plus a
+voice, both of which come in one package:
+
+    sudo apt install libflite1
+
+`speech.fs` loads `libflite.so.1` and the `cmu_us_slt` voice by default.
+Other voices ship in the same package and `speech-voice!` switches between
+them — see `help speech`.
+
+**`libflite.so.1` is correct even though the file on disk is
+`libflite.so.2.2`.** Debian versions the filename differently from the
+library's own SONAME; `.so.1` is what the loader answers to. Do not "fix" it.
+
+Speech plays through a sound channel, so it needs SDL3 as well.
+
+## engines
+
+`voice.fs` renders text to a WAV file by running an external text-to-speech
+program, which it takes as a command template — so it is tied to no particular
+engine. Piper is a good default: neural, offline, and small.
+
+**If you intend to ship what you render, look at the licensing before you
+build a vocabulary on a voice.** Three things carry their own terms — the
+engine, the voice model, and its training data — and how they bear on
+generated audio is not something this page is in a position to tell you. What
+it can give you is where to look:
+
+- `piper-tts` declares **GPL-3.0-or-later** in its package metadata
+  (`pip show piper-tts`).
+- each **voice model** has a card at
+  `huggingface.co/rhasspy/piper-voices`, naming the training dataset, that
+  dataset's licence, and what the model was trained *from*. Read both of the
+  last two: many piper voices are fine-tuned from a research-only model, which
+  a permissive dataset line on its own will not reveal. `download_voices`
+  fetches the model without its card.
+- `en_US-libritts-high`, the default above, is *"Trained from scratch on
+  train-clean-360"* with dataset LibriTTS under CC BY 4.0 — chosen because
+  neither its data nor its lineage carries a use restriction, so the question
+  need not arise for most projects.
+
+`voice.fs` runs the engine as a separate program and never links against it.
+
+    sudo apt install pipx                 # or your distribution's package
+    pipx ensurepath                       # once: puts ~/.local/bin on PATH
+    pipx install piper-tts
+    command -v piper                      # check before going further
+
+    mkdir -p ~/.local/share/piper-voices
+    "$(dirname "$(readlink -f "$(command -v piper)")")/python" \
+        -m piper.download_voices \
+        --data-dir ~/.local/share/piper-voices en_US-libritts-high
+
+Then re-source `setup.sh`: it builds `VOICE_ENGINE_CMD` from whatever `piper`
+is on your `PATH`, so nothing has an install path written down.
+
+**`pipx ensurepath` needs a fresh shell**, because it edits a shell profile.
+Carry on in the same shell and every command above still *succeeds* while
+`piper` is not on `PATH` — which is what the `command -v` check is for. An
+unreachable piper leaves `VOICE_ENGINE_CMD` unset, and the only sign is the
+suite reporting `SKIP … VOICE_ENGINE_CMD not set`. The voice is about 130 MB.
+
+[Speech.md](../Speech.md) in the repository explains why the voice download
+needs the environment's own interpreter, and what to do with another engine.
+
+This is the path a game wants: render the phrases once, ship the WAVs, and
+play them with `wav.fs` at run time. It needs neither SDL3 nor flite to
+render — only to play the result back.
+
+## sdl3-source
+
+Only if `apt` has no `libsdl3-dev` — see `help libraries` first, because most
+current distributions do package it and this whole page is then unnecessary.
 
     sudo apt install cmake
     git clone --depth 1 --branch release-3.4.12 \
@@ -251,34 +363,10 @@ To test a build without installing it system-wide, point the loader at it:
 
     LD_LIBRARY_PATH=/path/to/prefix/lib basicforth
 
-### flite — `say`
-
-`say` speaks text immediately, synthesizing in memory. It needs flite plus a
-voice, both of which come in one package:
-
-    sudo apt install libflite1
-
-`speech.fs` loads `libflite.so.1` and the `cmu_us_slt` voice by default.
-Other voices ship in the same package and `speech-voice!` switches between
-them — see `help speech`.
-
-**`libflite.so.1` is correct even though the file on disk is
-`libflite.so.2.2`.** Debian versions the filename differently from the
-library's own SONAME; `.so.1` is what the loader answers to. Do not "fix" it.
-
-Speech plays through a sound channel, so it needs SDL3 as well.
-
-### Speech engines — `voice-render`
-
-`voice.fs` renders text to a WAV file by running an external text-to-speech
-program, which it takes as a command template — so it is tied to no
-particular engine. Piper is a good default (neural, offline, permissively
-licensed); [Speech.md](../Speech.md) has the install, and `setup.sh` picks piper
-up automatically if it is on your `PATH`.
-
-This is the path a game wants: render the phrases once, ship the WAVs, and
-play them with `wav.fs` at run time. It needs neither SDL3 nor flite to
-render — only to play the result back.
+To check a version BasicForth has not been tried against, `tools/sdl3off.c`
+prints every constant and struct offset the Forth side hard-codes, straight
+from that build's headers — build it against the two SDLs and diff the
+output. That is how 3.2.10 was cleared.
 
 ## layout
 

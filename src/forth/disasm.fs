@@ -29,7 +29,13 @@
 \ have no header, so there is nothing to look up.
 \ See docs/Disassembler.md.
 
+\ --- dep block: what this file needs before any of it exists ---
+\ WANTS, not NEEDS: (d-probe) below re-checks for objdump on every `dis`, so
+\ installing binutils mid-session works without reloading this file. Aborting
+\ the load here would take that away. The two do different jobs -- the probe
+\ makes `dis` recover, this line makes `deps disasm` truthful.
 require shellutil.fs
+wants-cmd objdump         install binutils
 
 \ --- dictionary header navigation ---
 \ Entry layout (docs/Defining_Words.md):
