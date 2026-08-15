@@ -39,7 +39,12 @@
 \ The engine's own output stays on the terminal -- when a render fails, its
 \ complaint is usually more specific than voice-why.
 
+\ --- dep block: what this file needs before any of it exists ---
+\ The engine is a DEFAULT, not a requirement -- voice-cmd! takes any command
+\ template, so this file is useful on a machine with no piper at all. Declared
+\ softly so `deps voice` names the default rather than staying silent about it.
 require shellutil.fs
+wants-cmd piper           the default engine; voice-cmd! takes another
 
 \ --- the engine command ---
 \ 512 is far more than any real template needs (the piper default is 41

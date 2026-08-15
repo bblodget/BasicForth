@@ -56,6 +56,61 @@
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
 
+### Added: `deps <file>` — what a file needs, without loading it
+
+- `deps sdl3` reads a file's leading dep block and reports each requirement
+  against this machine, without running a line of the file:
+
+      deps sdl3
+      sdl3.fs
+        require ffi.fs            loaded
+        require graphics.fs       found
+        needs-lib libSDL3.so.0    MISSING -- see help install
+      sdl3.fs will not load: 1 requirement missing.
+
+  `.fs` is added if you leave it off, and the file is looked for in the current
+  directory first and then on `BASICFORTH_PATH` — the same order `require`
+  uses, so `deps` answers for the file the load would actually pick.
+- **One parser, not two.** `deps` re-runs the block with a mode flag set, and
+  each word takes a reporting branch through the same parse and the same probe
+  it uses at load time. A second implementation of the syntax would have been
+  free to drift from the first, and would eventually have said a file loads
+  when it does not.
+- **It follows `require`,** because the flat answer can lie: `require sound.fs
+  found` is no comfort on a machine where sound.fs itself cannot load for want
+  of SDL3. Nested files print **only if something in them is missing**, so a
+  healthy machine sees one short list and a broken one sees exactly the section
+  that explains itself. A file already loaded is not followed — it is in
+  memory, so its requirements were met when it got there.
+- A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
+  too — all met, will-load-but-degraded, and will-not-load.
+- **The traversal is bounded at 64 files, and says so when it runs out** rather
+  than reporting on the part it managed to read. dark-star.fs already follows
+  11 files, so the bound is reachable, and a quiet truncation would have
+  produced the one thing this word exists to prevent — a confident "all
+  requirements met" from a check that stopped looking.
+
+### Added: `wants-cmd` / `wants-lib` — requirements a file can live without
+
+- Same syntax as `needs-cmd`/`needs-lib`, opposite behaviour: no probe, no
+  message, and the load never stops. A soft requirement is a **declaration,
+  not a check** — it exists to be read by `deps`.
+
+      wants-cmd piper           the default engine; voice-cmd! takes another
+      wants-lib libflite.so.1   install flite
+
+- `disasm.fs`, `speech.fs` and `voice.fs` now carry a dep block for the first
+  time. Each deliberately keeps working without its dependency — `disasm.fs`
+  re-probes for objdump on every `dis`, so installing binutils mid-session
+  works without a reload; `voice.fs` treats piper as a default that
+  `voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )`. Using
+  `needs-*` in any of them would have broken a contract the file publishes on
+  purpose, which is why they had no dep block at all until now — and why
+  `deps speech` used to be able to say nothing about the one optional
+  dependency worth checking.
+- The silence is deliberate. A warning on every load would nag every user who
+  is running perfectly well without the thing.
+
 ### Changed: sdl3.fs and sound.fs declare the library they need
 
 - Both now open with a dep block, so a machine without SDL3 is told which file

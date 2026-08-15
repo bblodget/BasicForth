@@ -3476,10 +3476,15 @@ variable (nb-more)                          \ is another element still owed?
 \ An empty element means the current directory, so the bare name is the whole
 \ path to probe -- (exec?) resolves a relative name against the CWD, which is
 \ what the shell would do with it.
-: (nb-cwd?) ( -- flag )  (nb-cmd-a) @ (nb-cmd-u) @ (exec?) ;
+: (nb-cwd?) ( -- flag )
+    (nb0) (nb-cmd-a) @ (nb-cmd-u) @ (nb+)  (nb$) (exec?) ;
 
+\ Every branch leaves what it resolved to in (nb), so a caller that wants to
+\ SHOW the answer can. Which objdump you get is the interesting half of "is
+\ objdump installed" -- disasm.fs picks a cross one when decoding aarch64.
 : (on-path?) ( c-addr u -- flag )           \ can we run this command?
-    2dup (nb-slash?) if  (exec?) exit  then \ already a path: no search to do
+    2dup (nb-slash?) if                     \ already a path: no search to do
+        (nb0) 2dup (nb+) (exec?) exit  then
     (nb-cmd-u) !  (nb-cmd-a) !
     s" PATH" getenv                         ( a u )
     over 0= if                              \ UNSET, not empty: the shell falls
@@ -3526,10 +3531,66 @@ variable (nl-a)  variable (nl-u)  variable (nl-h)
 : (needs-say) ( name-a name-u kind-a kind-u -- )
     (nh-where)  ." needs the " type  space type  (nh.)  cr  -2 throw ;
 
+\ --- reporting instead of acting ---
+\ DEPS below re-runs a dep block with (dp-mode) set, and every word in it takes
+\ the reporting branch: same parse, same probe, a printed line instead of a
+\ throw. One piece of code answers both "can this file load" and "why not",
+\ which is the whole reason DEPS reads the block rather than a summary of it.
+variable (dp-mode)                          \ nonzero: report, do not act
+variable (dp-hard)                          \ is the requirement being reported a hard one?
+variable (dp-quiet)                         \ counting pass: probe, print nothing
+variable (dp-top)                           \ scanning the file the user named?
+variable (dp-ind)                           \ indent for this file's lines
+variable (dp-misses)  variable (dp-soft)    \ requirements missing, this run
+variable (dp-total)                         \ requirements the named file declares
+variable (dp-word-a) variable (dp-word-u)   \ the word that declared it
+variable (dp-okw-a)  variable (dp-okw-u)    \ what "met" is called for this kind
+variable (dp-note-a) variable (dp-note-u)   \ detail to show when it IS met
+
+: (dp-word!) ( c-addr u -- )  (dp-word-u) !  (dp-word-a) ! ;
+: (dp-okw!)  ( c-addr u -- )  (dp-okw-u) !  (dp-okw-a) ! ;
+: (dp-note!) ( c-addr u -- )  (dp-note-u) !  (dp-note-a) ! ;
+: (nh!)      ( c-addr u -- )  (nh-u) !  (nh-a) ! ;
+
+: (dp-pad) ( printed -- )                   \ out to the status column
+    26 swap -  dup 1 < if  drop 1  then  spaces ;
+
+: (dp-note.) ( -- )
+    (dp-note-u) @ if  ."  -- " (dp-note-a) @ (dp-note-u) @ type  then ;
+
+\ A long name pushes its own status right rather than being truncated: the
+\ column is there to be read down, not to cut anything off.
+: (dp-line) ( name-a name-u met? -- )
+    (dp-quiet) @ if
+        0= if
+            (dp-hard) @ if  1 (dp-misses) +!  else  1 (dp-soft) +!  then
+        then
+        2drop  (dp-top) @ if  1 (dp-total) +!  then  exit
+    then
+    >r  (dp-ind) @ 2 + spaces
+    (dp-word-a) @ (dp-word-u) @ type  space
+    2dup type  nip (dp-word-u) @ + 1+  (dp-pad)
+    r> if  (dp-okw-a) @ (dp-okw-u) @ type  (dp-note.)
+    else
+        (dp-hard) @ if  ." MISSING"  else  ." missing (optional)"  then
+        (nh.)
+    then  cr ;
+
+: (dp-cmd-line) ( c-addr u -- )
+    s" ok" (dp-okw!)
+    2dup (on-path?)  dup if  (nb$) (dp-note!)  else  0 (dp-note-u) !  then
+    (dp-line) ;
+
+: (dp-lib-line) ( c-addr u -- )
+    s" ok" (dp-okw!)  0 (dp-note-u) !
+    2dup (lib-there?) 0<>  (dp-line) ;
+
 : needs-cmd ( "name" ccc -- )
     parse-word dup 0= if
         2drop (nh-rest) ." usage: needs-cmd <command> [hint]" cr exit  then
     (nh-rest)                               \ consume the hint whether or not we fail
+    (dp-mode) @ if
+        s" needs-cmd" (dp-word!)  true (dp-hard) !  (dp-cmd-line) exit  then
     2dup (on-path?) if  2drop exit  then
     s" command" (needs-say) ;
 
@@ -3537,8 +3598,233 @@ variable (nl-a)  variable (nl-u)  variable (nl-h)
     parse-word dup 0= if
         2drop (nh-rest) ." usage: needs-lib <soname> [hint]" cr exit  then
     (nh-rest)
+    (dp-mode) @ if
+        s" needs-lib" (dp-word!)  true (dp-hard) !  (dp-lib-line) exit  then
     2dup (lib-there?) if  2drop exit  then
     s" library" (needs-say) ;
+
+\ ---------------------------------------------------------- soft requirements
+\ The hard forms stop the load, which is right for a file that cannot work
+\ without the thing -- sdl3.fs and sound.fs were already failing there, just
+\ less kindly. It is wrong for a file that deliberately keeps working: speech.fs
+\ answers `speech-open ( -- ior )` with no flite installed, voice.fs takes any
+\ engine you name, and disasm.fs re-probes for objdump on every `dis` so that
+\ installing it mid-session works without a reload. Declaring those with
+\ NEEDS-LIB would break contracts they publish on purpose.
+\
+\     wants-cmd piper           the default engine; voice-cmd! picks another
+\     wants-lib libflite.so.1   install flite
+\
+\ So a soft requirement is a DECLARATION, not a check: at load time it parses
+\ its line and does nothing else -- no probe, no message, no cost. It exists to
+\ be read by DEPS. Saying anything here would print on every load, in every
+\ environment that is running perfectly well without it.
+: wants-cmd ( "name" ccc -- )
+    parse-word dup 0= if
+        2drop (nh-rest) ." usage: wants-cmd <command> [hint]" cr exit  then
+    (nh-rest)
+    (dp-mode) @ 0= if  2drop exit  then
+    s" wants-cmd" (dp-word!)  false (dp-hard) !  (dp-cmd-line) ;
+
+: wants-lib ( "soname" ccc -- )
+    parse-word dup 0= if
+        2drop (nh-rest) ." usage: wants-lib <soname> [hint]" cr exit  then
+    (nh-rest)
+    (dp-mode) @ 0= if  2drop exit  then
+    s" wants-lib" (dp-word!)  false (dp-hard) !  (dp-lib-line) ;
+
+\ ------------------------------------------------- deps: checking without loading
+\ `deps <file>` answers "will this load here, and if not, what am I missing"
+\ without running a line of it. It reads the file's LEADING dep block -- blank
+\ lines and whole-line comments, then requirements, stopping at the first line
+\ that is neither -- and re-runs each requirement in reporting mode.
+\
+\ It follows REQUIRE into the files named there, because the flat answer can
+\ lie: `require sound.fs  found` is no comfort on a machine where sound.fs
+\ itself cannot load for want of SDL3. A file already loaded is not followed --
+\ it is in memory, so its own requirements were met when it got there. Those
+\ nested files are scanned twice, once counting and once printing, and only the
+\ ones with something missing print at all: quiet when it is fine, verbose
+\ exactly where the problem is.
+
+64 constant (dp-nmax)                       \ longest file name we will queue
+64 constant (dp-qmax)                       \ files considered in one run
+create (dp-q) (dp-qmax) (dp-nmax) * allot   \ the queue: counted strings
+variable (dp-qn)
+\ A bound that truncates in silence turns this word into the thing it exists to
+\ prevent: a report that says everything is fine because it stopped looking.
+\ dark-star.fs already follows 11 files, so the bound is reachable, not
+\ theoretical. Anything the queue cannot hold sets this, and the verdict
+\ refuses to promise what it did not read.
+variable (dp-cut)                           \ was any file left unfollowed?
+variable (dp-i)
+create (dp-buf)  512 allot                  \ one source line
+create (dp-path) 512 allot                  \ candidate path being tried
+variable (dp-pu)
+create (dp-nbuf) (dp-nmax) allot            \ the name as typed, plus ".fs"
+variable (dp-nu)
+variable (dp-la) variable (dp-lu)           \ the line being handled
+variable (dp-ta) variable (dp-tu)           \ its first token
+
+: (dp-q-at) ( i -- a )  (dp-nmax) *  (dp-q) + ;
+: (dp-q@)   ( i -- c-addr u )  (dp-q-at) count ;
+: (dp-q?)   ( c-addr u -- flag )            \ already queued?
+    (dp-qn) @ 0 ?do
+        2dup i (dp-q@) compare 0= if  2drop true unloop exit  then
+    loop  2drop false ;
+: (dp-q+)   ( c-addr u -- )                 \ queue a file, once
+    2dup (dp-q?) if  2drop exit  then
+    dup (dp-nmax) 1- >                      \ too long to hold...
+    (dp-qn) @ (dp-qmax) < 0= or if          \ ...or no room left
+        true (dp-cut) !  2drop exit  then
+    (dp-qn) @ (dp-q-at) >r
+    dup r@ c!  r> 1+ swap cmove  1 (dp-qn) +! ;
+
+\ --- resolving a name to a file, the way INCLUDE does it ---
+\ Current directory first, then each non-empty BASICFORTH_PATH element. That
+\ ordering is not a detail: dark-star.fs sits beside its own art.fs, and `deps`
+\ has to answer for the same file the game would load.
+: (dp-path$) ( -- c-addr u )  (dp-path) (dp-pu) @ ;
+: (dp-p0)    ( -- )  0 (dp-pu) ! ;
+: (dp-p+)    ( c-addr u -- )
+    (dp-pu) @ over + 511 > if  2drop exit  then
+    dup >r  (dp-path) (dp-pu) @ +  swap cmove  r> (dp-pu) +! ;
+: (dp-join)  ( seg-a seg-u name-a name-u -- )   \ "<seg>/<name>" into (dp-path)
+    2swap (dp-p0) (dp-p+)  s" /" (dp-p+)  (dp-p+) ;
+: (dp-try)   ( c-addr u -- flag )           \ can this path be opened?
+    r/o open-file if  drop false  else  close-file drop true  then ;
+
+: (dp-search) ( c-addr u -- flag )          \ resolve into (dp-path)
+    2dup (dp-p0) (dp-p+)  (dp-path$) (dp-try) if  2drop true exit  then
+    s" BASICFORTH_PATH" getenv              ( n-a n-u p-a p-u )
+    dup 0= if  2drop 2drop false exit  then
+    (nb-path-u) !  (nb-path-a) !  true (nb-more) !
+    begin (nb-next) while                   ( n-a n-u seg-a seg-u )
+        dup if
+            2over (dp-join)  (dp-path$) (dp-try) if  2drop true exit  then
+        else  2drop  then
+    repeat                                  \ the exhausted (nb-next) pushed 0 0
+    2drop 2drop false ;
+
+\ --- the block itself ---
+: (dp-skipb)  ( c-addr u -- c-addr u )      \ past any leading blanks
+    begin  dup  while  over c@ bl > if  exit  then  1 /string  repeat ;
+: (dp-token)  ( c-addr u -- tok-a tok-u )   \ first blank-delimited token
+    (dp-skipb)  dup (dp-tu) !               \ default: all that is left
+    dup 0 ?do
+        over i + c@ bl <= if  i (dp-tu) !  leave  then
+    loop
+    drop (dp-tu) @ ;
+: (dp-rest)   ( -- c-addr u )               \ the line after its first token
+    (dp-la) @ (dp-lu) @ (dp-skipb)  (dp-tu) @ /string ;
+: (dp-tok=)   ( c-addr u -- flag )
+    (dp-ta) @ (dp-tu) @ compare 0= ;
+
+: (dp-require) ( c-addr u -- )              \ report one required file, and queue it
+    s" require" (dp-word!)  true (dp-hard) !
+    0 (nh-u) !  0 (dp-note-u) !
+    2dup (inc-recorded?) if                 \ in memory: its own deps were met
+        s" loaded" (dp-okw!)  true (dp-line)  exit  then
+    2dup (dp-search) if
+        s" found" (dp-okw!)  2dup (dp-q+)  true (dp-line)  exit  then
+    s" not in . or on BASICFORTH_PATH" (nh!)
+    false (dp-line) ;
+
+: (dp-req-line) ( -- )                      \ "require <file>" -- take the file
+    (dp-rest) (dp-token)
+    dup 0= if  2drop exit  then
+    (dp-require) ;
+
+\ A dep word gets its whole line handed to EVALUATE, so the hint is parsed by
+\ the same (nh-rest) that parses it at load time. Nothing else on the line can
+\ run: the dep word consumes the rest of it either way.
+: (dp-dep-line) ( -- )
+    1 (dp-mode) !
+    (dp-la) @ (dp-lu) @ evaluate
+    0 (dp-mode) ! ;
+
+: (dp-do-line) ( -- more? )                 \ false ends the dep block
+    (dp-tu) @ 0= if  true exit  then                    \ blank
+    s" \" (dp-tok=) if  true exit  then                 \ comment
+    s" (" (dp-tok=) if  true exit  then                 \ ( comment ) on its own line
+    s" require" (dp-tok=) if  (dp-req-line) true exit  then
+    s" needs-cmd" (dp-tok=)  s" needs-lib" (dp-tok=) or
+    s" wants-cmd" (dp-tok=) or  s" wants-lib" (dp-tok=) or
+    if  (dp-dep-line) true exit  then
+    false ;
+
+: (dp-scan) ( c-addr u -- )                 \ read one file's dep block
+    (dp-search) 0= if  exit  then
+    (dp-path$) r/o open-file if  drop exit  then   ( fid )
+    >r
+    begin
+        (dp-buf) 511 r@ read-line           ( u2 flag ior )
+        if  2drop false  else
+            if  (dp-lu) !  (dp-buf) (dp-la) !  true
+            else  drop false  then
+        then
+    while
+        (dp-la) @ (dp-lu) @ (dp-token) (dp-tu) ! (dp-ta) !
+        (dp-do-line) 0= if  r> close-file drop exit  then
+    repeat
+    r> close-file drop ;
+
+\ --- the run ---
+: (dp-ends-fs?) ( c-addr u -- flag )
+    dup 3 < if  2drop false exit  then
+    +  3 -  3  s" .fs" compare 0= ;
+
+\ Always take our own copy: the name comes from the input source, and EVALUATE
+\ runs over the block below before the verdict prints it back.
+: (dp-name!) ( c-addr u -- c-addr' u' )     \ ".fs" appended if it is not there
+    dup (dp-nmax) 4 - > if  2drop (dp-nbuf) 0 exit  then
+    dup >r  (dp-nbuf) swap cmove  r> (dp-nu) !
+    (dp-nbuf) (dp-nu) @ (dp-ends-fs?) 0= if
+        s" .fs" dup >r  (dp-nbuf) (dp-nu) @ +  swap cmove  r> (dp-nu) +!
+    then
+    (dp-nbuf) (dp-nu) @ ;
+
+: (dp-s) ( n -- )  1 > if  ." s"  then ;
+
+: (dp-verdict) ( c-addr u -- )
+    (dp-misses) @ ?dup if                   \ true however much was left unread
+        >r type ."  will not load: " r@ . ." requirement" r> (dp-s)
+        ."  missing." cr exit  then
+    \ Everything below this line is a PROMISE about what will happen, and we
+    \ can only make one about the files we actually read.
+    (dp-cut) @ if
+        type ." : nothing missing in the first " (dp-qmax) . ." files, but"
+        ."  there are more -- the check did not finish." cr exit  then
+    (dp-soft) @ ?dup if
+        >r type ."  will load; " r@ . ." optional requirement" r> (dp-s)
+        ."  missing." cr exit  then
+    (dp-total) @ 0= if  type ." : no requirements declared." cr exit  then
+    type ." : all " (dp-total) @ dup . ." requirement" (dp-s) ."  met." cr ;
+
+: (dp-run) ( c-addr u -- )
+    0 (dp-qn) !  0 (dp-misses) !  0 (dp-soft) !  0 (dp-total) !  0 (dp-cut) !
+    (dp-q+)  0 (dp-i) !
+    begin  (dp-i) @ (dp-qn) @ <  while
+        (dp-i) @ 0= dup (dp-top) !          ( top? )
+        0= 2 and (dp-ind) !                 \ nested sections sit one step in
+        (dp-misses) @ (dp-soft) @ + >r      \ what was missing before this file
+        true (dp-quiet) !  (dp-i) @ (dp-q@) (dp-scan)  false (dp-quiet) !
+        (dp-misses) @ (dp-soft) @ + r> <>   ( found something? )
+        (dp-top) @ or if                    \ the named file always prints
+            (dp-ind) @ spaces  (dp-i) @ (dp-q@) 2dup type cr  (dp-scan)
+        then
+        1 (dp-i) +!
+    repeat ;
+
+: deps ( "name" -- )
+    parse-word dup 0= if
+        2drop ." usage: deps <file>" cr exit  then
+    (dp-name!) dup 0= if
+        2drop ." deps: name too long" cr exit  then
+    2dup (dp-search) 0= if
+        ." deps: cannot find " type ."  (not in . or on BASICFORTH_PATH)" cr
+        exit  then
+    2dup (dp-run)  (dp-verdict) ;
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

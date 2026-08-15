@@ -38,7 +38,13 @@
 \ no libflite.so, since the bare name belongs to the -dev package. Naming the
 \ soname is what makes this work on a plain install.
 
+\ --- dep block: what this file needs before any of it exists ---
+\ WANTS, not NEEDS: speech-open answers an ior rather than aborting, so a
+\ machine with no flite loads this file and runs soundless. The declaration is
+\ here for `deps speech` to read -- the one thing worth checking before you
+\ wonder why nothing is speaking.
 require sound.fs
+wants-lib libflite.so.1   install flite (Debian: flite libflite1)
 
 \ --- configuration ---------------------------------------------------------
 
