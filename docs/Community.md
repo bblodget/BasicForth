@@ -113,8 +113,9 @@ that cliff.
 1. **sockets.fs** (docs/Sockets.md) — unblocks everything; no concurrency
    needed thanks to non-blocking + `poll`.
 2. **Chat v1** — pull/prompt-peek, single-threaded, proves the fun.
-3. **Registry stages** (docs/Package_Registry.md) — `needs-cmd`/`needs-lib`
-   and `deps` are already unblocked by shellutil.fs.
+3. **Registry stages** (docs/Package_Registry.md) — `needs-cmd`/`needs-lib`,
+   the soft `wants-*` pair and `deps` have shipped; user package dirs and the
+   registry repo itself are next.
 4. **Threading** (docs/Threading.md) — its own arc; chat v3, audio feeders,
    robot control loops.
 5. **BBS** — when the pieces above make it a weekend of composition rather

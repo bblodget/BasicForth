@@ -3792,6 +3792,202 @@ assert_result "the probe cache answers only for its own name"  \
     "needs-lib libc.so.6
 s\" libm.so.6\" (lib-probed) 0= . cr"  "-1"
 
+# ---------------------------------------------------------------------------
+# DEPS reads a dep block WITHOUT loading the file, and the soft forms exist to
+# be read by it. Fixtures rather than the shipped libraries: the interesting
+# answers are the missing ones, and a machine that has everything installed
+# would never produce them.
+dp_dir="$(mktemp -d)"
+read -r -a dp_cmd <<< "${FORTH/.\//$PWD/}"      # absolute: the runs below cd
+
+# Each fixture ends in a print and a definition, so "did deps LOAD it" is
+# answerable: the report must appear with no trace of either.
+cat > "$dp_dir/dpmet.fs" <<'DPEOF'
+\ a comment header: skipped, not the end of the block
+
+require shellutil.fs
+needs-lib libc.so.6        should be everywhere
+." DPLOADED" cr
+: dp-met-word ;
+DPEOF
+cat > "$dp_dir/dphard.fs" <<'DPEOF'
+needs-lib libnosuch.so.99  install nosuch
+." DPLOADED" cr
+DPEOF
+cat > "$dp_dir/dpsoft.fs" <<'DPEOF'
+wants-lib libnosuch.so.99  install nosuch
+." DPLOADED" cr
+: dp-soft-word ;
+DPEOF
+cat > "$dp_dir/dpnone.fs" <<'DPEOF'
+\ nothing declared here
+: dp-none ;
+DPEOF
+# A requirement AFTER a non-dep line is not in the block: the scan stops at the
+# first line that is neither blank, a comment, nor a requirement.
+cat > "$dp_dir/dplate.fs" <<'DPEOF'
+require shellutil.fs
+
+: dp-late ;
+needs-lib libnosuch.so.99  never reached
+DPEOF
+# The parent's own requirements are all met; the child's are not. The verdict
+# has to carry that, and only the child's section may print.
+printf 'require dpchild.fs\n'                        > "$dp_dir/dpparent.fs"
+printf 'needs-lib libnosuch.so.99  install nosuch\n' > "$dp_dir/dpchild.fs"
+printf 'require shellutil.fs\n'                      > "$dp_dir/dpok.fs"
+# A require naming a file that is not there. This is the one path that walks
+# BASICFORTH_PATH to the end without a hit, and a stack slip there is invisible
+# in the line itself -- it shows up in the VERDICT, printed afterwards.
+printf 'require dpnosuch.fs\n'                       > "$dp_dir/dpgonereq.fs"
+# A chain longer than the queue. Following require is bounded, and a bound that
+# truncates in SILENCE turns deps into the thing it exists to prevent: a report
+# that says everything is fine because it stopped looking. dark-star.fs already
+# follows 11 files, so this bound is reachable rather than theoretical.
+for dp_i in $(seq 1 80); do
+    printf 'require dpc%d.fs\n' $((dp_i + 1)) > "$dp_dir/dpc$dp_i.fs"
+done
+printf '\\ the end of the chain\n' > "$dp_dir/dpc81.fs"
+# The same chain, with something genuinely missing in the part that IS read: a
+# definite "will not load" outranks "I did not finish", because it stays true
+# however much was left unread.
+printf 'needs-lib libnosuch.so.99  install nosuch\nrequire dpc2.fs\n' > "$dp_dir/dpcut-miss.fs"
+
+dp_run() {                              # dp_run <forth input>, from the fixture dir
+    printf '%s\nbye\n' "$1" \
+      | ( cd "$dp_dir" && timeout 10 env BASICFORTH_PATH="$FORTH_LIB" "${dp_cmd[@]}" 2>&1 ) \
+      | sed '/^> /d; /^>$/d'
+}
+dp_met=$(dp_run    "deps dpmet")
+dp_hard=$(dp_run   "deps dphard")
+dp_soft=$(dp_run   "deps dpsoft")
+dp_none=$(dp_run   "deps dpnone")
+dp_late=$(dp_run   "deps dplate")
+dp_nest=$(dp_run   "deps dpparent")
+dp_quiet=$(dp_run  "deps dpok")
+dp_ext=$(dp_run    "deps dpmet.fs")
+dp_gone=$(dp_run   "deps dpnosuchfile")
+dp_usage=$(dp_run  "deps")
+dp_reqgone=$(dp_run "deps dpgonereq")
+dp_cut=$(dp_run    "deps dpc1")
+dp_cutmiss=$(dp_run "deps dpcut-miss")
+dp_depth=$(dp_run "deps dpgonereq
+depth . .\" |DEPTH\"")
+dp_loaded=$(dp_run "require shellutil.fs
+deps dpok")
+# The soft forms must be SILENT at load time and must not stop the load. That
+# silence is the whole contract speech.fs/voice.fs/disasm.fs rely on, and it is
+# invisible in a passing report — only a real load shows it.
+dp_load=$(dp_run "require dpsoft.fs
+: dp? parse-name find if drop .\" DEFINED\" cr else 2drop then ;
+dp? dp-soft-word")
+rm -rf "$dp_dir"
+
+if [[ "$dp_met" == *"require shellutil.fs"*"found"* \
+   && "$dp_met" == *"needs-lib libc.so.6"*"ok"* \
+   && "$dp_met" == *"dpmet.fs: all 2 requirements met"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps reports a satisfied dep block\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a satisfied dep block\n    Got: %q\n" "$dp_met"; ((failed++))
+fi
+# Loading is the thing deps must NOT do: neither the file's output nor its
+# definitions may appear. Without this a scan that quietly INCLUDEd the file
+# would pass every other test here.
+if [[ "$dp_met" != *DPLOADED* && "$dp_met" != *DEFINED* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps does not load the file it reports on\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps loaded the file\n    Got: %q\n" "$dp_met"; ((failed++))
+fi
+# MISSING in capitals, and a verdict that says the load would fail — the hint
+# has to survive too, since it is the only thing that says what to do.
+if [[ "$dp_hard" == *"needs-lib libnosuch.so.99"*"MISSING -- install nosuch"* \
+   && "$dp_hard" == *"dphard.fs will not load: 1 requirement missing"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps reports a missing hard requirement, with its hint\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a missing hard requirement\n    Got: %q\n" "$dp_hard"; ((failed++))
+fi
+# The same miss, declared softly, must reach the opposite verdict. Testing both
+# against one fixture pair is the point: the difference is the wants-/needs-
+# prefix and nothing else.
+if [[ "$dp_soft" == *"wants-lib libnosuch.so.99"*"missing (optional) -- install nosuch"* \
+   && "$dp_soft" == *"dpsoft.fs will load; 1 optional requirement missing"* \
+   && "$dp_soft" != *"will not load"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a soft requirement is reported as optional, and still loads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a missing soft requirement\n    Got: %q\n" "$dp_soft"; ((failed++))
+fi
+if [[ "$dp_load" == *DEFINED* && "$dp_load" != *"missing"* && "$dp_load" != *"MISSING"* \
+   && "$dp_load" != *"wants-lib"* ]]; then
+    printf "  ${GREEN}PASS${NC}  wants-lib is silent at load time and does not stop the load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a soft requirement was not silent at load time\n    Got: %q\n" "$dp_load"; ((failed++))
+fi
+if [[ "$dp_none" == *"dpnone.fs: no requirements declared"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps says so when a file declares nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a file with no dep block\n    Got: %q\n" "$dp_none"; ((failed++))
+fi
+if [[ "$dp_late" == *"dplate.fs: all 1 requirement met"* && "$dp_late" != *"libnosuch"* ]]; then
+    printf "  ${GREEN}PASS${NC}  the dep block ends at the first line that is not one\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps read past the end of the dep block\n    Got: %q\n" "$dp_late"; ((failed++))
+fi
+# Following require is what makes the verdict honest: dpparent's own single
+# requirement IS met, and it still cannot load.
+if [[ "$dp_nest" == *"require dpchild.fs"*"found"* \
+   && "$dp_nest" == *"dpchild.fs"* && "$dp_nest" == *"needs-lib libnosuch.so.99"*MISSING* \
+   && "$dp_nest" == *"dpparent.fs will not load: 1 requirement missing"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps follows require, and a nested miss reaches the verdict\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps did not follow require\n    Got: %q\n" "$dp_nest"; ((failed++))
+fi
+# ...and stays quiet when it finds nothing there: shellutil.fs is scanned, and
+# must not print a section of its own.
+# Counted, not pattern-matched: a stray section header is a bare "shellutil.fs"
+# line, which every substring test for the require line above it also matches.
+dp_quiet_n=$(printf '%s\n' "$dp_quiet" | grep -c 'shellutil\.fs')
+if [[ "$dp_quiet" == *"require shellutil.fs"*"found"* && "$dp_quiet_n" -eq 1 \
+   && "$dp_quiet" == *"dpok.fs: all 1 requirement met"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a nested file with nothing missing prints no section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a healthy nested file printed anyway (%s lines name it)\n    Got: %q\n" "$dp_quiet_n" "$dp_quiet"; ((failed++))
+fi
+# loaded vs found: the same require, before and after the file is in memory.
+if [[ "$dp_quiet" == *"require shellutil.fs"*"found"* \
+   && "$dp_loaded" == *"require shellutil.fs"*"loaded"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a require reads 'found' on disk and 'loaded' in memory\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  loaded/found not distinguished\n    Got: %q / %q\n" "$dp_quiet" "$dp_loaded"; ((failed++))
+fi
+if [[ "$dp_cut" == *"the check did not finish"* \
+   && "$dp_cut" != *"all "*"requirements met"* && "$dp_cut" != *"will load"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a traversal that outruns the queue says so instead of claiming success\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  the file queue truncated silently\n    Got: %q\n" "$dp_cut"; ((failed++))
+fi
+if [[ "$dp_cutmiss" == *"will not load: 1 requirement missing"* \
+   && "$dp_cutmiss" != *"did not finish"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a definite miss outranks an unfinished traversal\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  truncation hid a real miss\n    Got: %q\n" "$dp_cutmiss"; ((failed++))
+fi
+# The verdict is checked WITH its file name: a leak under the name prints some
+# other part of the stack there while every line above stays perfectly correct.
+if [[ "$dp_reqgone" == *"require dpnosuch.fs"*"MISSING -- not in . or on BASICFORTH_PATH"* \
+   && "$dp_reqgone" == *"dpgonereq.fs will not load: 1 requirement missing"* \
+   && "$dp_depth" == *"0 |DEPTH"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a require naming a file that is not there, and deps leaves the stack clean\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  missing-require handling\n    Got: %q / %q\n" "$dp_reqgone" "$dp_depth"; ((failed++))
+fi
+if [[ "$dp_ext" == *"dpmet.fs: all 2 requirements met"* \
+   && "$dp_gone" == *"cannot find dpnosuchfile.fs"* \
+   && "$dp_usage" == *"usage: deps <file>"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps takes the name with or without .fs, and says when it cannot find it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps name handling\n    Got: %q / %q / %q\n" "$dp_ext" "$dp_gone" "$dp_usage"; ((failed++))
+fi
+
 # READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
 # blank line returns u2=0/flag=true, the last line without a trailing newline
 # is still read, then EOF returns flag=false. Each line is bracketed [..] so

@@ -198,6 +198,25 @@ use `include` to force a reload. A missing file is an error for both
 (`cannot open <name>`); only the silent startup loads (core.fs, the session
 file) skip quietly.
 
+Those `require` lines, together with any `needs-cmd` / `needs-lib` (things the
+*machine* must supply, whose absence stops the load) and their soft
+counterparts `wants-cmd` / `wants-lib` (declared but not checked, for files
+that work without them), make up a file's **dep block** — everything it needs
+before its first definition. `DEPS` reads that block and reports it against
+this machine without loading anything:
+
+```
+> deps sdl3
+sdl3.fs
+  require ffi.fs            loaded
+  require graphics.fs       found
+  needs-lib libSDL3.so.0    MISSING -- see help install
+sdl3.fs will not load: 1 requirement missing.
+```
+
+It follows `require` into the files named there, and prints a nested file's
+section only when something in it is missing. See `help deps`.
+
 ### Executable Scripts (`#!`)
 
 A Forth file can be run directly as a Unix executable script. Give it a
