@@ -7,7 +7,10 @@ and graphics and game code is full of `x y w h colour`.
 At a glance:
 
     {: a b c :}              ( x1 x2 x3 -- )   name the top 3 items
+    {: a | t :}              ( x1 -- )         ...plus t, yours, starting at 0
+    {: a b -- sum :}         ( x1 x2 -- )      ...with a stack comment
     a                        ( -- x )          read one, by name
+    5 to a                   ( x -- )          write one
 
 ## {: … :} ( x1 … xn -- )
 **Compile-only.** Names the top stack items for the rest of the definition:
