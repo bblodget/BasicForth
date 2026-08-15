@@ -6816,16 +6816,16 @@ vc_check "voice.fs takes its template from the environment" \
 # zero length stores an empty template, which would wipe the default rather
 # than decline to replace it.
 vc_check "an unset variable leaves the built-in default" \
-    "$(vc_run 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run 'voice-cmd type')" "^piper -m en_US-libritts-high"
 vc_check "an empty variable leaves the built-in default" \
-    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-libritts-high"
 # ...and so does one too LONG to hold. voice-cmd! refuses by storing nothing,
 # which is right for an explicit call but would leave a bare `require voice.fs`
 # with "no engine command set" — a working default destroyed by a variable that
 # was only ever meant to improve on it.
 vc_big="./engine %t %o$(printf '#%.0s' $(seq 1 520))"       # 534 — just past 512
 vc_check "an oversized variable leaves the built-in default" \
-    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-libritts-high"
 # ...and an explicit voice-cmd! still beats the environment.
 vc_check "voice-cmd! overrides the environment" \
     "$(vc_run_env './engine %t %o' 's" ./fails %t %o" voice-cmd! s" hi" s" o.txt" voice-render .')" \

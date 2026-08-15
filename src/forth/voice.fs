@@ -30,7 +30,7 @@
 \ substitutions are QUOTED, so a phrase containing an apostrophe, a $ or a
 \ semicolon is data and never syntax:
 \
-\   s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!    \ the default
+\   s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!    \ the default
 \   s" espeak-ng -w %o -- %t" voice-cmd!
 \   s" printf '%s' %t | some-engine --out %o" voice-cmd!       \ stdin engines
 \
@@ -55,7 +55,7 @@ variable (vc-#)
     dup (vc-max) > if 2drop 0 (vc-#) ! exit then
     dup (vc-#) !  (vc-buf) swap cmove ;
 
-s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!
+s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!
 
 \ ...but $VOICE_ENGINE_CMD wins, because the default above can only guess. It
 \ names piper with no --data-dir, so it finds a voice only where piper happens

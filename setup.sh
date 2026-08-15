@@ -89,7 +89,7 @@ _bf_piper="$(command -v piper 2>/dev/null)"
 if [ -n "$_bf_piper" ]; then
     # %o/%t are voice.fs placeholders, not shell syntax — and the whole
     # template must avoid double quotes, which would end voice-cmd!'s s".
-    export VOICE_ENGINE_CMD="$_bf_piper --data-dir ${PIPER_VOICES:-$HOME/.local/share/piper-voices} -m ${PIPER_VOICE:-en_US-lessac-medium} -f %o -- %t"
+    export VOICE_ENGINE_CMD="$_bf_piper --data-dir ${PIPER_VOICES:-$HOME/.local/share/piper-voices} -m ${PIPER_VOICE:-en_US-libritts-high} -f %o -- %t"
 else
     # Nothing here — so CLEAR it rather than leaving it. Sourcing this file in
     # a second checkout is routine, and a value inherited from the first would
