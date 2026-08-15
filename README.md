@@ -160,19 +160,27 @@ v0.15.0 — what is left is saying a phrase without writing it down first.)
 
 ## Building
 
+The whole thing, on a current Debian or Ubuntu:
+
 ```sh
-sudo apt install git binutils gcc make    # git fetches; binutils+gcc+make build
+sudo apt install git binutils gcc make
 git clone https://github.com/bblodget/BasicForth.git
 cd BasicForth
 make
 . ./setup.sh
+sudo apt install libsdl3-dev libflite1    # graphics, sound, gamepads, say
 basicforth
 ```
 
-Nothing else is needed to build or to run: SDL3, flite and a speech engine
-are all `dlopen`ed on demand, so a missing one costs exactly its own feature
-and nothing else. See **[docs/Guides/Install.md](docs/Guides/Install.md)** for the ARM64
-cross-compile, the optional libraries, and what `setup.sh` does.
+The last `apt` line is the optional half: skip it and everything still builds
+and runs, without a window or a sound. SDL3 and flite are `dlopen`ed on
+demand, so a missing one costs exactly its own feature and nothing else. If
+`apt` reports no `libsdl3-dev`, your distribution predates SDL3 and builds it
+from source instead.
+
+See **[docs/Guides/Install.md](docs/Guides/Install.md)** for that, the ARM64
+cross-compile, rendering speech to WAV files, and what `setup.sh` does — or
+`help install` at the prompt, which is the same page.
 
 ### Build Commands
 

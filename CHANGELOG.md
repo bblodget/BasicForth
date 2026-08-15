@@ -102,6 +102,70 @@
   machine that has it, and checks the message, the surviving session, and the
   absent words.
 
+### Changed: `help libraries` leads with the one command that usually works
+
+- **SDL3 is packaged now**, on Debian 13 (trixie) and Raspberry Pi OS 64-bit
+  among others, so the optional half of the install is `sudo apt install
+  libsdl3-dev libflite1` and nothing else. The page used to say "from source,
+  see below" unconditionally and then spend fifty lines on cmake — a build
+  most readers no longer need, presented as the only route.
+- The from-source recipe is intact, moved to its own topic: `help
+  sdl3-source`. Nothing was cut, only reordered so the common case is not
+  behind the rare one. flite and the speech engines moved out the same way, to
+  `help flite` and `help engines`. **A `###` subsection does not end a `help`
+  topic** — the page is read to the next `##` — so a detail section only stops
+  padding the overview once it becomes a topic in its own right. `help
+  libraries` is 37 source lines where it was 96.
+- **`help install` now answers with the commands, not with a table of
+  contents.** The complete install — build tools, clone, `make`, `setup.sh`,
+  and the one `apt` line that buys graphics, sound, gamepads and `say` — is in
+  the first screen, before the topic list. `help quickstart` carries the same
+  commands with a line on what each is for.
+- **`help engines` carries the piper install itself.** It used to point at
+  `docs/Speech.md`, which is design documentation and deliberately off
+  `BASICFORTH_DOCS` — so from the prompt, where the reader is, the pointer went
+  nowhere. Same broken promise `help install` was created to fix. Speech.md
+  keeps the reasoning; the guide keeps the commands and the one trap that
+  silently costs you the engine (`pipx ensurepath` needs a fresh shell).
+### Changed: the default piper voice is `en_US-libritts-high`
+
+- **The old default was the wrong thing to point people at.** It is trained on
+  the Blizzard Challenge 2013 Lessac data, whose licence restricts use to
+  "Research Purposes" and excludes "any commercial purpose" — while the
+  workflow these pages recommend is to render a vocabulary once and *ship the
+  WAVs*. Whatever one concludes about generated audio specifically, a default
+  should not put that question in front of every user.
+- `en_US-libritts-high` is **trained from scratch** on LibriTTS
+  (openslr.org/60), which is **CC BY 4.0**. Switched everywhere the old voice
+  was named — `setup.sh`, `voice.fs`'s built-in template, three suite
+  assertions and four documentation pages.
+- **A permissive dataset licence is not enough on its own, which is the trap
+  worth writing down.** Most piper voices are *fine-tuned from* the Lessac
+  model, so the restriction travels into voices whose own dataset is
+  perfectly free: `en_US-libritts_r-medium` advertises CC BY 4.0 and is
+  "fine-tuned from English lessac medium". The first replacement chosen here
+  was that voice, for exactly that reason. A voice is clear only if its
+  dataset licence *and* its training lineage are both clear, and the docs now
+  say so.
+- **The docs record where the terms are, and stop reasoning about how they
+  combine.** Three things carry their own — the engine (`piper-tts`,
+  GPL-3.0-or-later by its package metadata), the voice model, and its training
+  data — and what that means for generated audio is a question for the reader,
+  not for an install guide. Earlier drafts of this entry answered it three
+  different ways and each was an overreach, so the pages now give the facts
+  and the sources: `pip show piper-tts`, and the model cards at
+  huggingface.co/rhasspy/piper-voices, which `download_voices` does not
+  fetch.
+- `voice.fs` runs the engine as a separate program and never links against it,
+  which is stated as the architectural fact it is, without the conclusion the
+  earlier drafts drew from it.
+- **The version gap is documented as checked rather than hoped.** Debian ships
+  3.2.10 where BasicForth is developed against 3.4.12: every SDL function the
+  Forth side binds is present in 3.2.10, and all 51 constants and struct
+  offsets are identical between the two. `tools/sdl3off.c` is what settles
+  this, and `help sdl3-source` now says so, since the question recurs with
+  every distribution.
+
 ### Fixed: the integration suite assumed the machine it was written on
 
 Three defects, all found by running the suite on a Raspberry Pi 400 the day
