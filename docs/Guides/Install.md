@@ -313,6 +313,23 @@ Carry on in the same shell and every command above still *succeeds* while
 unreachable piper leaves `VOICE_ENGINE_CMD` unset, and the only sign is the
 suite reporting `SKIP … VOICE_ENGINE_CMD not set`. The voice is about 130 MB.
 
+**If a render fails with `Unable to find voice`**, the engine was found but
+`VOICE_ENGINE_CMD` was not set, so `voice.fs` fell back to its built-in
+template — which names `piper` with no `--data-dir` and therefore looks
+somewhere the voice is not. Re-source `setup.sh`, which knows where the voices
+on this machine actually are. Piper's own message cannot tell you this, since
+it never learns which template invoked it. The usual cause is installing piper
+*after* sourcing `setup.sh`, and a `setup.sh` of your own that sources this one
+by a hard-coded path is another: a failed `.` does not stop a shell script, so
+it leaves the variable unset and still reports success.
+
+**The `onnxruntime` warnings naming `/sys/class/drm/card0` are harmless.** It
+probes for a GPU at startup, finds no vendor file to read on a machine that
+does not expose one — a Raspberry Pi, for instance — and runs on the CPU, which
+is what you wanted anyway. `ORT_LOGGING_LEVEL` does not suppress them. Resist
+redirecting the engine's `stderr` to hide them: that is also where the reason
+appears when a render genuinely fails, as above.
+
 [Speech.md](../Speech.md) in the repository explains why the voice download
 needs the environment's own interpreter, and what to do with another engine.
 
