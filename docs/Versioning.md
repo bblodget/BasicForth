@@ -85,17 +85,28 @@ release**, since the banner comes from `git describe`.
    that remote's `main` does not contain. All-or-nothing turns that into a
    clean failure you retry.
 
-8. Verify against the remote, **including the tag**:
+8. Verify against the remote, **including the tag**, naming each ref exactly:
 
-       git ls-remote origin refs/heads/main refs/heads/staging 'refs/tags/vX.Y.Z*'
+       git ls-remote origin refs/heads/main refs/heads/staging \
+                            'refs/tags/vX.Y.Z' 'refs/tags/vX.Y.Z^{}'
+
+   Expect four lines, and expect three of them to carry the same sha:
+   `main`, `staging`, and `refs/tags/vX.Y.Z^{}`.
 
    Check the remote, not the local `origin/*` refs — those only report what the
-   last fetch saw. An annotated tag prints **two** lines, and the difference
-   matters: `refs/tags/vX.Y.Z` is the sha of the tag *object* and will not equal
-   anything else, while `refs/tags/vX.Y.Z^{}` is the commit it names. It is that
-   second line that must match `main` and `staging`. For v0.16.0 the tag object
-   was `62c5097` and the commit `15eed45` — compare the wrong one and a correct
-   release looks broken.
+   last fetch saw.
+
+   An annotated tag has **two** refs, and the difference matters:
+   `refs/tags/vX.Y.Z` is the sha of the tag *object* and matches nothing else,
+   while `refs/tags/vX.Y.Z^{}` is the commit it names. For v0.16.0 the tag
+   object was `62c5097` and the commit `15eed45` — compare the wrong line and a
+   correct release looks broken.
+
+   Name both refs rather than reaching for `refs/tags/vX.Y.Z*`. The wildcard
+   exists only to pick up that `^{}` line, and it also matches any sibling that
+   happens to share the prefix — a `vX.Y.Z-rc1`, say — so the check can print
+   extra refs while still looking like it passed. A verification is worth
+   nothing if it cannot be read at a glance.
 
 Step 4 is the part that is easy to get wrong. Tagging on `staging` would put
 the release on a commit `main` does not contain, so `git describe` on `main`
