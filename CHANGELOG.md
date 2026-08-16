@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Three headline changes: **local variables** (`{: a b c :}`), a compiler change
+that makes **a number an immediate** instead of a call, and **`deps`**, which
+answers what a file needs before you load it.
+
+It is also the first release exercised on real ARM64 hardware rather than under
+emulation, and that is where the `SIGILL` fix below came from — a bug that every
+QEMU suite had passed, because QEMU does not model an incoherent instruction
+cache.
+
 ### Added: local variables — `{: a b c :}`
 
 - Forth 2012 section 13. Names the top n stack items for the rest of the
@@ -32,9 +41,26 @@
   records the measurements and the experiment that did not close it.
 - **A definition that declares no locals is byte-for-byte unchanged.**
   `: sq dup * ;` is still 11 bytes on x86-64.
-- Locals live on their own per-thread stack, so they do not interact with
+- Locals live on **their own per-thread stack**, fenced by its own guard pages,
+  with `lp`/`lp0` in the existing TLS block — so they do not interact with
   `>r`/`r>` or with `do`/`loop` control parameters, and a worker cannot disturb
   another thread's frames. `see` prints them verbatim; `help {:` documents them.
+- A separate stack is not unwound by anything that unwinds the return stack, so
+  **every reset path releases it by hand**: caught and uncaught `throw`, `QUIT`,
+  an aborted definition, both guard-page faults, `dict_full`, and worker exit.
+  A missed one leaks silently — nothing fails until the locals stack overflows
+  much later, in unrelated code — so each has an assertion that `lp` came back,
+  which is a different question from "does it work". Overflowing it reports
+  `locals stack overflow`, distinct from the data stack's message, so a report
+  points at the right stack.
+- The one unconditional cost anywhere else is a cell in the `catch` frame,
+  which `throw` needs because it unwinds past an arbitrary number of frames at
+  once. Frame setup happens only where locals are declared, and teardown is a
+  fixed add, because the frame size is known at compile time.
+- The frame primitives underneath — `(lframe)`, `(lunframe)`, `(local@)`,
+  `(local!)`, `(lp@)`, `(lp0@)`, `(lstack-size)` — shipped and were tested
+  before any syntax existed, so the part that actually goes wrong could be
+  exercised on its own.
 - **Locals shadow, including verbs.** `{: i :}` beats the `DO` loop index inside
   that definition. That is what the standard requires and what every language
   does for variables, but Forth lets you shadow *verbs*, so it bites harder —
@@ -128,250 +154,6 @@ The value is now built straight into an instruction. No call, no inline data.
   constant for the demonstration now, because a plain number no longer hides
   anything.
 
-### Fixed: the lesson suite stopped recognising a missing libSDL3
-
-The graphics and sound lessons are meant to SKIP where libSDL3 is absent, which
-under QEMU is always. The gate matched one literal string, `dlopen: cannot load
-library` — and that message had changed twice, first to name the library and
-later to be intercepted by `needs-lib`. Six lessons had been *failing* rather
-than skipping, and the sentinel had been dead since well before the change that
-exposed it.
-
-Worse in the other direction: `needs-lib`'s wording matched none of the error
-patterns, so `examples/bounce.fs` and `examples/gamepad.fs` reported **PASS on
-ARM64 having loaded nothing at all**. That only surfaced because the pass count
-*fell* when the skip came back.
-
-The soname is now read from `sdl3.fs`'s own `needs-lib` line rather than spelled
-in the test, and the library named in a failure is compared with `=`, so it
-cannot prefix-match a different library. A missing library that is *not* SDL is
-now a failure rather than a skip wearing SDL's name.
-
-### Added: `deps <file>` — what a file needs, without loading it
-
-- `deps sdl3` reads a file's leading dep block and reports each requirement
-  against this machine, without running a line of the file:
-
-      deps sdl3
-      sdl3.fs
-        require ffi.fs            loaded
-        require graphics.fs       found
-        needs-lib libSDL3.so.0    MISSING -- see help install
-      sdl3.fs will not load: 1 requirement missing.
-
-  `.fs` is added if you leave it off, and the file is looked for in the current
-  directory first and then on `BASICFORTH_PATH` — the same order `require`
-  uses, so `deps` answers for the file the load would actually pick.
-- **One parser, not two.** `deps` re-runs the block with a mode flag set, and
-  each word takes a reporting branch through the same parse and the same probe
-  it uses at load time. A second implementation of the syntax would have been
-  free to drift from the first, and would eventually have said a file loads
-  when it does not.
-- **It follows `require`,** because the flat answer can lie: `require sound.fs
-  found` is no comfort on a machine where sound.fs itself cannot load for want
-  of SDL3. Nested files print **only if something in them is missing**, so a
-  healthy machine sees one short list and a broken one sees exactly the section
-  that explains itself. A file already loaded is not followed — it is in
-  memory, so its requirements were met when it got there.
-- A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
-  too — all met, will-load-but-degraded, and will-not-load.
-- **The traversal is bounded at 64 files, and says so when it runs out** rather
-  than reporting on the part it managed to read. dark-star.fs already follows
-  11 files, so the bound is reachable, and a quiet truncation would have
-  produced the one thing this word exists to prevent — a confident "all
-  requirements met" from a check that stopped looking.
-
-### Added: `wants-cmd` / `wants-lib` — requirements a file can live without
-
-- Same syntax as `needs-cmd`/`needs-lib`, opposite behaviour: no probe, no
-  message, and the load never stops. A soft requirement is a **declaration,
-  not a check** — it exists to be read by `deps`.
-
-      wants-cmd piper           the default engine; voice-cmd! takes another
-      wants-lib libflite.so.1   install flite
-
-- `disasm.fs`, `speech.fs` and `voice.fs` now carry a dep block for the first
-  time. Each deliberately keeps working without its dependency — `disasm.fs`
-  re-probes for objdump on every `dis`, so installing binutils mid-session
-  works without a reload; `voice.fs` treats piper as a default that
-  `voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )`. Using
-  `needs-*` in any of them would have broken a contract the file publishes on
-  purpose, which is why they had no dep block at all until now — and why
-  `deps speech` used to be able to say nothing about the one optional
-  dependency worth checking.
-- The silence is deliberate. A warning on every load would nag every user who
-  is running perfectly well without the thing.
-
-### Changed: sdl3.fs and sound.fs declare the library they need
-
-- Both now open with a dep block, so a machine without SDL3 is told which file
-  wanted the library and what to do about it, instead of being told only that
-  something could not be loaded:
-
-      require sdl3.fs
-      sdl3.fs: needs the library libSDL3.so.0 -- see help install
-
-  The pointer earns its place here: SDL3 is not packaged on Debian or Ubuntu
-  yet, so "install libsdl3" is not advice anyone can act on, and `help install`
-  has the cmake recipe.
-- The failure point is unchanged — `dlopen` already aborted the load — and the
-  probe hands its handle to the bind that follows, so declaring the
-  requirement costs no second `dlopen`.
-- **Deliberately not adopted** by `speech.fs`, `voice.fs` and `disasm.fs`.
-  Those three do not abort today: they return an `ior`, or probe at first use
-  and retry, so a game runs without flite and installing binutils mid-session
-  works. `needs-lib` stops the load, which would turn `require speech.fs` into
-  a hard failure on any machine without flite and break a published stack
-  effect. `disasm.fs` now *words* its message like `needs-cmd` — same
-  sentence, same shape — while still firing at first use, not at load.
-- `docs/Guides/` is a third help section, and `Install.md` moved into it. The
-  hint says `see help install`, and that has to be true at the prompt where
-  the error appears — but `docs/` itself is design and implementation notes,
-  which `help` should never offer, so the page had nowhere reachable to live.
-  `setup.sh` exports the new section; `help install` answers; `help` lists
-  Guides beside Language-Reference and Tutorial. Guides is for user-facing
-  pages that are neither word references nor lessons, and installing is only
-  the first.
-- A dep block that promises `help <x>` is now **checked**: the suite extracts
-  every such hint from `src/forth/*.fs` and asks the help system, against the
-  docs path *read from* `setup.sh` rather than a copy of it — a copy would keep
-  passing after `setup.sh` changed, which is the same bug one level up.
-  `help install` had been a broken promise from the moment it was written, and
-  prose asserting a capability is not checked by anything unless you check it.
-- Guides headings are checked too: each must be one token, and one that no
-  reference page already answers. `help` does not *lose* a collision, it
-  appends — a `## allot` in a guide would leave `help allot` printing Memory's
-  entry with a slab of the install guide after it.
-- The degraded path is now tested where it is actually used. It ran only under
-  QEMU before, where the SDL tests are skipped wholesale, so "library missing"
-  was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
-  machine that has it, and checks the message, the surviving session, and the
-  absent words.
-
-### Changed: `help libraries` leads with the one command that usually works
-
-- **SDL3 is packaged now**, on Debian 13 (trixie) and Raspberry Pi OS 64-bit
-  among others, so the optional half of the install is `sudo apt install
-  libsdl3-dev libflite1` and nothing else. The page used to say "from source,
-  see below" unconditionally and then spend fifty lines on cmake — a build
-  most readers no longer need, presented as the only route.
-- The from-source recipe is intact, moved to its own topic: `help
-  sdl3-source`. Nothing was cut, only reordered so the common case is not
-  behind the rare one. flite and the speech engines moved out the same way, to
-  `help flite` and `help engines`. **A `###` subsection does not end a `help`
-  topic** — the page is read to the next `##` — so a detail section only stops
-  padding the overview once it becomes a topic in its own right. `help
-  libraries` is 37 source lines where it was 96.
-- **`help install` now answers with the commands, not with a table of
-  contents.** The complete install — build tools, clone, `make`, `setup.sh`,
-  and the one `apt` line that buys graphics, sound, gamepads and `say` — is in
-  the first screen, before the topic list. `help quickstart` carries the same
-  commands with a line on what each is for.
-- **`help engines` carries the piper install itself.** It used to point at
-  `docs/Speech.md`, which is design documentation and deliberately off
-  `BASICFORTH_DOCS` — so from the prompt, where the reader is, the pointer went
-  nowhere. Same broken promise `help install` was created to fix. Speech.md
-  keeps the reasoning; the guide keeps the commands and the one trap that
-  silently costs you the engine (`pipx ensurepath` needs a fresh shell).
-### Changed: the default piper voice is `en_US-libritts-high`
-
-- **The old default was the wrong thing to point people at.** It is trained on
-  the Blizzard Challenge 2013 Lessac data, whose licence restricts use to
-  "Research Purposes" and excludes "any commercial purpose" — while the
-  workflow these pages recommend is to render a vocabulary once and *ship the
-  WAVs*. Whatever one concludes about generated audio specifically, a default
-  should not put that question in front of every user.
-- `en_US-libritts-high` is **trained from scratch** on LibriTTS
-  (openslr.org/60), which is **CC BY 4.0**. Switched everywhere the old voice
-  was named — `setup.sh`, `voice.fs`'s built-in template, three suite
-  assertions and four documentation pages.
-- **A permissive dataset licence is not enough on its own, which is the trap
-  worth writing down.** Most piper voices are *fine-tuned from* the Lessac
-  model, so the restriction travels into voices whose own dataset is
-  perfectly free: `en_US-libritts_r-medium` advertises CC BY 4.0 and is
-  "fine-tuned from English lessac medium". The first replacement chosen here
-  was that voice, for exactly that reason. A voice is clear only if its
-  dataset licence *and* its training lineage are both clear, and the docs now
-  say so.
-- **The docs record where the terms are, and stop reasoning about how they
-  combine.** Three things carry their own — the engine (`piper-tts`,
-  GPL-3.0-or-later by its package metadata), the voice model, and its training
-  data — and what that means for generated audio is a question for the reader,
-  not for an install guide. Earlier drafts of this entry answered it three
-  different ways and each was an overreach, so the pages now give the facts
-  and the sources: `pip show piper-tts`, and the model cards at
-  huggingface.co/rhasspy/piper-voices, which `download_voices` does not
-  fetch.
-- `voice.fs` runs the engine as a separate program and never links against it,
-  which is stated as the architectural fact it is, without the conclusion the
-  earlier drafts drew from it.
-- **The version gap is documented as checked rather than hoped.** Debian ships
-  3.2.10 where BasicForth is developed against 3.4.12: every SDL function the
-  Forth side binds is present in 3.2.10, and all 51 constants and struct
-  offsets are identical between the two. `tools/sdl3off.c` is what settles
-  this, and `help sdl3-source` now says so, since the question recurs with
-  every distribution.
-
-### Fixed: the integration suite assumed the machine it was written on
-
-Three defects, all found by running the suite on a Raspberry Pi 400 the day
-SDL3 was installed there. Each reported something other than itself, which is
-what made them worth fixing rather than merely correcting.
-
-- **Two `wav-play` tests loaded `/usr/share/sounds/sound-icons/pipe.wav`** — a
-  file from Debian's `sound-icons` package, which the suite never installs and
-  Raspberry Pi OS does not ship. Without it `wav-load` failed, both `wav-play`
-  calls returned the same inert channel, and the failure read as a fault in a
-  perfectly good SDL3. The sample now lives in the repo as
-  `tests/sample-16k-mono.wav`, so it cannot be missing and cannot fail to
-  build. (The `wavcore.fs` fixtures next to it are still built in Forth, for a
-  reason that does not apply here: there the byte layout *is* what is under
-  test, malformed chunks and all, while this one only has to be a valid sample
-  of a known length.) It is deliberately 16 kHz against a 44100 device, because
-  a sample that agreed with the device would make the format assertion vacuous.
-  Both expected strings are unchanged, which is what shows this was an
-  environment fix rather than a re-baseline.
-- **The no-libflite test hard-coded `/lib/x86_64-linux-gnu/libflite.so.1`.**
-  On any other architecture `bwrap` failed to bind over a file that was not
-  there and the test reported *that* as the speech output — so the degraded
-  path went untested on precisely the machines it was not written on. The path
-  now comes from `ldconfig`, which is not merely portable but correct:
-  `speech.fs` dlopens the bare SONAME, so the file `ldconfig` names is by
-  construction the one the loader would have opened.
-- **Every "is this library installed" gate read `ldconfig` off `$PATH`, and
-  failed silently to good news.** `ldconfig` lives in `/sbin`, which is not on
-  every developer's `PATH` — and `! ldconfig -p | grep -q libSDL3` is *true*
-  when the command is missing, so the SDL, sound and speech sections all
-  skipped and the run still ended `0 failed`. Nothing was red; the tests simply
-  did not happen. Resolved once now, by absolute path when the bare name is not
-  found. This was invisible on both machines' interactive shells and appeared
-  only over `ssh`, which is how the ARM64 runs are driven.
-
-### Fixed: `make` now refreshes the build directory's copy of `core.fs`
-
-- The binary reads `core.fs` at startup from beside itself, and that copy was
-  made by a `cp` line inside each `run-*` target. So a plain `make` left it
-  alone: edit `src/forth/core.fs`, run the binary directly, and you were
-  testing new machine code against an old core — with nothing on screen to say
-  so. It is now a real rule, `core.fs: $(FORTH_DIR)/core.fs`, and the default
-  goal builds it alongside the binary.
-- The copy was also `cp ... 2>/dev/null || true`, so a copy that *failed* said
-  nothing either, and the same line appearing in five targets meant two
-  concurrent `run-*` targets could copy over the file the other was reading.
-  One rule fixes all three, and a failure now stops the build.
-- The rule compares by **content**, not by timestamp. A timestamp rule misses
-  an edit made in the same clock tick as the previous copy — the kernel's
-  coarse clock gives both files the identical mtime and `make` reads "not
-  older" as "up to date". Measured while building this: two of three
-  back-to-back edits were skipped. Scripts write files back to back and people
-  do not, which is exactly what would make it an hour lost to a phantom bug.
-- Deliberate behaviour change: a missing `src/forth/core.fs` is now a build
-  error rather than a silent skip. The binary cannot start without it, so the
-  build had nothing to gain by continuing.
-- The binary is **not** made to depend on `core.fs`. It genuinely does not —
-  saying otherwise would relink on every edit to a `.fs` file and assert a
-  relationship that is not there.
-
 ### Added: a file can say what it needs from the machine
 
 - `needs-cmd <name>` and `needs-lib <soname>` go at the top of a file with its
@@ -410,53 +192,107 @@ what made them worth fixing rather than merely correcting.
 - `dlopen` now names the library it could not load. "cannot load library" in a
   session that has required three of them says nothing.
 
-### Added: the locals runtime frame (stage 1 — no syntax yet)
+### Changed: sdl3.fs and sound.fs declare the library they need
 
-- The substrate for local variables: a **separate locals stack**, per thread,
-  fenced by its own guard pages, with `lp`/`lp0` in the existing TLS block.
-  `{: … :}` is stage 2; this stage ships only the frame primitives
-  (`(lframe)`, `(lunframe)`, `(local@)`, `(local!)`, `(lp@)`, `(lp0@)`,
-  `(lstack-size)`) so the part that actually goes wrong could be tested first.
-- A separate stack is not unwound by anything that unwinds the return stack, so
-  every reset path releases it by hand: caught and uncaught `throw`, `QUIT`,
-  an aborted definition, both guard-page faults, `dict_full`, and worker exit.
-  A missed one leaks silently — nothing fails until the locals stack overflows
-  much later, in unrelated code — so each has an assertion that `lp` came back,
-  which is a different question from "does it work".
-- **A definition that declares no locals is unchanged.** Frame setup happens
-  only where locals are declared, and teardown is a fixed add, because the
-  frame size is known at compile time. The one unconditional cost is a cell in
-  the `catch` frame, which `throw` needs because it unwinds past an arbitrary
-  number of frames at once.
-- Overflowing the locals stack reports `locals stack overflow`, distinct from
-  the data stack's message, so a report points at the right stack.
+- Both now open with a dep block, so a machine without SDL3 is told which file
+  wanted the library and what to do about it, instead of being told only that
+  something could not be loaded:
 
-### Changed: tunable sizes live in one shared file
+      require sdl3.fs
+      sdl3.fs: needs the library libSDL3.so.0 -- see help install
 
-- `src/config.inc` now holds every tunable size — `CELL`, `DATA_STACK_SIZE`,
-  `LOCALS_STACK_SIZE` and `THREAD_RSTACK_SIZE` — included by `core.s` and
-  `main.s` on both architectures. The Makefiles depend on it, so changing a
-  value forces a rebuild: a stack assembled from a different number than its
-  guard pages would be worse than no sharing at all.
-- `threads.fs` states no size of its own. `thread-dstack`, `thread-rstack` and
-  the worker locals stack read back through `(dstack-size)`, `(thread-rsize)`
-  and `(lstack-size)`, so the Forth side cannot disagree with the assembler
-  about how big a stack is or where to fence it.
+  The pointer earns its place here: SDL3 is not packaged on Debian or Ubuntu
+  yet, so "install libsdl3" is not advice anyone can act on, and `help install`
+  has the cmake recipe.
+- The failure point is unchanged — `dlopen` already aborted the load — and the
+  probe hands its handle to the bind that follows, so declaring the
+  requirement costs no second `dlopen`.
+- **Deliberately not adopted** by `speech.fs`, `voice.fs` and `disasm.fs`.
+  Those three do not abort today: they return an `ior`, or probe at first use
+  and retry, so a game runs without flite and installing binutils mid-session
+  works. `needs-lib` stops the load, which would turn `require speech.fs` into
+  a hard failure on any machine without flite and break a published stack
+  effect. `disasm.fs` now *words* its message like `needs-cmd` — same
+  sentence, same shape — while still firing at first use, not at load. (The
+  soft forms below give those three a dep block after all, without the abort.)
+- `docs/Guides/` is a third help section, and `Install.md` moved into it. The
+  hint says `see help install`, and that has to be true at the prompt where
+  the error appears — but `docs/` itself is design and implementation notes,
+  which `help` should never offer, so the page had nowhere reachable to live.
+  `setup.sh` exports the new section; `help install` answers; `help` lists
+  Guides beside Language-Reference and Tutorial. Guides is for user-facing
+  pages that are neither word references nor lessons, and installing is only
+  the first.
+- A dep block that promises `help <x>` is now **checked**: the suite extracts
+  every such hint from `src/forth/*.fs` and asks the help system, against the
+  docs path *read from* `setup.sh` rather than a copy of it — a copy would keep
+  passing after `setup.sh` changed, which is the same bug one level up.
+  `help install` had been a broken promise from the moment it was written, and
+  prose asserting a capability is not checked by anything unless you check it.
+- Guides headings are checked too: each must be one token, and one that no
+  reference page already answers. `help` does not *lose* a collision, it
+  appends — a `## allot` in a guide would leave `help allot` printing Memory's
+  entry with a slab of the install guide after it.
+- The degraded path is now tested where it is actually used. It ran only under
+  QEMU before, where the SDL tests are skipped wholesale, so "library missing"
+  was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
+  machine that has it, and checks the message, the surviving session, and the
+  absent words.
 
-### Changed: the data stack is 1024 cells, and one size for every thread
+### Added: `wants-cmd` / `wants-lib` — requirements a file can live without
 
-- Collecting the numbers in one file exposed that the REPL's data stack was
-  **half a worker's** — 4096 bytes against 8192 — set in two files, in two
-  languages, with nothing explaining why the thread you actually type at got
-  the smaller one.
-- Now a single `DATA_STACK_SIZE` of **8192 bytes (1024 cells)** serves both, so
-  a REPL/worker difference cannot be expressed at all. Two constants that are
-  supposed to stay equal is the arrangement that produced the drift. Raised
-  rather than lowered: no working program breaks by being given more room.
-- Same principle as `LOCALS_STACK_SIZE`, which was shared from the start —
-  what a computation can hold, and how deep it can recurse, should not depend
-  on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
-  return stack is the process stack handed over by the kernel.
+- Same syntax as `needs-cmd`/`needs-lib`, opposite behaviour: no probe, no
+  message, and the load never stops. A soft requirement is a **declaration,
+  not a check** — it exists to be read by `deps`.
+
+      wants-cmd piper           the default engine; voice-cmd! takes another
+      wants-lib libflite.so.1   install flite
+
+- `disasm.fs`, `speech.fs` and `voice.fs` now carry a dep block for the first
+  time. Each deliberately keeps working without its dependency — `disasm.fs`
+  re-probes for objdump on every `dis`, so installing binutils mid-session
+  works without a reload; `voice.fs` treats piper as a default that
+  `voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )`. Using
+  `needs-*` in any of them would have broken a contract the file publishes on
+  purpose, which is why they had no dep block at all until now — and why
+  `deps speech` used to be able to say nothing about the one optional
+  dependency worth checking.
+- The silence is deliberate. A warning on every load would nag every user who
+  is running perfectly well without the thing.
+
+### Added: `deps <file>` — what a file needs, without loading it
+
+- `deps sdl3` reads a file's leading dep block and reports each requirement
+  against this machine, without running a line of the file:
+
+      deps sdl3
+      sdl3.fs
+        require ffi.fs            loaded
+        require graphics.fs       found
+        needs-lib libSDL3.so.0    MISSING -- see help install
+      sdl3.fs will not load: 1 requirement missing.
+
+  `.fs` is added if you leave it off, and the file is looked for in the current
+  directory first and then on `BASICFORTH_PATH` — the same order `require`
+  uses, so `deps` answers for the file the load would actually pick.
+- **One parser, not two.** `deps` re-runs the block with a mode flag set, and
+  each word takes a reporting branch through the same parse and the same probe
+  it uses at load time. A second implementation of the syntax would have been
+  free to drift from the first, and would eventually have said a file loads
+  when it does not.
+- **It follows `require`,** because the flat answer can lie: `require sound.fs
+  found` is no comfort on a machine where sound.fs itself cannot load for want
+  of SDL3. Nested files print **only if something in them is missing**, so a
+  healthy machine sees one short list and a broken one sees exactly the section
+  that explains itself. A file already loaded is not followed — it is in
+  memory, so its requirements were met when it got there.
+- A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
+  too — all met, will-load-but-degraded, and will-not-load.
+- **The traversal is bounded at 64 files, and says so when it runs out** rather
+  than reporting on the part it managed to read. dark-star.fs already follows
+  11 files, so the bound is reachable, and a quiet truncation would have
+  produced the one thing this word exists to prevent — a confident "all
+  requirements met" from a check that stopped looking.
 
 ### Fixed: ARM64 could not run at all on a Cortex-A72
 
@@ -479,53 +315,6 @@ what made them worth fixing rather than merely correcting.
   ran the interpreter fine.
 - All four suites now pass on the hardware: 123 unit, 1022 integration, 36 pty,
   23 lessons (8 skipped for libSDL3).
-
-### Fixed: a control-flow closer with nothing open blamed the data stack
-
-- `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
-  `while`, `again`, `loop`, `+loop`, `endof` and `endcase` — the whole family.
-  `cf_check_tag` read the top of the compile-time stack before checking
-  anything, so with nothing open it walked off the top, hit the guard page, and
-  the fault handler got there first. The definition rolled back correctly and no
-  wrong code was ever emitted; the message simply named the wrong thing, and
-  sent a beginner who typed `then` with no `if` off to look at their stack.
-  It now bounds the read by `colon_dsp`, the way `ENDCASE` already did.
-- `WHILE` needed its own fix: it inlined the tag compare instead of calling
-  `cf_check_tag` (which only peeks — it never consumed), so it kept reporting a
-  stack underflow after the shared fix landed.
-
-### Fixed: an unbalanced definition reported nowhere, then let the load run on
-
-- `: Say ... if ... ;` with the `then` left off printed a bare
-  `unresolved control flow` — no file, no line, no name — and then **returned**,
-  so the file went on loading against a word that never got defined. The only
-  line number you ever saw came from the first *call* to the missing word.
-  Found in the Dark Star port, where the typo was on line 167 and the sole
-  reported location was 213.
-- It now reports like every other compile error, naming the definition read out
-  of its own half-built header:
-  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
-  also stops the load at that line instead of producing a second, unrelated
-  looking failure further down. `;` was the last compile error that let a load
-  continue.
-- A `:noname` has no name to give — it builds a hidden header with an empty
-  name — so it reports the token instead: `unresolved control flow: ;`.
-- Names print as the dictionary stores them, which is lower case.
-
-### Changed: control-flow errors name the word you typed
-
-- `? mismatched-control-flow` is now `mismatched control flow: then`. The `?`
-  prefix is BasicForth's *undefined word* marker, so the old report read as
-  though `then` did not exist, and the token position was spent on a fixed
-  string that said nothing the prefix had not. The outer interpreter already
-  banks each word in `err_token` before `FIND`, so naming the actual closer
-  cost nothing — and inside a file you get
-  `game.fs:2: mismatched control flow: then`.
-- One wrinkle worth knowing: the token is the last word the **outer
-  interpreter** parsed. That is the closer for ordinary source, but the
-  enclosing word when a closer is reached at run time through
-  `' then execute` — a construction that is already undefined, since it
-  bypasses the compile-only check.
 
 ### Added: `ch-claim` / `ch-release` — keeping a channel
 
@@ -577,19 +366,6 @@ what made them worth fixing rather than merely correcting.
 - `tutorial Sound` taught that `tone-ch` is a **constant** and demonstrated
   that `to tone-ch` fails. The practice is unchanged and the *reason* is
   rewritten: what makes the channel `tone`'s is the claim, not the number.
-
-### Fixed: four `help` entries were unreachable by their second name
-
-- `help on-stop`, `help pad-closeall`, `help pad-hasaxis?` and `help pad-dy`
-  all answered "no help", while the first name of each pair worked. The
-  headings read `## a ( eff ) / b ( eff )`, and the index takes the words up to
-  the first `(` — so only `a` was ever registered. The supported form is
-  `## a b ( eff )`.
-- Nothing caught it because the reference audit never `require`s `pad.fs`, the
-  same blind spot that let `snd-dev` ship undocumented. Adding it turns the
-  audit red with about 40 further names, in two groups — described-but-unindexed
-  in `pad.fs`, and genuinely undocumented raw handles in `sdl3.fs` — so that is
-  filed in `docs/TODO.md` rather than bolted on here.
 
 ### Changed: `snd-channels` is a constant, 64
 
@@ -750,6 +526,189 @@ what made them worth fixing rather than merely correcting.
   **interactive-only**, so a library loaded with `require` can shadow a core
   word with no sign at all.
 
+### Fixed: a control-flow closer with nothing open blamed the data stack
+
+- `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
+  `while`, `again`, `loop`, `+loop`, `endof` and `endcase` — the whole family.
+  `cf_check_tag` read the top of the compile-time stack before checking
+  anything, so with nothing open it walked off the top, hit the guard page, and
+  the fault handler got there first. The definition rolled back correctly and no
+  wrong code was ever emitted; the message simply named the wrong thing, and
+  sent a beginner who typed `then` with no `if` off to look at their stack.
+  It now bounds the read by `colon_dsp`, the way `ENDCASE` already did.
+- `WHILE` needed its own fix: it inlined the tag compare instead of calling
+  `cf_check_tag` (which only peeks — it never consumed), so it kept reporting a
+  stack underflow after the shared fix landed.
+
+### Fixed: an unbalanced definition reported nowhere, then let the load run on
+
+- `: Say ... if ... ;` with the `then` left off printed a bare
+  `unresolved control flow` — no file, no line, no name — and then **returned**,
+  so the file went on loading against a word that never got defined. The only
+  line number you ever saw came from the first *call* to the missing word.
+  Found in the Dark Star port, where the typo was on line 167 and the sole
+  reported location was 213.
+- It now reports like every other compile error, naming the definition read out
+  of its own half-built header:
+  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  also stops the load at that line instead of producing a second, unrelated
+  looking failure further down. `;` was the last compile error that let a load
+  continue.
+- A `:noname` has no name to give — it builds a hidden header with an empty
+  name — so it reports the token instead: `unresolved control flow: ;`.
+- Names print as the dictionary stores them, which is lower case.
+
+### Changed: control-flow errors name the word you typed
+
+- `? mismatched-control-flow` is now `mismatched control flow: then`. The `?`
+  prefix is BasicForth's *undefined word* marker, so the old report read as
+  though `then` did not exist, and the token position was spent on a fixed
+  string that said nothing the prefix had not. The outer interpreter already
+  banks each word in `err_token` before `FIND`, so naming the actual closer
+  cost nothing — and inside a file you get
+  `game.fs:2: mismatched control flow: then`.
+- One wrinkle worth knowing: the token is the last word the **outer
+  interpreter** parsed. That is the closer for ordinary source, but the
+  enclosing word when a closer is reached at run time through
+  `' then execute` — a construction that is already undefined, since it
+  bypasses the compile-only check.
+
+### Changed: tunable sizes live in one shared file
+
+- `src/config.inc` now holds every tunable size — `CELL`, `DATA_STACK_SIZE`,
+  `LOCALS_STACK_SIZE` and `THREAD_RSTACK_SIZE` — included by `core.s` and
+  `main.s` on both architectures. The Makefiles depend on it, so changing a
+  value forces a rebuild: a stack assembled from a different number than its
+  guard pages would be worse than no sharing at all.
+- `threads.fs` states no size of its own. `thread-dstack`, `thread-rstack` and
+  the worker locals stack read back through `(dstack-size)`, `(thread-rsize)`
+  and `(lstack-size)`, so the Forth side cannot disagree with the assembler
+  about how big a stack is or where to fence it.
+
+### Changed: the data stack is 1024 cells, and one size for every thread
+
+- Collecting the numbers in one file exposed that the REPL's data stack was
+  **half a worker's** — 4096 bytes against 8192 — set in two files, in two
+  languages, with nothing explaining why the thread you actually type at got
+  the smaller one.
+- Now a single `DATA_STACK_SIZE` of **8192 bytes (1024 cells)** serves both, so
+  a REPL/worker difference cannot be expressed at all. Two constants that are
+  supposed to stay equal is the arrangement that produced the drift. Raised
+  rather than lowered: no working program breaks by being given more room.
+- Same principle as `LOCALS_STACK_SIZE`, which was shared from the start —
+  what a computation can hold, and how deep it can recurse, should not depend
+  on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
+  return stack is the process stack handed over by the kernel.
+
+### Added: `docs/Install.md` — clone to a working prompt
+
+- There was no single place saying what BasicForth needs. The build toolchain
+  was documented twice (`README.md` and the Manual, free to drift), SDL3 had
+  no install instructions at all beyond a parenthetical in `Graphics.md`,
+  flite was undocumented, piper was documented only inside `Speech.md`, and
+  neither `git clone` nor `. ./setup.sh` appeared anywhere as a step.
+- The page leads with what none of that made visible: **nothing is required
+  to build but `binutils`, `gcc` and `make`.** Every library is `dlopen`ed on
+  demand, so a missing one cannot break the build, cannot stop the binary
+  starting, and costs exactly its own feature. `ldd` on the binary lists libc
+  and nothing else.
+- **`gcc` is required to build, not just to run the unit tests** — the README
+  and the Manual both said otherwise. It links the binary, which is what
+  makes the FFI's `dlopen` work at all.
+- A missing library does not degrade the way the "loaded on demand" story
+  might suggest, and the page says so: `require sdl3.fs` reports
+  `sdl3.fs: needs the library libSDL3.so.0 -- see help install` and the session
+  continues, but loading stops there, so the words are absent and a later
+  `snd-open` reports `? snd-open`.
+- The SDL3-from-source recipe was verified end to end rather than written
+  from memory — built into a scratch prefix, confirmed with `LD_DEBUG=libs`
+  that BasicForth loaded that build, then opened a window and drew on it. Two
+  traps documented: cmake's "Enabled backends" summary is the check that
+  matters, since SDL builds happily with no video backend when the dev
+  headers are missing and only fails later at `sdl-open`; and `sudo ldconfig`
+  after installing to `/usr/local` is required, not optional.
+- `README.md` and `docs/BasicForth_Manual.md` lose their duplicate
+  §Prerequisites and point at the page. `Graphics.md` and `Speech.md` gain
+  cross-references.
+
+### Changed: `help libraries` leads with the one command that usually works
+
+- **SDL3 is packaged now**, on Debian 13 (trixie) and Raspberry Pi OS 64-bit
+  among others, so the optional half of the install is `sudo apt install
+  libsdl3-dev libflite1` and nothing else. The page used to say "from source,
+  see below" unconditionally and then spend fifty lines on cmake — a build
+  most readers no longer need, presented as the only route.
+- The from-source recipe is intact, moved to its own topic: `help
+  sdl3-source`. Nothing was cut, only reordered so the common case is not
+  behind the rare one. flite and the speech engines moved out the same way, to
+  `help flite` and `help engines`. **A `###` subsection does not end a `help`
+  topic** — the page is read to the next `##` — so a detail section only stops
+  padding the overview once it becomes a topic in its own right. `help
+  libraries` is 37 source lines where it was 96.
+- **`help install` now answers with the commands, not with a table of
+  contents.** The complete install — build tools, clone, `make`, `setup.sh`,
+  and the one `apt` line that buys graphics, sound, gamepads and `say` — is in
+  the first screen, before the topic list. `help quickstart` carries the same
+  commands with a line on what each is for.
+- **`help engines` carries the piper install itself.** It used to point at
+  `docs/Speech.md`, which is design documentation and deliberately off
+  `BASICFORTH_DOCS` — so from the prompt, where the reader is, the pointer went
+  nowhere. Same broken promise `help install` was created to fix. Speech.md
+  keeps the reasoning; the guide keeps the commands and the one trap that
+  silently costs you the engine (`pipx ensurepath` needs a fresh shell).
+- **The version gap is documented as checked rather than hoped.** Debian ships
+  SDL 3.2.10 where BasicForth is developed against 3.4.12: every SDL function
+  the Forth side binds is present in 3.2.10, and all 51 constants and struct
+  offsets are identical between the two. `tools/sdl3off.c` is what settles
+  this, and `help sdl3-source` now says so, since the question recurs with
+  every distribution.
+
+### Changed: the default piper voice is `en_US-libritts-high`
+
+- **The old default was the wrong thing to point people at.** It is trained on
+  the Blizzard Challenge 2013 Lessac data, whose licence restricts use to
+  "Research Purposes" and excludes "any commercial purpose" — while the
+  workflow these pages recommend is to render a vocabulary once and *ship the
+  WAVs*. Whatever one concludes about generated audio specifically, a default
+  should not put that question in front of every user.
+- `en_US-libritts-high` is **trained from scratch** on LibriTTS
+  (openslr.org/60), which is **CC BY 4.0**. Switched everywhere the old voice
+  was named — `setup.sh`, `voice.fs`'s built-in template, three suite
+  assertions and four documentation pages.
+- **A permissive dataset licence is not enough on its own, which is the trap
+  worth writing down.** Most piper voices are *fine-tuned from* the Lessac
+  model, so the restriction travels into voices whose own dataset is
+  perfectly free: `en_US-libritts_r-medium` advertises CC BY 4.0 and is
+  "fine-tuned from English lessac medium". The first replacement chosen here
+  was that voice, for exactly that reason. A voice is clear only if its
+  dataset licence *and* its training lineage are both clear, and the docs now
+  say so.
+- **The docs record where the terms are, and stop reasoning about how they
+  combine.** Three things carry their own — the engine (`piper-tts`,
+  GPL-3.0-or-later by its package metadata), the voice model, and its training
+  data — and what that means for generated audio is a question for the reader,
+  not for an install guide. Earlier drafts of this entry answered it three
+  different ways and each was an overreach, so the pages now give the facts
+  and the sources: `pip show piper-tts`, and the model cards at
+  huggingface.co/rhasspy/piper-voices, which `download_voices` does not
+  fetch.
+- `voice.fs` runs the engine as a separate program and never links against it,
+  which is stated as the architectural fact it is, without the conclusion the
+  earlier drafts drew from it.
+
+### Fixed: four `help` entries were unreachable by their second name
+
+- `help on-stop`, `help pad-closeall`, `help pad-hasaxis?` and `help pad-dy`
+  all answered "no help", while the first name of each pair worked. The
+  headings read `## a ( eff ) / b ( eff )`, and the index takes the words up to
+  the first `(` — so only `a` was ever registered. The supported form is
+  `## a b ( eff )`.
+- Nothing caught it because the reference audit never `require`s `pad.fs`, the
+  same blind spot that let `snd-dev` ship undocumented. Adding it turns the
+  audit red with about 40 further names, in two groups — described-but-unindexed
+  in `pad.fs`, and genuinely undocumented raw handles in `sdl3.fs` — so that is
+  filed in `docs/TODO.md` rather than bolted on here.
+
 ### Fixed: `help <word>` missed 53 names across six libraries
 
 - The reference audit swept the core dictionary, the wav/audio tree and
@@ -813,35 +772,84 @@ what made them worth fixing rather than merely correcting.
   a settled decision read as an oversight waiting to be tidied up. `sdl-fps`
   is now in the word table too; it was absent.
 
-### Added: `docs/Install.md` — clone to a working prompt
+### Fixed: `make` now refreshes the build directory's copy of `core.fs`
 
-- There was no single place saying what BasicForth needs. The build toolchain
-  was documented twice (`README.md` and the Manual, free to drift), SDL3 had
-  no install instructions at all beyond a parenthetical in `Graphics.md`,
-  flite was undocumented, piper was documented only inside `Speech.md`, and
-  neither `git clone` nor `. ./setup.sh` appeared anywhere as a step.
-- The page leads with what none of that made visible: **nothing is required
-  to build but `binutils`, `gcc` and `make`.** Every library is `dlopen`ed on
-  demand, so a missing one cannot break the build, cannot stop the binary
-  starting, and costs exactly its own feature. `ldd` on the binary lists libc
-  and nothing else.
-- **`gcc` is required to build, not just to run the unit tests** — the README
-  and the Manual both said otherwise. It links the binary, which is what
-  makes the FFI's `dlopen` work at all.
-- A missing library does not degrade the way the "loaded on demand" story
-  might suggest, and the page says so: `require sdl3.fs` prints `dlopen:
-  cannot load library` and the session continues, but loading stops there, so
-  the words are absent and a later `snd-open` reports `? snd-open`.
-- The SDL3-from-source recipe was verified end to end rather than written
-  from memory — built into a scratch prefix, confirmed with `LD_DEBUG=libs`
-  that BasicForth loaded that build, then opened a window and drew on it. Two
-  traps documented: cmake's "Enabled backends" summary is the check that
-  matters, since SDL builds happily with no video backend when the dev
-  headers are missing and only fails later at `sdl-open`; and `sudo ldconfig`
-  after installing to `/usr/local` is required, not optional.
-- `README.md` and `docs/BasicForth_Manual.md` lose their duplicate
-  §Prerequisites and point at the page. `Graphics.md` and `Speech.md` gain
-  cross-references.
+- The binary reads `core.fs` at startup from beside itself, and that copy was
+  made by a `cp` line inside each `run-*` target. So a plain `make` left it
+  alone: edit `src/forth/core.fs`, run the binary directly, and you were
+  testing new machine code against an old core — with nothing on screen to say
+  so. It is now a real rule, `core.fs: $(FORTH_DIR)/core.fs`, and the default
+  goal builds it alongside the binary.
+- The copy was also `cp ... 2>/dev/null || true`, so a copy that *failed* said
+  nothing either, and the same line appearing in five targets meant two
+  concurrent `run-*` targets could copy over the file the other was reading.
+  One rule fixes all three, and a failure now stops the build.
+- The rule compares by **content**, not by timestamp. A timestamp rule misses
+  an edit made in the same clock tick as the previous copy — the kernel's
+  coarse clock gives both files the identical mtime and `make` reads "not
+  older" as "up to date". Measured while building this: two of three
+  back-to-back edits were skipped. Scripts write files back to back and people
+  do not, which is exactly what would make it an hour lost to a phantom bug.
+- Deliberate behaviour change: a missing `src/forth/core.fs` is now a build
+  error rather than a silent skip. The binary cannot start without it, so the
+  build had nothing to gain by continuing.
+- The binary is **not** made to depend on `core.fs`. It genuinely does not —
+  saying otherwise would relink on every edit to a `.fs` file and assert a
+  relationship that is not there.
+
+### Fixed: the integration suite assumed the machine it was written on
+
+Three defects, all found by running the suite on a Raspberry Pi 400 the day
+SDL3 was installed there. Each reported something other than itself, which is
+what made them worth fixing rather than merely correcting.
+
+- **Two `wav-play` tests loaded `/usr/share/sounds/sound-icons/pipe.wav`** — a
+  file from Debian's `sound-icons` package, which the suite never installs and
+  Raspberry Pi OS does not ship. Without it `wav-load` failed, both `wav-play`
+  calls returned the same inert channel, and the failure read as a fault in a
+  perfectly good SDL3. The sample now lives in the repo as
+  `tests/sample-16k-mono.wav`, so it cannot be missing and cannot fail to
+  build. (The `wavcore.fs` fixtures next to it are still built in Forth, for a
+  reason that does not apply here: there the byte layout *is* what is under
+  test, malformed chunks and all, while this one only has to be a valid sample
+  of a known length.) It is deliberately 16 kHz against a 44100 device, because
+  a sample that agreed with the device would make the format assertion vacuous.
+  Both expected strings are unchanged, which is what shows this was an
+  environment fix rather than a re-baseline.
+- **The no-libflite test hard-coded `/lib/x86_64-linux-gnu/libflite.so.1`.**
+  On any other architecture `bwrap` failed to bind over a file that was not
+  there and the test reported *that* as the speech output — so the degraded
+  path went untested on precisely the machines it was not written on. The path
+  now comes from `ldconfig`, which is not merely portable but correct:
+  `speech.fs` dlopens the bare SONAME, so the file `ldconfig` names is by
+  construction the one the loader would have opened.
+- **Every "is this library installed" gate read `ldconfig` off `$PATH`, and
+  failed silently to good news.** `ldconfig` lives in `/sbin`, which is not on
+  every developer's `PATH` — and `! ldconfig -p | grep -q libSDL3` is *true*
+  when the command is missing, so the SDL, sound and speech sections all
+  skipped and the run still ended `0 failed`. Nothing was red; the tests simply
+  did not happen. Resolved once now, by absolute path when the bare name is not
+  found. This was invisible on both machines' interactive shells and appeared
+  only over `ssh`, which is how the ARM64 runs are driven.
+
+### Fixed: the lesson suite stopped recognising a missing libSDL3
+
+The graphics and sound lessons are meant to SKIP where libSDL3 is absent, which
+under QEMU is always. The gate matched one literal string, `dlopen: cannot load
+library` — and that message had changed twice, first to name the library and
+later to be intercepted by `needs-lib`. Six lessons had been *failing* rather
+than skipping, and the sentinel had been dead since well before the change that
+exposed it.
+
+Worse in the other direction: `needs-lib`'s wording matched none of the error
+patterns, so `examples/bounce.fs` and `examples/gamepad.fs` reported **PASS on
+ARM64 having loaded nothing at all**. That only surfaced because the pass count
+*fell* when the skip came back.
+
+The soname is now read from `sdl3.fs`'s own `needs-lib` line rather than spelled
+in the test, and the library named in a failure is compared with `=`, so it
+cannot prefix-match a different library. A missing library that is *not* SDL is
+now a failure rather than a skip wearing SDL's name.
 
 ## v0.15.1 — 2026-08-10
 
