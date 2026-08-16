@@ -48,8 +48,40 @@ The browser does no Markdown parsing; it leans on the layout every
   (`## stdin stdout stderr ( -- fileid )`); the token scan stops at the `(`
   that opens the stack effect, so effect names like `n` or `flag` are not
   matchable words.
+- **The stack effect is required, and is what marks the heading as an entry.**
+  A `## ` heading without one is an ordinary prose section — `## Notes`,
+  `## The heap` — and contributes no word names at all.
 
 Keep new pages to this shape and they are automatically browsable.
+
+### Why an entry must state its effect
+
+Without that test every word of a prose heading registered as an entry, and a
+collision **appends** rather than shadows — so `## See Also`, which appears in
+29 reference pages, made `help see` print its real entry followed by 28
+unrelated cross-reference blocks. `## Double and mixed precision` did the same
+to `help and`, `## Errors come back as a value` to `help value`. Requiring the
+effect fixed all of it without touching a page.
+
+**A locals declaration is not a stack effect and must not be written as one.**
+`## clamp {: n lo hi :}` does not document `clamp` — it is prose as far as the
+index is concerned, and `help clamp` answers nothing. That is deliberate:
+
+- `{: a b | c :}` leaves `c` off the stack entirely, so the effect is
+  `( a b -- )`, not `( a b c -- )`;
+- everything after `--` inside `{: … :}` is free-form text the compiler
+  ignores, so nothing keeps it honest the way a stack comment is kept honest;
+- it says nothing about what the word *leaves*, which is half of an effect.
+
+Locals are how a word is built, not what it takes. `see` prints the definition
+for a reader who wants the implementation. Even `{:` documents itself in stack
+notation: `## {: … :} ( x1 … xn -- )`.
+
+The reference-coverage audit is the backstop: a heading that loses its effect
+makes its word undocumented, and the suite fails naming that word. That audit
+re-implements the heading rule in `awk`, so **the two must be changed
+together** — when they drifted apart, `## dup {: x :}` still read as
+documenting `dup` while `help dup` answered nothing.
 
 ### Guides pages
 

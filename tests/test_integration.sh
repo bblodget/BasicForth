@@ -5952,6 +5952,114 @@ fi
 
 rm -rf "$docs_dir"
 
+# ONE definition of "does this heading state a closed stack effect", shared by
+# every check that needs it. Two copies is how this drifted twice: first the
+# audit did not require an effect at all, then it required an opening paren
+# while (head-eff?) had moved on to requiring a closed one. It must stay in
+# step with (head-eff?) in core.fs, and the fixture check below is what proves
+# it does.
+head_eff_awk='
+function head_eff(   i, j) {
+    for (i = 3; i <= NF; i++) if ($i == "(") {
+        for (j = i + 1; j <= NF; j++) if ($j ~ /\)/) return 1
+        return 0
+    }
+    return 0
+}'
+# A word entry must state a STACK EFFECT; a heading without one is prose and
+# contributes no names. Asked of the BINARY, not of a second model of the rule
+# -- the audit below re-implements it in awk, and the two drifting apart is
+# exactly how `## dup {: x :}` once read as documenting `dup`.
+he_dir="$(mktemp -d)"
+mkdir -p "$he_dir/Language-Reference" "$he_dir/Guides"
+cat > "$he_dir/Language-Reference/Fixture.md" <<'HEEOF'
+# Fixture
+
+Preamble.
+
+## hefix-word ( x -- y )
+A real entry.
+
+## hefix-locals {: x :}
+A locals declaration is NOT a stack effect.
+
+## hefix-open (
+An opening paren with nothing to close it is not an effect.
+
+## hefix-unclosed ( x
+Neither is an effect that is never closed.
+
+## hefix-empty ( )
+An empty effect is still an effect.
+
+## See Also
+
+- hefix-prose is only a word of a prose heading.
+HEEOF
+# Guides is the deliberate exception: single-token headings, no effect, and
+# every one is a topic. The same run must show the rule did not reach it.
+printf '# G
+
+Preamble.
+
+## hefixguide
+Text.
+' > "$he_dir/Guides/G.md"
+he_out=$(printf 'help hefix-word
+help hefix-locals
+help hefix-prose
+help also
+help hefixguide
+help hefix-open
+help hefix-unclosed
+help hefix-empty
+bye
+' \
+    | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$he_dir/Language-Reference:$he_dir/Guides" \
+      timeout 10 $FORTH 2>&1)
+# The awk above re-implements (head-eff?), and a re-implementation that is
+# never compared with the thing it models is how this drifted twice. Run it
+# over the same fixture and require the SAME verdict the binary just gave.
+he_awk=$(awk "$head_eff_awk"'
+    /^## / { if (!head_eff()) next
+        for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }
+    ' "$he_dir/Language-Reference/Fixture.md" | sort -u | tr '\n' ' ')
+rm -rf "$he_dir"
+he_bad=""
+# grep -c, not a substring test: "no help for X" and a real entry both mention X.
+[ "$(printf '%s' "$he_out" | grep -c 'A real entry')"  = 1 ] || he_bad="$he_bad entry-missing"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-locals')" = 1 ] || he_bad="$he_bad locals-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-prose')"  = 1 ] || he_bad="$he_bad prose-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for also')"         = 1 ] || he_bad="$he_bad seealso-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefixguide')"   = 0 ] || he_bad="$he_bad guides-broken"
+# An effect must be CLOSED: a bare "(" is a parenthesis, not a stack effect.
+# Without these three the predicate indexed `## foo (` and `## foo ( x`.
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-open')"     = 1 ] || he_bad="$he_bad open-paren-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-unclosed')" = 1 ] || he_bad="$he_bad unclosed-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-empty')"    = 0 ] || he_bad="$he_bad empty-effect-rejected"
+# hefix-word and hefix-empty are exactly the two the binary indexed above.
+[ "$he_awk" = "hefix-empty hefix-word " ] || he_bad="$he_bad awk-model-disagrees[$he_awk]"
+if [ -z "$he_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  a word entry needs a stack effect; prose and locals headings index nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  heading-effect rule:%s\n    Got: %s\n" "$he_bad" "$(echo "$he_out" | head -12)"; ((failed++))
+fi
+
+# ...and a heading that MEANT to state an effect but misspelt it must fail
+# loudly rather than silently becoming prose. `## foo (x -- y)` reads as an
+# entry to a human, has no bare "(" token, and would just lose `help foo`.
+# The discriminator is `--`: a stack effect has one, and the only prose heading
+# in the tree that carries parentheses (`## Number prefixes ($ hex, ...)`)
+# does not -- so this flags the misspelling without flagging ordinary prose.
+he_mal=$(awk "$head_eff_awk"'
+    /^## / && /--/ { if (!head_eff()) printf "      %s: %s\n", FILENAME, $0 }
+    ' "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Guides/*.md)
+if [ -z "$he_mal" ]; then
+    printf "  ${GREEN}PASS${NC}  every heading that states an effect spells it as a closed ( ... )\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a heading states an effect the index cannot read\n%s\n" "$he_mal"; ((failed++))
+fi
+
 # Reference coverage audit: every user-facing word in the live dictionary
 # must have a "## " heading entry in some docs/Language-Reference page —
 # the `help <word>` contract. Parenthesized names are internal by
@@ -5959,7 +6067,14 @@ rm -rf "$docs_dir"
 # (set -f: the dictionary contains `*` and `*/`, which must not glob.)
 audit_words=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
     | sed -n '2p' | sed 's/ ok *$//')
-audit_heads=$(awk '/^## /{ for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }' \
+# A word entry states a stack effect; a prose heading does not, and since
+# 2026-08-16 the index requires one here (Guides is the exception). This awk
+# MUST track (head-word?) in core.fs -- when it did not, `## dup {: x :}` still
+# read as documenting `dup` while `help dup` answered nothing.
+audit_heads=$(awk "$head_eff_awk"'
+    /^## / {
+        if (!head_eff()) next
+        for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }' \
     "$REPO_ROOT"/docs/Language-Reference/*.md | sort -u)
 audit_missing=""
 set -f

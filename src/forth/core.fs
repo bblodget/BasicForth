@@ -1806,9 +1806,49 @@ variable (mn-found)
 \ '-' or '_', so no fold here).
 variable (hh-a)  variable (hh-u)           \ heading text after "## "
 variable (hh-1st)                          \ scanning the first token?
+
+\ A word entry states a STACK EFFECT; a prose section heading does not. Without
+\ that test every word of a prose heading registers as an entry, and since a
+\ collision APPENDS rather than shadows, `## See Also` in 29 reference pages made
+\ `help see` print its real entry followed by 28 unrelated cross-reference
+\ blocks. `## Double and mixed precision` did the same to `help and`.
+\
+\ The effect is what the caller must supply and is left with, so it is also the
+\ right thing to key on: a heading without one is not describing a word. Note a
+\ locals declaration does NOT count and must not — `{: a b | c :}` leaves `c`
+\ off the stack entirely, and everything after `--` inside it is free-form text
+\ the compiler ignores, so it cannot be trusted the way a stack comment can.
+\ Locals are how a word is built, not what it takes (docs/Help_System.md).
+variable (hh-eff)                          \ must a heading here carry one?
+
+\ A stack effect is "( ... )" -- an OPENING token that is exactly "(", and not
+\ the heading's first token (there the "(" is the word `(` itself), CLOSED by a
+\ ")" somewhere after it. Blank-delimited, so the opener is a "(" preceded by a
+\ blank and followed by a blank.
+\
+\ The closing half is not pedantry: without it `## foo (` and `## foo ( x` both
+\ counted as entries, which is a predicate that tests for a parenthesis rather
+\ than for an effect. A heading that opens an effect and never closes it is
+\ malformed, and the suite says so by name rather than quietly indexing it.
+: (head-eff?) ( -- f )
+    (hh-u) @ 2 < if  false exit  then       \ a computed limit needs the guard
+    (hh-u) @ 1 ?do
+        i (hh-a) @ + c@ [char] ( =
+        i 1- (hh-a) @ + c@ bl = and if
+            i 1+ (hh-u) @ = if  false unloop exit  then   \ nothing left to close it
+            i 1+ (hh-a) @ + c@ bl = if
+                (hh-u) @ i 1+ ?do
+                    i (hh-a) @ + c@ [char] ) = if  true unloop unloop exit  then
+                loop
+                false unloop exit
+            then
+        then
+    loop  false ;
+
 : (head-word?) ( c-addr u -- f )
     dup 3 < if 2drop false exit then
     3 - (hh-u) !  3 + (hh-a) !  true (hh-1st) !
+    (hh-eff) @ if  (head-eff?) 0= if  false exit  then  then
     0                                       ( i )
     begin dup (hh-u) @ < while
         dup (hh-a) @ + c@ bl = if 1+ else
@@ -1865,6 +1905,11 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
 \ not word entries.
 : (hw-in) ( dir-addr dir-u -- )
     2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    \ Guides is the deliberate exception: its headings are single tokens with no
+    \ stack effect, and every one of them IS a topic -- that is the convention
+    \ the suite enforces for that section. Everywhere else a heading must state
+    \ an effect to count as a word entry.
+    2dup (basename) s" Guides" (ci=) 0= (hh-eff) !
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
     >r
