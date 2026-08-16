@@ -2647,8 +2647,16 @@ The open-coded reference is vindicated: ~1 cycle, cheaper than the `dup` it
 replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
 4. What the trip actually found is below.
 
-- [ ] **Inline the locals frame instead of calling it.** *(In progress, branch
-  `locals-frame`.)* The frame costs 27.8 ns per call on ARM64 and is FLAT in the
+- [x] **Inline the locals frame instead of calling it.** DONE 2026-08-15
+  (branch `locals-frame`): `(lframe,)` emits the build open-coded and
+  `compile_local_release` the release, on both arches. Frame build+release
+  **27.8 ns → 0.4 ns on ARM64**, 7.2 → 0.4 on x86; the whole-word case went
+  15.2 → 6.4 ns on x86, which now BEATS the juggled spelling's 8.6. Verified on
+  Pi 400 hardware, not QEMU, since this writes code at run time. **The ARM64
+  whole-word case is still 26.0 vs 19.6 and the parts do not explain the
+  residual — see the next item.** Original report follows.
+
+  The frame costs 27.8 ns per call on ARM64 and is FLAT in the
   number of locals — a frame of 1 costs what a frame of 3 does. That flatness is
   the tell: the cell count reaches `(lframe)`/`(lunframe)` as a runtime
   `LITERAL`, twice per call, and two literals are ~21 of the 28 ns. The count is
@@ -2662,6 +2670,22 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   This is NOT an ARM64 defect — x86 has it at 1.8x and the Pi only magnified it
   3.5x. It was invisible because the x86 timing done when locals shipped
   measured *references*, never a whole word.
+
+- [ ] **ARM64: a locals word still loses to juggling, and the parts do not say
+  why.** After the frame fix, `(a+b)*(b+c)` is 26.0 ns with locals against
+  19.6 ns juggled on the Pi 400. But the pieces measure: frame 0.4, a reference
+  in context ~1.2 (four of them), a primitive call ~1.9 (three of them) — which
+  predicts locals winning. **About 7 ns is unaccounted for**, and until that is
+  explained any "fix" is guesswork. x86 has no such residual (6.4 vs 8.6, a win).
+  One hypothesis worth testing FIRST, not assuming: the locals spelling is ~45
+  inline instructions where the juggled one is six calls into primitives that
+  stay hot in I-cache, so this may be instruction-fetch cost that no
+  per-primitive microbenchmark can see. A second: `TLS_ADDR` is recomputed for
+  every reference (three instructions of the six), and it is loop-invariant
+  within a word — hoisting it, or keeping LP in a register across a definition,
+  would cut a reference roughly in half. **Both predict "locals slower"; they
+  are separated by whether the gap tracks code SIZE or reference COUNT.** Vary
+  each independently before touching the emitter.
 
 - [ ] **Compile a literal as an immediate, not as `call lit` + inline data.**
   The single biggest lever in the engine, because literals are in nearly every

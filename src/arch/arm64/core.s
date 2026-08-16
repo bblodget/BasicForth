@@ -5454,6 +5454,63 @@ local_store_tmpl:
 .equ LOCAL_STORE_LEN, . - local_store_tmpl
 .equ LOCAL_STORE_PATCH, 5
 
+// ---------- frame build/release templates ----------
+// The frame used to be `n (lframe)` -- a LITERAL and a call, twice per
+// invocation, plus one more literal per uninitialised val. The count is known
+// while {: is running, so none of it needed to travel at run time; a literal
+// costs 10.6 ns here (~19 cycles) because forth_lit reaches its operand through
+// its own return address and returns past it, mispredicting every time.
+//
+// Every piece is a TEMPLATE with a zero immediate, patched the same way the
+// reference templates are: the imm12 sits at bits 10-21 in ADD/SUB and in the
+// unsigned-offset form of LDR/STR alike, and for a 64-bit access the field IS
+// the slot index because the offset is scaled by 8. Nothing here is
+// hand-encoded, on an architecture where every instruction is a bitfield.
+//
+// X10 holds the new LP across the whole sequence; X11 carries each argument.
+// Both are scratch in compiled code -- X19 (DSP), X21 (HERE) and X22 (LATEST)
+// are the ones a compiled word must leave alone.
+
+// LP -= ntotal cells. The SUB is word 4 (TLS_ADDR is three instructions), and
+// its immediate is UNSCALED -- a byte count -- so the emitter shifts the cell
+// count itself. The LDR/STR templates below are the opposite: scaled by 8, so
+// there the field is the slot index unshifted. Getting these two backwards is
+// the mistake this comment exists to prevent.
+lframe_head_tmpl:
+    TLS_ADDR X9, lp
+    LDR X10, [X9]
+    SUB X10, X10, #0
+    STR X10, [X9]
+.equ LFRAME_HEAD_LEN, . - lframe_head_tmpl
+.equ LFRAME_HEAD_PATCH, 4           // the SUB
+
+// One argument: read it from the data stack, write it to its slot. Both imm12s
+// are scaled indices, so both take a slot/stack number directly.
+lframe_arg_tmpl:
+    LDR X11, [X19, #0]
+    STR X11, [X10, #0]
+.equ LFRAME_ARG_LEN, . - lframe_arg_tmpl
+
+// One uninitialised local: zeroed rather than left dirty. The standard says
+// merely uninitialised; a store of XZR is cheaper than the push it replaces.
+lframe_val_tmpl:
+    STR XZR, [X10, #0]
+.equ LFRAME_VAL_LEN, . - lframe_val_tmpl
+
+// Drop the arguments. Unscaled immediate, like the SUB above.
+lframe_dsp_tmpl:
+    ADD X19, X19, #0
+.equ LFRAME_DSP_LEN, . - lframe_dsp_tmpl
+
+// LP += n cells, at `;` and at every `exit`.
+lunframe_tmpl:
+    TLS_ADDR X9, lp
+    LDR X10, [X9]
+    ADD X10, X10, #0
+    STR X10, [X9]
+.equ LUNFRAME_LEN, . - lunframe_tmpl
+.equ LUNFRAME_PATCH, 4              // the ADD
+
 // ---------- Locals frame primitives ----------
 // Stage 1 of the locals work: the runtime substrate, with no syntax on top.
 // These are the words the unwind tests drive directly; the compiler will emit
@@ -5650,18 +5707,122 @@ compile_local_store:
     ADD X21, X21, #LOCAL_STORE_LEN
     RET
 
-// compile_local_release — emit `n (lunframe)` if this definition has locals.
-// Once per exit, so an ordinary call costs nothing worth open-coding for.
-// Emits nothing at all when none were declared, which is what keeps an
-// ordinary definition byte-for-byte unchanged.
+// (lframe,) ( nargs ntotal -- )  Emit an OPEN-CODED frame build.
+// See the templates above for why this is not `n (lframe)` any more. A
+// zero-cell frame emits NOTHING, matching (lframe)'s own no-op case.
+//
+//   X23 = ntotal, X24 = nargs, X25 = walking index. All callee-saved, because
+//   the copy helper below clobbers the low scratch registers.
+.global forth_lframe_comma
+forth_lframe_comma:
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    LDR X23, [X19], #CELL           // ntotal
+    LDR X24, [X19], #CELL           // nargs
+    CBZ X23, .Llfc_done             // no locals: emit nothing at all
+    // Worst case is every local an ARGUMENT: a val is one instruction where an
+    // argument is two. DERIVED from the template lengths rather than written
+    // out, because the hand-computed version was 8 bytes short -- TLS_ADDR is
+    // three instructions, so the head is 24 bytes and not 16.
+    CHECK_DICT (LFRAME_HEAD_LEN + LOCALS_MAX * LFRAME_ARG_LEN + LFRAME_DSP_LEN)
+    // --- head: LP -= ntotal cells (SUB immediate is a BYTE count)
+    ADR X9, lframe_head_tmpl
+    MOV X11, #LFRAME_HEAD_LEN
+    BL .Llfc_copy
+    ADD X10, X21, #(LFRAME_HEAD_PATCH * 4)
+    LDR W12, [X10]
+    LSL X26, X23, #3                // ntotal * CELL
+    ORR W12, W12, W26, LSL #10
+    STR W12, [X10]
+    ADD X21, X21, #LFRAME_HEAD_LEN
+    // --- one pair per argument: slot j takes the value (nargs-1-j) deep
+    MOV X25, XZR                    // j = 0
+.Llfc_args:
+    CMP X25, X24
+    B.HS .Llfc_vals
+    ADR X9, lframe_arg_tmpl
+    MOV X11, #LFRAME_ARG_LEN
+    BL .Llfc_copy
+    SUB X26, X24, X25
+    SUB X26, X26, #1                // nargs-1-j, a SCALED index
+    LDR W12, [X21]                  // the LDR from the data stack
+    ORR W12, W12, W26, LSL #10
+    STR W12, [X21]
+    LDR W12, [X21, #4]              // the STR into the slot
+    ORR W12, W12, W25, LSL #10
+    STR W12, [X21, #4]
+    ADD X21, X21, #LFRAME_ARG_LEN
+    ADD X25, X25, #1
+    B .Llfc_args
+    // --- one store per uninitialised local
+.Llfc_vals:
+    MOV X25, X24                    // k = nargs
+.Llfc_valloop:
+    CMP X25, X23
+    B.HS .Llfc_dsp
+    ADR X9, lframe_val_tmpl
+    MOV X11, #LFRAME_VAL_LEN
+    BL .Llfc_copy
+    LDR W12, [X21]
+    ORR W12, W12, W25, LSL #10
+    STR W12, [X21]
+    ADD X21, X21, #LFRAME_VAL_LEN
+    ADD X25, X25, #1
+    B .Llfc_valloop
+    // --- drop the arguments; `{: | a b :}` consumes nothing
+.Llfc_dsp:
+    CBZ X24, .Llfc_done
+    ADR X9, lframe_dsp_tmpl
+    MOV X11, #LFRAME_DSP_LEN
+    BL .Llfc_copy
+    LDR W12, [X21]
+    LSL X26, X24, #3                // nargs * CELL, unscaled immediate
+    ORR W12, W12, W26, LSL #10
+    STR W12, [X21]
+    ADD X21, X21, #LFRAME_DSP_LEN
+.Llfc_done:
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// Copy X11 bytes of template from X9 to HERE. HERE is NOT advanced -- the
+// caller patches in place first and advances afterwards.
+.Llfc_copy:
+    MOV X10, X21
+.Llfc_copy_loop:
+    LDR W12, [X9], #4
+    STR W12, [X10], #4
+    SUBS X11, X11, #4
+    B.NE .Llfc_copy_loop
+    RET
+
+// compile_local_release — emit an OPEN-CODED frame release if this definition
+// has locals. Open-coded for the same reason as the build: the call was never
+// the cost, the LITERAL in front of it was. Emits nothing at all when none were
+// declared, which is what keeps an ordinary definition byte-for-byte unchanged.
+// Runs at `;` and at every `exit`.
 compile_local_release:
     STP X29, X30, [SP, #-16]!
     ADR X9, locals_count
     LDR X0, [X9]
     CBZ X0, .Lclr_none
-    BL compile_literal
-    ADR X0, forth_lunframe
-    BL compile_call
+    CHECK_DICT LUNFRAME_LEN
+    ADR X9, lunframe_tmpl
+    MOV X10, X21
+    MOV X11, #LUNFRAME_LEN
+.Lclr_copy:
+    LDR W12, [X9], #4
+    STR W12, [X10], #4
+    SUBS X11, X11, #4
+    B.NE .Lclr_copy
+    ADD X10, X21, #(LUNFRAME_PATCH * 4)
+    LDR W12, [X10]
+    LSL X0, X0, #3                  // n * CELL: the ADD immediate is unscaled
+    ORR W12, W12, W0, LSL #10
+    STR W12, [X10]
+    ADD X21, X21, #LUNFRAME_LEN
 .Lclr_none:
     LDP X29, X30, [SP], #16
     RET
@@ -6915,7 +7076,8 @@ DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
 DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
 DEFWORD dict_lframe,      "(lframe)",     forth_lframe,      dict_thr_tramp
 DEFWORD dict_lunframe,    "(lunframe)",   forth_lunframe,    dict_lframe
-DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lunframe
+DEFWORD dict_lframe_comma, "(lframe,)",   forth_lframe_comma, dict_lunframe
+DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lframe_comma
 DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
