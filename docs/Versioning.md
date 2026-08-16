@@ -88,22 +88,31 @@ release**, since the banner comes from `git describe`.
    **Why not `git push origin main --tags`?** It is the obvious shorter form,
    and it publishes `main` plus every local tag — `staging` is not in its
    refspec at all, so the branch the Pi and the other worktrees pull stays a
-   release behind. Adding `staging` back fixes that much, but two problems
-   survive in any `--tags` spelling:
+   release behind. Adding `staging` back fixes that much. Two problems remain,
+   and they are worth separating, because one of them has a cure and the other
+   does not:
 
-   - It publishes **every** local tag rather than this release's, so a scratch
-     tag escapes alongside it.
-   - It cannot notice a tag that is not there. Naming the version makes the push
-     **self-checking**: arrive here having skipped step 5, or mistype the
-     number, and git refuses —
+   - **Every `--tags` spelling** publishes all local tags rather than this
+     release's, so a scratch tag escapes alongside it. Adding the version back
+     does not help: `git push --atomic origin main staging vX.Y.Z --tags` still
+     pushes the lot.
+   - **Spellings that put `--tags` in place of the version** also lose the
+     check. Naming the version makes the push **self-checking**: arrive here
+     having skipped step 5, or mistype the number, and git refuses —
 
          error: src refspec v0.17.0 does not match any
 
-     so with `--atomic` nothing goes out and you fix it. `--tags` has no version
-     in it to be wrong, so it reports success and publishes whichever branches
-     you did name, carrying no release tag. `git describe` in a fresh clone then
-     reports the *previous* version — the failure this whole procedure exists to
-     prevent, reached through the convenient spelling.
+     so with `--atomic` nothing goes out and you fix it. A `--tags` that has
+     replaced the version has nothing in it to be wrong, so it reports success
+     and publishes whichever branches you did name, carrying no release tag.
+     `git describe` in a fresh clone then reports the *previous* version — the
+     failure this whole procedure exists to prevent, reached through the
+     convenient spelling.
+
+   So `vX.Y.Z --tags` keeps the check and loses only tag hygiene, while
+   `--tags` alone loses both. Step 7 names the version and omits `--tags`,
+   which costs nothing: the release's tag is the one you want published, and
+   it is already named.
 
 8. Verify against the remote, **including the tag**, naming each ref exactly:
 
