@@ -1117,10 +1117,15 @@ docs/Graphics.md for the API.
   declaration (`|`, `--`). See docs/Locals.md for what the building of it
   corrected in the design, and docs/Language-Reference/Locals.md for the user
   page. `does>` is refused, deliberately.
-  **Still open:** ARM64 timings. A reference is six instructions there against
-  x86's four (ARM64 needs three to reach TLS where x86 needs one), so the
-  "open-coding beats a call" claim is measured on x86 only. Worth an hour on
-  the Pi 400 now that it runs natively.
+  **ARM64 timings: DONE 2026-08-15** on the Pi 400, and they earned their hour.
+  The "open-coding beats a call" claim held — a reference is 0.62 ns against
+  2.24 ns for the `dup` it replaces — but the measurement found the FRAME
+  costing 28 ns a call, flat in the number of locals, because its cell count
+  travelled as a `LITERAL`. Fixed (staging `115f09d`), and the literal itself
+  the day after. A reference is still six instructions on ARM64 to x86's four,
+  since finding LP takes four instructions there and one on x86; that is the
+  one gap left, it is explained rather than open, and an X20 experiment to
+  close it was built and rejected. All of it in docs/Locals.md.
   Original research entry follows.
 
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
