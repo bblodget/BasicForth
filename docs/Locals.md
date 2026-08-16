@@ -308,6 +308,11 @@ it looks: `X20` is only ever live between a build and its matching release, so
 nothing reads before the next build overwrites it), and registers are
 per-thread already, so threads need nothing either.
 
+Run-to-run spread on this board is ~2%, so figures below are quoted from the
+single run that also produced the instruction counts (`f-locals` 26.4 ns,
+`f-juggle` 19.6 ns); other runs in this document report the same pair as
+26.0 / 19.8, which is the same result, not a different one.
+
 | | before | after |
 |---|---|---|
 | `f-locals` | 26.4 ns | 23.0 ns |
@@ -340,11 +345,16 @@ instructions, but calls cost more per instruction than inline code — is only
 Treat any further estimate here as an argument for measuring, not as a result.
 
 A fourth slip, caught in review and worth keeping as the reason for the table
-above: the first version of this section put the executed counts at 58 and 33
-by assuming every primitive was three instructions, having measured only the
-four that are. `+` and `*` are five. The direction survived — locals still run
-more instructions for less time — but a section whose title is "counted, not
-guessed" had a guess in it.
+above: the first version of this section put the executed counts at **58 and
+27** — against the 64 and 33 measured here — by assuming every primitive was
+three instructions, having measured only the four that are. `+` and `*` are
+five. The direction survived — locals still run more instructions for less
+time — but a section whose title is "counted, not guessed" had a guess in it.
+
+A fifth, in the correction itself: it first described the superseded pair as
+"58 and 33", pasting in the new f-juggle figure while quoting the old one for
+f-locals. Both numbers here now come from `git show` rather than recall, which
+is the only reliable way to quote a number you have just finished changing.
 
 **The standing conclusion:** a local reference is cheaper than the `dup` it
 replaces on both architectures, and locals are a clear win on x86. On ARM64 a
