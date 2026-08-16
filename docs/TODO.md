@@ -2932,6 +2932,21 @@ spread, so nothing below needs revisiting.
     the more forgiving one. Fixing it means returning the file id from the
   loader, and checking `EVALUATE` reports -1 while it is at it.
 
+- [ ] **A skip whose reason depends on how the suite was invoked reads as a
+  fact about the machine.** The integration suite is deliberately
+  environment-independent — it never sources `setup.sh` — so the real-engine
+  render test skips with `(VOICE_ENGINE_CMD not set)` on a machine that has
+  piper installed and working. During the v0.16.0 verification that was read as
+  "piper is not on the Pi", and reported as such, when in fact sourcing
+  `setup.sh` first makes the test run and PASS: the Pi then matches x86 exactly
+  at 1180/1180 with no skips anywhere. Two fixes worth considering, and they
+  are not exclusive: word the skip so it names the remedy
+  (`VOICE_ENGINE_CMD not set — source setup.sh`), and have the suite derive the
+  engine the way `setup.sh` does (`command -v piper`) so the capability, not
+  the caller's shell, decides. Found 2026-08-16. The general point is the one
+  in `derive-dont-record`: a skip is a claim about the world, and this one was
+  really a claim about the command line.
+
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
   input** along with the output (`> 5 5 <= .` then `-1  ok`). So any assertion
