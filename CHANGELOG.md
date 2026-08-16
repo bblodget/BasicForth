@@ -17,8 +17,19 @@
   instructions on ARM64, and no call on either. That was the condition the whole
   feature rested on: a reference costing a `create`/`does>`-class call would
   have made locals *slower* than the juggling they replace, and no correctness
-  test would have noticed. Frame build and release are one call each, at the
-  ends, where they run once.
+  test would have noticed. Measured on a Raspberry Pi 400: 0.62 ns a reference,
+  against 2.24 ns for the `dup` it replaces.
+- **The frame is open-coded too**, and that took a second pass to get right.
+  Building and releasing it are once-per-call, so a call there looked free —
+  but the cell count reached the runtime as a `LITERAL`, twice per invocation
+  plus one per `|` local, and a literal was the most expensive thing the engine
+  did. The frame cost 27.8 ns on ARM64 and was *flat* in the number of locals,
+  which is the tell: frame cost that ignores frame size is not frame work. Now
+  **0.4 ns**. On x86-64 a three-argument word written with locals went from
+  15.2 ns to 6.4 ns, beating the juggled spelling's 8.6. On ARM64 the same word
+  is 26 ns against 19.6 juggled — still behind, because locating the locals
+  pointer takes four instructions there and one on x86-64. `docs/Locals.md`
+  records the measurements and the experiment that did not close it.
 - **A definition that declares no locals is byte-for-byte unchanged.**
   `: sq dup * ;` is still 11 bytes on x86-64.
 - Locals live on their own per-thread stack, so they do not interact with
@@ -55,6 +66,59 @@
   `note: local i shadows an existing word`. A note, not an error: shadowing is
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
+
+### Changed: a number compiles to an immediate, not a call
+
+`5` inside a definition used to compile a call to `lit` followed by eight bytes
+of payload; `lit` reached that operand through its own return address and
+returned past it, so **every literal mispredicted the return-stack predictor**.
+It was the most expensive step in the engine — 10.6 ns on a Raspberry Pi 400,
+against 1.94 ns for an ordinary call.
+
+The value is now built straight into an instruction. No call, no inline data.
+
+- **An ordinary loop containing one constant is 2.6x faster on ARM64** (0.172 s
+  → 0.065 s over ten million iterations), 1.6x on x86-64. A loop with a
+  constant in it is now *faster* than the same loop with a `dup`, where before
+  it was two and a half times slower.
+- `begin 1+ dup <n> = until` over 10^9 iterations: **3.66 s → 2.90 s**, so the
+  gap between choosing `do`/`loop` and choosing `begin`/`until` narrows from 9x
+  to 7x. `docs/Performance.md` is re-measured.
+- Usually *smaller*, not just faster, since the old form always carried an
+  8-byte payload. x86-64: **13 bytes before, 11 now** for a value fitting a
+  signed 32-bit immediate, 17 for one that does not. ARM64: **12 before, 8 now**
+  for a small value — one `MOVZ` plus the push — rising to 20 for an arbitrary
+  64-bit constant. A small negative also takes the 8-byte form, via `MOVN`,
+  because `-1` is `true` and deserved better than a four-move sequence.
+- **The call form is deliberately kept where the inline cell is *storage*** —
+  `>body` reads it, `TO` writes it, `IS` patches a deferred word's xt, a
+  `CREATE` body holds its data-field address there. `[']` and `POSTPONE` keep it
+  too, so `dis` can still name what it points at (`\ xt: dup`). Only values that
+  are purely pushed became immediates.
+- `dis` follows: a plain number now reads as the instruction it is, while a
+  `constant`, `value`, `create` body or deferred word still has its data split
+  out and labelled. The `tutorial machine-code` step that taught this uses a
+  constant for the demonstration now, because a plain number no longer hides
+  anything.
+
+### Fixed: the lesson suite stopped recognising a missing libSDL3
+
+The graphics and sound lessons are meant to SKIP where libSDL3 is absent, which
+under QEMU is always. The gate matched one literal string, `dlopen: cannot load
+library` — and that message had changed twice, first to name the library and
+later to be intercepted by `needs-lib`. Six lessons had been *failing* rather
+than skipping, and the sentinel had been dead since well before the change that
+exposed it.
+
+Worse in the other direction: `needs-lib`'s wording matched none of the error
+patterns, so `examples/bounce.fs` and `examples/gamepad.fs` reported **PASS on
+ARM64 having loaded nothing at all**. That only surfaced because the pass count
+*fell* when the skip came back.
+
+The soname is now read from `sdl3.fs`'s own `needs-lib` line rather than spelled
+in the test, and the library named in a failure is compared with `=`, so it
+cannot prefix-match a different library. A missing library that is *not* SDL is
+now a failure rather than a skip wearing SDL's name.
 
 ### Added: `deps <file>` — what a file needs, without loading it
 

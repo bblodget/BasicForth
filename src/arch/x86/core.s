@@ -1704,10 +1704,69 @@ compile_ret:
     inc %r13                       # advance HERE
     ret
 
+# ---------- compile_literal_imm (internal) ----------
+# Compile "push RAX's value" as an IMMEDIATE, with no call and no inline data.
+#
+# THE TWO ARE NOT INTERCHANGEABLE. compile_literal below emits a CALL plus an
+# 8-byte cell, and several features use that cell as PATCHABLE STORAGE at a
+# known offset: >body reads xt+5, TO writes it, DEFER/IS patch the xt inside
+# `CALL lit ; <xt> ; CALL execute`, and a CREATE body is `CALL lit + value +
+# RET`. Those sites must keep calling compile_literal. This one is for the
+# other half -- compiling a number, LITERAL, ['], [char], POSTPONE -- where the
+# value is only ever pushed and nothing ever looks at where it was stored.
+#
+# Why it is worth a second emitter: forth_lit reaches its operand through its
+# own return address and returns PAST it, so every literal mispredicts the
+# return-stack predictor. Measured on a Pi 400, a literal costs 10.6 ns against
+# 1.94 ns for a plain call -- five times a call -- and 1.68 vs 0.80 on x86.
+# Swapping one `dup` for one constant in an ordinary ?do loop made it 50%
+# slower, so this is not a microbenchmark effect.
+#
+#   value fits a signed 32-bit:      sub $8,%r15 ; movq $imm32,(%r15)   11 bytes
+#   otherwise:      mov $imm64,%rax ; sub $8,%r15 ; mov %rax,(%r15)     17 bytes
+#
+# MOVQ sign-extends its imm32 to 64 bits, which is exactly what the narrow path
+# needs and the reason it is correct for negative values too. The narrow form
+# is SMALLER than the 13 bytes the call idiom costs, so the common case gives
+# back space rather than spending it.
+.global compile_literal_imm
+compile_literal_imm:
+    CHECK_DICT 17
+    movslq %eax, %rcx               # sign-extend the low 32 bits
+    cmp %rax, %rcx                  # unchanged? then imm32 represents it exactly
+    jne .Lcli_wide
+    movb $0x49, 0(%r13)             # sub $8, %r15
+    movb $0x83, 1(%r13)
+    movb $0xEF, 2(%r13)
+    movb $0x08, 3(%r13)
+    movb $0x49, 4(%r13)             # movq $imm32, (%r15)   [sign-extended]
+    movb $0xC7, 5(%r13)
+    movb $0x07, 6(%r13)
+    mov %eax, 7(%r13)
+    add $11, %r13
+    ret
+.Lcli_wide:
+    movb $0x48, 0(%r13)             # mov $imm64, %rax
+    movb $0xB8, 1(%r13)
+    mov %rax, 2(%r13)
+    movb $0x49, 10(%r13)            # sub $8, %r15
+    movb $0x83, 11(%r13)
+    movb $0xEF, 12(%r13)
+    movb $0x08, 13(%r13)
+    movb $0x49, 14(%r13)            # mov %rax, (%r15)
+    movb $0x89, 15(%r13)
+    movb $0x07, 16(%r13)
+    add $17, %r13
+    ret
+
 # ---------- compile_literal (internal) ----------
 # Compile a CALL to forth_lit followed by an 8-byte inline value.
 # Value is taken from RAX.  Advances HERE by 13 bytes.
 # Clobbers RCX.
+#
+# Keep using this wherever the inline cell is STORAGE someone later reads or
+# patches (see compile_literal_imm above for the list). For a value that is
+# only pushed, compile_literal_imm is faster and usually smaller.
 .global compile_literal
 compile_literal:
     CHECK_DICT 13
@@ -2414,7 +2473,10 @@ forth_tick:
     cmpq $0, state(%rip)
     je .Ltick_done                  # interpreting -> leave on stack
 
-    # Compiling — pop xt and compile as literal
+    # Compiling — pop xt and compile it. Deliberately the CALL idiom, not an
+    # immediate: `dis` splits that inline cell out and names the xt (\ xt: dup),
+    # which the Machine-Code tutorial teaches. An xt push is never hot enough to
+    # trade that for.
     mov (%r15), %rax
     add $CELL, %r15
     call compile_literal
@@ -2556,7 +2618,7 @@ forth_interpret_line:
     # Compiling — compile literal
     mov (%r15), %rax                # RAX = number
     add $CELL, %r15                 # pop number
-    call compile_literal            # emit CALL LIT + value at HERE
+    call compile_literal_imm        # push the number; nothing reads it back
     jmp .Lil_loop
 
 .Lil_not_found:
@@ -3676,7 +3738,7 @@ forth_to:
 .Lto_compile:
     # Compile mode: compile LITERAL(addr) + CALL(forth_store)
     mov %rbx, %rax                  # addr of inline value
-    call compile_literal            # compile addr as literal
+    call compile_literal_imm        # compile addr as an immediate
     lea forth_store(%rip), %rax
     call compile_call               # compile call to !
     pop %rbx
@@ -5739,12 +5801,13 @@ forth_right_bracket:
     ret
 
 # LITERAL ( x -- )  Compile a literal at compile time.  IMMEDIATE+COMPILE_ONLY.
-# Takes x from data stack and compiles CALL LIT + x into the current definition.
+# Takes x from the data stack and compiles an immediate push into the current
+# definition -- no call, no inline cell (see compile_literal_imm).
 .global forth_literal
 forth_literal:
     mov (%r15), %rax
     add $CELL, %r15
-    call compile_literal
+    call compile_literal_imm
     ret
 
 # ['] ( "<spaces>name" -- )  Compile xt as literal.  IMMEDIATE+COMPILE_ONLY.
@@ -5759,7 +5822,7 @@ forth_bracket_tick:
     add $CELL, %r15                 # drop flag
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # drop xt
-    call compile_literal            # compile xt as literal
+    call compile_literal            # xt: keep the annotated form (see ')
     ret
 .Lbt_not_found:
     add $3*CELL, %r15               # drop flag, u, c-addr
@@ -5781,7 +5844,7 @@ forth_bracket_char:
 .Lbc_zero:
     xor %eax, %eax
 .Lbc_compile:
-    call compile_literal            # compile char as literal (value in EAX)
+    call compile_literal_imm        # compile char as an immediate
     ret
 
 # EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
@@ -5822,7 +5885,7 @@ forth_postpone:
     je .Lpostpone_immediate
 
     # Non-immediate: compile LITERAL(xt) + CALL(forth_compile_comma)
-    call compile_literal            # compile xt as literal
+    call compile_literal            # xt: keep the annotated form (see ')
     lea forth_compile_comma(%rip), %rax
     call compile_call               # compile call to forth_compile_comma
     pop %rbx

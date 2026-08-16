@@ -1813,9 +1813,105 @@ compile_ret:
     RET
 
 // ---------- compile_literal (internal) ----------
+// ---------- compile_literal_imm (internal) ----------
+// Compile "push X0's value" as an IMMEDIATE: no call, no inline data.
+//
+// NOT interchangeable with compile_literal below, which emits a BL plus an
+// 8-byte cell that other features use as PATCHABLE STORAGE at a known offset
+// (>body, TO on a VALUE, IS on a DEFER, a CREATE body). Those keep the call
+// idiom. This is for the other half -- numbers, LITERAL, [char] -- where the
+// value is only pushed and nobody looks at where it was stored.
+//
+// forth_lit reaches its operand through its own return address and returns
+// PAST it, so every literal mispredicts the return-stack predictor: 10.6 ns
+// against 1.94 ns for a plain call on a Pi 400. Swapping one `dup` for one
+// constant in an ordinary ?do loop cost 50%, so this is not a microbenchmark
+// effect.
+//
+//   0..0xFFFF          MOVZ X9, #v                       1 instruction
+//   ~v fits 16 bits    MOVN X9, #~v                      1  (covers -1, -7, ...)
+//   otherwise          MOVZ + MOVK per non-zero chunk    2..4
+//   then               STR X9, [X19, #-8]!               1
+//
+// The MOVN case is here because small NEGATIVE constants are common (-1 is
+// `true`), and without it every one of them would cost the full four-chunk
+// sequence. Each piece is a template with a zero immediate, patched with
+// (hw << 21) | (imm16 << 5) -- the same field positions in all three of MOVZ,
+// MOVN and MOVK, which is why one patch expression serves all of them.
+// Nothing is hand-encoded.
+.global compile_literal_imm
+compile_literal_imm:
+    CHECK_DICT 20                   // worst case: 4 moves + the push
+    STP X29, X30, [SP, #-16]!
+    STP X23, X24, [SP, #-16]!
+    STP X25, X26, [SP, #-16]!
+    MOV X23, X0                     // the value
+    LSR X9, X23, #16
+    CBZ X9, .Lcli_movz_only         // fits in the low 16 bits
+    MVN X24, X23
+    LSR X9, X24, #16
+    CBZ X9, .Lcli_movn_only         // its complement does
+    // General case: MOVZ the lowest non-zero chunk, MOVK the rest.
+    MOV X25, XZR                    // chunk index 0..3
+    MOV X26, XZR                    // 0 until the MOVZ has been emitted
+.Lcli_chunks:
+    CMP X25, #4
+    B.HS .Lcli_push
+    LSL X9, X25, #4                 // shift = chunk * 16
+    LSR X10, X23, X9
+    AND X10, X10, #0xFFFF           // this chunk
+    CBZ X10, .Lcli_next             // skip zero chunks entirely
+    CBNZ X26, .Lcli_movk
+    ADR X9, lit_movz_tmpl
+    MOV X26, #1
+    B .Lcli_emit
+.Lcli_movk:
+    ADR X9, lit_movk_tmpl
+.Lcli_emit:
+    LDR W11, [X9]
+    ORR W11, W11, W10, LSL #5       // imm16
+    ORR W11, W11, W25, LSL #21      // hw = chunk index
+    STR W11, [X21], #4
+.Lcli_next:
+    ADD X25, X25, #1
+    B .Lcli_chunks
+.Lcli_movz_only:
+    ADR X9, lit_movz_tmpl
+    AND X10, X23, #0xFFFF
+    B .Lcli_one
+.Lcli_movn_only:
+    ADR X9, lit_movn_tmpl
+    AND X10, X24, #0xFFFF           // MOVN writes ~imm, so emit the complement
+.Lcli_one:
+    LDR W11, [X9]
+    ORR W11, W11, W10, LSL #5
+    STR W11, [X21], #4
+.Lcli_push:
+    ADR X9, lit_push_tmpl
+    LDR W11, [X9]
+    STR W11, [X21], #4
+    LDP X25, X26, [SP], #16
+    LDP X23, X24, [SP], #16
+    LDP X29, X30, [SP], #16
+    RET
+
+// Templates for the above: real instructions with zero immediates, so the
+// assembler owns every bit we do not deliberately set.
+lit_movz_tmpl:
+    MOVZ X9, #0
+lit_movn_tmpl:
+    MOVN X9, #0
+lit_movk_tmpl:
+    MOVK X9, #0
+lit_push_tmpl:
+    STR X9, [X19, #-CELL]!
+
 // Compile a BL to forth_lit followed by an 8-byte inline value.
 // Value is taken from X0.  Advances HERE by 12 bytes.
 // Clobbers X9, X10.
+//
+// Keep using this wherever the inline cell is STORAGE someone later reads or
+// patches; compile_literal_imm above is for values that are only pushed.
 .global compile_literal
 compile_literal:
     CHECK_DICT 12
@@ -2750,7 +2846,7 @@ forth_interpret_line:
 
     // Compiling — compile literal
     LDR X0, [X19], #CELL            // pop number into X0
-    BL compile_literal              // emit BL LIT + value at HERE
+    BL compile_literal_imm          // push the number; nothing reads it back
     B .Lil_loop
 
 .Lil_not_found:
@@ -4063,7 +4159,7 @@ forth_to:
 .Lto_compile:
     // Compile mode: compile LITERAL(addr) + BL(forth_store)
     MOV X0, X23
-    BL compile_literal
+    BL compile_literal_imm
     ADR X0, forth_store
     BL compile_call
     LDP X23, X24, [SP], #16
@@ -6307,7 +6403,7 @@ forth_right_bracket:
 forth_literal:
     STP X29, X30, [SP, #-16]!
     LDR X0, [X19], #CELL           // pop value
-    BL compile_literal
+    BL compile_literal_imm
     LDP X29, X30, [SP], #16
     RET
 
@@ -6342,7 +6438,7 @@ forth_bracket_char:
     CBZ X10, .Lbc_compile           // u == 0 → compile 0, do NOT deref c-addr
     LDRB W0, [X9]                   // first character
 .Lbc_compile:
-    BL compile_literal
+    BL compile_literal_imm
     LDP X29, X30, [SP], #16
     RET
 

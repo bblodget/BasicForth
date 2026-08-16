@@ -67,11 +67,19 @@ That turns the listing into a readable decompile of the definition.
 ## Idiom-aware listings
 
 Compiled code embeds data in the instruction stream in exactly two shapes:
-a literal is `call lit` + 8 value bytes, and `s"` / `."` / `abort"`
-compile a call to the string runtime + an 8-byte length + the characters
-(padded to 4 alignment on ARM64). A linear disassembler decodes that data
-as garbage instructions — on x86 the variable-width decode can even lose
-step and swallow the following real instructions.
+`call lit` + 8 value bytes, and `s"` / `."` / `abort"`, which compile a call
+to the string runtime + an 8-byte length + the characters (padded to 4
+alignment on ARM64). A linear disassembler decodes that data as garbage
+instructions — on x86 the variable-width decode can even lose step and
+swallow the following real instructions.
+
+**A plain number is not one of them.** Since 2026-08-15 a number compiles to
+an immediate — the value is built into an instruction, with no call and no
+inline cell — so there is nothing to split and nothing to annotate; the value
+is legible in the instruction itself. The `call lit` shape survives only where
+the cell is *storage* someone reads or patches later: a `constant`, a `value`,
+a `create` body, a deferred word, and `[']`/`postpone`, which keep it so the
+xt can still be named. Those are what the splitting below is for.
 
 `dis` knows both idioms. The dict path *scans* the word first, splitting
 it into code spans (each decoded by objdump with `--start/--stop-address`
@@ -79,7 +87,7 @@ over one shared temp file) and data spans, which are printed as what they
 are — hex column intact, meaning in the margin:
 
 ```
-  43d5f1:  05 00 00 00 00 00 00 00   \ literal: 5
+  43d5f1:  2a 00 00 00 00 00 00 00   \ literal: 42
   43d629:  08 00 ... 68 69 20 74 ..  \ s" hi there"
   43d669:  e4 16 40 00 00 00 00 00   \ xt: dup
 ```

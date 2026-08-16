@@ -3,7 +3,7 @@
 You've been told BasicForth compiles your definitions to real machine code —
 no interpreter in the middle. In this lesson you stop taking that on faith:
 you'll disassemble your own words and read the instructions the compiler
-laid down, watch a literal hide its bytes in the code stream, and peek at
+laid down, watch a constant hide its bytes in the code stream, and peek at
 the assembly behind the built-ins.
 
 The listings below appear on an x86-64 machine; on ARM64 the instructions
@@ -75,22 +75,35 @@ annotated just like the primitives around it. When you define a word, you
 extend the machine's vocabulary on equal footing with `dup` and `*`.
 `next`.
 
-## A literal hides in the code
+## A number becomes an instruction
 
 Numbers need different treatment — there's no `call 5`. Look:
 
     : five  5 ;
     dis five
 
-The line after the banner calls `lit`, the runtime that pushes an inline
-value — and the next 8 bytes *are the number 5*, data sitting in the
-middle of the instruction stream. Find the `05` at the start of that
-line's hex column. A plain disassembler would chew those bytes into
-garbage instructions (on x86-64 it even loses step and swallows the
-following `ret`) — but `dis` knows the compiler's idiom, so it prints
-the span as what it is: `\ literal: 5`, hex intact, and the `ret` after
-it stays honest. Strings work the same way: try `: hi ." hello" ;` then
-`dis hi` and read your text back out of the code. `next`.
+No call at all. The compiler builds the 5 *into* an instruction that
+writes it straight to the stack, so the number is right there in the
+disassembly where you can read it. That is the cheapest thing it could
+possibly do: nothing is fetched, nothing is called. `next`.
+
+## Data hiding in the instruction stream
+
+Some words really do carry data among their instructions. A constant is
+one:
+
+    42 constant answer
+    dis answer
+
+Here you *do* see a call to `lit`, and the next 8 bytes *are the number
+42* — data sitting in the middle of the code. Words built this way keep
+their data where the system can find it: that cell is what `>body` points
+at for a `create`d word, and what `to` writes into for a `value`. A plain disassembler would chew those bytes
+into garbage instructions (on x86-64 it even loses step and swallows the
+following `ret`), but `dis` knows the compiler's idiom and prints the
+span as what it is: `\ literal: 42`, hex intact, `ret` still honest.
+Strings work the same way: try `: hi ." hello" ;` then `dis hi` and read
+your text back out of the code. `next`.
 
 ## Control flow becomes jumps
 

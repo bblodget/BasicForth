@@ -188,6 +188,30 @@ assert_result() {
     fi
 }
 
+# assert_absent: the output must NOT contain the substring. Same echo-stripping
+# as assert_result, which is the point of having it: run_forth captures the
+# ECHOED INPUT too, so a hand-rolled `[[ "$out" != *x* ]]` can be defeated by
+# the very text it is checking for appearing in the command that produced it.
+assert_absent() {
+    local name="$1"
+    local input="$2"
+    local unwanted="$3"
+
+    local output
+    output=$(run_forth "$input" | sed '/^> /d; /^>$/d; /^\.\.\. /d')
+
+    if [[ "$output" != *"$unwanted"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:      %s\n" "$input"
+        printf "    Unexpected: %s\n" "$unwanted"
+        printf "    Got:        %s\n" "$(echo "$output" | head -5)"
+        ((failed++))
+    fi
+}
+
 # assert_error: check that output contains a fixed substring (case-insensitive)
 assert_error() {
     local name="$1"
@@ -7191,11 +7215,21 @@ else
         "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
     assert_output "dis primitive: banner" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
-    # stage 2: inline data is split out of the stream, not decoded as code
-    assert_output "dis shows a literal's value" \
+    # stage 2: inline data is split out of the stream, not decoded as code.
+    # A CONSTANT is the probe for that now, because a plain number compiles to
+    # an immediate with no inline data at all (2026-08-15). The constant's cell
+    # is the case that MUST still split -- when the disassembler's calibration
+    # probe was left as `: five 5 ;` it silently stopped resolving and printed
+    # a constant's 8 data bytes as three bogus instructions.
+    assert_output "dis splits a constant's inline cell" \
+        "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "literal: 42"
+    assert_output "dis keeps the ret after a constant's cell" \
+        "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "ret"
+    # ...and a plain number is now an immediate: no call, and no cell to split.
+    # Asserted as an ABSENCE because the instruction that replaced it differs
+    # per architecture (movq $0x5 against movz #5), and this suite runs on both.
+    assert_absent "dis: a number compiles no call to lit" \
         "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "literal: 5"
-    assert_output "dis keeps the ret after a literal" \
-        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "ret"
     assert_output "dis decodes inline strings" \
         "$(printf '%s\n: greet ." hi there" ;\ndis greet' "$dis_pre")"  's" hi there"'
     assert_output "dis names an xt literal" \
