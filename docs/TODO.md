@@ -2558,6 +2558,13 @@ the hunt starts in the feature, not the compiler. Optimizers want a stable,
 well-covered base underneath precisely so a regression tells you which
 layer moved. Building one now taxes the debugging of everything else.
 
+**The intent is a dedicated optimisation pass once the feature set settles**
+(confirmed 2026-08-16), not a series of opportunistic tweaks. Two consequences
+worth acting on when it opens: start by reading what other Forths already do —
+see the Mecrisp item at the end of this section — and expect the items here to
+share machinery rather than each carry its own, since the inliner and constant
+folding both want the same "what did I just compile" state.
+
 **Re-entry conditions** — reopen when *both* hold:
 
 1. The module/editing interface has stopped changing shape (the use-testing
@@ -2627,6 +2634,46 @@ smaller risk surface.
   the pair in registers: the loop becomes inc/cmp/jne, which IS the C -O0
   loop. Smaller win than the inliner (0.41 s → ~0.36 s on the empty
   benchmark) but a cute, self-contained peephole.
+
+- [ ] **Constant folding.** *(Deferred — see above.)* `1024 4 *` written in
+  ordinary code should compile to `4096`, not to two pushes and a call. This is
+  the automatic cousin of `[ 1024 4 * ] literal`, and the distinction is worth
+  keeping straight: `[ … ]` is a *semantic escape* — it runs arbitrary code at
+  compile time, including a file read — while folding is the compiler noticing
+  that operands are already known and a word is pure. They overlap on exactly
+  one case, constant arithmetic; neither subsumes the other.
+  - **The 2026-08-16 literal change made this cheap.** A number now compiles
+    through one choke point, `compile_literal_imm`, which knows the value it
+    emitted and how many bytes it took. So a fold is not a compiler pass: keep
+    the last one or two (value, address, size) triples, and when a foldable
+    word arrives with literals immediately behind it, rewind `HERE` and emit a
+    single literal. That is a small amount of compile-time state, in the one
+    place that already has it.
+  - **Three hazards, in order of how quietly they bite.** (a) *Which words are
+    foldable* is a curated list — `+ * and or xor lshift rshift` yes, anything
+    touching memory, I/O or the return stack no — and a wrong entry silently
+    miscompiles, the same failure class as the inliner's byte table. (b)
+    *Boundaries*: the literals must be genuinely adjacent in the instruction
+    stream and not jumped into, so a branch target, a `[`, or an immediate word
+    between them all forbid the fold. Tracking "what was compiled last" is easy;
+    knowing nothing can *arrive* at that address is the real work. (c) `dis`
+    readability again — folded code stops resembling the source, which the
+    Machine-Code tutorial trades on.
+  - **Interaction worth checking early:** folding and the peephole inliner want
+    the same "what did I just compile" state, so whichever lands first should
+    put that state somewhere the other can use rather than growing its own.
+
+- [ ] **Read other Forths' optimisers before starting the pass.**
+  **Mecrisp** (<https://mecrisp.sourceforge.net/>, Matthias Koch) is the one to
+  study first: it compiles to native code on small targets and does constant
+  folding and peephole optimisation in a compiler that stays remarkably small,
+  which is the shape this project wants — not a separate optimising pass over an
+  IR, but a compiler that emits better code as it goes. Worth understanding what
+  it folds, what it refuses to fold, and how it decides, before designing ours.
+  Note the target difference when reading: Mecrisp-Stellaris is Cortex-M, where
+  code size and flash matter more than branch prediction, so its trade-offs are
+  not automatically ours. gforth's `compile,`-time behaviour and CMForth are the
+  other obvious references.
 
 ### Measured 2026-08-15 on the Pi 400 — the literal is the engine's slowest step
 
