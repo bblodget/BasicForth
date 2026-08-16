@@ -269,6 +269,9 @@ have — but `lscpu -e` shows which of them share a physical core, and that is
 where the gains stop. Past your real core count the curve flattens.
 
 - `help concurrency` — `thread`, `join`, `threads` in full
+- `tutorial Locals` — `{: … :}` names a word's arguments, and the locals stack
+  is per-thread, so a `|` local is scratch space that cannot be shared by
+  accident the way the `variable` above was
 - `help exceptions` — a worker's `throw` comes back as `join`'s result
 - `docs/Threading.md` — how a Forth word gets onto an OS thread at all
 

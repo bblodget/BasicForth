@@ -44,5 +44,8 @@ Copy the top return-stack item to the data stack, leaving it on the return stack
 ## See Also
 
 - `help stack` — the data stack and its rearranging words.
+- `help locals` — `{: a b c :}` holds values by name for the length of a
+  definition. Locals live on their own stack, so they neither use nor disturb
+  this one, and they need no matching `r>` to stay balanced.
 - `help loops` — `do … loop` and the index words `i`/`j`, which use the
   return stack.

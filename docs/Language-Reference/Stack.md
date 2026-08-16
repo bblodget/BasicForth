@@ -116,5 +116,8 @@ Exchange the top two pairs.
 ## See Also
 
 - `help return-stack` — `>r`, `r>`, `r@` and friends.
+- `help locals` — `{: a b c :}` names a word's arguments instead of shuffling
+  them, which is usually the better answer once `rot` and `over` start piling
+  up. `tutorial Locals` works through it.
 - `help printing` — `.s` and `.`, used in the examples above.
 - `help getting-started` — the tutorial introduction to the stack.
