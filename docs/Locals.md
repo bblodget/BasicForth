@@ -308,10 +308,11 @@ it looks: `X20` is only ever live between a build and its matching release, so
 nothing reads before the next build overwrites it), and registers are
 per-thread already, so threads need nothing either.
 
-Run-to-run spread on this board is ~2%, so figures below are quoted from the
-single run that also produced the instruction counts (`f-locals` 26.4 ns,
-`f-juggle` 19.6 ns); other runs in this document report the same pair as
-26.0 / 19.8, which is the same result, not a different one.
+Figures below come from the single run that also produced the instruction
+counts: `f-locals` 26.4 ns, `f-juggle` 19.6 ns. The section above quotes
+`f-locals` as 26.0 ns from an earlier run — run-to-run spread on this board is
+~2%, so the two are the same result, and the derived ratios here use the 26.4
+pair for consistency with the counts.
 
 | | before | after |
 |---|---|---|
