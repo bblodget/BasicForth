@@ -2722,8 +2722,16 @@ forth_tick:
     CBNZ X9, .Lcf_abort             // compiling: abandon the definition
     LDRB W9, [X22, #8]              // LATEST flags
     TST W9, #F_HIDDEN               // definition open but interpreting?
-    B.NE .Lcf_abort
-    B .Lcf_longjmp                  // nothing open: error, keep the stack
+    B.EQ .Lcf_longjmp
+    // ...but only the OUTERMOST interpret_line may abandon it, for the reason
+    // spelled out at .Lil_err_maybe_abort. This route is `'` failing to find a
+    // name. Offset #0, not #8: entry stores the pair with the previous il_sp
+    // FIRST, the reverse of the x86 mirror.
+    ADR X9, il_sp
+    LDR X9, [X9]
+    LDR X9, [X9]                    // previous il_sp: 0 only at the top level
+    CBNZ X9, .Lcf_longjmp
+    B .Lcf_abort
 
 // ---------- INTERPRET-LINE ----------
 // ( -- ) Returns status in X0: 0=success, 1=error
@@ -2879,7 +2887,14 @@ forth_interpret_line:
     LDRB W10, [X22, #8]             // LATEST flags
     TST W10, #F_HIDDEN              // definition open but interpreting?
     B.EQ .Lil_err_return
-    // Only the OUTERMOST interpret_line may abandon a definition on this route.
+    // On THIS route -- STATE 0 with a definition open, which is what the test
+    // above newly reaches -- only the OUTERMOST interpret_line may abandon it.
+    // The STATE != 0 arm above deliberately keeps its pre-existing behaviour and
+    // is NOT gated: a nested error while compiling still rolls back to the global
+    // anchor and can take an outer definition with it. That is a real bug, filed
+    // in TODO.md beside the swallowed-EVALUATE one, and not this change's to fix
+    // -- skipping the abort there would leave a hidden header and STATE set,
+    // which wedges the session harder than the bug being avoided.
     // Returning an error ends the LINE only at the top level; a nested one --
     // EVALUATE, or a load -- returns into a caller that carries on with the
     // rest of its own line, which left it compiling into a definition that no

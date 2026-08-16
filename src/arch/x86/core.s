@@ -2328,8 +2328,10 @@ build_header_anon:
     # because the guard refused before touching it.
     #
     # STATE is not the test for which of the two to use (`[` makes it 0 while
-    # a definition is open), which is exactly the trap the tick-not-found site
-    # sidesteps by testing state when IT cannot be inside brackets.
+    # a definition is open). The tick-not-found site was assumed to be exempt
+    # -- "it cannot be inside brackets" -- and that was simply wrong: `: foo
+    # [ ' nosuchword` reaches it with STATE 0 and a definition open. It now
+    # tests F_HIDDEN as well, gated to the outermost interpret_line.
     jmp .Lcf_abort
 
 # ---------- COLON (Forth-level) ----------
@@ -2501,8 +2503,17 @@ forth_tick:
     cmpq $0, state(%rip)
     jne .Lcf_abort                  # compiling: abandon the definition
     testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
-    jnz .Lcf_abort
-    jmp .Lcf_longjmp                # nothing open: error, keep the stack
+    jz .Lcf_longjmp
+    # ...but only the OUTERMOST interpret_line may abandon it, for the reason
+    # spelled out at .Lil_err_maybe_abort: a nested one returns into a caller
+    # that carries on with the rest of ITS line. This route is `'` failing to
+    # find a name, and it needs the same gate -- without it,
+    # `: foo [ s" ' nosuchword" evaluate ] ;` destroyed foo mid-line.
+    mov il_rsp(%rip), %rax
+    cmpq $0, 8(%rax)                # previous il_rsp: 0 only at the top level
+    jne .Lcf_longjmp
+    jmp .Lcf_abort
+    # (fall-through impossible; both arms jump)
 
 # ---------- INTERPRET-LINE ----------
 # ( -- ) Returns status in RAX: 0=success, 1=error
@@ -2651,7 +2662,14 @@ forth_interpret_line:
     jne .Lil_err_abort
     testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
     jz .Lil_err_return
-    # Only the OUTERMOST interpret_line may abandon a definition on this route.
+    # On THIS route -- STATE 0 with a definition open, which is what the test
+    # above newly reaches -- only the OUTERMOST interpret_line may abandon it.
+    # The STATE != 0 arm above deliberately keeps its pre-existing behaviour and
+    # is NOT gated: a nested error while compiling still rolls back to the global
+    # anchor and can take an outer definition with it. That is a real bug, filed
+    # in TODO.md beside the swallowed-EVALUATE one, and not this change's to fix
+    # -- skipping the abort there would leave a hidden header and STATE set,
+    # which wedges the session harder than the bug being avoided.
     # Returning an error ends the LINE only at the top level; a nested one --
     # EVALUATE, or a load -- returns into a caller that carries on with the rest
     # of its own line. Dropping the header there left the outer line compiling

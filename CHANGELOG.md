@@ -111,6 +111,19 @@ abandoned the definition cleanly, which is the behaviour both now share. The
 compile-only path (`: foo [ if`) was the same bug one step worse: it jumped
 straight to the error return and never consulted `STATE` at all.
 
+The abort is gated to the outermost `interpret_line`, because returning an
+error ends the *line* only at the top level — a nested one (an `EVALUATE`, or a
+load) returns into a caller that carries on with the rest of its own line.
+Without that gate, `: foo [ s" nosuchword" evaluate ] ;` tore the enclosing
+definition down mid-line while the line kept compiling into the hole. Two
+routes needed it: the shared error exit, and `'` failing to find a name.
+
+The same flaw on the *compiling* arm is older and still there — an error inside
+a nested evaluation while `STATE` is set rolls back to the global anchor and
+takes the enclosing definition with it. Unchanged by this work, pinned by a
+test, and filed: the real repair is for `EVALUATE` to propagate the error so
+the outer line aborts too.
+
 Found by sweeping every `state` read on both architectures for the same
 confusion, which had already produced four bugs — three of them silent session
 wedges. Most reads turned out to be legitimate: an IMMEDIATE word choosing

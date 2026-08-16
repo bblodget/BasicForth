@@ -2788,6 +2788,23 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   up rather than dropping it. Pinned by a test in the meantime, so the current
   behaviour cannot change without someone noticing.
 
+  **The same nesting flaw exists on the compiling arm, and is older.** When
+  `STATE` is non-zero the abort is not gated at all, so an error inside a
+  nested evaluation rolls back to the *global* anchor and takes the enclosing
+  definition with it:
+
+      : foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+      \ both foo and inner vanish, silently, and the line still prints ` ok`
+
+  Verified identical before and after the 2026-08-16 sweep, so it is not that
+  change's doing — but it is why the gate added there covers only the
+  STATE-0 route. Gating this arm as well is NOT the fix: skipping the abort
+  would leave a hidden header and `STATE` set, wedging the session harder than
+  the bug it avoids. The anchor (`saved_latest`/`saved_here`/`colon_dsp`) is
+  global by design — see the recovery-anchor note — so the real repair is the
+  same one: propagate the error out of `EVALUATE` so the outer line aborts too,
+  rather than trying to unwind one level from the inside.
+
 - [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
   gating the locals shadow warning: it returns 0 at the prompt *and* during a
   file load, so it cannot distinguish the two, which is most of what the word

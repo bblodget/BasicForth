@@ -4708,6 +4708,28 @@ assert_result "[ ] at compile time still works" ": c9 [ 6 7 * ] literal ; c9 ." 
 # inside the evaluation is swallowed, which is its own pre-existing bug, filed
 # in TODO.md) -- what this pins is that it still gets DEFINED rather than
 # vanishing mid-line.
+# The same, by the OTHER abort route: `'` failing to find a name reaches
+# .Lcf_abort rather than the shared error exit, and needed the gate separately.
+# It was missed the first time precisely because a comment there asserted the
+# site "cannot be inside brackets" -- it can.
+# Records CURRENT behaviour, which is wrong and pre-existing: an error inside a
+# nested evaluation while COMPILING rolls back to the global anchor and takes
+# the enclosing definition with it. Both foo and inner vanish. Pinned so that
+# fixing it (TODO: propagate errors out of EVALUATE) is a deliberate act rather
+# than a surprise, and so this arm's exemption from the nesting gate stays
+# visible.
+assert_result "a nested error while compiling still takes the outer definition (known bug)" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+probe foo'                                                                "MISSING"
+assert_result "a failed tick inside a nested EVALUATE does not abandon it either" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" '"'"' nosuchword" evaluate ] 2 + . ;
+probe foo'                                                                "EXISTS"
+assert_result "a failed tick inside [ ] DOES abandon at the top level" \
+    ": g1 [ ' nosuchword
+: g2 3 ;
+g2 ."                                                                     "3"
 assert_result "an error inside a nested EVALUATE does not abandon the outer definition" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" nosuchword" evaluate ] 2 + . ;
