@@ -85,6 +85,20 @@ release**, since the banner comes from `git describe`.
    that remote's `main` does not contain. All-or-nothing turns that into a
    clean failure you retry.
 
+   **Why not `git push origin main --tags`?** It is the obvious shorter form,
+   and it fails three ways. It does not push `staging`, so the remote branch the
+   Pi and the other worktrees pull sits a release behind. It publishes *every*
+   local tag rather than this release's, so a scratch tag escapes with it. And
+   the one that matters: naming the version makes the push **self-checking**. If
+   you arrive here having skipped step 5, or you mistype the number, git refuses:
+
+       error: src refspec v0.17.0 does not match any
+
+   With `--atomic` nothing goes out and you fix it. `--tags` in that same
+   situation *succeeds*, publishing both branches with no release tag on them —
+   and `git describe` in a fresh clone then reports the previous version, which
+   is the failure this whole procedure exists to prevent.
+
 8. Verify against the remote, **including the tag**, naming each ref exactly:
 
        git ls-remote origin refs/heads/main refs/heads/staging \
