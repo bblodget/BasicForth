@@ -275,13 +275,19 @@ wins against 8.6 ns. The next section is why, and what was tried.
 
 ## Why ARM64 still loses, and the experiment that did not fix it
 
-**Counted, not guessed.** `f-locals` compiles to **196 bytes / 49
-instructions**; `f-juggle` to **36 bytes / 9**, calling primitives that are
-3 instructions each (`over`, `>r`, `r>`, `drop` are all `LDR`/`STR`/`RET`). So
-roughly **58 executed instructions against 27** — the locals spelling runs 2.1×
-the instructions for 1.35× the time. It is not fetch-starved or
-cache-thrashing; it executes at *better* IPC (~1.2 vs ~0.8, since it makes half
-as many calls) and simply has far more to do.
+**Counted, not guessed** — including the primitives, which have to be counted
+individually rather than averaged: `over`, `>r`, `r>` and `drop` are three
+instructions each (`LDR`/`STR`/`RET`), but `+` and `*` are **five**.
+
+| | inline | primitives called | executed |
+|---|---|---|---|
+| `f-locals` | 196 B / **49** | `+ + *` = 15 | **64** |
+| `f-juggle` | 36 B / **9** | `over + >r + r> *` = 24 | **33** |
+
+So the locals spelling runs **1.94× the instructions for 1.35× the time**. It
+is not fetch-starved or cache-thrashing; it executes at *better* IPC
+(**1.35 vs 0.94** at 1.8 GHz, since it makes half as many calls) and simply has
+far more to do.
 
 **Where the instructions are.** A reference is six instructions on ARM64, and
 **four of them are spent finding LP**: `MRS TPIDR_EL0`, two `ADD`s for the TLS
@@ -316,7 +322,7 @@ moves while the workload it stands for does not is the signal to stop.
 
 **What was left on the table**, if this is ever revisited: reserving `X20`
 globally rather than per-word would also remove the TLS access from the frame
-itself (build 8 instructions → 1, release 8 → 1), predicting ~16 ns — a win
+itself (build 8 instructions → 1, release 8 → 1), predicting ~15 ns — a win
 over 19.6, but a modest one, and the same reasoning says it would show up in
 synthetics and not in the `acc` loop, since a frame is built once per call and
 `acc` calls it once per 100,000 iterations. Against that: a global reservation
@@ -330,8 +336,15 @@ code, which is the shape of every serious bug this project has had.
 first attributed to I-cache pressure, then to being purely instruction-count
 bound; both were refuted by counting. The surviving model — time tracks
 instructions, but calls cost more per instruction than inline code — is only
-*directional*: it predicted 20.5 ns for the experiment and reality was 23.0.
+*directional*: it predicted 21.0 ns for the experiment and reality was 23.0.
 Treat any further estimate here as an argument for measuring, not as a result.
+
+A fourth slip, caught in review and worth keeping as the reason for the table
+above: the first version of this section put the executed counts at 58 and 33
+by assuming every primitive was three instructions, having measured only the
+four that are. `+` and `*` are five. The direction survived — locals still run
+more instructions for less time — but a section whose title is "counted, not
+guessed" had a guess in it.
 
 **The standing conclusion:** a local reference is cheaper than the `dup` it
 replaces on both architectures, and locals are a clear win on x86. On ARM64 a
