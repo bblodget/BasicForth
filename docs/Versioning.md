@@ -86,18 +86,24 @@ release**, since the banner comes from `git describe`.
    clean failure you retry.
 
    **Why not `git push origin main --tags`?** It is the obvious shorter form,
-   and it fails three ways. It does not push `staging`, so the remote branch the
-   Pi and the other worktrees pull sits a release behind. It publishes *every*
-   local tag rather than this release's, so a scratch tag escapes with it. And
-   the one that matters: naming the version makes the push **self-checking**. If
-   you arrive here having skipped step 5, or you mistype the number, git refuses:
+   and it publishes `main` plus every local tag — `staging` is not in its
+   refspec at all, so the branch the Pi and the other worktrees pull stays a
+   release behind. Adding `staging` back fixes that much, but two problems
+   survive in any `--tags` spelling:
 
-       error: src refspec v0.17.0 does not match any
+   - It publishes **every** local tag rather than this release's, so a scratch
+     tag escapes alongside it.
+   - It cannot notice a tag that is not there. Naming the version makes the push
+     **self-checking**: arrive here having skipped step 5, or mistype the
+     number, and git refuses —
 
-   With `--atomic` nothing goes out and you fix it. `--tags` in that same
-   situation *succeeds*, publishing both branches with no release tag on them —
-   and `git describe` in a fresh clone then reports the previous version, which
-   is the failure this whole procedure exists to prevent.
+         error: src refspec v0.17.0 does not match any
+
+     so with `--atomic` nothing goes out and you fix it. `--tags` has no version
+     in it to be wrong, so it reports success and publishes whichever branches
+     you did name, carrying no release tag. `git describe` in a fresh clone then
+     reports the *previous* version — the failure this whole procedure exists to
+     prevent, reached through the convenient spelling.
 
 8. Verify against the remote, **including the tag**, naming each ref exactly:
 
