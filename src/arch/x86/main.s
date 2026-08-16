@@ -14,7 +14,10 @@
 
 .global _start
 
-.equ CELL, 8
+# Tunable sizes, shared with core.s and the ARM64 build. CELL comes from
+# here rather than being redefined per file -- three copies of the one value
+# this file exists to keep single is exactly the drift it prevents.
+.include "../../config.inc"
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          # buffer for the absolute startup directory
 .equ F_HIDDEN, 0x40                 # header flags2 bit; must match core.s
@@ -136,6 +139,9 @@ _start:
     lea data_stack_top(%rip), %r15  # DSP = sp0 (empty stack)
     mov %r15, %fs:sp0@tpoff             # save initial DSP for .S / guards
     movq $1, %fs:is_repl@tpoff      # this is the REPL thread; workers get 0
+    lea locals_stack_top(%rip), %rax    # LP = lp0 (no frames)
+    mov %rax, %fs:lp@tpoff
+    mov %rax, %fs:lp0@tpoff
     lea dict_space(%rip), %r13      # HERE
     lea dict_throw(%rip), %r12      # LATEST (head of the built-in dictionary chain)
 
@@ -503,16 +509,36 @@ dict_full:
     mov $msg_dict_full_len, %rdx
     call platform_write
 
-    # Reset return stack and data stack
+    # Reset return stack, data stack and locals stack
     mov rp0(%rip), %rsp
     mov %fs:sp0@tpoff, %r15
+    mov %fs:lp0@tpoff, %rax
+    mov %rax, %fs:lp@tpoff
 
-    # If we were compiling, abort the definition
+    # UNCONDITIONAL, above the STATE test below: we are going to repl_loop
+    # either way, and neither of these is tied to being mid-definition.
+    # in_load is not about compiling at all, and `[` makes STATE 0 *inside* an
+    # open definition, so gating either on STATE skips exactly the cases that
+    # need them -- a dictionary exhausted while interpreting a file left
+    # "a file is loading" set for the rest of the session.
+    movq $0, locals_count(%rip)     # the names die with the definition
+    movq $0, in_load(%rip)          # and any abandoned loader frame
+
+    # Roll back an open definition. STATE alone cannot decide -- `[` interprets
+    # INSIDE an open definition -- so also check LATEST's hidden bit, the same
+    # pair the ` ok` suppression above uses. Gating on STATE alone left the
+    # partial header alive when the dictionary ran out inside `[ ... ]`, and
+    # the definition-open guard then refused every LATER definition: the
+    # session was wedged, with nothing on screen to explain it.
     cmpq $0, state(%rip)
-    je repl_loop
+    jne .Ldf_rollback
+    testb $F_HIDDEN, 8(%r12)            # definition open but interpreting?
+    jz repl_loop
+.Ldf_rollback:
     movq $0, state(%rip)
     mov saved_latest(%rip), %r12
     mov saved_here(%rip), %r13
+    call drop_partial_header            # the anchor may still point AT it
 
     jmp repl_loop
 

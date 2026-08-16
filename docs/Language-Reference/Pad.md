@@ -59,16 +59,42 @@ At a glance:
 `examples/gamepad.fs` is a live readout of every control — the quickest way to
 check a new pad is mapped the way you expect.
 
-## Buttons are named by position
-
-The bottom face button is `pad-south` on every controller. It is printed **A**
-on an Xbox pad, **B** on a Nintendo one and **✕** on a PlayStation one, so no
-letter is true of all three — but the position is. `pad-east` is the right-hand
-face button, `pad-west` the left, `pad-north` the top.
+## pad-south pad-east pad-west pad-north ( -- b )
+The four face buttons, named by **position** rather than by letter. The bottom
+one is `pad-south` on every controller: it is printed **A** on an Xbox pad,
+**B** on a Nintendo one and **✕** on a PlayStation one, so no letter is true
+of all three — but the position is. `pad-east` is the right-hand face button,
+`pad-west` the left, `pad-north` the top.
 
 This is why the compass names are worth the moment of unfamiliarity: a game
 written against `pad-south` behaves the way the player expects on hardware you
 have never seen. SDL renamed these for the same reason.
+
+Pass one to `pad-held?` or `pad-has?`:
+
+    pad-south pad-held? if  jump  then
+
+## pad-up pad-down pad-left pad-right ( -- b )
+The d-pad, as four separate buttons — any combination can be down at once.
+For the usual "which way is the player pointing" question, `pad-dx` / `pad-dy`
+merge these with the left stick and hand back a direction instead.
+
+## pad-lshoulder pad-rshoulder pad-lstick pad-rstick pad-back pad-start pad-guide ( -- b )
+The rest of the buttons: the two shoulder buttons, the two sticks *pressed in*
+as buttons, and the three centre buttons. `pad-guide` is the big logo button —
+many pads report it, some swallow it, and a desktop environment may take it
+before you see it, so check `pad-has?` and never make it the only way to do
+something.
+
+## pad-leftx pad-lefty pad-rightx pad-righty pad-ltrigger pad-rtrigger ( -- a )
+The six axes: both sticks in each direction, and the two triggers. Pass one to
+`pad-axis` for the raw −32768..32767 reading, or to `pad-dir` for a direction
+with the dead zone applied.
+
+**Y is positive downward** on both sticks, matching screen coordinates. The
+triggers are one-sided, 0 to 32767, and read only 0 or 32767 on a pad whose
+triggers are really buttons — so a throttle wants a fallback for the player
+whose trigger has just two positions.
 
 ## pads ( -- n )
 How many controllers are connected right now. Starts SDL's gamepad subsystem
@@ -108,6 +134,16 @@ unplugged and pushed back in: whatever was in the slot is closed first, so its
 handle is never stranded. The old one is closed only *after* the new open
 succeeds, so a re-open that fails — the pad was pulled out again — leaves the
 working controller in place rather than emptying the slot on the way past.
+
+## #pads ( -- n )
+How many slots there are to open controllers into — 4 as shipped. A
+`constant`, not a limit on how many controllers may be *attached*: `pads`
+answers that, and can be larger.
+
+Slots run 0 to `#pads`-1, so this is the bound to loop to when you want to
+touch every open pad:
+
+    #pads 0 ?do  i pad  pad? if pad-name type cr then  loop
 
 ## pad-why ( -- c-addr u )
 Why the last `pad-open` failed — "no controller at that index", SDL's own
@@ -153,7 +189,7 @@ It names the *model*, not the individual: two identical controllers give the
 same string. Slots are what tell players apart — don't try to identify a
 player by name.
 
-## pad-close ( -- ) / pad-closeall ( -- )
+## pad-close pad-closeall ( -- )
 Close the selected controller, or all of them. `pad-closeall` also stops the
 gamepad subsystem. Like `sdl-close`, it stops only what it started — a blanket
 `SDL_Quit` would tear down the window `sdl3.fs` opened and the audio device
@@ -193,7 +229,10 @@ True while that button is down. This is state, not an edge — it answers "is it
 down now", so holding the button reads true every frame. For edges, watch
 `ev-pad-down` / `ev-pad-up` through `sdl-poll`.
 
-## pad-has? ( button -- flag ) / pad-hasaxis? ( axis -- flag )
+## pad-has? pad-hasaxis? ( n -- flag )
+`pad-has? ( button -- flag )` for a button, `pad-hasaxis? ( axis -- flag )` for
+a stick or trigger.
+
 Not every controller has every control: no guide button, no right stick,
 digital-only triggers. Ask rather than reading a phantom 0, so a game can
 offer a different binding instead of a control that never responds.
@@ -213,7 +252,7 @@ and the triggers have no d-pad to merge with, so they come through here:
 
     pad-rightx pad-dir      \ -1, 0 or 1 — aim left, centre, right
 
-## pad-dx ( -- -1|0|1 ) / pad-dy ( -- -1|0|1 )
+## pad-dx pad-dy ( -- -1|0|1 )
 The left hand as one answer, whether the player uses the d-pad or the left
 stick. This is what a grid game wants: `pad-dx` is −1 for left, 0 for centred,
 1 for right; `pad-dy` is −1 for up, 1 for down (positive downward, like the
@@ -238,20 +277,30 @@ It is a value, so a tired controller can be tuned without editing anything:
 
 Only `pad-dir`, `pad-dx` and `pad-dy` consult it; `pad-axis` is always raw.
 
-## Events
-Controller events arrive through `sdl-poll` alongside the keyboard ones, for
-programs that want edges rather than held state — a menu, or a "press any
-button to join" screen.
+## ev-pad-down ev-pad-up ev-pad-axis ev-pad-added ev-pad-removed ( -- u )
+Controller event types, arriving through `sdl-poll` alongside the keyboard
+ones, for programs that want edges rather than held state — a menu, or a
+"press any button to join" screen. Compare them against `sdl-event-type`:
 
     begin sdl-poll while
         sdl-event-type ev-pad-down = if pad-ev-button . then
     repeat
 
-`pad-ev-which` is the controller's instance id (all pad events), `pad-ev-button`
-the button for `ev-pad-down`/`ev-pad-up`, `pad-ev-axis` and `pad-ev-value` the
-axis and its new position for `ev-pad-axis`. `ev-pad-added` and
-`ev-pad-removed` fire when a controller is plugged in or pulled out; neither
-opens or closes anything by itself, so a game decides what to do about it.
+`ev-pad-down` and `ev-pad-up` are a button pressed and released, `ev-pad-axis`
+a stick or trigger moved. `ev-pad-added` and `ev-pad-removed` fire when a
+controller is plugged in or pulled out; **neither opens or closes anything by
+itself**, so a game decides what to do about it.
+
+## pad-ev-which pad-ev-button pad-ev-axis pad-ev-value ( -- n )
+The details of the event just polled — read them straight after `sdl-poll`,
+before the next one overwrites the buffer. Which one is meaningful depends on
+the event type: `pad-ev-which` is the controller's instance id and is set on
+all pad events; `pad-ev-button` is the button for `ev-pad-down` / `ev-pad-up`;
+`pad-ev-axis` and `pad-ev-value` are the axis and its new position for
+`ev-pad-axis`.
+
+The instance id is SDL's own, not a slot number: it names the device rather
+than the slot you happened to open it in.
 
 ## pad-map ( c-addr u -- )
 Teach SDL a controller it does not recognise. An unknown device opens as a raw

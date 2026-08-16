@@ -29,7 +29,13 @@
 \ have no header, so there is nothing to look up.
 \ See docs/Disassembler.md.
 
+\ --- dep block: what this file needs before any of it exists ---
+\ WANTS, not NEEDS: (d-probe) below re-checks for objdump on every `dis`, so
+\ installing binutils mid-session works without reloading this file. Aborting
+\ the load here would take that away. The two do different jobs -- the probe
+\ makes `dis` recover, this line makes `deps disasm` truthful.
 require shellutil.fs
+wants-cmd objdump         install binutils
 
 \ --- dictionary header navigation ---
 \ Entry layout (docs/Defining_Words.md):
@@ -155,7 +161,11 @@ create (d-od) 64 allot     variable (d-od#)     \ which objdump to run
 : (d-probe) ( -- f )                        \ true when dis is usable
     (d-ready) if true exit then
     (cmd0) s" command -v objdump" (cmd+)
-    (cmd-line1) 0= if ." dis: needs objdump (binutils) on PATH" cr false exit then
+    \ Same wording as needs-cmd, deliberately -- but NOT needs-cmd itself:
+    \ that aborts the load, and this probe is re-run on every dis, so
+    \ installing objdump mid-session works without reloading the file.
+    (cmd-line1) 0= if
+        ." dis: needs the command objdump -- install binutils" cr false exit then
     drop
     (d-find-bin) 0= if
         ." dis: cannot identify the running binary" cr false exit then
@@ -296,11 +306,34 @@ variable (d-in)                             \ inside our symbol's block?
     dup (nt>clen) ?dup if nip (d-dict) else drop (d-prim) then ;
 
 \ --- self-calibration (runs now, at load) ---
-\ Compile two probes and read the compiler's own idiom addresses out of
-\ their first call instructions. If either read fails, its address stays
-\ 0 and the scanner simply never splits (stage-1 whole-range listings).
-:noname 0 ;                                 ( lit-probe-xt )
-:noname s" x" 2drop ;                       ( lit-probe-xt str-probe-xt )
-over c@ $E8 = to (d-x86?)
-swap (d-target1) to (d-lit)
-(d-target1) to (d-sq)
+\ Compile probes and read the compiler's own idiom addresses out of their
+\ first call instructions. If a read fails, its address stays 0 and the
+\ scanner simply never splits (stage-1 whole-range listings).
+\
+\ The LIT probe must be a CONSTANT, not `:noname 0 ;`. Since literals compile
+\ as immediates, a plain number pushes itself with no call and no inline data
+\ -- there is nothing to calibrate from and nothing to split. The call idiom
+\ survives only where the inline cell is STORAGE: a constant, a value, a
+\ CREATE body, a deferred word. Those still carry eight bytes of data that
+\ must not be disassembled as instructions, which is the whole job here.
+\ Probing the wrong shape leaves (d-lit) at 0 and prints a constant's value
+\ as three bogus instructions.
+\
+\ Both probes go through (d-target1), which steps over ARM64's STP prologue:
+\ a constant is built with compile_prolog there, so its body starts with the
+\ prologue and not with the call. On x86 there is no prologue and (d-target1)
+\ skips nothing, so one path serves both -- reading the xt directly worked on
+\ x86 and silently failed on ARM64, which is the kind of asymmetry only the
+\ second architecture ever shows you.
+\ Arch detection also has to come from the STRING probe now: the lit probe no
+\ longer begins with a call on either architecture.
+\ The calibration lives in a colon word because a file's top level runs at
+\ INTERPRET state, where `if` is compile-only: written inline it aborts the
+\ load at that line, silently leaving (d-lit) at 0 -- which looks exactly like
+\ a probe that legitimately found no call.
+0 constant (d-lit-probe)                    \ body: CALL lit + cell + RET
+: (d-calibrate) ( str-probe-xt -- )
+    dup c@ $E8 = to (d-x86?)
+    (d-target1) to (d-sq)
+    ['] (d-lit-probe) (d-target1) to (d-lit) ;
+:noname s" x" 2drop ; (d-calibrate)

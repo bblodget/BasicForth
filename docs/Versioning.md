@@ -47,8 +47,32 @@ breaking changes.
 
 ## Workflow
 
-1. Do the work, commit as usual
-2. Update `CHANGELOG.md` with the new version entry
-3. Commit the changelog update
-4. Tag: `git tag vX.Y.Z`
-5. Push: `git push && git push origin vX.Y.Z`
+Work happens on `staging` (feature branch → `--no-ff` merge → delete branch).
+A release is `staging` arriving on `main`, and **the tag is what makes it a
+release**, since the banner comes from `git describe`.
+
+1. Do the work, commit as usual — feature branches merged into `staging`
+2. Curate `CHANGELOG.md`: date the `## Unreleased` heading as
+   `## vX.Y.Z — YYYY-MM-DD`, and update the `## Status` block in `README.md`
+3. Commit that on `staging` and merge it there
+4. Merge into main, naming the version in the merge message:
+
+       git checkout main
+       git merge --no-ff staging -m 'Merge branch "staging" into main: vX.Y.Z — <tagline>'
+
+5. Tag **that merge commit**, annotated:
+
+       git tag -a vX.Y.Z -m "Release vX.Y.Z"
+
+6. Fast-forward `staging` so the two agree and the next commit is not a fork:
+
+       git checkout staging && git merge --ff-only main
+
+7. Push: `git push && git push origin vX.Y.Z`
+
+Step 4 is the part that is easy to get wrong. Tagging on `staging` would put
+the release on a commit `main` does not contain, so `git describe` on `main`
+would still name the *previous* release — and `main` can be a hundred commits
+behind by the time a minor version is ready. `v0.14.0` and `v0.15.0` are
+lightweight tags and `v0.15.1` onward are annotated; annotated is preferred,
+so a release carries its own message and date.

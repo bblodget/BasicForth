@@ -18,7 +18,7 @@ signal handler catches and recovers from.
   guard_page_underflow   4096 bytes  PROT_NONE
   ──────────────────────────────────────────────
   data_stack_top (sp0)   page-aligned             ← DSP starts here (empty)
-  data_stack             4096 bytes  PROT_READ|PROT_WRITE (512 cells)
+  data_stack             8192 bytes  PROT_READ|PROT_WRITE (1024 cells)
   data_stack_bottom      page-aligned
   ──────────────────────────────────────────────
   guard_page_overflow    4096 bytes  PROT_NONE

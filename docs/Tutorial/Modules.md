@@ -185,13 +185,47 @@ unsaved work, so a typo can't cost you anything.
 
 Your `score.fs` is still on disk. `load score.fs` brings it all back.
 
+## When your program needs a library
+
+Everything so far has been your own words. Most programs lean on a library too,
+and `require` is how you say so:
+
+    require fontcore.fs
+    require fontcore.fs
+
+The first pulls in `fontcore.fs` — and `graphics.fs`, which *it* requires in
+turn. The second does nothing at all: `require` remembers what it has already
+loaded, so every file can name what it needs without anyone tracking who gets
+there first.
+
+That line is captured like a definition, so `save` writes it into your file and
+the program loads its own dependencies next time.
+
+## Ask before you load: `deps`
+
+A file declares its needs at the top, in a **dep block**: the `require` lines,
+plus `needs-lib` for a shared library it cannot run without, or `wants-lib` for
+one it can manage without. `deps` reads that block and checks it against this
+machine — without loading a line of the file:
+
+    deps fontcore
+    deps sdl3
+
+`fontcore` is pure Forth, so it is always fine. `sdl3` needs a real library, so
+what you see there depends on your machine. A `require` reads `loaded`, `found`
+or `MISSING`; a `needs-` reads `ok` or `MISSING`, which stops the load; a
+`wants-` reads `ok` or `missing (optional)`, which does not — the file loads
+with less of it working. A missing line carries the hint its author wrote, like
+which package to install, and the last line is the verdict for the whole file.
+
 ## Where to go next
 
-That's the loop: **save**, `list`, `:e`, `delete`, `reload`. The reference page
-`help modules` covers every word here plus `redo` and `-session`; `see <word>`
-shows any word's source, from the file or from your session.
-`docs/Persistence.md` tells the deeper story — why editing mutates the file in
-place while a plain `:` appends.
+That's the loop: **save**, `list`, `:e`, `delete`, `reload`, and `require` for
+what you did not write. The reference page `help modules` covers every word here
+plus `redo` and `-session`; `help files` covers `require`, `deps` and the
+`needs-`/`wants-` declarations; `see <word>` shows any word's source, from the
+file or from your session. `docs/Persistence.md` tells the deeper story — why
+editing mutates the file in place while a plain `:` appends.
 
     tutorials          \ pick another lesson
 

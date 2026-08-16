@@ -19,8 +19,9 @@
 # R12-R15 are callee-saved in the System V AMD64 ABI,
 # so C functions won't clobber them.
 
-.equ CELL, 8                    # 64-bit cells
-.equ DATA_STACK_SIZE, 4096      # 512 cells
+# Tunable sizes (CELL, DATA_STACK_SIZE, LOCALS_STACK_SIZE) live in one file
+# shared with the ARM64 build, so a size cannot drift between architectures.
+.include "../../config.inc"
 
 # ---------- Dictionary Entry Layout ----------
 # [Link:8] [Flags+Len:1] [Name:N] [.balign 8] [CodePtr:8] [CodeLen:4] [SrcId:2] [Len:2] [Off:4]
@@ -1636,15 +1637,17 @@ err_pfx_conly:    .ascii "compile only: "
 .equ err_pfx_conly_len, . - err_pfx_conly
 msg_def_open: .ascii "definition still open: "
 .equ msg_def_open_len, . - msg_def_open
-msg_unbalanced: .ascii "unresolved control flow\n"
+msg_unbalanced: .ascii "unresolved control flow: "
 .equ msg_unbalanced_len, . - msg_unbalanced
-msg_cf_mismatch: .ascii "mismatched control flow\n"
+msg_is_local: .ascii "is: that name is a local, not a deferred word: "
+.equ msg_is_local_len, . - msg_is_local
+msg_does_locals: .ascii "does> cannot see the defining word's locals: "
+.equ msg_does_locals_len, . - msg_does_locals
+msg_cf_mismatch: .ascii "mismatched control flow: "
 .equ msg_cf_mismatch_len, . - msg_cf_mismatch
 msg_redefined: .ascii "redefined "
 .equ msg_redefined_len, . - msg_redefined
 msg_one_space: .ascii " "
-cf_mismatch_name: .ascii "mismatched-control-flow"
-.equ cf_mismatch_name_len, . - cf_mismatch_name
 sq_unterminated_name: .ascii "unterminated string"
 .equ sq_unterminated_name_len, . - sq_unterminated_name
 msg_undef_defer: .ascii ": uninitialized deferred word\n"
@@ -1701,10 +1704,69 @@ compile_ret:
     inc %r13                       # advance HERE
     ret
 
+# ---------- compile_literal_imm (internal) ----------
+# Compile "push RAX's value" as an IMMEDIATE, with no call and no inline data.
+#
+# THE TWO ARE NOT INTERCHANGEABLE. compile_literal below emits a CALL plus an
+# 8-byte cell, and several features use that cell as PATCHABLE STORAGE at a
+# known offset: >body reads xt+5, TO writes it, DEFER/IS patch the xt inside
+# `CALL lit ; <xt> ; CALL execute`, and a CREATE body is `CALL lit + value +
+# RET`. Those sites must keep calling compile_literal. This one is for the
+# other half -- compiling a number, LITERAL, ['], [char], POSTPONE -- where the
+# value is only ever pushed and nothing ever looks at where it was stored.
+#
+# Why it is worth a second emitter: forth_lit reaches its operand through its
+# own return address and returns PAST it, so every literal mispredicts the
+# return-stack predictor. Measured on a Pi 400, a literal costs 10.6 ns against
+# 1.94 ns for a plain call -- five times a call -- and 1.68 vs 0.80 on x86.
+# Swapping one `dup` for one constant in an ordinary ?do loop made it 50%
+# slower, so this is not a microbenchmark effect.
+#
+#   value fits a signed 32-bit:      sub $8,%r15 ; movq $imm32,(%r15)   11 bytes
+#   otherwise:      mov $imm64,%rax ; sub $8,%r15 ; mov %rax,(%r15)     17 bytes
+#
+# MOVQ sign-extends its imm32 to 64 bits, which is exactly what the narrow path
+# needs and the reason it is correct for negative values too. The narrow form
+# is SMALLER than the 13 bytes the call idiom costs, so the common case gives
+# back space rather than spending it.
+.global compile_literal_imm
+compile_literal_imm:
+    CHECK_DICT 17
+    movslq %eax, %rcx               # sign-extend the low 32 bits
+    cmp %rax, %rcx                  # unchanged? then imm32 represents it exactly
+    jne .Lcli_wide
+    movb $0x49, 0(%r13)             # sub $8, %r15
+    movb $0x83, 1(%r13)
+    movb $0xEF, 2(%r13)
+    movb $0x08, 3(%r13)
+    movb $0x49, 4(%r13)             # movq $imm32, (%r15)   [sign-extended]
+    movb $0xC7, 5(%r13)
+    movb $0x07, 6(%r13)
+    mov %eax, 7(%r13)
+    add $11, %r13
+    ret
+.Lcli_wide:
+    movb $0x48, 0(%r13)             # mov $imm64, %rax
+    movb $0xB8, 1(%r13)
+    mov %rax, 2(%r13)
+    movb $0x49, 10(%r13)            # sub $8, %r15
+    movb $0x83, 11(%r13)
+    movb $0xEF, 12(%r13)
+    movb $0x08, 13(%r13)
+    movb $0x49, 14(%r13)            # mov %rax, (%r15)
+    movb $0x89, 15(%r13)
+    movb $0x07, 16(%r13)
+    add $17, %r13
+    ret
+
 # ---------- compile_literal (internal) ----------
 # Compile a CALL to forth_lit followed by an 8-byte inline value.
 # Value is taken from RAX.  Advances HERE by 13 bytes.
 # Clobbers RCX.
+#
+# Keep using this wherever the inline cell is STORAGE someone later reads or
+# patches (see compile_literal_imm above for the list). For a value that is
+# only pushed, compile_literal_imm is faster and usually smaller.
 .global compile_literal
 compile_literal:
     CHECK_DICT 13
@@ -2087,7 +2149,7 @@ build_header:
     # Gated OFF inside included (cur_source_id != 0): core.fs redefines
     # words on purpose at startup, module reloads replay whole files, and
     # skipping the gate first means file loads never pay for the scan.
-    cmpq $0, cur_source_id(%rip)
+    cmpq $0, in_load(%rip)
     jne .Lbh_build
     cmpq $0, redef_quiet(%rip)      # :e armed a one-shot skip?
     je .Lbh_dowarn
@@ -2266,8 +2328,10 @@ build_header_anon:
     # because the guard refused before touching it.
     #
     # STATE is not the test for which of the two to use (`[` makes it 0 while
-    # a definition is open), which is exactly the trap the tick-not-found site
-    # sidesteps by testing state when IT cannot be inside brackets.
+    # a definition is open). The tick-not-found site was assumed to be exempt
+    # -- "it cannot be inside brackets" -- and that was simply wrong: `: foo
+    # [ ' nosuchword` reaches it with STATE 0 and a definition open. It now
+    # tests F_HIDDEN as well, gated to the outermost interpret_line.
     jmp .Lcf_abort
 
 # ---------- COLON (Forth-level) ----------
@@ -2309,6 +2373,11 @@ forth_semicolon:
     cmp %rax, %r15
     jne .Lsemi_unbalanced
 
+    # Release the frame BEFORE the RET, then forget the names: the list is
+    # per-definition, and a leftover would silently rename words in the next one.
+    call compile_local_release
+    movq $0, locals_count(%rip)
+
     # Compile RET
     call compile_ret
 
@@ -2335,20 +2404,39 @@ forth_semicolon:
     ret
 
 .Lsemi_unbalanced:
-    # Unresolved control flow — roll back the definition
-    lea msg_unbalanced(%rip), %rsi
-    mov $msg_unbalanced_len, %rdx
-    call platform_write
-
-    # Restore stack, LATEST, HERE, STATE
-    mov colon_dsp(%rip), %r15
-    mov saved_latest(%rip), %r12
-    mov saved_here(%rip), %r13
-    call drop_partial_header        # a definition spanning lines leaves one
-    movq $0, state(%rip)
-    movq $0, do_depth(%rip)
-    movq $0, leave_count(%rip)
-    ret
+    # Unresolved control flow. Report through the standard protocol (err_pfx +
+    # err_token) rather than printing here, so a load gets its "file:line:"
+    # prefix -- and that same error return STOPS the load. This label used to
+    # print bare and `ret`, so the file went on loading against a word that
+    # never got defined: one missing THEN reported with no location at all,
+    # then a second, unrelated-looking "? name" wherever it was first used,
+    # dozens of lines away. (Found 2026-08-11 in the Dark Star port: line 167
+    # was the typo, line 213 was the only line number printed.)
+    #
+    # Name the definition, copied OUT of the partial header -- .Lcf_abort drops
+    # that header and HERE moves back over it, so err_token must not point into
+    # reclaimed space. Two guards: F_HIDDEN, because only a header we opened is
+    # ours to name, and a non-zero length, because :NONAME builds a real hidden
+    # header too (type T_NONAME) with an EMPTY name -- without that test an
+    # anonymous definition reported a bare "unresolved control flow: ". Either
+    # way it falls back to whatever the interpreter parsed, which is `;`.
+    # Name bytes start at +10: the flags byte is at +8 and Flags2 at +9.
+    testb $F_HIDDEN, 8(%r12)
+    jz .Lsemi_ub_say
+    movzbl 8(%r12), %ecx
+    and $F_LENMASK, %ecx
+    jz .Lsemi_ub_say                # anonymous -- no name to give
+    mov %rcx, err_token_len(%rip)
+    lea 10(%r12), %rsi
+    lea err_name_buf(%rip), %rdi
+    mov %rdi, err_token_addr(%rip)
+    rep movsb
+.Lsemi_ub_say:
+    lea msg_unbalanced(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_unbalanced_len, err_pfx_len(%rip)
+    jmp .Lcf_abort                  # performs the identical rollback this
+                                    #   label used to open-code
 
 .Lsemi_err:
     # ; reached in interpret mode. The outer interpreter rejects it before
@@ -2387,7 +2475,10 @@ forth_tick:
     cmpq $0, state(%rip)
     je .Ltick_done                  # interpreting -> leave on stack
 
-    # Compiling — pop xt and compile as literal
+    # Compiling — pop xt and compile it. Deliberately the CALL idiom, not an
+    # immediate: `dis` splits that inline cell out and names the xt (\ xt: dup),
+    # which the Machine-Code tutorial teaches. An xt push is never hot enough to
+    # trade that for.
     mov (%r15), %rax
     add $CELL, %r15
     call compile_literal
@@ -2403,9 +2494,26 @@ forth_tick:
     mov CELL(%r15), %rax            # c-addr
     mov %rax, err_token_addr(%rip)
     add $2*CELL, %r15               # drop c-addr u
+    # Abandon the definition if one is open. STATE alone cannot decide -- `[`
+    # interprets INSIDE an open definition -- so also check LATEST's hidden
+    # bit, the same pair the ` ok` suppression and dict_full's rollback use.
+    # Gated on STATE alone, `: foo [ if` left the partial header alive and the
+    # definition-open guard then refused every later `:`, naming the WRONG word
+    # ("definition still open: bar" when it is foo that is open).
     cmpq $0, state(%rip)
     jne .Lcf_abort                  # compiling: abandon the definition
-    jmp .Lcf_longjmp                # interpreting: error, keep the stack
+    testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
+    jz .Lcf_longjmp
+    # ...but only the OUTERMOST interpret_line may abandon it, for the reason
+    # spelled out at .Lil_err_maybe_abort: a nested one returns into a caller
+    # that carries on with the rest of ITS line. This route is `'` failing to
+    # find a name, and it needs the same gate -- without it,
+    # `: foo [ s" ' nosuchword" evaluate ] ;` destroyed foo mid-line.
+    mov il_rsp(%rip), %rax
+    cmpq $0, 8(%rax)                # previous il_rsp: 0 only at the top level
+    jne .Lcf_longjmp
+    jmp .Lcf_abort
+    # (fall-through impossible; both arms jump)
 
 # ---------- INTERPRET-LINE ----------
 # ( -- ) Returns status in RAX: 0=success, 1=error
@@ -2419,7 +2527,17 @@ forth_interpret_line:
     push %rbp
     push %r14
     pushq il_rsp(%rip)              # save previous il_rsp (for nesting)
-    sub $8, %rsp                    # 16-byte alignment (5 pushes + ret addr = 48)
+    # LP at entry, saved in place of what used to be alignment padding (still
+    # 5 pushes + ret addr = 48, still 16-byte aligned).
+    #
+    # NOT lp0 on the error path, which is the trap: interpret_line NESTS. A
+    # compiled word holding locals can call EVALUATE, and an error inside that
+    # evaluation longjmps to the INNER frame -- resetting to lp0 there would
+    # discard the caller's live frame and it would keep running against freed
+    # slots. Restoring to entry is right at any nesting depth, and at the
+    # outermost level entry IS lp0.
+    mov %fs:lp@tpoff, %rax
+    push %rax
     mov %rsp, il_rsp(%rip)          # save RSP for cf_check_tag recovery
 
 .Lil_loop:
@@ -2440,6 +2558,22 @@ forth_interpret_line:
     lea err_pfx_question(%rip), %rax
     mov %rax, err_pfx_addr(%rip)
     movq $err_pfx_question_len, err_pfx_len(%rip)
+
+    # A local in scope beats the dictionary -- that is what "locals shadow"
+    # means, and it has to happen BEFORE find, or `{: i :}` would still get the
+    # DO loop index. Gated on compiling AND a non-empty list, so a definition
+    # that declares no locals pays one compare against zero.
+    cmpq $0, state(%rip)
+    je .Lil_not_local
+    cmpq $0, locals_count(%rip)
+    je .Lil_not_local
+    call locals_lookup              # RAX = index, or -1; args left on the stack
+    cmp $-1, %rax
+    je .Lil_not_local
+    add $2*CELL, %r15               # drop c-addr u
+    call compile_local_fetch
+    jmp .Lil_loop
+.Lil_not_local:
 
     # FIND ( c-addr u -- xt flag | c-addr u 0 )
     call forth_find
@@ -2503,7 +2637,7 @@ forth_interpret_line:
     # Compiling — compile literal
     mov (%r15), %rax                # RAX = number
     add $CELL, %r15                 # pop number
-    call compile_literal            # emit CALL LIT + value at HERE
+    call compile_literal_imm        # push the number; nothing reads it back
     jmp .Lil_loop
 
 .Lil_not_found:
@@ -2518,10 +2652,37 @@ forth_interpret_line:
     add $2*CELL, %r15               # clean up c-addr and u
                                     # wording stays the per-token default, "? "
 
-    # If we were compiling, abort the definition
-    cmpq $0, state(%rip)
-    je .Lil_err_return
+    # If a definition is open, abort it. Not STATE alone: `[` interprets inside
+    # an open definition, and gating on STATE left `: foo [ nosuchword` with a
+    # live partial header, so the next `:` was refused and only `] ;` could
+    # recover -- while the same typo OUTSIDE a bracket abandoned the definition
+    # cleanly. The two now behave the same.
+.Lil_err_maybe_abort:               # shared: every error exit that may have a
+    cmpq $0, state(%rip)            # definition open behind it comes through here
+    jne .Lil_err_abort
+    testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
+    jz .Lil_err_return
+    # On THIS route -- STATE 0 with a definition open, which is what the test
+    # above newly reaches -- only the OUTERMOST interpret_line may abandon it.
+    # The STATE != 0 arm above deliberately keeps its pre-existing behaviour and
+    # is NOT gated: a nested error while compiling still rolls back to the global
+    # anchor and can take an outer definition with it. That is a real bug, filed
+    # in TODO.md beside the swallowed-EVALUATE one, and not this change's to fix
+    # -- skipping the abort there would leave a hidden header and STATE set,
+    # which wedges the session harder than the bug being avoided.
+    # Returning an error ends the LINE only at the top level; a nested one --
+    # EVALUATE, or a load -- returns into a caller that carries on with the rest
+    # of its own line. Dropping the header there left the outer line compiling
+    # into a definition that no longer existed, and its `;` operating on whatever
+    # LATEST had become. il_rsp is saved and restored around each nesting level,
+    # so the previous value being zero IS "outermost"; it is derived rather than
+    # counted because the longjmp path unwinds without running an epilogue.
+    mov il_rsp(%rip), %rax
+    cmpq $0, 8(%rax)                # previous il_rsp: 0 only at the top level
+    jne .Lil_err_return
+.Lil_err_abort:
     movq $0, state(%rip)            # reset to interpret mode
+    movq $0, locals_count(%rip)     # ...and the names it declared
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
     mov saved_latest(%rip), %r12    # restore LATEST
     mov saved_here(%rip), %r13      # restore HERE
@@ -2531,7 +2692,8 @@ forth_interpret_line:
 
 .Lil_err_return:
     mov $1, %eax                    # return 1 = error
-    add $8, %rsp                    # drop alignment padding
+    pop %rcx                        # LP at entry -- this is an error exit like
+    mov %rcx, %fs:lp@tpoff          #   .Lcf_longjmp, and needs the same release
     popq il_rsp(%rip)               # restore previous il_rsp
     pop %r14
     pop %rbp
@@ -2542,7 +2704,11 @@ forth_interpret_line:
     # End of line — drop 0 0 from PARSE-WORD
     add $2*CELL, %r15
     xor %eax, %eax                  # return 0 = success
-    add $8, %rsp                    # drop alignment padding
+    # Discard the saved LP without applying it. A balanced line has already
+    # left LP where it found it; restoring here anyway would REPAIR a leaked
+    # frame instead of letting it show, and a silently repaired leak is the one
+    # thing the locals tests cannot catch.
+    add $8, %rsp
     popq il_rsp(%rip)               # restore previous il_rsp
     pop %r14
     pop %rbp
@@ -2558,7 +2724,11 @@ forth_interpret_line:
     lea err_pfx_conly(%rip), %rax   # report as "compile only: <token>"
     mov %rax, err_pfx_addr(%rip)
     movq $err_pfx_conly_len, err_pfx_len(%rip)
-    jmp .Lil_err_return             # err_token was saved before FIND
+    jmp .Lil_err_maybe_abort        # err_token was saved before FIND. Not
+                                    # .Lil_err_return: this path skipped the
+                                    # abort decision entirely, so `: foo [ if`
+                                    # left the definition open where the same
+                                    # mistake without the bracket did not.
 
 # ---------- PAREN (comment word, IMMEDIATE) ----------
 # ( "ccc)" -- )
@@ -2662,6 +2832,14 @@ forth_included:
     push %rbp
     push %r14
     push %r8                        # for line_start scratch
+    pushq in_load(%rip)             # "a file is loading" -- saved/restored like
+    pushq $0                        #   the source context, so nesting works.
+                                    #   PAIRED with a pad: the line loop below
+                                    #   counts its own alignment from here ("3
+                                    #   pushes + an 8-byte pad"), so an odd
+                                    #   number of entry pushes silently flips
+                                    #   what that padding achieves.
+    movq $1, in_load(%rip)
     pushq cur_source_id(%rip)       # save source context (restored in .Lincl_pop_regs)
     pushq cur_line_off(%rip)        #   so nested includes don't clobber the parent's
     pushq incl_entry_latest(%rip)   # and what was open before this load began,
@@ -2873,6 +3051,8 @@ forth_included:
     popq incl_entry_latest(%rip)
     popq cur_line_off(%rip)         # restore source context saved at entry
     popq cur_source_id(%rip)
+    add $8, %rsp                    # the pad pushed with in_load at entry
+    popq in_load(%rip)
     pop %r8
     pop %r14
     pop %rbp
@@ -3138,14 +3318,23 @@ incl_err_open:   .ascii "Error: cannot open "
 # Input: RAX = expected tag.  On mismatch, aborts compilation and
 # jumps directly to repl_loop (does not return to caller).
 cf_check_tag:
+    # Nothing pushed since `:` means no construct is open -- a closer with no
+    # opener. Bound the read by colon_dsp the way ENDCASE does, or we read off
+    # the top of the compile-time stack and the guard-page fault reports a
+    # stack underflow, naming the data stack for what is a compile error.
+    cmp colon_dsp(%rip), %r15
+    jae .Lcf_mismatch
     cmp (%r15), %rax
     jne .Lcf_mismatch
     ret
 .Lcf_mismatch:
-    # Set error token for control-flow mismatch
-    lea cf_mismatch_name(%rip), %rax
-    mov %rax, err_token_addr(%rip)
-    movq $cf_mismatch_name_len, err_token_len(%rip)
+    # The offending token is already in err_token: forth_interpret_line stores
+    # every word there before FIND. So name the closer the user actually typed
+    # ("then") and supply our own wording, rather than the default "? ", which
+    # is the undefined-word marker and reads as if `then` did not exist.
+    lea msg_cf_mismatch(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_cf_mismatch_len, err_pfx_len(%rip)
     # Fall through to abort
 .Lcf_abort:
     # Abort compilation — restore state and longjmp.
@@ -3155,6 +3344,7 @@ cf_check_tag:
     mov saved_here(%rip), %r13      # restore HERE
     call drop_partial_header        # a definition spanning lines leaves one
     movq $0, state(%rip)            # interpret mode
+    movq $0, locals_count(%rip)     # ...and the names it declared
     movq $0, do_depth(%rip)         # reset DO nesting
     movq $0, leave_count(%rip)      # reset leave chain
 .Lcf_longjmp:
@@ -3178,7 +3368,8 @@ cf_check_tag:
     # Longjmp back to forth_interpret_line's error return
     mov il_rsp(%rip), %rsp          # unwind to interpret_line's frame
     mov $1, %eax                    # return error
-    add $8, %rsp                    # drop alignment padding
+    pop %rcx                        # LP at this interpret_line's entry
+    mov %rcx, %fs:lp@tpoff          #   -- release every frame opened since
     popq il_rsp(%rip)               # restore previous il_rsp (nesting)
     pop %r14                        # restore callee-saved registers
     pop %rbp
@@ -3267,10 +3458,11 @@ forth_again:
 # Compile conditional forward branch (exit test). Like IF inside a loop.
 .global forth_while
 forth_while:
-    # Verify BEGIN's tag is below (peek, don't consume)
+    # Verify BEGIN's tag is below (peek, don't consume). cf_check_tag never
+    # consumes either, so call it rather than inlining the compare -- inlining
+    # is how WHILE alone kept reporting a stack underflow with no BEGIN open.
     mov $CF_DEST, %rax
-    cmp (%r15), %rax
-    jne .Lcf_mismatch
+    call cf_check_tag
     call compile_0branch            # RAX = while-patch
     sub $2*CELL, %r15
     mov %rax, CELL(%r15)            # push while-patch
@@ -3519,6 +3711,38 @@ forth_to:
 .Ltois_body:
     push %rbx
     call forth_parse_word           # ( -- c-addr u )
+
+    # A local in scope beats a VALUE of the same name, exactly as it does when
+    # read -- `to x` must not store into a global x that the local is shadowing.
+    # `is` is excluded: it targets deferred words, and a local is not one.
+    cmpq $0, state(%rip)
+    je .Lto_not_local
+    cmpq $0, locals_count(%rip)
+    je .Lto_not_local
+    call locals_lookup              # RAX = index, or -1; args left on the stack
+    cmp $-1, %rax
+    je .Lto_not_local
+    # It IS a local. `is` targets deferred words and a local is not one -- but
+    # falling through would find the SHADOWED global and write that instead,
+    # silently, which is the same shape of bug as does> reading a dead frame.
+    cmpq $0, tois_mode(%rip)
+    jne .Lto_is_local
+    add $2*CELL, %r15               # drop the name
+    call compile_local_store
+    pop %rbx
+    ret
+.Lto_is_local:
+    mov (%r15), %rax
+    mov %rax, err_token_len(%rip)
+    mov CELL(%r15), %rax
+    mov %rax, err_token_addr(%rip)
+    add $2*CELL, %r15
+    lea msg_is_local(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_is_local_len, err_pfx_len(%rip)
+    jmp .Lcf_abort
+.Lto_not_local:
+
     # Stash the name for the type-error message (find consumes it)
     mov CELL(%r15), %rax
     mov %rax, tois_name(%rip)
@@ -3563,7 +3787,7 @@ forth_to:
 .Lto_compile:
     # Compile mode: compile LITERAL(addr) + CALL(forth_store)
     mov %rbx, %rax                  # addr of inline value
-    call compile_literal            # compile addr as literal
+    call compile_literal_imm        # compile addr as an immediate
     lea forth_store(%rip), %rax
     call compile_call               # compile call to !
     pop %rbx
@@ -4150,6 +4374,35 @@ forth_chdir:
     movq $-36, (%r15)               # -ENAMETOOLONG
     ret
 
+# (exec?) ( c-addr u -- flag )  true if the path names a file this process can
+# execute. Backs NEEDS-CMD's PATH walk, which asks this once per PATH element
+# and wants a plain yes/no: every failure (absent, not executable, a directory,
+# a dangling symlink) means the same thing to a search — keep looking. A path
+# too long for the buffer answers false for the same reason; there is nothing
+# runnable at a name we cannot even form.
+.global forth_exec_q
+forth_exec_q:
+    mov (%r15), %rdx                # u (length)
+    mov CELL(%r15), %rsi            # c-addr
+    add $CELL, %r15                 # pop u; TOS slot ← flag
+    cmp $ABS_PATH_MAX, %rdx
+    jae .Lexecq_no                  # no room for path + NUL
+    lea access_buf(%rip), %rdi
+    push %rdi                       # save buffer start across the copy
+    mov %rdx, %rcx
+    cld
+    rep movsb                       # RDI advances to the end
+    movb $0, (%rdi)                 # NUL-terminate
+    pop %rdi                        # RDI = buffer start
+    call platform_exec_q            # RAX = 0 if executable
+    test %rax, %rax
+    jnz .Lexecq_no
+    movq $-1, (%r15)                # true
+    ret
+.Lexecq_no:
+    movq $0, (%r15)                 # false
+    ret
+
 # (startup-dir) ( -- c-addr u )  absolute directory BasicForth was launched in
 # (u = 0 if getcwd failed at boot). Backs bare `cd` and session.fs pinning.
 .global forth_startup_dir
@@ -4264,8 +4517,8 @@ forth_getenv:
 
 # entropy ( -- x ior )  one 64-bit value from the kernel's CSPRNG. ior is 0 on
 # success; non-zero means x is meaningless, not that x is a bad number. The
-# failure value cannot be folded into x: 0 is a legal random value and is also
-# exactly the seed that stops xorshift dead, so the two must stay separate.
+# failure value cannot be folded into x: 0 is a legal random value, so a caller
+# could not tell "unlucky" from "broken".
 .global forth_entropy
 forth_entropy:
     call platform_random            # RAX = value, RDX = ior
@@ -4658,6 +4911,17 @@ forth_does_runtime:
 # the does-body. ; will close the does-body with its own RET.
 .global forth_does
 forth_does:
+    # A does> body runs when the CREATED word is executed -- long after the
+    # defining word returned and its frame was popped. A local referenced there
+    # reads a dead slot: `: mk {: v :} create v , does> @ v + ;` did not crash,
+    # it returned a WRONG NUMBER, which is worse. Refuse at compile time.
+    cmpq $0, locals_count(%rip)
+    je .Ldoes_ok
+    lea msg_does_locals(%rip), %rax
+    mov %rax, err_pfx_addr(%rip)
+    movq $msg_does_locals_len, err_pfx_len(%rip)
+    jmp .Lcf_abort
+.Ldoes_ok:
     # Compile CALL forth_does_runtime
     lea forth_does_runtime(%rip), %rax
     call compile_call
@@ -4675,6 +4939,17 @@ forth_base:
     sub $CELL, %r15
     mov %fs:0, %rax                 # thread pointer (TCB self-pointer)
     lea base@tpoff(%rax), %rax      # this thread's own BASE cell
+    mov %rax, (%r15)
+    ret
+
+# SEED ( -- a-addr )  Push the address of THIS thread's RNG state.
+# An address, not a value, so `42 seed !` and `seed @` read exactly as they did
+# when this was a Forth `variable` -- the cell simply moved into TLS.
+.global forth_seed
+forth_seed:
+    sub $CELL, %r15
+    mov %fs:0, %rax                 # thread pointer (TCB self-pointer)
+    lea seed@tpoff(%rax), %rax      # this thread's own seed cell
     mov %rax, (%r15)
     ret
 
@@ -4750,6 +5025,506 @@ forth_source:
 #   [56] source_id      [64] to_in          [72] source_len
 #   [80] source_addr    [88] saved DSP      [96] CATCH's return address
 
+# The compile-time locals table's shape. LOCALS_MAX 16 comfortably exceeds the
+# 8 that Forth 2012 requires a system to accept; LOCAL_NAME_MAX matches the
+# dictionary's own F_LENMASK, so a name that fits a definition fits a local.
+.equ LOCALS_MAX,      16
+.equ LOCAL_NAME_MAX,  31
+.equ LOCAL_ENTRY,     32            # 1 length byte + 31 name bytes
+
+# The templates the locals emitters copy. Written as real instructions so the
+# assembler and linker fill in the TLS offset; the emitters copy the bytes.
+# Hand-encoding these would be guessing at a number that is not ours to compute.
+lp_load_tmpl:
+    mov %fs:lp@tpoff, %rax
+.equ LP_LOAD_LEN, . - lp_load_tmpl
+
+lp_store_tmpl:
+    mov %rax, %fs:lp@tpoff
+.equ LP_STORE_LEN, . - lp_store_tmpl
+
+# ---------- Locals frame primitives ----------
+# Stage 1 of the locals work: the runtime substrate, with no syntax on top.
+# These are the words the unwind tests drive directly; the compiler will emit
+# the same operations inline (see docs/Locals.md -- a local reference that
+# costs a create/does>-class call would make locals SLOWER than the stack
+# juggling they replace, so the compiled form must open-code, not call these).
+#
+# The frame is n cells at LP, first-declared local at offset 0. Teardown is a
+# fixed add, because n is known at compile time -- so no per-frame size field
+# and no saved-LP cell. That is what makes a definition WITHOUT locals cost
+# exactly nothing.
+
+# (lframe) ( x1 .. xn n -- )  Push a frame of n cells; x1 becomes local 0.
+.global forth_lframe
+forth_lframe:
+    mov (%r15), %rcx                # n
+    add $CELL, %r15
+    test %rcx, %rcx
+    jz .Llframe_done                # a zero-cell frame is a no-op, not a fault
+    mov %fs:lp@tpoff, %rdx
+    lea (,%rcx,CELL), %rax
+    sub %rax, %rdx                  # LP -= n cells
+    mov %rdx, %fs:lp@tpoff
+    # x1 is DEEPEST on the data stack ((n-1)*CELL above DSP) and must land at
+    # offset 0, so the copy runs backwards: source j from the top maps to
+    # local (n-1-j).
+    xor %eax, %eax                  # j = 0
+.Llframe_copy:
+    mov (%r15,%rax,CELL), %rsi      # x(n-j)
+    mov %rcx, %rdi
+    sub %rax, %rdi
+    dec %rdi                        # n-1-j
+    mov %rsi, (%rdx,%rdi,CELL)
+    inc %rax
+    cmp %rcx, %rax
+    jb .Llframe_copy
+    lea (,%rcx,CELL), %rax
+    add %rax, %r15                  # drop x1..xn
+.Llframe_done:
+    ret
+
+# (lunframe) ( n -- )  Pop a frame of n cells.
+.global forth_lunframe
+forth_lunframe:
+    mov (%r15), %rax                # n
+    add $CELL, %r15
+    shl $3, %rax                    # n cells
+    add %fs:lp@tpoff, %rax
+    mov %rax, %fs:lp@tpoff
+    ret
+
+# (l@) ( i -- x )  Fetch local i of the current frame.
+.global forth_local_fetch
+forth_local_fetch:
+    mov (%r15), %rax
+    mov %fs:lp@tpoff, %rdx
+    mov (%rdx,%rax,CELL), %rax
+    mov %rax, (%r15)
+    ret
+
+# (l!) ( x i -- )  Store to local i of the current frame. Locals are
+# assignable; this is what `to <local>` will compile to.
+.global forth_local_store
+forth_local_store:
+    mov (%r15), %rax                # i
+    mov CELL(%r15), %rcx            # x
+    mov %fs:lp@tpoff, %rdx
+    mov %rcx, (%rdx,%rax,CELL)
+    add $2*CELL, %r15
+    ret
+
+# (lp@) ( -- a )  Current locals pointer.
+.global forth_lp_fetch
+forth_lp_fetch:
+    sub $CELL, %r15
+    mov %fs:lp@tpoff, %rax
+    mov %rax, (%r15)
+    ret
+
+# (lp0@) ( -- a )  This thread's empty mark. `(lp@) (lp0@) =` is the assertion
+# every unwind test makes.
+.global forth_lp0_fetch
+forth_lp0_fetch:
+    sub $CELL, %r15
+    mov %fs:lp0@tpoff, %rax
+    mov %rax, (%r15)
+    ret
+
+# (lstack-size) ( -- n )  Bytes per locals stack. threads.fs reads this rather
+# than keeping its own copy, so the worker stacks cannot drift from the REPL's.
+.global forth_lstack_size
+forth_lstack_size:
+    sub $CELL, %r15
+    movq $LOCALS_STACK_SIZE, (%r15)
+    ret
+
+# ---------- Locals: compile-time name list ----------
+# Set by `{:` and read by the outer interpreter, which must resolve a local
+# BEFORE consulting the dictionary. That is why this lives here and not in
+# core.fs -- name resolution IS the outer interpreter.
+#
+# This is per-DEFINITION compile-time state, distinct from the runtime LP, and
+# it needs its own reset on every path that abandons a definition. Miss that
+# and the NEXT definition inherits stale names -- which would compile, and be
+# wrong, which is worse than a crash.
+
+# locals_lookup — is this name a local in scope?
+# Input:  ( c-addr u ) on the data stack, NOT consumed.
+# Output: RAX = index, or -1 if no match. Clobbers RCX, RDX, RSI, RDI, R8-R11.
+locals_lookup:
+    mov (%r15), %rcx                # u
+    cmp $LOCAL_NAME_MAX, %rcx
+    ja .Lll_miss                    # too long to be one of ours
+    mov CELL(%r15), %rsi            # c-addr
+    xor %r8, %r8                    # index
+.Lll_entry:
+    cmp locals_count(%rip), %r8
+    jae .Lll_miss
+    mov %r8, %rax
+    shl $5, %rax                    # index * LOCAL_ENTRY
+    lea locals_names(%rip), %rdi
+    add %rax, %rdi                  # RDI = entry
+    movzbq (%rdi), %rdx             # stored length
+    cmp %rcx, %rdx
+    jne .Lll_next
+    inc %rdi                        # name bytes
+    xor %r9, %r9
+.Lll_char:
+    cmp %rcx, %r9
+    jae .Lll_hit                    # all bytes matched
+    movzbl (%rsi,%r9), %eax
+    movzbl (%rdi,%r9), %r10d
+    # Case-insensitive, like the dictionary: fold both to lower.
+    cmp $'A', %al
+    jb 1f
+    cmp $'Z', %al
+    ja 1f
+    add $32, %al
+1:  cmp $'A', %r10b
+    jb 2f
+    cmp $'Z', %r10b
+    ja 2f
+    add $32, %r10b
+2:  cmp %r10b, %al
+    jne .Lll_next
+    inc %r9
+    jmp .Lll_char
+.Lll_next:
+    inc %r8
+    jmp .Lll_entry
+.Lll_hit:
+    mov %r8, %rax
+    ret
+.Lll_miss:
+    mov $-1, %rax
+    ret
+
+# compile_local_fetch — emit an OPEN-CODED read of local RAX.
+#
+# 23 bytes, no call, no dispatch. This is the decision the whole feature rests
+# on (docs/Locals.md): a reference that cost a create/does>-class call would
+# make locals SLOWER than the stack juggling they replace, and no correctness
+# test would ever notice.
+#
+# The first 9 bytes are COPIED from lp_load_tmpl rather than hand-encoded,
+# because `mov %fs:lp@tpoff, %rax` carries a TLS relocation whose value is
+# fixed at link time. Letting the assembler emit it once and copying the bytes
+# gets the relocation right by construction; hand-encoding it would be
+# guessing at a number that is not ours to compute. The remaining 14 bytes
+# have no relocations, so they are emitted directly, as compile_loop_inline
+# already does for DO/LOOP.
+compile_local_fetch:
+    CHECK_DICT 23
+    push %rbx
+    mov %rax, %rbx                  # RBX = index (survives the copy)
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13                  # HERE advanced by the copy
+    movb $0x48, 0(%r13)             # mov disp32(%rax), %rax
+    movb $0x8B, 1(%r13)
+    movb $0x80, 2(%r13)
+    shl $3, %rbx                    # index * CELL
+    mov %ebx, 3(%r13)
+    movb $0x49, 7(%r13)             # sub $8, %r15
+    movb $0x83, 8(%r13)
+    movb $0xEF, 9(%r13)
+    movb $0x08, 10(%r13)
+    movb $0x49, 11(%r13)            # mov %rax, (%r15)
+    movb $0x89, 12(%r13)
+    movb $0x07, 13(%r13)
+    add $14, %r13
+    pop %rbx
+    ret
+
+# compile_local_store — emit an OPEN-CODED write to local RAX.
+#
+# 23 bytes, the mirror of compile_local_fetch, and open-coded for the same
+# reason: `to x` inside a loop is as hot as reading x. Same template trick for
+# the one instruction carrying a TLS relocation.
+compile_local_store:
+    CHECK_DICT 23
+    push %rbx
+    mov %rax, %rbx                  # RBX = index (survives the copy)
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x49, 0(%r13)             # mov (%r15), %rdx      -- the value
+    movb $0x8B, 1(%r13)
+    movb $0x17, 2(%r13)
+    movb $0x49, 3(%r13)             # add $8, %r15          -- consume it
+    movb $0x83, 4(%r13)
+    movb $0xC7, 5(%r13)
+    movb $0x08, 6(%r13)
+    movb $0x48, 7(%r13)             # mov %rdx, disp32(%rax)
+    movb $0x89, 8(%r13)
+    movb $0x90, 9(%r13)
+    shl $3, %rbx                    # index * CELL
+    mov %ebx, 10(%r13)
+    add $14, %r13
+    pop %rbx
+    ret
+
+# (lframe,) ( nargs ntotal -- )  Emit an OPEN-CODED frame build.
+#
+# This used to compile `n (lframe)` -- a LITERAL and a call. The count is known
+# HERE, at compile time, so pushing it at run time paid the engine's most
+# expensive dispatch for a number we already had: forth_lit finds its operand
+# through its own return address and returns past it, so every literal
+# mispredicts the return-stack predictor. Measured on a Pi 400 (2026-08-15):
+# 10.6 ns per literal, and a frame of 1 cost the same 28 ns as a frame of 3 --
+# that flatness was the tell that the fixed part, not the copying, dominated.
+# Each uninitialised val cost a further literal to push its zero.
+#
+# Emitted, for nargs arguments and ntotal-nargs vals:
+#
+#   mov %fs:lp@tpoff, %rax              template (carries the TLS relocation)
+#   sub $ntotal*CELL, %rax
+#   mov %rax, %fs:lp@tpoff              template
+#   mov (nargs-1-j)*CELL(%r15), %rdx  ] per argument j -- x1 is DEEPEST on the
+#   mov %rdx, j*CELL(%rax)            ] data stack and must land in slot 0
+#   movq $0, k*CELL(%rax)               per val slot k: zeroed, not left dirty
+#   add $nargs*CELL, %r15               drop the arguments
+#
+# Every slot offset fits a disp8 (LOCALS_MAX is 16, so the largest is 120),
+# which is why there is no size-dependent encoding path here to get wrong.
+# A zero-cell frame emits NOTHING, matching (lframe)'s own no-op case.
+.global forth_lframe_comma
+forth_lframe_comma:
+    mov (%r15), %rax                # ntotal
+    mov CELL(%r15), %rsi            # nargs -- RSI survives CHECK_DICT
+    add $2*CELL, %r15
+    test %rax, %rax
+    jz .Llfc_done                   # no locals: emit nothing at all
+    # Worst case, derived rather than counted by hand: an argument pair and a
+    # val store are both 8 bytes here, so the mix does not matter -- but the
+    # ARM64 mirror of this line was 8 bytes short from exactly that kind of
+    # hand arithmetic, so both are now expressions.
+    CHECK_DICT (LP_LOAD_LEN + 6 + LP_STORE_LEN + LOCALS_MAX * 8 + 7)
+    push %rbx
+    push %rbp
+    mov %rax, %rbx                  # RBX = ntotal
+    mov %rsi, %rbp                  # RBP = nargs
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x48, 0(%r13)             # sub $ntotal*CELL, %rax
+    movb $0x2D, 1(%r13)
+    mov %rbx, %rax
+    shl $3, %rax
+    mov %eax, 2(%r13)
+    add $6, %r13
+    lea lp_store_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_STORE_LEN, %rcx
+    cld
+    rep movsb                       # mov %rax, %fs:lp@tpoff
+    mov %rdi, %r13
+    xor %ecx, %ecx                  # j = 0
+.Llfc_args:
+    cmp %rbp, %rcx
+    jae .Llfc_vals
+    movb $0x49, 0(%r13)             # mov (nargs-1-j)*CELL(%r15), %rdx
+    movb $0x8B, 1(%r13)
+    movb $0x57, 2(%r13)
+    mov %rbp, %rax
+    sub %rcx, %rax
+    dec %rax
+    shl $3, %rax
+    movb %al, 3(%r13)
+    movb $0x48, 4(%r13)             # mov %rdx, j*CELL(%rax)
+    movb $0x89, 5(%r13)
+    movb $0x50, 6(%r13)
+    mov %rcx, %rax
+    shl $3, %rax
+    movb %al, 7(%r13)
+    add $8, %r13
+    inc %rcx
+    jmp .Llfc_args
+.Llfc_vals:
+    mov %rbp, %rcx                  # k = nargs
+.Llfc_valloop:
+    cmp %rbx, %rcx
+    jae .Llfc_dsp
+    movb $0x48, 0(%r13)             # movq $0, k*CELL(%rax)
+    movb $0xC7, 1(%r13)
+    movb $0x40, 2(%r13)
+    mov %rcx, %rax
+    shl $3, %rax
+    movb %al, 3(%r13)
+    movl $0, 4(%r13)
+    add $8, %r13
+    inc %rcx
+    jmp .Llfc_valloop
+.Llfc_dsp:
+    test %rbp, %rbp
+    jz .Llfc_pop                    # `{: | a b :}` consumes nothing
+    movb $0x49, 0(%r13)             # add $nargs*CELL, %r15
+    movb $0x81, 1(%r13)
+    movb $0xC7, 2(%r13)
+    mov %rbp, %rax
+    shl $3, %rax
+    mov %eax, 3(%r13)
+    add $7, %r13
+.Llfc_pop:
+    pop %rbp
+    pop %rbx
+.Llfc_done:
+    ret
+
+# compile_local_release — emit an OPEN-CODED frame release if this definition
+# has locals. Open-coded for the same reason as the build: the call was never
+# the cost, the LITERAL in front of it was. Emits nothing at all when no locals
+# were declared, which is what keeps an ordinary definition byte-for-byte
+# unchanged. Runs at `;` and at every `exit`.
+compile_local_release:
+    mov locals_count(%rip), %rax
+    test %rax, %rax
+    jz .Lclr_none
+    CHECK_DICT 24
+    push %rbx
+    mov %rax, %rbx                  # RBX = n
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x48, 0(%r13)             # add $n*CELL, %rax
+    movb $0x05, 1(%r13)
+    mov %rbx, %rax
+    shl $3, %rax
+    mov %eax, 2(%r13)
+    add $6, %r13
+    lea lp_store_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_STORE_LEN, %rcx
+    cld
+    rep movsb                       # mov %rax, %fs:lp@tpoff
+    mov %rdi, %r13
+    pop %rbx
+.Lclr_none:
+    ret
+
+# (loc-add) ( c-addr u -- flag )  Record a local name. False if the table is
+# full or the name is too long; `{:` reports, so no message here.
+.global forth_loc_add
+forth_loc_add:
+    mov (%r15), %rcx                # u
+    mov CELL(%r15), %rsi            # c-addr
+    add $2*CELL, %r15
+    test %rcx, %rcx
+    jz .Lla_no
+    cmp $LOCAL_NAME_MAX, %rcx
+    ja .Lla_no
+    mov locals_count(%rip), %rax
+    cmp $LOCALS_MAX, %rax
+    jae .Lla_no
+    mov %rax, %rdx
+    shl $5, %rdx
+    lea locals_names(%rip), %rdi
+    add %rdx, %rdi
+    mov %cl, (%rdi)                 # length byte
+    inc %rdi
+    push %rcx
+    cld
+    rep movsb
+    pop %rcx
+    incq locals_count(%rip)
+    sub $CELL, %r15
+    movq $-1, (%r15)
+    ret
+.Lla_no:
+    sub $CELL, %r15
+    movq $0, (%r15)
+    ret
+
+# (cf-open?) ( -- flag )  Is a control-flow construct open right now?
+# True when anything has been pushed on the compile-time stack since `:`.
+#
+# `{:` uses this to refuse a declaration inside `if`/`begin`/`do`. The frame is
+# built where `{:` appears but released unconditionally at `;`, so a `{:` in a
+# branch that a call does not take releases a frame that call never built --
+# LP drifted 8 bytes per call, toward the guard page, silently. Inside a loop
+# it is the opposite: a frame per iteration, released once.
+.global forth_cf_open
+forth_cf_open:
+    xor %edx, %edx                  # assume nothing open
+    mov colon_dsp(%rip), %rax
+    cmp %rax, %r15                  # compare BEFORE pushing: our own push would
+    jae .Lcfo_done                  #   otherwise look like an open construct
+    mov $-1, %rdx
+.Lcfo_done:
+    sub $CELL, %r15
+    mov %rdx, (%r15)
+    ret
+
+# (loading?) ( -- flag )  Is a file being loaded right now?
+#
+# in_load, a flag the loader sets. Three plausible alternatives are all wrong:
+# source-id answers 0 inside an included file as well as at the prompt (see
+# docs/TODO.md); (ldg-n) is pushed by the FORTH `included` wrapper only, so a
+# script named on the command line bypasses it; and cur_source_id is SEE
+# metadata from a 64-entry table, so src_register answers 0 once it is full and
+# the 65th file would load with the flag clear. `redefined` gates on the same
+# flag -- one notion of "loading", not three approximations.
+.global forth_loading
+forth_loading:
+    sub $CELL, %r15
+    movq $0, (%r15)
+    cmpq $0, in_load(%rip)
+    je .Lloading_done
+    movq $-1, (%r15)
+.Lloading_done:
+    ret
+
+# (loc-count) ( -- n )  How many locals the current definition declared.
+.global forth_loc_count
+forth_loc_count:
+    sub $CELL, %r15
+    mov locals_count(%rip), %rax
+    mov %rax, (%r15)
+    ret
+
+# (loc-clear) ( -- )  Forget them. `;` calls this, and so does every path that
+# abandons a definition.
+.global forth_loc_clear
+forth_loc_clear:
+    movq $0, locals_count(%rip)
+    ret
+
+# (loc-max) ( -- n )  The table's capacity, so `{:` can report a real limit.
+.global forth_loc_max
+forth_loc_max:
+    sub $CELL, %r15
+    movq $LOCALS_MAX, (%r15)
+    ret
+
+# (dstack-size) ( -- n )  Bytes of data stack, per thread. threads.fs sizes a
+# worker's from this same constant the REPL's .bss stack uses.
+.global forth_dstack_size
+forth_dstack_size:
+    sub $CELL, %r15
+    movq $DATA_STACK_SIZE, (%r15)
+    ret
+
+# (thread-rsize) ( -- n )  Bytes of return stack per worker. Both exist so that
+# threads.fs states no size of its own -- every tunable is in src/config.inc.
+.global forth_thread_rsize
+forth_thread_rsize:
+    sub $CELL, %r15
+    movq $THREAD_RSTACK_SIZE, (%r15)
+    ret
+
 # ---------- Thread trampoline ----------
 # pthread_create starts a thread as a C function on a C stack, with none of the
 # Forth machine state: no DSP, no data stack, no return-stack convention. Hand
@@ -4785,9 +5560,51 @@ forth_thread_tramp:
                                     #   registers are all spoken for
     mov %rsp, %fs:thread_csp@tpoff  # our way back, kept out of the worker's
                                     #   reach (see thread_csp in the TLS block)
+
+    # Seed this worker's RNG, BEFORE the stacks are switched below -- this is
+    # the last point at which we are still on the C stack glibc gave us, and
+    # so the last point where the SysV alignment guarantee holds. Seeding after
+    # the switch would call on the worker's RETURN stack, whose alignment comes
+    # from ctx.rtop: an allocation-derived address this code does not control.
+    #
+    # It must happen somewhere, rather than in the .tdata image, because that
+    # image is a constant: every worker would otherwise start from the same
+    # number and replay the same sequence -- independent streams that are
+    # identical, which is harder to notice than the shared cell it replaces.
+    # One getrandom next to an mmap, a pthread_create and three mprotects.
+    #
+    # ctx rides in RBX: callee-saved, already spilled above, and not an engine
+    # register (those are R15/R13/R12). No scratch register survives a call,
+    # and RDI is clobbered by platform_random itself.
+    mov %rdi, %rbx
+    sub $8, %rsp                    # SysV wants RSP 16-byte aligned AT the
+                                    #   call. Entry leaves it 8 mod 16 (the
+                                    #   caller's return address) and six 8-byte
+                                    #   pushes preserve that, so pad by 8.
+    call platform_random            # RAX = value, RDX = ior (0 = ok)
+    add $8, %rsp
+    test %rdx, %rdx
+    jz .Ltramp_seed
+    # No kernel entropy (early boot, or no getrandom). Fall back to something
+    # PER-THREAD -- a constant here would rebuild the bug this code exists to
+    # fix. The context block is a separate allocation per worker, so its
+    # address differs; scramble it so nearby blocks don't give nearby seeds.
+    mov %rbx, %rax
+    movabs $0x9E3779B97F4A7C15, %rdx
+    xor %rdx, %rax
+.Ltramp_seed:
+    mov %rax, %fs:seed@tpoff        # any value will do: splitmix64 has no bad
+                                    #   state, 0 included
+    mov %rbx, %rdi                  # ctx back where the rest of this expects it
+
     mov 8(%rdi), %r15               # DSP = this thread's own data stack
     mov %r15, %fs:sp0@tpoff         # so depth/.s measure against OUR stack
     mov 16(%rdi), %rsp              # return stack = this thread's own
+    mov 56(%rdi), %rax              # ctx.locals-top (the spare cell in the 64
+    mov %rax, %fs:lp@tpoff          #   byte context block, see threads.fs)
+    mov %rax, %fs:lp0@tpoff         # a worker's empty mark is its OWN, so an
+                                    #   unwind here cannot reset LP onto the
+                                    #   REPL thread's stack
 
     # Run the xt through CATCH, not by calling it: an uncaught THROW in a
     # worker would otherwise reset to the REPL, which is meaningless off the
@@ -4857,6 +5674,12 @@ forth_catch:
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # pop it (saved DSP excludes the xt)
     push %r15                       # frame: data-stack pointer
+    # Frame: locals pointer. The one place a saved LP is unavoidable -- every
+    # other release is a compile-time add of a known frame size, but THROW
+    # unwinds past an arbitrary number of frames at once and cannot know how
+    # many. RDX, not RAX: RAX holds the xt until the `call *%rax` below.
+    mov %fs:lp@tpoff, %rdx
+    push %rdx
     # The snapshot below is the interpreter's input source and error context --
     # process-wide globals. A worker never interprets (it runs compiled words
     # only), so it has nothing to save, and restoring its snapshot on THROW
@@ -4883,7 +5706,8 @@ forth_catch:
     mov %rsp, %fs:handler@tpoff
     call *%rax
     popq %fs:handler@tpoff              # normal return: unlink the frame,
-    add $11*CELL, %rsp              #   discard the snapshot (globals are live)
+    add $12*CELL, %rsp              #   discard the snapshot (globals are live)
+                                    #   -- 12 since the frame gained saved LP
     sub $CELL, %r15
     movq $0, (%r15)                 # report success
     ret
@@ -4919,6 +5743,8 @@ forth_throw:
 .Lthrow_no_source:
     add $10*CELL, %rsp
 .Lthrow_dsp:
+    pop %rcx                        # restore LP saved by CATCH: releases every
+    mov %rcx, %fs:lp@tpoff          #   frame opened inside the caught word
     pop %r15                        # restore DSP saved by CATCH
     sub $CELL, %r15
     mov %rax, (%r15)                # push n
@@ -4941,8 +5767,13 @@ forth_throw:
 .Lthrow_reset:
     mov %fs:sp0@tpoff, %r15             # reset data stack
     mov rp0(%rip), %rsp             # reset return stack
+    mov %fs:lp0@tpoff, %rax         # reset locals stack -- the return stack
+    mov %rax, %fs:lp@tpoff          #   unwinds itself, this one does not
     call drop_partial_header        # an uncaught throw abandons any open def
     movq $0, state(%rip)            # reset compile state
+    movq $0, locals_count(%rip)     # ...and the names it declared
+    movq $0, in_load(%rip)          # ...and the loader's frame went with it, so
+                                    #   its saved flag will never be restored
     movq $0, %fs:handler@tpoff          # no live frames on a reset stack
     jmp repl_loop
 
@@ -4964,6 +5795,7 @@ forth_abort:
 # Safe because only `:`/`:noname` set F_HIDDEN and only `;` clears it, so
 # hidden ⇒ incomplete. Call this ONLY on abort paths: during a live `[ ... ]`
 # inside a definition, STATE is 0 and the header is legitimately still hidden.
+.global drop_partial_header
 drop_partial_header:
     testb $F_HIDDEN, 8(%r12)
     jz .Ldph_done
@@ -4976,8 +5808,12 @@ drop_partial_header:
 .global forth_quit
 forth_quit:
     mov rp0(%rip), %rsp             # reset return stack
+    mov %fs:lp0@tpoff, %rax         # and the locals stack with it
+    mov %rax, %fs:lp@tpoff
     call drop_partial_header        # ABORT/THROW abandons any open definition
     movq $0, state(%rip)            # reset compile state
+    movq $0, locals_count(%rip)     # ...and the names it declared
+    movq $0, in_load(%rip)          # ...and any abandoned loader frame
     movq $0, %fs:handler@tpoff          # frames died with the return stack
     jmp repl_loop
 
@@ -5014,12 +5850,13 @@ forth_right_bracket:
     ret
 
 # LITERAL ( x -- )  Compile a literal at compile time.  IMMEDIATE+COMPILE_ONLY.
-# Takes x from data stack and compiles CALL LIT + x into the current definition.
+# Takes x from the data stack and compiles an immediate push into the current
+# definition -- no call, no inline cell (see compile_literal_imm).
 .global forth_literal
 forth_literal:
     mov (%r15), %rax
     add $CELL, %r15
-    call compile_literal
+    call compile_literal_imm
     ret
 
 # ['] ( "<spaces>name" -- )  Compile xt as literal.  IMMEDIATE+COMPILE_ONLY.
@@ -5034,7 +5871,7 @@ forth_bracket_tick:
     add $CELL, %r15                 # drop flag
     mov (%r15), %rax                # xt
     add $CELL, %r15                 # drop xt
-    call compile_literal            # compile xt as literal
+    call compile_literal            # xt: keep the annotated form (see ')
     ret
 .Lbt_not_found:
     add $3*CELL, %r15               # drop flag, u, c-addr
@@ -5056,14 +5893,15 @@ forth_bracket_char:
 .Lbc_zero:
     xor %eax, %eax
 .Lbc_compile:
-    call compile_literal            # compile char as literal (value in EAX)
+    call compile_literal_imm        # compile char as an immediate
     ret
 
 # EXIT ( -- )  Compile a return instruction.  IMMEDIATE+COMPILE_ONLY.
 .global forth_exit
 forth_exit:
-    call compile_ret
-    ret
+    call compile_local_release      # an early exit leaves through the same door
+    call compile_ret                #   -- but the names stay in scope, since
+    ret                             #   the definition is still being compiled
 
 # COMPILE, ( xt -- )  Compile a call to xt into the current definition.
 .global forth_compile_comma
@@ -5096,7 +5934,7 @@ forth_postpone:
     je .Lpostpone_immediate
 
     # Non-immediate: compile LITERAL(xt) + CALL(forth_compile_comma)
-    call compile_literal            # compile xt as literal
+    call compile_literal            # xt: keep the annotated form (see ')
     lea forth_compile_comma(%rip), %rax
     call compile_call               # compile call to forth_compile_comma
     pop %rbx
@@ -5624,7 +6462,8 @@ DEFWORD dict_um_divmod,  "um/mod",     forth_um_divmod,   dict_m_star
 DEFWORD dict_sm_rem,     "sm/rem",     forth_sm_rem,      dict_um_divmod
 DEFWORD dict_fm_mod,     "fm/mod",     forth_fm_mod,      dict_sm_rem
 DEFWORD dict_base,       "base",       forth_base,        dict_fm_mod
-DEFWORD dict_pad,        "pad",        forth_pad,         dict_base
+DEFWORD dict_seed,       "seed",       forth_seed,        dict_base
+DEFWORD dict_pad,        "pad",        forth_pad,         dict_seed
 DEFWORD dict_hld,        "hld",        forth_hld,         dict_pad
 DEFWORD dict_lshift,     "lshift",     forth_lshift,      dict_hld
 DEFWORD dict_rshift,     "rshift",     forth_rshift,      dict_lshift
@@ -5702,7 +6541,8 @@ DEFWORD dict_defer,       "defer",        forth_defer,       dict_version_str
 DEFWORD dict_is,          "is",           forth_is,          dict_defer,     F_IMMEDIATE
 DEFWORD dict_assign_query,"(assign?)",    forth_assign_query, dict_is
 DEFWORD dict_chdir,       "chdir",        forth_chdir,       dict_assign_query
-DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_chdir
+DEFWORD dict_exec_q,      "(exec?)",      forth_exec_q,      dict_chdir
+DEFWORD dict_startup_dir, "(startup-dir)", forth_startup_dir, dict_exec_q
 DEFWORD dict_cwd,         "(cwd)",        forth_cwd,         dict_startup_dir
 DEFWORD dict_home_dir,    "(home-dir)",   forth_home_dir,    dict_cwd
 DEFWORD dict_wfetch,      "w@",           forth_wfetch,      dict_home_dir
@@ -5730,7 +6570,23 @@ DEFWORD dict_catch,       "catch",        forth_catch,       dict_inc_opened
 DEFWORD dict_acq_fetch,   "(acq@)",       forth_acq_fetch,   dict_catch
 DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
 DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
-DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_tramp
+DEFWORD dict_lframe,      "(lframe)",     forth_lframe,      dict_thr_tramp
+DEFWORD dict_lunframe,    "(lunframe)",   forth_lunframe,    dict_lframe
+DEFWORD dict_lframe_comma, "(lframe,)",   forth_lframe_comma, dict_lunframe
+DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lframe_comma
+DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
+DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
+DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
+DEFWORD dict_lstack_size, "(lstack-size)", forth_lstack_size, dict_lp0_fetch
+DEFWORD dict_loading,     "(loading?)",   forth_loading,     dict_lstack_size
+DEFWORD dict_cf_open,     "(cf-open?)",   forth_cf_open,     dict_loading
+DEFWORD dict_loc_add,     "(loc-add)",    forth_loc_add,     dict_cf_open
+DEFWORD dict_loc_count,   "(loc-count)",  forth_loc_count,   dict_loc_add
+DEFWORD dict_loc_clear,   "(loc-clear)",  forth_loc_clear,   dict_loc_count
+DEFWORD dict_loc_max,     "(loc-max)",    forth_loc_max,     dict_loc_clear
+DEFWORD dict_dstack_size, "(dstack-size)", forth_dstack_size, dict_loc_max
+DEFWORD dict_thr_rsize,   "(thread-rsize)", forth_thread_rsize, dict_dstack_size
+DEFWORD dict_throw,       "throw",        forth_throw,       dict_thr_rsize
 .global dict_include
 .global dict_hook_store
 .global dict_find_meta
@@ -5772,6 +6628,12 @@ incl_path_buf:
 chdir_buf:
     .space ABS_PATH_MAX
 
+# NUL-terminated scratch path for (exec?). Its own buffer, not chdir's: a PATH
+# walk probes many candidates and must not disturb an unrelated pending path.
+.align 8
+access_buf:
+    .space ABS_PATH_MAX
+
 # Static buffer for (cwd)/pwd getcwd results.
 .align 8
 cwd_buf:
@@ -5809,6 +6671,36 @@ data_stack_bottom:
 data_stack_top:
 .global guard_page_underflow
 guard_page_underflow:
+    .space 4096
+
+# Compile-time locals list. Per DEFINITION, not per thread: only the REPL
+# thread compiles (see the rule in threads.fs), so this is not TLS.
+.global locals_count
+locals_count:
+    .space 8
+.global locals_names
+locals_names:
+    .space LOCALS_MAX * LOCAL_ENTRY
+
+# ---------- Locals Stack Memory ----------
+# Same shape as the data stack above, and fenced the same way, so overflowing a
+# locals frame is a reported error rather than a silent walk into whatever
+# follows. Only frame setup and teardown touch it: a definition that declares
+# no locals never moves LP.
+#
+# This is the REPL thread's. Each worker gets its own from the block threads.fs
+# allocates, because LP is per-thread (see the .tdata block).
+.balign 4096
+.global lguard_page_overflow
+lguard_page_overflow:
+    .space 4096
+.global locals_stack_bottom
+locals_stack_bottom:
+    .space LOCALS_STACK_SIZE
+.global locals_stack_top
+locals_stack_top:
+.global lguard_page_underflow
+lguard_page_underflow:
     .space 4096
 
 # ---------- Dictionary Space ----------
@@ -5849,12 +6741,42 @@ is_repl:                            # 1 on the REPL thread, 0 in a worker. The
 thread_ctx:                         # This worker's context block (0 on the REPL
     .quad 0                         #   thread). Holds ctx across the Forth call,
                                     #   where no scratch register survives.
+.global lp
+lp:                                 # Locals pointer: the current frame's first
+    .quad 0                         #   local. Grows down, like the data stack.
+                                    #   In TLS rather than a register: both
+                                    #   arches have a freed register on paper
+                                    #   (R14 / X20) but both are in live scratch
+                                    #   use, and reclaiming one is its own job.
+.global lp0
+lp0:                                # This thread's empty-locals-stack mark. The
+    .quad 0                         #   unwind contract is "every path that
+                                    #   reaches repl_loop with a reset return
+                                    #   stack resets LP to this".
 .global thread_csp
 thread_csp:                         # The C stack pointer to return on. Kept in
     .quad 0                         #   TLS, NOT in the context block: the
                                     #   worker's data stack grows down toward
                                     #   its context, so an overflow there would
                                     #   otherwise rewrite our way back to glibc.
+.global seed
+seed:                               # splitmix64 state for THIS thread. Shared,
+    .quad 0                         #   it was both wrong and slow: two threads
+                                    #   read-modify-write one cell, so they draw
+                                    #   from one interleaved stream (measured:
+                                    #   1707 of 2000 values common to both) and
+                                    #   lose updates, and the contended line ran
+                                    #   4 threads 4x slower than 1.
+                                    #
+                                    #   The image below is a CONSTANT, so a
+                                    #   worker starting from it would replay the
+                                    #   REPL's sequence exactly -- independent
+                                    #   but identical, which looks correct and
+                                    #   is not. The trampoline therefore seeds
+                                    #   every worker; 0 here means "nobody has
+                                    #   seeded me yet", which only the REPL
+                                    #   thread ever sees, and core.fs's
+                                    #   (reseed) fixes that before first use.
 
 # ---------- Variables ----------
 .data
@@ -5914,6 +6836,15 @@ err_pfx_len:
 .global il_rsp
 il_rsp:                             # RSP at interpret_line entry (for cf longjmp)
     .quad 0
+.global in_load
+in_load:                            # 1 while forth_included is running a file.
+    .space 8                        #   NOT cur_source_id: that is SEE metadata
+                                    #   from a 64-entry table, and src_register
+                                    #   answers 0 once the table is full -- so a
+                                    #   65th file would load with the flag clear
+                                    #   and every load-time warning would fire.
+err_name_buf:                       # A name copied out of a header that is
+    .space 32                       #   about to be reclaimed (F_LENMASK = 31)
 .global err_token_addr
 err_token_addr:                     # Address of last error token (set by interpret_line)
     .quad 0

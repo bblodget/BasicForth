@@ -92,19 +92,79 @@ CONFIG = {
     "Snake":   {"env": DUMMY},
 }
 
+# "needs the library" is here because a dep block ABORTS the load and then says
+# so in words that none of the other patterns match: examples/bounce.fs and
+# examples/gamepad.fs both reported PASS on ARM64 having run nothing at all.
+# The libSDL3 skip below is checked BEFORE this scan, so the qemu case still
+# skips; what this catches is any OTHER library a dep block declares missing.
 ERROR_RE = re.compile(
     r"(^\? \S)|(stack underflow)|(stack overflow)|(\berror\b)|(cannot )"
-    r"|(not found)|(uninitialized)|(out of memory)",
+    r"|(not found)|(uninitialized)|(out of memory)|(needs the library)",
     re.IGNORECASE | re.MULTILINE)
 
 # The graphics lessons need libSDL3 on the host. Under QEMU there is no aarch64
 # libSDL3 in the -L sysroot, so those lessons SKIP rather than fail — the same
 # rule test_integration.sh applies to its SDL section. Detected from the
-# failure itself (the FFI's own message) rather than a hardcoded lesson list,
-# so a lesson that starts using SDL is covered without touching this file.
-NO_SDL = "dlopen: cannot load library"
+# failure itself rather than a hardcoded lesson list, so a lesson that starts
+# using SDL is covered without touching this file.
+#
+# TWO messages mean "libSDL3 is not here", and a file may print either: the
+# FFI's own dlopen failure, and the dep block's needs-lib, which intercepts that
+# dlopen before it can speak (sdl3.fs and sound.fs, d4c17c4).
+#
+# It must name the library exactly. This gate EXCUSES a failure, so a loose
+# match hides a missing dependency behind "needs libSDL3", and a lesson that
+# broke for some other reason reports as skipped.
+#
+# The soname is therefore READ from the file that declares it, never spelled
+# again here. Written by hand it needed three corrections and was still wrong:
+# "libSDL3" prefix-matches libSDL3_mixer.so.0, and "libSDL3\.so" matches inside
+# libSDL3.software.so.0. A literal lifted from the declaration cannot
+# prefix-match, cannot drift when the soname is bumped, and needs no fourth
+# guess about what a library might be called.
+#
+# The sentinel had already been dead for some time: 1854c32 changed dlopen's
+# message from "cannot load library" to "cannot load <soname>", so the literal
+# it matched no longer existed and these lessons had been FAILING on ARM64
+# rather than skipping.
+
+
+def sdl_soname():
+    """The soname sdl3.fs declares, so this file never guesses at one."""
+    src = open(os.path.join(LIB, "sdl3.fs"), encoding="utf-8").read()
+    m = re.search(r"^needs-lib\s+(\S+)", src, re.MULTILINE)
+    if not m:
+        # Loudly, not silently: without a soname the SDL lessons stop skipping
+        # and report as failures under QEMU, which reads as a broken lesson.
+        sys.exit("test_lessons.py: sdl3.fs has no `needs-lib <soname>` line, so "
+                 "the libSDL3 skip cannot be derived. Fix this file to match "
+                 "however sdl3.fs now declares its library.")
+    return m.group(1)
+
+
+SDL_SONAME = sdl_soname()
+# The regex CAPTURES the library name; the comparison is then string equality.
+# A pattern that tries to be exact by construction has to anticipate every
+# character a soname may end with — three attempts here each let a different
+# name through (libSDL3_mixer.so.0, libSDL3.software.so.0). A soname has no
+# spaces, so \S+ takes exactly the name the message printed, and == settles it.
+NO_SDL_MSG = re.compile(r"(?:dlopen: cannot load|needs the library) (\S+)")
+
+
+def missing_sdl(out):
+    """True only if a library failure names EXACTLY the soname sdl3.fs wants."""
+    return any(m.group(1) == SDL_SONAME for m in NO_SDL_MSG.finditer(out))
+# Compared as a FIELD, not a substring: ldconfig prints "<soname> (flags) =>
+# <path>", and the path repeats the name with the full version on it, so a grep
+# for libSDL3.so.0 also matches a host that has only libSDL3.so.0.900.0. This
+# direction fails safe (a wrongly-good host skips nothing and fails loudly), but
+# the cost of being exact is one awk, and then neither gate needs an argument
+# about which way it errs.
 SDL_OK = (not any("qemu" in c for c in CMD)) and subprocess.run(
-    "ldconfig -p 2>/dev/null | grep -q libSDL3", shell=True).returncode == 0
+    ["sh", "-c",
+     'ldconfig -p 2>/dev/null | awk -v n="$1" \'$1 == n { f = 1 } END { exit !f }\'',
+     "sh", SDL_SONAME]
+).returncode == 0
 
 passed = failed = skipped = 0
 
@@ -182,7 +242,7 @@ def lesson(md):
         rc, out = run(lines, cfg.get("env", {}), tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if not SDL_OK and NO_SDL in out:
+    if not SDL_OK and missing_sdl(out):
         skip(name, "needs libSDL3")
         return
     hits = unexpected(out, expect)
@@ -219,7 +279,7 @@ def example(fs):
                            input="bye\n", env=env, cwd=tmp,
                            capture_output=True, text=True, timeout=TIMEOUT)
         out = p.stdout + p.stderr
-        if not SDL_OK and NO_SDL in out:
+        if not SDL_OK and missing_sdl(out):
             skip("examples/%s" % fs, "needs libSDL3")
             return
         hits = unexpected(out, [])

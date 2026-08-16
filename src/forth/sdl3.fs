@@ -3,14 +3,14 @@
 \ SPDX-License-Identifier: GPL-2.0-only
 \
 \ Presents the graphics.fs software 2D surface in a desktop window (or on the
-\ raw console via SDL's KMSDRM driver), vsync'd. Pulls in its own
-\ dependencies -- just:
+\ raw console via SDL's KMSDRM driver). Pulls in its own dependencies -- just:
 \
 \   require sdl3.fs
 \
 \ A frame goes:  sdl-frame  (lock texture, point the surface at its pixels)
 \                ... draw with graphics.fs words ...
-\                sdl-show   (unlock + present; vsync paces the loop)
+\                sdl-show   (unlock + present; a TIMER paces the loop, not
+\                            vsync -- see sdl-fps below for why)
 \
 \ The texture is streaming/write-only: after sdl-show its contents are gone,
 \ so draw every frame from scratch (clear + draw). Events are polled:
@@ -19,8 +19,13 @@
 \ Constants and struct offsets verified against the SDL3 headers by
 \ tools/sdl3off.c (SDL 3.4.12).
 
+\ --- dep block: what this file needs before any of it exists ---
+\ SDL3 is not packaged on Debian/Ubuntu yet, so "install libsdl3" is not the
+\ advice — hence the pointer to the page that has the cmake recipe. The probe
+\ keeps its handle for (sdl-bind) below, so declaring it costs no extra dlopen.
 require ffi.fs
 require graphics.fs
+needs-lib libSDL3.so.0    see help install
 
 \ --- library ---
 \ The strings live in one binding word that runs at include time (bottom of
@@ -66,10 +71,10 @@ require graphics.fs
 (sdl-bind)
 
 \ --- constants (see tools/sdl3off.c) ---
-$20       constant SDL_INIT_VIDEO
-$16161804 constant XRGB8888          \ SDL_PIXELFORMAT_XRGB8888
-1         constant TEX_STREAMING     \ SDL_TEXTUREACCESS_STREAMING
-0         constant SCALE_NEAREST     \ SDL_SCALEMODE_NEAREST (crisp pixels)
+$20       constant (SDL_INIT_VIDEO)
+$16161804 constant (XRGB8888)          \ SDL_PIXELFORMAT_XRGB8888
+1         constant (TEX_STREAMING)     \ SDL_TEXTUREACCESS_STREAMING
+0         constant (SCALE_NEAREST)     \ SDL_SCALEMODE_NEAREST (crisp pixels)
 
 $100 constant ev-quit                \ SDL_EVENT_QUIT
 $210 constant ev-close               \ SDL_EVENT_WINDOW_CLOSE_REQUESTED
@@ -91,7 +96,7 @@ $40000052 constant key-up
 $40000051 constant key-down
 
 \ --- state ---
-0 value sdl-win    0 value sdl-ren    0 value sdl-tex
+0 value (sdl-win)    0 value (sdl-ren)    0 value (sdl-tex)
 0 value sdl-width  0 value sdl-height
 
 \ Pixel size: set BEFORE sdl-open. The drawing surface stays w x h (logical
@@ -142,7 +147,7 @@ s" BasicForth" 2dup (z-title) swap cmove   \ default title...
     (title-max) 1- min                       ( c-addr u )   \ leave room for the NUL
     dup >r  (z-title) swap cmove             ( )    \ R: u
     0  (z-title) r> +  c!                    \ NUL-terminate at the copied length
-    sdl-win ?dup if                          \ a window is up: retitle it now
+    (sdl-win) ?dup if                          \ a window is up: retitle it now
         (z-title) 2 (SDL_SetWindowTitle) (ccall) drop
     then ;
 
@@ -153,36 +158,36 @@ s" BasicForth" 2dup (z-title) swap cmove   \ default title...
     \ doesn't pump events, so the WM would pop "not responding" dialogs at a
     \ perfectly healthy prompt. Must be set before the window is created.
     (z-wm-ping) (z-off) 2 (SDL_SetHint) (ccall) drop
-    SDL_INIT_VIDEO 1 (SDL_Init) (ccall) (c-bool) 0= if sdl-error then
+    (SDL_INIT_VIDEO) 1 (SDL_Init) (ccall) (c-bool) 0= if sdl-error then
     (z-title)  sdl-width sdl-scale *  sdl-height sdl-scale *  0
-    4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then  to sdl-win
-    sdl-win 0  2 (SDL_CreateRenderer) (ccall)
-    dup 0= if sdl-error then  to sdl-ren
+    4 (SDL_CreateWindow) (ccall)  dup 0= if sdl-error then  to (sdl-win)
+    (sdl-win) 0  2 (SDL_CreateRenderer) (ccall)
+    dup 0= if sdl-error then  to (sdl-ren)
     \ vsync OFF: sdl-show paces with a timer instead (see sdl-fps). Under a
     \ compositor vsync blocks the present hard; the compositor vsyncs the final
     \ output anyway, so nothing tears.
-    sdl-ren 0  2 (SDL_SetRenderVSync) (ccall) drop
+    (sdl-ren) 0  2 (SDL_SetRenderVSync) (ccall) drop
     0 (frame-last) !
-    sdl-ren XRGB8888 TEX_STREAMING sdl-width sdl-height
-    5 (SDL_CreateTexture) (ccall)  dup 0= if sdl-error then  to sdl-tex
+    (sdl-ren) (XRGB8888) (TEX_STREAMING) sdl-width sdl-height
+    5 (SDL_CreateTexture) (ccall)  dup 0= if sdl-error then  to (sdl-tex)
     \ default texture filtering is linear (blurry when scaled up)
-    sdl-tex SCALE_NEAREST 2 (SDL_SetTextureScaleMode) (ccall) drop ;
+    (sdl-tex) (SCALE_NEAREST) 2 (SDL_SetTextureScaleMode) (ccall) drop ;
 
 : sdl-close ( -- )
-    sdl-tex ?dup if 1 (SDL_DestroyTexture)  (ccall) drop  0 to sdl-tex then
-    sdl-ren ?dup if 1 (SDL_DestroyRenderer) (ccall) drop  0 to sdl-ren then
-    sdl-win ?dup if 1 (SDL_DestroyWindow)   (ccall) drop  0 to sdl-win then
+    (sdl-tex) ?dup if 1 (SDL_DestroyTexture)  (ccall) drop  0 to (sdl-tex) then
+    (sdl-ren) ?dup if 1 (SDL_DestroyRenderer) (ccall) drop  0 to (sdl-ren) then
+    (sdl-win) ?dup if 1 (SDL_DestroyWindow)   (ccall) drop  0 to (sdl-win) then
     \ Quit only what sdl-open started. SDL_Quit() ends EVERY subsystem, so
     \ closing a window would also tear down the audio device sound.fs opened
     \ -- leaving sound.fs's channel streams pointing at freed memory, which
     \ its `(snd-stream) 0=` guard cannot detect, so the next tone writes
     \ into one.
-    SDL_INIT_VIDEO 1 (SDL_QuitSubSystem) (ccall) drop
+    (SDL_INIT_VIDEO) 1 (SDL_QuitSubSystem) (ccall) drop
     0 0 0 0 set-surface ;
 
 \ --- frame cycle ---
 : sdl-frame ( -- )
-    sdl-tex 0 (sdl-px) (sdl-pitch)
+    (sdl-tex) 0 (sdl-px) (sdl-pitch)
     4 (SDL_LockTexture) (ccall) (c-bool) 0= if sdl-error then
     (sdl-px) @  sdl-width sdl-height  (sdl-pitch) l@  set-surface ;
 
@@ -202,9 +207,9 @@ s" BasicForth" 2dup (z-title) swap cmove   \ default title...
     \ moves OS events into SDL's queue without consuming them — sdl-poll
     \ still sees everything. A pure draw loop needs no event code at all.
     0 (SDL_PumpEvents) (ccall) drop
-    sdl-tex 1 (SDL_UnlockTexture) (ccall) drop
-    sdl-ren sdl-tex 0 0  4 (SDL_RenderTexture) (ccall) drop
-    sdl-ren 1 (SDL_RenderPresent) (ccall) drop
+    (sdl-tex) 1 (SDL_UnlockTexture) (ccall) drop
+    (sdl-ren) (sdl-tex) 0 0  4 (SDL_RenderTexture) (ccall) drop
+    (sdl-ren) 1 (SDL_RenderPresent) (ccall) drop
     (frame-pace)
     0 0 0 0 set-surface ;   \ pixels invalid until the next sdl-frame
 

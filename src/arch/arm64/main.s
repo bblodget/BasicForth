@@ -23,7 +23,10 @@
 
 .global _start
 
-.equ CELL, 8
+// Tunable sizes, shared with core.s and the x86-64 build. CELL comes from
+// here rather than being redefined per file -- three copies of the one value
+// this file exists to keep single is exactly the drift it prevents.
+.include "../../config.inc"
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          // buffer for the absolute startup directory
 .equ F_HIDDEN, 0x40                 // header flags2 bit; must match core.s
@@ -172,6 +175,11 @@ _start:
     TLS_ADDR X9, is_repl
     MOV X10, #1
     STR X10, [X9]                   // this is the REPL thread; workers get 0
+    ADR X10, locals_stack_top       // LP = lp0 (no frames)
+    TLS_ADDR X9, lp
+    STR X10, [X9]
+    TLS_ADDR X9, lp0
+    STR X10, [X9]
     ADR X21, dict_space             // HERE
     ADR X22, dict_throw             // LATEST (head of the built-in dictionary chain)
 
@@ -565,22 +573,52 @@ dict_full:
     MOV X1, #msg_dict_full_len
     BL platform_write
 
-    // Reset return stack and data stack
+    // Reset return stack, data stack and locals stack
     ADR X9, rp0
     LDR X9, [X9]
     MOV SP, X9
     TLS_ADDR X9, sp0
     LDR X19, [X9]
+    TLS_ADDR X9, lp0
+    LDR X10, [X9]
+    TLS_ADDR X9, lp
+    STR X10, [X9]
+    // UNCONDITIONAL, above the STATE test below: we are going to repl_loop
+    // either way, and neither of these is tied to being mid-definition.
+    // in_load is not about compiling at all, and `[` makes STATE 0 *inside* an
+    // open definition, so gating either on STATE skips exactly the cases that
+    // need them.
+    ADR X9, locals_count
+    STR XZR, [X9]                   // the names die with the definition
+    ADR X9, in_load
+    STR XZR, [X9]                   // and any abandoned loader frame
 
-    // If we were compiling, abort the definition
+    // Roll back an open definition. STATE alone cannot decide -- `[` interprets
+    // INSIDE an open definition -- so also check LATEST's hidden bit, the same
+    // pair the ` ok` suppression uses. Gating on STATE alone left the partial
+    // header alive when the dictionary ran out inside `[ ... ]`, and the
+    // definition-open guard then refused every LATER definition: the session
+    // was wedged, with nothing on screen to explain it.
     ADR X9, state
     LDR X10, [X9]
-    CBZ X10, repl_loop
+    CBNZ X10, .Ldf_rollback
+    LDRB W10, [X22, #8]                 // definition open but interpreting?
+    TST W10, #F_HIDDEN
+    B.EQ repl_loop
+.Ldf_rollback:
     STR XZR, [X9]
     ADR X9, saved_latest
     LDR X22, [X9]
     ADR X9, saved_here
     LDR X21, [X9]
+    // Drop the partial header the anchor may still point AT (core.s's
+    // DROP_PARTIAL_HEADER macro, hand-written: it is not visible here).
+    LDRB W9, [X22, #8]
+    TST W9, #F_HIDDEN
+    B.EQ .Ldf_done
+    MOV X21, X22
+    LDR X22, [X22]
+.Ldf_done:
 
     B repl_loop
 

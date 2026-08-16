@@ -19,6 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 
+# core.fs runs the editor as ${VISUAL:-${EDITOR:-vi}}, so VISUAL OUTRANKS the
+# EDITOR each edit/define test sets for itself. Inherited from the developer's
+# environment it wins every time, the real editor opens, waits for a human, and
+# 18 tests fail with output no one would connect to their shell profile.
+# Clearing it is enough: ${VISUAL:-...} treats empty as unset.
+unset VISUAL
+
+# Every "is this library installed" gate below asks ldconfig, which lives in
+# /sbin -- on root's PATH, but not on every developer's. That failure is
+# SILENT and reads as good news: `! ldconfig -p | grep -q libSDL3` is TRUE when
+# the command is missing, so the SDL, sound and speech sections all SKIP and
+# the run still ends "0 failed". Resolve it once, by absolute path when the
+# bare name is not found, so a green run means the tests actually ran.
+LDCONFIG="$(command -v ldconfig || echo /sbin/ldconfig)"
+
 # Colors
 GREEN="\033[32m"
 RED="\033[31m"
@@ -43,6 +58,51 @@ SLOW_THRESHOLD_MS=100
 run_forth() {
     printf '%s\n' "$1" | BASICFORTH_PATH="$FORTH_LIB" timeout 2 $FORTH 2>&1
 }
+
+# Smoke check: does the binary run at all?
+#
+# Every assertion below compares captured output against an expectation, so a
+# binary that dies on startup produces ~1000 failures that all read
+# "Expected: 7  ok / Got:" and never say why. That is a genuinely bad first
+# experience -- it looks exactly like core.fs not being found, which sends you
+# off to check BASICFORTH_PATH and setup.sh. It cost real time when the ARM64
+# I-cache bug made basicforth die with SIGILL before printing a byte.
+#
+# One trivial run first, and a specific message for each way it can fail.
+smoke_out=$(printf 'bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+smoke_status=$?
+if [ $smoke_status -ne 0 ] || [ -z "$smoke_out" ]; then
+    printf "${RED}FATAL${NC}  %s does not run; the suite would report every test as a\n" "$FORTH"
+    printf "       failure without saying why, so it is not being run.\n\n"
+    if [ $smoke_status -gt 128 ]; then
+        sig=$((smoke_status - 128))
+        printf "       Killed by signal %d (%s).\n" "$sig" "$(kill -l $sig 2>/dev/null || echo unknown)"
+        printf "       A binary that dies before printing anything is usually built\n"
+        printf "       for another architecture, or hitting an instruction this CPU\n"
+        printf "       does not implement.\n"
+    elif [ $smoke_status -eq 124 ]; then
+        printf "       Timed out after 10s without exiting on 'bye'.\n"
+    elif [ -z "$smoke_out" ]; then
+        printf "       Exited %d and printed nothing.\n" "$smoke_status"
+    else
+        printf "       Exited %d. Output was:\n" "$smoke_status"
+        printf '%s\n' "$smoke_out" | sed 's/^/         /'
+    fi
+    exit 1
+fi
+
+# The binary starts, but without core.fs only the built-in primitives exist, so
+# most assertions will fail. That is a library-path problem, not a broken
+# binary -- and the two look identical once you are staring at a wall of
+# failures. Say which one it is up front. Not fatal: `3 4 + .` genuinely works
+# in this state, so the run is still informative.
+case "$smoke_out" in
+    *"core.fs not found"*)
+        printf "${YELLOW}WARNING${NC}  the binary reports \"core.fs not found\", so only built-in\n"
+        printf "         primitives are available and most tests below will fail.\n"
+        printf "         This is a library path problem, not a broken binary.\n"
+        printf "         BASICFORTH_PATH is set to %s\n\n" "$FORTH_LIB" ;;
+esac
 
 # elapsed_ms: compute milliseconds between two %s.%N timestamps
 elapsed_ms() {
@@ -124,6 +184,30 @@ assert_result() {
         printf "    Input:    %s\n" "$input"
         printf "    Expected: %s\n" "$expected"
         printf "    Got:      %s\n" "$(echo "$output" | head -5)"
+        ((failed++))
+    fi
+}
+
+# assert_absent: the output must NOT contain the substring. Same echo-stripping
+# as assert_result, which is the point of having it: run_forth captures the
+# ECHOED INPUT too, so a hand-rolled `[[ "$out" != *x* ]]` can be defeated by
+# the very text it is checking for appearing in the command that produced it.
+assert_absent() {
+    local name="$1"
+    local input="$2"
+    local unwanted="$3"
+
+    local output
+    output=$(run_forth "$input" | sed '/^> /d; /^>$/d; /^\.\.\. /d')
+
+    if [[ "$output" != *"$unwanted"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"
+        ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$name"
+        printf "    Input:      %s\n" "$input"
+        printf "    Unexpected: %s\n" "$unwanted"
+        printf "    Got:        %s\n" "$(echo "$output" | head -5)"
         ((failed++))
     fi
 }
@@ -465,30 +549,92 @@ assert_output "if else false"      ": test 0 if 42 else 99 then ; test ."     "9
 assert_output "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
 assert_output "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
 assert_output "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
-assert_error  "if without then"  ": test if ;"                               "unresolved control flow"
-assert_error  "begin without until" ": test begin ;"                         "unresolved control flow"
-assert_error  "begin then mismatch" ": test begin then ;"                   "? mismatched-control-flow"
-assert_error  "if until mismatch"  ": test if until ;"                      "? mismatched-control-flow"
+assert_error  "if without then"  ": test if ;"                               "unresolved control flow: test"
+assert_error  "begin without until" ": test begin ;"                         "unresolved control flow: test"
+# :NONAME builds a hidden header with an EMPTY name, so there is nothing to
+# name and the report falls back to the token the interpreter parsed.
+assert_error  "noname without then" ":noname 1 if ;"                         "unresolved control flow: ;"
+assert_error  "begin then mismatch" ": test begin then ;"                   "mismatched control flow: then"
+assert_error  "if until mismatch"  ": test if until ;"                      "mismatched control flow: until"
 # CASE arm bookkeeping. Before 2026-07-29 the CASE family pushed UNTAGGED
 # values, so ENDOF could not tell its own pending OF-branch from a previous
 # arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
 # other's bodies), and closing a non-CASE construct with a CASE word handed
 # patch_forward a tag value as an address and SEGFAULTED the process — fatal
 # during a file load. Found in the Dark Star port.
-assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "? mismatched-control-flow"
-assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "? mismatched-control-flow"
-assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "? mismatched-control-flow"
-assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "? mismatched-control-flow"
-assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "? mismatched-control-flow"
-assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "? mismatched-control-flow"
-assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "? mismatched-control-flow"
+assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "mismatched control flow: endof"
+assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "mismatched control flow: endcase"
+assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "mismatched control flow: endcase"
+assert_error  "if closed by endcase" ": bad if 1 endcase ;"                "mismatched control flow: endcase"
+assert_error  "if closed by endof"   ": bad if 1 endof ;"                  "mismatched control flow: endof"
+assert_error  "do closed by endcase" ": bad do 1 endcase ;"                "mismatched control flow: endcase"
+assert_error  "begin closed by endcase" ": bad begin 1 endcase ;"          "mismatched control flow: endcase"
 # an IF opened inside an arm and closed out of order — the likeliest typo
-assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "? mismatched-control-flow"
-assert_error  "endcase without case"  ": bad endcase ;"                    "? mismatched-control-flow"
-assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "? mismatched-control-flow"
+assert_error  "endof over an open if" ": bad case 1 of if 2 endof then endcase ;" "mismatched control flow: endof"
+assert_error  "endcase without case"  ": bad endcase ;"                    "mismatched control flow: endcase"
+assert_error  "extra endcase"    ": bad case 0 of 11 endof endcase endcase ;" "mismatched control flow: endcase"
+# A closer with NOTHING open. Until 2026-08-11 these read the compile-time
+# stack before checking it, so they walked off the top, hit the guard page, and
+# the fault handler reported "stack underflow" -- naming the DATA stack for what
+# is a compile error, and telling a beginner who typed `then` with no `if` to go
+# look at their stack. Each closer is its own call site, so each is asserted;
+# `while` in particular inlined the tag compare and had to be fixed separately.
+assert_error  "then with nothing open"   ": q then ;"        "mismatched control flow: then"
+assert_error  "else with nothing open"   ": q else ;"        "mismatched control flow: else"
+assert_error  "until with nothing open"  ": q until ;"       "mismatched control flow: until"
+assert_error  "repeat with nothing open" ": q repeat ;"      "mismatched control flow: repeat"
+assert_error  "while with nothing open"  ": q while ;"       "mismatched control flow: while"
+assert_error  "again with nothing open"  ": q again ;"       "mismatched control flow: again"
+assert_error  "loop with nothing open"   ": q loop ;"        "mismatched control flow: loop"
+assert_error  "+loop with nothing open"  ": q +loop ;"       "mismatched control flow: +loop"
+assert_error  "endof with nothing open"  ": q endof ;"       "mismatched control flow: endof"
+assert_error  "endcase with nothing open" ": q endcase ;"    "mismatched control flow: endcase"
+# and none of them leaves the session wedged. Not implied by the message above:
+# the definition-open guard printed correctly while stranding the half-built
+# header as LATEST, which then refused every later definition.
+assert_output "define after a stray then" ": q then ; : ok2 42 . ; ok2"     "42"
+assert_output "define after a stray loop" ": q loop ; : ok3 43 . ; ok3"     "43"
+# Mid-FILE is where a wrong diagnosis costs the most, and it is a different
+# report path: the loader prefixes file:line. Assert the LINE too -- the error
+# is on line 2, and a report that always said line 1 would still contain the
+# message. The file must also not take the session down with it.
+# An UNBALANCED definition in a file: `: Say ... if ... ;` with the THEN left
+# off. Until 2026-08-11 `;` printed "unresolved control flow" bare -- no file,
+# no line, no name -- and then RETURNED, so the file kept loading against a word
+# that never got defined. The only line number you got was from the first CALL
+# to the missing word, 46 lines further on in the real case (Dark Star, typo on
+# 167, reported at 213). Assert all three things that were wrong: the location,
+# the name, and that the load stopped before the later definition.
+cfu_dir="$(mktemp -d)"
+printf ': fine 1 ;\n: say 1 if 2 ;\n: later 7 ;\n99 say\n' > "$cfu_dir/unbal.fs"
+cfu_out=$(printf 's" %s/unbal.fs" included\nlater\n: after 45 . ;\nafter\nbye\n' "$cfu_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+rm -rf "$cfu_dir"
+if [[ "$cfu_out" == *"unbal.fs:2: unresolved control flow: say"* \
+      && "$cfu_out" == *"? later"* && "$cfu_out" == *"45"* \
+      && "$cfu_out" != *"? say"* ]]; then
+    printf "  ${GREEN}PASS${NC}  unbalanced definition in a file → file:line:name, load stops\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unbalanced definition in a file → file:line:name, load stops\n"
+    printf "    Expected: 'unbal.fs:2: unresolved control flow: say', '? later', '45', no '? say'\n    Got: %q\n" "$cfu_out"; ((failed++))
+fi
+
+cfl_dir="$(mktemp -d)"
+printf ': fine 1 ;\n: q then ;\n: later 7 ;\n' > "$cfl_dir/stray.fs"
+cfl_out=$(printf 's" %s/stray.fs" included\n: after 44 . ;\nafter\nbye\n' "$cfl_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1)
+rm -rf "$cfl_dir"
+if [[ "$cfl_out" == *"stray.fs:2: mismatched control flow: then"* && "$cfl_out" == *"44"* ]]; then
+    printf "  ${GREEN}PASS${NC}  stray closer in a file → file:line, session lives\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  stray closer in a file → file:line, session lives\n"
+    printf "    Expected: 'stray.fs:2: mismatched control flow: then' and '44'\n    Got: %q\n" "$cfl_out"; ((failed++))
+fi
 # and the well-formed cases still compile and run, including nested both ways
 assert_output "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
 assert_output "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+assert_output "while loop still runs" ": t begin dup while 1- repeat ; 3 t ." "0"
+assert_output "leave still runs"      ": t 10 0 do i . i 3 = if leave then loop ; t" "0 1 2 3"
 
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
@@ -518,15 +664,23 @@ assert_output "stray ; inside evaluate stops that line" \
 # context. Without that, an error raised later in the SAME outer token inherits
 # the inner string's wording. Reaching a wording-less error site at run time
 # takes `execute` on a compile-only word, which skips the compile-only check and
-# lands in cf_check_tag with a bogus tag. Verified: with the bracketing removed
-# the second line below reports "compile only: mismatched-control-flow".
+# lands in cf_check_tag with a bogus tag.
+#
+# NOTE (2026-08-11): cf_check_tag now sets its OWN wording, so it is no longer
+# wording-less and these two can no longer demonstrate the leak -- they assert
+# the wording is right, not that bracketing works. A probe that still bites
+# needs a site that inherits (`.Lsq_no_close` is one); see docs/TODO.md.
+#
+# The TOKEN here is the enclosing word, not `then`: cf_check_tag names whatever
+# the OUTER interpreter last parsed, which is the closer for ordinary source but
+# the caller when a closer is reached at run time through `execute`.
 assert_output "a nested evaluate does not leak its error wording" \
               ": leaky s\" ;\" evaluate  0 99 ' then execute ;
-leaky"                                                      "? mismatched-control-flow"
+leaky"                                                      "mismatched control flow"
 # the same error with no evaluate in front, as the control
 assert_output "control-flow mismatch reports plainly" \
               ": plain 0 99 ' then execute ;
-plain"                                                      "? mismatched-control-flow"
+plain"                                                      "mismatched control flow: plain"
 # and nesting still returns values correctly through two levels
 assert_output "evaluate nests two deep" \
               ": inner s\" 2 3 +\" evaluate ;
@@ -575,7 +729,7 @@ assert_output "leave nested inner" \
 assert_output "leave nested outer" \
     ": test 3 0 do i 1 = if leave then 3 0 do i . loop 32 emit loop ; test"  "0 1 2"
 assert_output "leave +loop"        ": test 20 0 do i 10 > if leave then i . 3 +loop ; test"  "0 3 6 9"
-assert_error  "leave outside do"  ": test leave ;"                                         "? mismatched-control-flow"
+assert_error  "leave outside do"  ": test leave ;"                                         "mismatched control flow: leave"
 
 # =========================================================================
 section "Defining Words"
@@ -988,7 +1142,7 @@ assert_output "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlop
 assert_output "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
 assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
 assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
-assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "dlopen: cannot load library"
+assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "cannot load libnosuch.so.99"
 
 # --- float arguments ---
 # libm is the oracle: exact, well-defined functions, so a wrong register or a
@@ -1055,7 +1209,7 @@ assert_result "ccallf with no floats == ccall" \
 # under QEMU (no aarch64 libSDL3 in the -L sysroot).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 open+draw+readback (libSDL3 not installed)\n"
 else
     sdl_px=$(printf 'include %s/graphics.fs\ninclude %s/ffi.fs\ninclude %s/sdl3.fs\n: t 64 32 sdl-open sdl-frame red clear gr-base @ l@ u. sdl-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" \
@@ -1064,6 +1218,36 @@ else
         printf "  ${GREEN}PASS${NC}  SDL3 open+draw+readback (red pixel via dummy video driver)\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  SDL3 open+draw+readback\n    Got: %q\n" "$sdl_px"; ((failed++))
+    fi
+
+    # The DEGRADED path, on a machine that HAS SDL3: hide the library with
+    # bwrap and check the dep block does its job. This is the run a new user
+    # gets, and it is the one no suite could see before — the qemu sysroot has
+    # no libSDL3 either, but there the SDL tests are skipped wholesale, so
+    # "missing library" was never actually asserted anywhere.
+    # Mask the library FILES, never their directory. A from-source SDL3 lands
+    # in /usr/local/lib here, but a packaged one lives in /usr/lib/<triplet>
+    # beside libc and ld.so — a --tmpfs over that directory stops the binary
+    # from exec'ing at all, which tests nothing and reads like a real failure.
+    # Paths come from ldconfig, never assumed; every libSDL3 entry is covered
+    # because dlopen resolves the soname through that same cache.
+    sdl_libs=()
+    while read -r p; do sdl_libs+=(--ro-bind /dev/null "$p"); done < <(
+        "$LDCONFIG" -p 2>/dev/null | awk '/libSDL3\.so/ {print $NF}' | sort -u)
+    if ! command -v bwrap >/dev/null 2>&1; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (no bwrap to hide it with)\n"
+    elif [ ${#sdl_libs[@]} -eq 0 ]; then
+        printf "  ${YELLOW}SKIP${NC}  missing-libSDL3 message (cannot locate libSDL3 to hide)\n"
+    else
+        sdl_miss=$(printf 'require sdl3.fs\n2 3 + . cr\nparse-name sdl-open find if drop ." STILL-DEFINED" else 2drop then\nbye\n' \
+            | timeout 10 bwrap --dev-bind / / "${sdl_libs[@]}" \
+                --setenv BASICFORTH_PATH "$FORTH_LIB" $FORTH 2>&1 | sed '/^> /d; /^>$/d')
+        if [[ "$sdl_miss" == *"sdl3.fs: needs the library libSDL3.so.0 -- see help install"* \
+           && "$sdl_miss" == *"5"* && "$sdl_miss" != *STILL-DEFINED* ]]; then
+            printf "  ${GREEN}PASS${NC}  a missing libSDL3 names the file and the fix, and the session survives\n"; ((passed++))
+        else
+            printf "  ${RED}FAIL${NC}  missing-libSDL3 dep block\n    Got: %q\n" "$sdl_miss"; ((failed++))
+        fi
     fi
 
     # sdl-scale: the window is scaled but the drawing surface stays logical
@@ -1076,8 +1260,8 @@ else
     fi
 
     # require sdl3.fs pulls its own deps (ffi, graphics), and a second require
-    # under a live window is a no-op: sdl-win must be preserved, not zeroed.
-    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\nsdl-win\nrequire sdl3.fs\nsdl-win swap over = . 0= 0= .\nsdl-close\nbye\n' \
+    # under a live window is a no-op: (sdl-win) must be preserved, not zeroed.
+    sdl_rq=$(printf 'require sdl3.fs\n32 16 sdl-open\n(sdl-win)\nrequire sdl3.fs\n(sdl-win) swap over = . 0= 0= .\nsdl-close\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$sdl_rq" | grep -q -- '-1 -1'; then
         printf "  ${GREEN}PASS${NC}  require sdl3.fs: deps auto-load; re-require keeps a live window\n"; ((passed++))
@@ -1144,7 +1328,7 @@ fi
 # (examples/gamepad.fs is the readout for it).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  gamepad pad.fs (libSDL3 not installed)\n"
 else
     # Dead zone: |n| < pad-dead is centre, |n| >= pad-dead is a direction. The
@@ -1323,7 +1507,7 @@ else
     fi
 
     # require pad.fs pulls sdl3.fs (and through it ffi/graphics) on its own.
-    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open sdl-win 0<> . sdl-close pad-closeall depth .\nbye\n' \
+    pad_rq=$(printf 'require pad.fs\n32 16 sdl-open (sdl-win) 0<> . sdl-close pad-closeall depth .\nbye\n' \
         | SDL_VIDEODRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$pad_rq" | grep -q -- '-1 0'; then
         printf "  ${GREEN}PASS${NC}  require pad.fs pulls sdl3 deps; pad-closeall keeps SDL usable\n"; ((passed++))
@@ -1338,7 +1522,7 @@ fi
 # snd-error if SDL_PutAudioStreamData fails).
 if [[ "$FORTH" == *qemu* ]]; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (no libSDL3 in the qemu sysroot)\n"
-elif ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
     printf "  ${YELLOW}SKIP${NC}  SDL3 audio open+tone (libSDL3 not installed)\n"
 else
     snd_out=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 123 45 tone depth . snd-open . 440 100 tone 440 0 tone 440 -9 tone depth . .\" put-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
@@ -1430,30 +1614,54 @@ else
         printf "  ${RED}FAIL${NC}  next-ch round-robin / stealing\n    Got: %q\n" "$ch_alloc"; ((failed++))
     fi
 
-    # snd-channels is read once, at open, and clamped into 2..snd-max-channels.
-    ch_cnt=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 4 to snd-channels snd-open drop snd-channels . snd-close 999 to snd-channels snd-open drop snd-channels snd-max-channels = . snd-close 1 to snd-channels snd-open drop snd-channels . .\" cnt-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+    # A claimed channel is never handed out. next-ch skips a channel only while
+    # audio is QUEUED on it, so before ch-claim a channel held for later came
+    # back into rotation the moment it fell silent -- measured at 3 reissues in
+    # 200 calls, which is how speech ended up sharing a queue with sound
+    # effects. 500 calls over 64 channels is ~8 laps, so a channel that is not
+    # respected will certainly come up.
+    # The release half matters as much: without it the claim could be doing
+    # nothing and this would still pass. And a second claim of the same channel
+    # must FAIL -- that is the only check ch-claim makes.
+    ch_claim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n0 value MINE\n: probe 0 500 0 do next-ch MINE = if 1+ then loop ;\n: t snd-open drop next-ch to MINE MINE ch-claim . drop probe . MINE ch-claim . drop MINE ch-release probe 0> . .\" claim-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$ch_cnt" | grep -q '4 -1 2 cnt-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-channels is settable and clamped at open\n"; ((passed++))
+    if printf '%s' "$ch_claim" | grep -q -- '-1 0 0 -1 claim-ok'; then
+        printf "  ${GREEN}PASS${NC}  a claimed channel is never handed out, until released\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  snd-channels clamping\n    Got: %q\n" "$ch_cnt"; ((failed++))
+        printf "  ${RED}FAIL${NC}  ch-claim / ch-release\n    Got: %q\n" "$ch_claim"; ((failed++))
     fi
 
-    # snd-close must clear EVERY slot, not just the first snd-channels of
-    # them. snd-channels is user-writable, so shrinking it while a device is
-    # open once hid the tail from its own cleanup: open 64, drop to 4, close,
-    # and 60 handles stayed in the table pointing at destroyed streams.
-    # This counts non-null handles, which is the invariant snd-close states
-    # for itself -- NOT proof that streams leaked, because SDL_QuitSubSystem
-    # frees them (RSS is flat over 50 such cycles). The defect is the dangling
-    # handles; the ior and (snd-dev) both look healthy throughout.
-    snd_shrink=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: live 0 snd-max-channels 0 do i cells (ch-streams) + @ if 1+ then loop ;\n: t snd-open drop live . 4 to snd-channels snd-close live . snd-open drop live . snd-close live . .\" shrink-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+
+    # A claim outlives a device cycle, so claims taken while the device is shut
+    # can leave snd-open with no channel for tone. That is not an SDL failure,
+    # so it must not report SDL's last error -- which would be stale or empty
+    # and blame the wrong thing. Its own ior and its own reason, and freeing a
+    # single channel lets the next open succeed.
+    # (snd-close frees tone's own claim, which is why this needs the claims to
+    # be taken while closed rather than before the close.)
+    snd_noch=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 0 ?do i ch-claim 2drop loop ;\n: t snd-open drop snd-close claim-all snd-open . snd-why type .\" |\" 0 ch-release snd-open . tone-ch . .\" noch-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$snd_shrink" | grep -q '64 0 4 0 shrink-ok'; then
-        printf "  ${GREEN}PASS${NC}  snd-close clears every slot after a shrink\n"; ((passed++))
+    if printf '%s' "$snd_noch" | grep -q 'every channel is claimed; none free for tone|0 0 noch-ok'; then
+        printf "  ${GREEN}PASS${NC}  snd-open explains having no channel for tone\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  snd-close leaves streams after a shrink\n    Got: %q\n" "$snd_shrink"; ((failed++))
+        printf "  ${RED}FAIL${NC}  snd-open with every channel claimed\n    Got: %q\n" "$snd_noch"; ((failed++))
     fi
+
+    # Claiming everything leaves next-ch nothing to give, and it must NOT fall
+    # back to tone-ch: channel 0 is reserved so effects cannot cut a game's
+    # tones short, and handing it out here would do exactly that on the one
+    # path where the caller cannot tell anything is wrong. -1 is not a channel,
+    # so every channel word ignores it and the sound is dropped instead.
+    # Asserted together with tone still owning channel 0 afterwards.
+    ch_allclaim=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: claim-all snd-channels 0 ?do i ch-claim 2drop loop ;\n: t snd-open drop claim-all next-ch . 440 200 tone tone-ch ch-queued 0> . 5 ch-release next-ch . .\" allclaim-ok\" snd-wait snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+    if printf '%s' "$ch_allclaim" | grep -q -- '-1 -1 5 allclaim-ok'; then
+        printf "  ${GREEN}PASS${NC}  every channel claimed yields no channel, and tone keeps its own\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  next-ch with every channel claimed\n    Got: %q\n" "$ch_allclaim"; ((failed++))
+    fi
+
+
 
     # Opening an already-open device SUCCEEDS and changes nothing. The device
     # handle is the observable that actually moves: before the guard, three
@@ -1650,21 +1858,35 @@ else
     fi
 
     # --- playing loaded samples (wav.fs) ---
+    # The sample is checked in beside this script. Both tests used to load
+    # /usr/share/sounds/sound-icons/pipe.wav -- a file from Debian's
+    # `sound-icons` package, which the suite never installs and Raspberry Pi OS
+    # does not ship. On a machine without it wav-load failed, both wav-play
+    # calls returned the same inert channel, and two tests blamed a perfectly
+    # good SDL3 for a missing fixture. Nothing here may depend on a file the
+    # repo does not carry.
+    #
+    # sample-16k-mono.wav is 12288 frames of 16-bit mono PCM at 16 kHz --
+    # exactly 768 ms, which is the 768 the first test reads back. The rate is
+    # deliberately NOT the device's 44100: the format test below can only see
+    # wav-play set the channel rate if the sample disagrees with the device.
+    play_wav="$REPO_ROOT/tests/sample-16k-mono.wav"
+
     # A wav plays on a channel; two plays land on different channels and both
     # sound at once; the queued byte count is the sample's own size, which is
     # what proves nothing was converted or copied on the way in.
-    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_play=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n0 value C1  0 value C2\n: a snd-open drop S wav-play to C1  S wav-play to C2 ;\n: b C1 C2 <> . C1 ch-playing? . C2 ch-playing? . ;\n: c C1 ch-queued S wav-bytes = . S wav-ms . .\" play-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_play" | grep -q -- '-1 -1 -1 -1 768 play-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play mixes two sounds, queueing the sample untouched\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  wav-play\n    Got: %q\n" "$wav_play"; ((failed++))
     fi
-    # wav-play must tell the channel what is coming: pipe.wav is 16 kHz mono
+    # wav-play must tell the channel what is coming: the sample is 16 kHz mono
     # 16-bit (format 32784 = 0x8010), against a device side of 44100. Reading
     # the format back is the direct check -- the queued byte count is identical
     # whether or not the format was set, so it cannot catch this.
-    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "/usr/share/sounds/sound-icons/pipe.wav" \
+    wav_fmt=$(printf 'include %s/wav.fs\ns" %s" wav-load value S\n: a snd-open drop tone-ch ch-format@ . . . ;\n: b S 5 wav-play-on 5 ch-format@ . . . ;\n: c 440 50 5 tone-on 5 ch-format@ . . . .\" fmt-ok\" snd-close ;\na b c\nbye\n' "$FORTH_LIB" "$play_wav" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$wav_fmt" | grep -q '44100 1 32784 16000 1 32784 44100 1 32784 fmt-ok'; then
         printf "  ${GREEN}PASS${NC}  wav-play sets the channel format; tone-on sets it back\n"; ((passed++))
@@ -1686,10 +1908,193 @@ else
     # contract tone already had, so a soundless system never aborts.
     ch_closed=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t 440 100 3 tone-on pad 4 3 ch-put 3 ch-stop snd-stop snd-wait 3 ch-queued . next-ch . depth . .\" closed-ok\" ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
-    if printf '%s' "$ch_closed" | grep -q '0 0 0 closed-ok'; then
+    if printf '%s' "$ch_closed" | grep -q -- '0 -1 0 closed-ok'; then
         printf "  ${GREEN}PASS${NC}  channel words are no-ops with no device open\n"; ((passed++))
     else
         printf "  ${RED}FAIL${NC}  channel words with no device\n    Got: %q\n" "$ch_closed"; ((failed++))
+    fi
+fi
+
+# =========================================================================
+section "Speech (speech.fs)"
+# =========================================================================
+# speech.fs synthesizes through flite into memory and queues the samples on a
+# channel, so it needs libSDL3 (via sound.fs) AND libflite. Same skip rules as
+# the SDL sections; under qemu neither library is in the sysroot.
+sp_run() {   # sp_run <forth lines> -> output
+    printf 'include %s/ffi.fs\ninclude %s/sound.fs\ninclude %s/speech.fs\n%s\nbye\n' \
+        "$FORTH_LIB" "$FORTH_LIB" "$FORTH_LIB" "$1" \
+        | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 20 $FORTH 2>&1
+}
+sp_check() { # sp_check <name> <output> <grep pattern>
+    if printf '%s' "$2" | grep -q -- "$3"; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Got: %q\n" "$1" "$2"; ((failed++))
+    fi
+}
+
+if [[ "$FORTH" == *qemu* ]]; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (no aarch64 libSDL3/libflite in the qemu sysroot)\n"
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (libSDL3 not installed)\n"
+elif ! "$LDCONFIG" -p 2>/dev/null | grep -q 'libflite\.so\.1'; then
+    printf "  ${YELLOW}SKIP${NC}  speech.fs (libflite not installed)\n"
+else
+    sp_check "speech-open succeeds, and is idempotent" \
+        "$(sp_run ': t snd-open drop speech-open . speech-open . ." sp-ok" ; t')" '0 0 sp-ok'
+
+    # say must actually produce audio, not merely return. The observable is
+    # bytes queued on speech's own channel -- and that the channel is NOT
+    # channel 0, which belongs to tone.
+    sp_check "say queues audio on its own channel" \
+        "$(sp_run ': t snd-open drop speech-open drop s" Dark Star ready" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
+        '-1 -1 -1 said'
+
+    # The bug this caught during development: `dup >r` left the cst_wave on the
+    # data stack as well as the return stack, so every say leaked a cell.
+    # Junk underneath, so a consumed-too-much defect shows up as well.
+    sp_check "say leaves the stack exactly as it found it" \
+        "$(sp_run ': t snd-open drop speech-open drop 99 88 77 s" hello" say depth . . . . ." depth-ok" speech-ch ch-wait ; t')" \
+        '3 77 88 99 depth-ok'
+
+    # >z copies into one shared 256-byte buffer and aborts past it. say checks
+    # first, so an over-long phrase reports about the phrase and consumes its
+    # arguments. Built in a buffer because the REPL's input line cannot carry
+    # a 250-character literal -- it truncates somewhere past 200.
+    sp_check "an over-long phrase is refused, not aborted" \
+        "$(sp_run 'create sbuf 300 allot : fill-n 0 do 65 sbuf i + c! loop ; 300 fill-n
+: t snd-open drop speech-open drop 99 sbuf 250 say speech-why type ." |" depth . . ." long-ok" ; t')" \
+        'phrase too long to say|1 99 long-ok'
+
+    sp_check "a phrase just inside the limit still speaks" \
+        "$(sp_run 'create sbuf 300 allot : fill-n 0 do 65 sbuf i + c! loop ; 300 fill-n
+: t snd-open drop speech-open drop sbuf 200 say speech-ch ch-queued 0> . ." fit-ok" speech-ch ch-wait ; t')" \
+        '-1 fit-ok'
+
+    # Speaking with nothing open is a silent no-op, the contract tone already
+    # has, so a machine without speech runs rather than aborting.
+    sp_check "say with no speech open is a silent no-op" \
+        "$(sp_run ': t 99 s" hello" say depth . . ." closed-ok" ; t')" '1 99 closed-ok'
+
+    # snd-close destroys every stream, and a later snd-open builds new ones and
+    # starts handing the same channel NUMBERS out again. Holding speech-ch
+    # across that reported success with no device, and left speech sharing a
+    # channel with whatever next-ch gave the next caller -- destroying the one
+    # property speech-ch exists for. Whole cycle in one test: ready? goes
+    # false, open reports the missing device, say stays a silent no-op, and
+    # after reopening speech takes a channel that next-ch then does NOT reissue.
+    sp_check "speech survives snd-close and a reopen without going stale" \
+        "$(sp_run ': t snd-open drop speech-open drop snd-close
+speech-ready? . speech-open . 99 s" x" say depth . .
+snd-open drop speech-open . next-ch speech-ch = .
+s" two" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
+        '0 6 1 99 0 0 -1 cycle-ok'
+
+    # Speech's whole reason for holding a channel is that a phrase must never
+    # queue behind a sound effect. That only holds if next-ch stops handing the
+    # channel out -- it was reissued 3 times in 200 calls before ch-claim.
+    sp_check "speech's channel is not reissued to anyone else" \
+        "$(sp_run ': probe 0 500 0 do next-ch speech-ch = if 1+ then loop ;
+: t snd-open drop speech-open drop probe . ." claim-ok" ; t')" \
+        '0 claim-ok'
+
+    # When every channel is busy, next-ch hands back the least recently used
+    # one WITHOUT clearing it -- tone-on only queues. So speech could be handed
+    # a channel with an effect still on it, and the first phrase would play
+    # behind that effect: exactly the thing speech-ch exists to prevent, broken
+    # at the moment speech opens. Measured before the fix: 237976 bytes
+    # inherited. speech-open now stops the channel it takes over.
+    sp_check "speech takes over its channel rather than inheriting a queue" \
+        "$(sp_run ': fill snd-channels 1 ?do 220 3000 i tone-on loop ;
+: t snd-open drop fill speech-open . speech-ch ch-queued . ." busy-ok" snd-stop ; t')" \
+        '0 0 busy-ok'
+
+    # speech-close gives the channel back, and it is the only thing that can:
+    # ch-release needs the claim token, which lives inside speech.fs. Both
+    # halves are asserted, because either alone could pass while the other was
+    # broken -- the channel really returns to rotation (0 hand-outs while open,
+    # some after), AND speech goes quiet rather than carrying on with a channel
+    # other callers are now being given.
+    sp_check "speech-close returns the channel and silences say" \
+        "$(sp_run '0 value OLD
+: probe 0 300 0 do next-ch OLD = if 1+ then loop ;
+: t snd-open drop speech-open drop speech-ch to OLD
+probe . speech-close speech-ch . speech-ready? . probe 0> .
+99 s" x" say depth . . ." close-ok" ; t')" \
+        '0 -1 0 -1 1 99 close-ok'
+
+    # A claim belongs to whoever took it, not to the device, so it OUTLIVES a
+    # snd-close/snd-open cycle -- speech keeps the same channel, stays ready,
+    # and next-ch still skips it. That is what makes the channel number alone
+    # sufficient: nothing invalidates it behind speech's back, so there is
+    # nothing to detect. 20 cycles, then speak on the same channel.
+    sp_check "a claim outlives repeated device cycles" \
+        "$(sp_run '0 value OLD
+: cycles 20 0 do snd-close snd-open drop loop ;
+: t snd-open drop speech-open drop speech-ch to OLD speech-ready? .
+cycles speech-ready? . speech-ch OLD = . next-ch OLD = .
+s" ok" say speech-ch ch-queued 0> . ." cycle-ok" speech-ch ch-wait ; t')" \
+        '-1 -1 -1 0 -1 cycle-ok'
+
+    # A snd-close/snd-open cycle destroys every stream, clears every claim, and
+    # starts reissuing the same channel NUMBERS. A speech-ch kept across that
+    # names a channel someone else may now own -- and speech-close would stop
+    # audio it never queued and release a claim that is not its. It must only
+    # touch the channel while speech-ready? says it is still ours.
+    # Asserted from the OTHER caller's side: their sound must survive, and
+    # speech must then take a different channel rather than stomping on theirs.
+    sp_check "speech-close leaves another caller's channel alone after a reopen" \
+        "$(sp_run '0 value THEIRS
+: t snd-open drop speech-open drop snd-close snd-open drop
+next-ch to THEIRS 220 3000 THEIRS tone-on THEIRS ch-queued 0> .
+speech-close THEIRS ch-queued 0> . speech-ch .
+speech-open . speech-ch THEIRS = . ." nostomp-ok" snd-stop ; t')" \
+        '-1 -1 -1 0 0 nostomp-ok'
+
+    # Closing twice, and opening again afterwards, must both be ordinary.
+    sp_check "speech-close is idempotent and reopening works" \
+        "$(sp_run ': t snd-open drop speech-open drop speech-close speech-close
+speech-open . speech-ch 0> . s" hi" say speech-ch ch-queued 0> . ." recycle-ok" speech-ch ch-wait ; t')" \
+        '0 -1 -1 recycle-ok'
+
+    # next-ch answers -1 when every channel is claimed. Claiming that would
+    # report success while speech had nowhere to play.
+    sp_check "speech reports having no channel rather than taking -1" \
+        "$(sp_run ': claim-all snd-channels 0 ?do i ch-claim 2drop loop ;
+: t snd-open drop claim-all speech-open . speech-why type ." |" 99 s" x" say depth . . ." exh-ok" ; t')" \
+        'no free channel to speak on|1 99 exh-ok'
+
+    sp_check "speech-open without an audio device reports it" \
+        "$(sp_run ': t speech-open . speech-why type ." |" ." nodev-ok" ; t')" \
+        'no audio device (snd-open first)|nodev-ok'
+
+    sp_check "an unknown voice library is reported, not fatal" \
+        "$(sp_run ': t snd-open drop s" libflite_nope.so.1" s" register_nope" speech-voice! speech-open . speech-why type ." |" ." voice-ok" ; t')" \
+        'no such voice library|voice-ok'
+
+    # The missing-libflite path cannot be reached natively on a machine that
+    # has libflite, so mask the library. Without this the ior-1 branch and the
+    # promise that `require speech.fs` never aborts are both untested.
+    #
+    # Ask ldconfig where the library actually is rather than naming a path.
+    # This used to hard-code /lib/x86_64-linux-gnu/libflite.so.1, which does
+    # not exist on any other architecture: on ARM64 bwrap failed to bind over
+    # a missing file and the test reported that failure as the speech output,
+    # so the case went untested on precisely the machines it was not written
+    # on. ldconfig is also the RIGHT source, not merely a portable one --
+    # speech.fs dlopens the bare SONAME, so the file ldconfig names is by
+    # construction the one the loader would have opened.
+    flite_so=$("$LDCONFIG" -p 2>/dev/null | awk '/libflite\.so\.1 /{print $NF; exit}')
+    if command -v bwrap >/dev/null 2>&1 && [ -n "$flite_so" ]; then
+        sp_noflite=$(bwrap --dev-bind / / --bind /dev/null "$flite_so" \
+            sh -c "$(declare -f sp_run); FORTH_LIB='$FORTH_LIB'; FORTH='$FORTH'; sp_run ': t snd-open drop speech-open . speech-why type .\" |\" 99 s\" hi\" say depth . . .\" noflite-ok\" ; t'" 2>&1)
+        sp_check "no libflite: an ior and a reason, and say stays a no-op" \
+            "$sp_noflite" 'no libflite.so.1 on this machine|1 99 noflite-ok'
+    elif [ -z "$flite_so" ]; then
+        printf "  ${YELLOW}SKIP${NC}  no-libflite path (ldconfig does not name libflite.so.1)\n"
+    else
+        printf "  ${YELLOW}SKIP${NC}  no-libflite path (needs bwrap to mask the library)\n"
     fi
 fi
 
@@ -2461,14 +2866,38 @@ assert_output "rnd zero base"       '1 rnd .'                             "0"
 assert_result "entropy succeeds"     'entropy nip .'                       "0"
 assert_result "entropy twice differs" 'entropy drop entropy drop = .'      "0"
 
-# A zero seed is xorshift's fixed point -- every output would be 0 forever, and
 # `0 seed !` is the obvious thing to type after reading that a known seed makes
-# runs repeatable. It must behave like any other seed instead: nonzero output,
-# and the same stream both times.
+# runs repeatable, and it must behave like any other seed: nonzero output, same
+# stream both times. splitmix64 gives that for free -- it has no bad state --
+# where its predecessor xorshift64 had a fixed point at 0 and needed a special
+# case in `random` to avoid dying there. Kept as a guard on the property, not
+# on the mechanism, so it outlives the next change of generator too.
 assert_result "zero seed still runs" '0 seed ! random 0= .'                "0"
 assert_result "zero seed repeats"    '0 seed ! random 0 seed ! random = .' "-1"
 assert_result "known seed repeats"   '42 seed ! random 42 seed ! random = .' "-1"
 assert_result "known seeds differ"   '42 seed ! random 43 seed ! random = .' "0"
+
+# splitmix64 against the published reference vectors: seeded 0, the first two
+# outputs are 0xE220A8397B1DCDAF and 0x6E789E6AA1B965F4. A generator that is
+# merely self-consistent passes every test above -- these pin it to the actual
+# algorithm, so a mistyped constant or a wrong shift cannot slip through.
+assert_result "splitmix64 matches the reference" \
+    '0 seed ! random $E220A8397B1DCDAF = . random $6E789E6AA1B965F4 = .' "-1 -1"
+
+# The property that motivated moving off xorshift64: the generator must not be
+# F2-LINEAR, or the bits within one output are linear combinations of each
+# other and slicing one draw into several numbers goes wrong. examples/dice.fs
+# packs 32 two-bit fields into one draw and saw a tail ~50% too heavy that way,
+# while matching on mean, standard deviation and a bit-exact naive counter.
+#
+# Testing it via marginal uniformity does NOT work -- xorshift64's fields are
+# individually uniform, and a count-the-values test passes on both generators
+# (tried; it was vacuous). What F2-linearity actually implies is that the
+# generator is ADDITIVE OVER XOR: f(a) xor f(b) = f(a xor b), exactly. That is
+# instant to check and false for any generator with a nonlinear mixing step.
+# 0x1111 xor 0x2222 = 0x3333. On xorshift64 this printed -1.
+assert_result "random is not F2-linear (xor-additive)" \
+    '$1111 seed ! random  $2222 seed ! random  xor  $3333 seed ! random  = .' "0"
 
 # The regression that started this: seeding from ms@ gave every process started
 # in the SAME MILLISECOND an identical stream -- 200 parallel launches produced
@@ -2484,6 +2913,67 @@ if [ "$ent_distinct" -eq "$ent_n" ]; then
 else
     printf "  ${RED}FAIL${NC}  parallel launches get independent streams\n"
     printf "    %d of %d launches produced a distinct first value\n" "$ent_distinct" "$ent_n"; ((failed++))
+fi
+
+# `seed` is PER-THREAD (TLS), so two workers draw independent streams. It used
+# to be one shared cell that both read-modify-wrote without atomicity, which
+# was wrong twice over: the two threads walked ONE interleaved sequence, and
+# updates were lost outright. Measured before the fix, 1707 of 2000 values
+# drawn by the second worker also appeared in the first; after, 0.
+#
+# The overlap count is the assertion because it fails for BOTH defects. Two
+# threads sharing a cell overlap heavily; two threads seeded from a constant
+# .tdata image would overlap COMPLETELY -- and that second one is the trap,
+# since per-thread-but-identical streams look correct from inside one thread.
+# A tolerance of 0 is safe: independent xorshift64 streams colliding at all in
+# 2x2000 draws from 2^64 is a once-in-the-heat-death event.
+thr_rng=$(printf 'require threads.fs
+400 constant #n
+create bufa #n cells allot
+create bufb #n cells allot
+: filla  #n 0 ?do random bufa i cells + ! loop ;
+: fillb  #n 0 ?do random bufb i cells + ! loop ;
+: run2   [char] a drop
+         \x27 filla thread throw  \x27 fillb thread throw
+         join drop throw  join drop throw ;
+: overlap 0 #n 0 ?do bufb i cells + @
+         #n 0 ?do dup bufa i cells + @ = if swap 1+ swap leave then loop
+         drop loop ;
+run2 ." OVERLAP=" overlap . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $FORTH 2>&1)
+if printf '%s' "$thr_rng" | grep -q 'OVERLAP=0 '; then
+    printf "  ${GREEN}PASS${NC}  two threads draw independent random streams\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  two threads draw independent random streams\n"
+    printf "    Got: %s\n" "$(printf '%s' "$thr_rng" | grep -o 'OVERLAP=[0-9-]*' || printf '%s' "$thr_rng" | tail -2)"
+    ((failed++))
+fi
+
+# ...and the worker's seed must come from the KERNEL, not from the .tdata
+# image. That image is a constant, so a trampoline that failed to seed would
+# start every worker in every process from the same number -- caught here by
+# running the same program twice and requiring the worker's first draw to
+# differ between runs.
+#
+# This has to be cross-PROCESS. The obvious in-process check, "the worker's
+# value differs from the REPL's", passes whether or not the fix is present: a
+# single shared seed also hands the worker a different (merely *next*) value.
+# It was written that way first and proved nothing.
+thr_ent_a=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+thr_ent_b=$(printf 'require threads.fs
+variable w
+: worker  random w ! ;
+\x27 worker thread throw join drop throw  ." W=" w @ . cr
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 60 $FORTH 2>&1 | sed -n 's/.*W=\(-\?[0-9]\+\).*/\1/p' | head -1)
+if [ -n "$thr_ent_a" ] && [ "$thr_ent_a" != "$thr_ent_b" ]; then
+    printf "  ${GREEN}PASS${NC}  a worker is seeded from the kernel, not the .tdata image\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a worker is seeded from the kernel, not the .tdata image\n"
+    printf "    Two runs gave the worker the same first value: %q / %q\n" "$thr_ent_a" "$thr_ent_b"; ((failed++))
 fi
 
 # INCLUDE (parse-word + included)
@@ -3168,6 +3658,360 @@ else
     printf "  ${RED}FAIL${NC}  tokens after include\n    Expected 7\n    Got: %q\n" "$inc_rest"; ((failed++))
 fi
 
+# =========================================================================
+# NEEDS-CMD / NEEDS-LIB — what a file needs from the machine
+# =========================================================================
+# The PATH walk is exercised against a directory we build, not against
+# whatever this machine happens to have installed: an executable, a file with
+# the same name but no execute bit, and a DIRECTORY with the same name. The
+# last two are the interesting ones — each is found by exactly one half of
+# (exec?), so dropping either the faccessat or the newfstatat turns one of
+# these tests red.
+nd_dir="$(mktemp -d)"
+nd_forth="${FORTH/.\//$PWD/}"           # absolute: these subshells set PATH
+mkdir -p "$nd_dir/bin" "$nd_dir/plain" "$nd_dir/asdir"
+printf '#!/bin/sh\necho hi\n' > "$nd_dir/bin/nd-tool"      ; chmod 755 "$nd_dir/bin/nd-tool"
+printf 'not executable\n'     > "$nd_dir/plain/nd-tool"    ; chmod 644 "$nd_dir/plain/nd-tool"
+mkdir -p "$nd_dir/asdir/nd-tool"                           # a directory, X_OK passes
+# Resolve the runner to an absolute path BEFORE anyone touches PATH. On ARM64
+# $FORTH is "qemu-aarch64-static -L <sysroot> <binary>", and a test PATH that
+# does not contain qemu makes `env` fail to find it — which looks exactly like
+# a BasicForth answer of "not found" to every negative test here.
+read -r -a nd_cmd <<< "$nd_forth"
+nd_cmd[0]="$(command -v "${nd_cmd[0]}" 2>/dev/null || printf '%s' "${nd_cmd[0]}")"
+
+nd_run() {                              # nd_run <PATH value|UNSET> <forth input>
+    # PATH goes to the forth process only, via env: setting it for the whole
+    # command would hide `timeout` itself, and every test would "pass" on a
+    # shell error instead of on BasicForth's answer.
+    # Drop the prompt echoes, as assert_result does: the REPL echoes each input
+    # line, so a marker word written in the INPUT would otherwise satisfy a test
+    # looking for it in the OUTPUT.
+    local envset=(env PATH="$1")
+    [ "$1" = UNSET ] && envset=(env -u PATH)
+    printf '%s\n' "$2" | timeout 5 "${envset[@]}" BASICFORTH_PATH="$FORTH_LIB" "${nd_cmd[@]}" 2>&1 \
+        | sed '/^> /d; /^>$/d'
+}
+# Every case goes through a FILE, because that is where a dep block lives and
+# because only a file shows the whole effect: at the prompt a failure abandons
+# one line, but in a file it must stop the load with the definitions below it
+# never reached. FOUND is printed by the line after the requirement.
+cat > "$nd_dir/probe.fs" <<'NDEOF'
+needs-cmd nd-tool     chmod it   \ this comment must not reach the message
+." FOUND" cr
+: nd-word  ." NDWORD" cr ;
+NDEOF
+printf 'needs-cmd %s/bin/nd-tool\n." FOUND" cr\n' "$nd_dir" > "$nd_dir/abs.fs"
+printf 'needs-cmd %s/bin/nope\n." FOUND" cr\n'    "$nd_dir" > "$nd_dir/absmiss.fs"
+nd_load() {                             # nd_load <PATH value> <file>
+    # FIND, not the word's own output: `: nd-word ." NDWORD" ;` would not print
+    # anything at load time even if it HAD been compiled, so only asking the
+    # dictionary shows whether the load got that far. Printing a word ("DEFINED")
+    # rather than the raw flag — an xt that happens to end in 0 would match a
+    # substring test for "0".
+    # `if` is compile-only, so the lookup lives in a definition; it parses the
+    # name at RUN time, which is why the name follows the call.
+    nd_run "$1" "require $nd_dir/$2
+: nd? parse-name find if drop .\" DEFINED\" cr else 2drop then ;
+nd? nd-word
+bye"
+}
+nd_found=$(nd_load  "$nd_dir/bin"    probe.fs)
+nd_noexec=$(nd_load "$nd_dir/plain"  probe.fs)
+nd_isdir=$(nd_load  "$nd_dir/asdir"  probe.fs)
+nd_later=$(nd_load  "$nd_dir/plain:$nd_dir/asdir:$nd_dir/bin" probe.fs)
+# A name with a / is used as-is: no search, so an empty PATH cannot hide it,
+# and a PATH holding a same-named executable cannot supply a missing one.
+nd_abs=$(nd_load     "/nowhere"    abs.fs)
+nd_absmiss=$(nd_load "$nd_dir/bin" absmiss.fs)
+
+# An EMPTY PATH element means the current directory, in every position — this
+# is measured behaviour of /bin/sh, not a reading of the spec, and it matters
+# because the shell is what will actually run the command. PATH holds one more
+# element than it has colons, so "a:" and ":" and "" all end in an empty one
+# and a walk that stops when the characters run out never sees it.
+nd_cd_load() {                          # nd_cd_load <PATH value> <file>
+    ( cd "$nd_dir/bin" && nd_load "$1" "$2" )
+}
+nd_empty_only=$(nd_cd_load  ""                    probe.fs)   # "" is one empty element
+nd_empty_lead=$(nd_cd_load  ":/nowhere"           probe.fs)
+nd_empty_mid=$(nd_cd_load   "/nowhere::/nowhere2" probe.fs)
+nd_empty_tail=$(nd_cd_load  "/nowhere:"           probe.fs)
+# UNSET is not the same as empty: the shell falls back to a built-in default
+# and does NOT search the current directory. A tool sitting right there must
+# NOT be found, while a system command still is.
+nd_unset_cwd=$(nd_cd_load  UNSET probe.fs)
+printf 'needs-cmd sh\n." FOUND" cr\n' > "$nd_dir/shprobe.fs"
+nd_unset_sys=$(nd_cd_load  UNSET shprobe.fs)
+rm -rf "$nd_dir"
+
+if [[ "$nd_found" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  needs-cmd finds an executable on PATH\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  needs-cmd missed an executable on PATH\n    Got: %q\n" "$nd_found"; ((failed++))
+fi
+if [[ "$nd_noexec" != *FOUND* && "$nd_noexec" == *"needs the command nd-tool -- chmod it"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file on PATH without the execute bit is not a command\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  non-executable accepted (or hint lost)\n    Got: %q\n" "$nd_noexec"; ((failed++))
+fi
+# Every negative test demands the MESSAGE, not just the absence of FOUND: a
+# harness slip that stops forth from running at all produces neither.
+if [[ "$nd_isdir" != *FOUND* && "$nd_isdir" == *"needs the command nd-tool"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a DIRECTORY on PATH is not a command (X_OK alone says yes)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a directory was accepted as a command\n    Got: %q\n" "$nd_isdir"; ((failed++))
+fi
+if [[ "$nd_later" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  the search continues past unusable matches to a later PATH element\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  search stopped at the first same-named entry\n    Got: %q\n" "$nd_later"; ((failed++))
+fi
+nd_empty_bad=""                         # collect EVERY failing position, not the last
+for nd_case in "only:$nd_empty_only" "lead:$nd_empty_lead" "mid:$nd_empty_mid" "tail:$nd_empty_tail"; do
+    [[ "${nd_case#*:}" == *FOUND* ]] || nd_empty_bad+=" ${nd_case%%:*}"
+done
+if [ -z "$nd_empty_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  an empty PATH element means the current directory (all four positions)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  empty PATH element ignored at:%s\n    Got: %q\n" \
+        "$nd_empty_bad" "$nd_empty_only$nd_empty_lead$nd_empty_mid$nd_empty_tail"; ((failed++))
+fi
+if [[ "$nd_unset_cwd" != *FOUND* && "$nd_unset_cwd" == *"needs the command nd-tool"* \
+   && "$nd_unset_sys" == *FOUND* ]]; then
+    printf "  ${GREEN}PASS${NC}  an UNSET PATH uses the default, and does not search the CWD\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  unset-PATH fallback\n    Got: %q / %q\n" "$nd_unset_cwd" "$nd_unset_sys"; ((failed++))
+fi
+if [[ "$nd_abs" == *FOUND* \
+   && "$nd_absmiss" != *FOUND* && "$nd_absmiss" == *"needs the command "*"/nope"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a name with a / is used as-is, with no PATH search\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  path-name handling\n    Got: %q / %q\n" "$nd_abs" "$nd_absmiss"; ((failed++))
+fi
+# The failing load names the file it came from, keeps the author's hint, drops
+# the trailing comment, and never reaches the definition below it — `find`
+# printing 0 is that definition's absence.
+if [[ "$nd_noexec" == *"probe.fs: needs the command nd-tool -- chmod it"* \
+   && "$nd_noexec" != *"must not reach"* && "$nd_noexec" != *DEFINED* ]]; then
+    printf "  ${GREEN}PASS${NC}  a failed requirement names the file, cuts the comment, and stops the load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  dep-block failure in a file\n    Got: %q\n" "$nd_noexec"; ((failed++))
+fi
+
+assert_result "needs-lib finds a library that loads"  "needs-lib libc.so.6  should be everywhere
+.\" NLOK\" cr"  "NLOK"
+assert_result "needs-lib reports one that does not"   "needs-lib libnosuch.so.99  no such thing"  \
+    "needs the library libnosuch.so.99 -- no such thing"
+# The probe keeps its handle for the DLOPEN that follows, and only for the
+# name it actually probed — a cache that answered for any name would hand a
+# library the handle of a different one.
+assert_result "needs-lib hands its handle to dlopen"  \
+    "needs-lib libc.so.6
+include $FFI
+s\" libc.so.6\" dlopen  s\" libc.so.6\" (lib-probed) =  . cr"  "-1"
+# 0=, not the raw value: a cache that wrongly answered would print a handle
+# address, and a substring test for "0" matches most addresses.
+assert_result "the probe cache answers only for its own name"  \
+    "needs-lib libc.so.6
+s\" libm.so.6\" (lib-probed) 0= . cr"  "-1"
+
+# ---------------------------------------------------------------------------
+# DEPS reads a dep block WITHOUT loading the file, and the soft forms exist to
+# be read by it. Fixtures rather than the shipped libraries: the interesting
+# answers are the missing ones, and a machine that has everything installed
+# would never produce them.
+dp_dir="$(mktemp -d)"
+read -r -a dp_cmd <<< "${FORTH/.\//$PWD/}"      # absolute: the runs below cd
+
+# Each fixture ends in a print and a definition, so "did deps LOAD it" is
+# answerable: the report must appear with no trace of either.
+cat > "$dp_dir/dpmet.fs" <<'DPEOF'
+\ a comment header: skipped, not the end of the block
+
+require shellutil.fs
+needs-lib libc.so.6        should be everywhere
+." DPLOADED" cr
+: dp-met-word ;
+DPEOF
+cat > "$dp_dir/dphard.fs" <<'DPEOF'
+needs-lib libnosuch.so.99  install nosuch
+." DPLOADED" cr
+DPEOF
+cat > "$dp_dir/dpsoft.fs" <<'DPEOF'
+wants-lib libnosuch.so.99  install nosuch
+." DPLOADED" cr
+: dp-soft-word ;
+DPEOF
+cat > "$dp_dir/dpnone.fs" <<'DPEOF'
+\ nothing declared here
+: dp-none ;
+DPEOF
+# A requirement AFTER a non-dep line is not in the block: the scan stops at the
+# first line that is neither blank, a comment, nor a requirement.
+cat > "$dp_dir/dplate.fs" <<'DPEOF'
+require shellutil.fs
+
+: dp-late ;
+needs-lib libnosuch.so.99  never reached
+DPEOF
+# The parent's own requirements are all met; the child's are not. The verdict
+# has to carry that, and only the child's section may print.
+printf 'require dpchild.fs\n'                        > "$dp_dir/dpparent.fs"
+printf 'needs-lib libnosuch.so.99  install nosuch\n' > "$dp_dir/dpchild.fs"
+printf 'require shellutil.fs\n'                      > "$dp_dir/dpok.fs"
+# A require naming a file that is not there. This is the one path that walks
+# BASICFORTH_PATH to the end without a hit, and a stack slip there is invisible
+# in the line itself -- it shows up in the VERDICT, printed afterwards.
+printf 'require dpnosuch.fs\n'                       > "$dp_dir/dpgonereq.fs"
+# A chain longer than the queue. Following require is bounded, and a bound that
+# truncates in SILENCE turns deps into the thing it exists to prevent: a report
+# that says everything is fine because it stopped looking. dark-star.fs already
+# follows 11 files, so this bound is reachable rather than theoretical.
+for dp_i in $(seq 1 80); do
+    printf 'require dpc%d.fs\n' $((dp_i + 1)) > "$dp_dir/dpc$dp_i.fs"
+done
+printf '\\ the end of the chain\n' > "$dp_dir/dpc81.fs"
+# The same chain, with something genuinely missing in the part that IS read: a
+# definite "will not load" outranks "I did not finish", because it stays true
+# however much was left unread.
+printf 'needs-lib libnosuch.so.99  install nosuch\nrequire dpc2.fs\n' > "$dp_dir/dpcut-miss.fs"
+
+dp_run() {                              # dp_run <forth input>, from the fixture dir
+    printf '%s\nbye\n' "$1" \
+      | ( cd "$dp_dir" && timeout 10 env BASICFORTH_PATH="$FORTH_LIB" "${dp_cmd[@]}" 2>&1 ) \
+      | sed '/^> /d; /^>$/d'
+}
+dp_met=$(dp_run    "deps dpmet")
+dp_hard=$(dp_run   "deps dphard")
+dp_soft=$(dp_run   "deps dpsoft")
+dp_none=$(dp_run   "deps dpnone")
+dp_late=$(dp_run   "deps dplate")
+dp_nest=$(dp_run   "deps dpparent")
+dp_quiet=$(dp_run  "deps dpok")
+dp_ext=$(dp_run    "deps dpmet.fs")
+dp_gone=$(dp_run   "deps dpnosuchfile")
+dp_usage=$(dp_run  "deps")
+dp_reqgone=$(dp_run "deps dpgonereq")
+dp_cut=$(dp_run    "deps dpc1")
+dp_cutmiss=$(dp_run "deps dpcut-miss")
+dp_depth=$(dp_run "deps dpgonereq
+depth . .\" |DEPTH\"")
+dp_loaded=$(dp_run "require shellutil.fs
+deps dpok")
+# The soft forms must be SILENT at load time and must not stop the load. That
+# silence is the whole contract speech.fs/voice.fs/disasm.fs rely on, and it is
+# invisible in a passing report — only a real load shows it.
+dp_load=$(dp_run "require dpsoft.fs
+: dp? parse-name find if drop .\" DEFINED\" cr else 2drop then ;
+dp? dp-soft-word")
+rm -rf "$dp_dir"
+
+if [[ "$dp_met" == *"require shellutil.fs"*"found"* \
+   && "$dp_met" == *"needs-lib libc.so.6"*"ok"* \
+   && "$dp_met" == *"dpmet.fs: all 2 requirements met"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps reports a satisfied dep block\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a satisfied dep block\n    Got: %q\n" "$dp_met"; ((failed++))
+fi
+# Loading is the thing deps must NOT do: neither the file's output nor its
+# definitions may appear. Without this a scan that quietly INCLUDEd the file
+# would pass every other test here.
+if [[ "$dp_met" != *DPLOADED* && "$dp_met" != *DEFINED* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps does not load the file it reports on\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps loaded the file\n    Got: %q\n" "$dp_met"; ((failed++))
+fi
+# MISSING in capitals, and a verdict that says the load would fail — the hint
+# has to survive too, since it is the only thing that says what to do.
+if [[ "$dp_hard" == *"needs-lib libnosuch.so.99"*"MISSING -- install nosuch"* \
+   && "$dp_hard" == *"dphard.fs will not load: 1 requirement missing"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps reports a missing hard requirement, with its hint\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a missing hard requirement\n    Got: %q\n" "$dp_hard"; ((failed++))
+fi
+# The same miss, declared softly, must reach the opposite verdict. Testing both
+# against one fixture pair is the point: the difference is the wants-/needs-
+# prefix and nothing else.
+if [[ "$dp_soft" == *"wants-lib libnosuch.so.99"*"missing (optional) -- install nosuch"* \
+   && "$dp_soft" == *"dpsoft.fs will load; 1 optional requirement missing"* \
+   && "$dp_soft" != *"will not load"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a soft requirement is reported as optional, and still loads\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a missing soft requirement\n    Got: %q\n" "$dp_soft"; ((failed++))
+fi
+if [[ "$dp_load" == *DEFINED* && "$dp_load" != *"missing"* && "$dp_load" != *"MISSING"* \
+   && "$dp_load" != *"wants-lib"* ]]; then
+    printf "  ${GREEN}PASS${NC}  wants-lib is silent at load time and does not stop the load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a soft requirement was not silent at load time\n    Got: %q\n" "$dp_load"; ((failed++))
+fi
+if [[ "$dp_none" == *"dpnone.fs: no requirements declared"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps says so when a file declares nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps on a file with no dep block\n    Got: %q\n" "$dp_none"; ((failed++))
+fi
+if [[ "$dp_late" == *"dplate.fs: all 1 requirement met"* && "$dp_late" != *"libnosuch"* ]]; then
+    printf "  ${GREEN}PASS${NC}  the dep block ends at the first line that is not one\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps read past the end of the dep block\n    Got: %q\n" "$dp_late"; ((failed++))
+fi
+# Following require is what makes the verdict honest: dpparent's own single
+# requirement IS met, and it still cannot load.
+if [[ "$dp_nest" == *"require dpchild.fs"*"found"* \
+   && "$dp_nest" == *"dpchild.fs"* && "$dp_nest" == *"needs-lib libnosuch.so.99"*MISSING* \
+   && "$dp_nest" == *"dpparent.fs will not load: 1 requirement missing"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps follows require, and a nested miss reaches the verdict\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps did not follow require\n    Got: %q\n" "$dp_nest"; ((failed++))
+fi
+# ...and stays quiet when it finds nothing there: shellutil.fs is scanned, and
+# must not print a section of its own.
+# Counted, not pattern-matched: a stray section header is a bare "shellutil.fs"
+# line, which every substring test for the require line above it also matches.
+dp_quiet_n=$(printf '%s\n' "$dp_quiet" | grep -c 'shellutil\.fs')
+if [[ "$dp_quiet" == *"require shellutil.fs"*"found"* && "$dp_quiet_n" -eq 1 \
+   && "$dp_quiet" == *"dpok.fs: all 1 requirement met"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a nested file with nothing missing prints no section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a healthy nested file printed anyway (%s lines name it)\n    Got: %q\n" "$dp_quiet_n" "$dp_quiet"; ((failed++))
+fi
+# loaded vs found: the same require, before and after the file is in memory.
+if [[ "$dp_quiet" == *"require shellutil.fs"*"found"* \
+   && "$dp_loaded" == *"require shellutil.fs"*"loaded"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a require reads 'found' on disk and 'loaded' in memory\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  loaded/found not distinguished\n    Got: %q / %q\n" "$dp_quiet" "$dp_loaded"; ((failed++))
+fi
+if [[ "$dp_cut" == *"the check did not finish"* \
+   && "$dp_cut" != *"all "*"requirements met"* && "$dp_cut" != *"will load"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a traversal that outruns the queue says so instead of claiming success\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  the file queue truncated silently\n    Got: %q\n" "$dp_cut"; ((failed++))
+fi
+if [[ "$dp_cutmiss" == *"will not load: 1 requirement missing"* \
+   && "$dp_cutmiss" != *"did not finish"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a definite miss outranks an unfinished traversal\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  truncation hid a real miss\n    Got: %q\n" "$dp_cutmiss"; ((failed++))
+fi
+# The verdict is checked WITH its file name: a leak under the name prints some
+# other part of the stack there while every line above stays perfectly correct.
+if [[ "$dp_reqgone" == *"require dpnosuch.fs"*"MISSING -- not in . or on BASICFORTH_PATH"* \
+   && "$dp_reqgone" == *"dpgonereq.fs will not load: 1 requirement missing"* \
+   && "$dp_depth" == *"0 |DEPTH"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a require naming a file that is not there, and deps leaves the stack clean\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  missing-require handling\n    Got: %q / %q\n" "$dp_reqgone" "$dp_depth"; ((failed++))
+fi
+if [[ "$dp_ext" == *"dpmet.fs: all 2 requirements met"* \
+   && "$dp_gone" == *"cannot find dpnosuchfile.fs"* \
+   && "$dp_usage" == *"usage: deps <file>"* ]]; then
+    printf "  ${GREEN}PASS${NC}  deps takes the name with or without .fs, and says when it cannot find it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps name handling\n    Got: %q / %q / %q\n" "$dp_ext" "$dp_gone" "$dp_usage"; ((failed++))
+fi
+
 # READ-LINE: one line at a time, terminator (and a CR before it) stripped, a
 # blank line returns u2=0/flag=true, the last line without a trailing newline
 # is still read, then EOF returns flag=false. Each line is bracketed [..] so
@@ -3832,6 +4676,64 @@ if [[ "$ap_out" == *"3  ok"* && "$ap_out" == *"7  ok"* && "$ap_out" == *"0  ok"*
 else
     printf "  ${RED}FAIL${NC}  aborted definition leaves hidden LATEST\n    Got: %q\n" "$ap_out"; ((failed++))
 fi
+
+# ...and the same must hold when the error happens inside `[ ... ]`, which is
+# where STATE stops being the answer: `[` interprets INSIDE an open definition,
+# so an abort gated on STATE alone left the header live. `: foo [ nosuchword`
+# then refused every later `:` -- naming the wrong word, since the guard reports
+# the name being defined ("definition still open: bar") and not the one actually
+# open -- and only `] ;` could recover, while the identical typo one word to the
+# left abandoned the definition cleanly. Two error routes reach this: an unknown
+# word, and a compile-only word, which skipped the abort decision altogether.
+assert_result "an error inside [ ] abandons the definition too" \
+    ": foo [ nosuchword
+: bar 1 ;
+bar ."                                                                    "1"
+assert_result "a compile-only word inside [ ] abandons it as well" \
+    ": foo [ if
+: bar 1 ;
+bar ."                                                                    "1"
+# The other direction: with NO definition open, an error must leave the
+# dictionary and the stack alone. Aborting here would be the opposite bug.
+assert_result "a prompt-level error keeps the stack" '1 2 3 nosuchword
+.s'                                                                       "<3> 1 2 3"
+assert_result "a prompt-level compile-only error keeps the stack" '1 2 if
+.s'                                                                       "<2> 1 2"
+assert_result "[ ] at compile time still works" ": c9 [ 6 7 * ] literal ; c9 ."  "42"
+# A NESTED interpret_line must not take that abort. Returning an error ends the
+# line only at the top level -- EVALUATE returns into a caller that carries on
+# with the rest of ITS line, so dropping the header there left the outer line
+# compiling into a definition that no longer existed, and its `;` operating on
+# whatever LATEST had become. The word below is wrong either way (the error
+# inside the evaluation is swallowed, which is its own pre-existing bug, filed
+# in TODO.md) -- what this pins is that it still gets DEFINED rather than
+# vanishing mid-line.
+# The same, by the OTHER abort route: `'` failing to find a name reaches
+# .Lcf_abort rather than the shared error exit, and needed the gate separately.
+# It was missed the first time precisely because a comment there asserted the
+# site "cannot be inside brackets" -- it can.
+# Records CURRENT behaviour, which is wrong and pre-existing: an error inside a
+# nested evaluation while COMPILING rolls back to the global anchor and takes
+# the enclosing definition with it. Both foo and inner vanish. Pinned so that
+# fixing it (TODO: propagate errors out of EVALUATE) is a deliberate act rather
+# than a surprise, and so this arm's exemption from the nesting gate stays
+# visible.
+assert_result "a nested error while compiling still takes the outer definition (known bug)" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+probe foo'                                                                "MISSING"
+assert_result "a failed tick inside a nested EVALUATE does not abandon it either" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" '"'"' nosuchword" evaluate ] 2 + . ;
+probe foo'                                                                "EXISTS"
+assert_result "a failed tick inside [ ] DOES abandon at the top level" \
+    ": g1 [ ' nosuchword
+: g2 3 ;
+g2 ."                                                                     "3"
+assert_result "an error inside a nested EVALUATE does not abandon the outer definition" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" nosuchword" evaluate ] 2 + . ;
+probe foo'                                                                "EXISTS"
 
 # cancel; abandons the definition being typed — nothing defined, the rest of
 # the line discarded, a pending :e disarmed (nothing spliced, file untouched);
@@ -4845,10 +5747,15 @@ fi
 
 # The real-docs case that motivated multi-entry help: `help begin` must show
 # all three indefinite-loop entries from Language-Reference/Loops.md
-# timeout 5 (not 2): help begin scans the whole Language-Reference corpus,
-# which keeps growing; 2 s is marginal under qemu when the host is loaded.
+# timeout 30 (was 5, was 2): help begin scans the whole Language-Reference
+# corpus, and that corpus keeps growing -- the help-coverage sweep of 2026-08-11
+# alone took the scan to ~9.6 s under qemu, so 5 s started timing out and the
+# test reported "0 '## begin' headings", which reads like a help bug rather than
+# a clock. It is emulation cost, not a real one: the same scan is well under a
+# second natively. 30 s matches the other corpus-scanning tests above; if this
+# ever fires again, measure before believing the docs broke.
 begin_out=$(printf 'help begin\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 5 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference" timeout 30 $FORTH 2>&1)
 if [[ $(echo "$begin_out" | grep -c "^## begin") -eq 3 ]]; then
     printf "  ${GREEN}PASS${NC}  help begin shows all three begin entries\n"; ((passed++))
 else
@@ -5045,6 +5952,114 @@ fi
 
 rm -rf "$docs_dir"
 
+# ONE definition of "does this heading state a closed stack effect", shared by
+# every check that needs it. Two copies is how this drifted twice: first the
+# audit did not require an effect at all, then it required an opening paren
+# while (head-eff?) had moved on to requiring a closed one. It must stay in
+# step with (head-eff?) in core.fs, and the fixture check below is what proves
+# it does.
+head_eff_awk='
+function head_eff(   i, j) {
+    for (i = 3; i <= NF; i++) if ($i == "(") {
+        for (j = i + 1; j <= NF; j++) if ($j ~ /\)/) return 1
+        return 0
+    }
+    return 0
+}'
+# A word entry must state a STACK EFFECT; a heading without one is prose and
+# contributes no names. Asked of the BINARY, not of a second model of the rule
+# -- the audit below re-implements it in awk, and the two drifting apart is
+# exactly how `## dup {: x :}` once read as documenting `dup`.
+he_dir="$(mktemp -d)"
+mkdir -p "$he_dir/Language-Reference" "$he_dir/Guides"
+cat > "$he_dir/Language-Reference/Fixture.md" <<'HEEOF'
+# Fixture
+
+Preamble.
+
+## hefix-word ( x -- y )
+A real entry.
+
+## hefix-locals {: x :}
+A locals declaration is NOT a stack effect.
+
+## hefix-open (
+An opening paren with nothing to close it is not an effect.
+
+## hefix-unclosed ( x
+Neither is an effect that is never closed.
+
+## hefix-empty ( )
+An empty effect is still an effect.
+
+## See Also
+
+- hefix-prose is only a word of a prose heading.
+HEEOF
+# Guides is the deliberate exception: single-token headings, no effect, and
+# every one is a topic. The same run must show the rule did not reach it.
+printf '# G
+
+Preamble.
+
+## hefixguide
+Text.
+' > "$he_dir/Guides/G.md"
+he_out=$(printf 'help hefix-word
+help hefix-locals
+help hefix-prose
+help also
+help hefixguide
+help hefix-open
+help hefix-unclosed
+help hefix-empty
+bye
+' \
+    | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$he_dir/Language-Reference:$he_dir/Guides" \
+      timeout 10 $FORTH 2>&1)
+# The awk above re-implements (head-eff?), and a re-implementation that is
+# never compared with the thing it models is how this drifted twice. Run it
+# over the same fixture and require the SAME verdict the binary just gave.
+he_awk=$(awk "$head_eff_awk"'
+    /^## / { if (!head_eff()) next
+        for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }
+    ' "$he_dir/Language-Reference/Fixture.md" | sort -u | tr '\n' ' ')
+rm -rf "$he_dir"
+he_bad=""
+# grep -c, not a substring test: "no help for X" and a real entry both mention X.
+[ "$(printf '%s' "$he_out" | grep -c 'A real entry')"  = 1 ] || he_bad="$he_bad entry-missing"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-locals')" = 1 ] || he_bad="$he_bad locals-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-prose')"  = 1 ] || he_bad="$he_bad prose-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for also')"         = 1 ] || he_bad="$he_bad seealso-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefixguide')"   = 0 ] || he_bad="$he_bad guides-broken"
+# An effect must be CLOSED: a bare "(" is a parenthesis, not a stack effect.
+# Without these three the predicate indexed `## foo (` and `## foo ( x`.
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-open')"     = 1 ] || he_bad="$he_bad open-paren-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-unclosed')" = 1 ] || he_bad="$he_bad unclosed-indexed"
+[ "$(printf '%s' "$he_out" | grep -c 'no help for hefix-empty')"    = 0 ] || he_bad="$he_bad empty-effect-rejected"
+# hefix-word and hefix-empty are exactly the two the binary indexed above.
+[ "$he_awk" = "hefix-empty hefix-word " ] || he_bad="$he_bad awk-model-disagrees[$he_awk]"
+if [ -z "$he_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  a word entry needs a stack effect; prose and locals headings index nothing\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  heading-effect rule:%s\n    Got: %s\n" "$he_bad" "$(echo "$he_out" | head -12)"; ((failed++))
+fi
+
+# ...and a heading that MEANT to state an effect but misspelt it must fail
+# loudly rather than silently becoming prose. `## foo (x -- y)` reads as an
+# entry to a human, has no bare "(" token, and would just lose `help foo`.
+# The discriminator is `--`: a stack effect has one, and the only prose heading
+# in the tree that carries parentheses (`## Number prefixes ($ hex, ...)`)
+# does not -- so this flags the misspelling without flagging ordinary prose.
+he_mal=$(awk "$head_eff_awk"'
+    /^## / && /--/ { if (!head_eff()) printf "      %s: %s\n", FILENAME, $0 }
+    ' "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Guides/*.md)
+if [ -z "$he_mal" ]; then
+    printf "  ${GREEN}PASS${NC}  every heading that states an effect spells it as a closed ( ... )\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a heading states an effect the index cannot read\n%s\n" "$he_mal"; ((failed++))
+fi
+
 # Reference coverage audit: every user-facing word in the live dictionary
 # must have a "## " heading entry in some docs/Language-Reference page —
 # the `help <word>` contract. Parenthesized names are internal by
@@ -5052,7 +6067,14 @@ rm -rf "$docs_dir"
 # (set -f: the dictionary contains `*` and `*/`, which must not glob.)
 audit_words=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
     | sed -n '2p' | sed 's/ ok *$//')
-audit_heads=$(awk '/^## /{ for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }' \
+# A word entry states a stack effect; a prose heading does not, and since
+# 2026-08-16 the index requires one here (Guides is the exception). This awk
+# MUST track (head-word?) in core.fs -- when it did not, `## dup {: x :}` still
+# read as documenting `dup` while `help dup` answered nothing.
+audit_heads=$(awk "$head_eff_awk"'
+    /^## / {
+        if (!head_eff()) next
+        for(i=2;i<=NF;i++){ if($i=="("){ if(i==2) print "("; else break } else print tolower($i) } }' \
     "$REPO_ROOT"/docs/Language-Reference/*.md | sort -u)
 audit_missing=""
 set -f
@@ -5072,16 +6094,147 @@ else
     printf "    Undocumented:%s\n" "${audit_missing:- (no words output)}"; ((failed++))
 fi
 
-# The same audit for the AUDIO library words, which the core sweep above cannot
-# see: they only exist after `require wav.fs`, so sound.fs/wavcore.fs/wav.fs
-# could add public names with no help entry and nothing would notice. Found
-# that way -- snd-dev and snd-stream were public-looking names for raw SDL
-# handles. Parenthesised names are internal by convention and skipped, as above.
-if [[ "$FORTH" == *qemu* ]] || ! ldconfig -p 2>/dev/null | grep -q libSDL3; then
-    printf "  ${YELLOW}SKIP${NC}  every audio library word has a reference entry (needs libSDL3)\n"
+# A needs-cmd/needs-lib hint that says "see help <x>" is a promise the help
+# system has to keep. `help install` was such a promise and did NOT resolve:
+# Install.md lived in docs/, which is design documentation and deliberately
+# not on BASICFORTH_DOCS. Nothing caught it, because prose asserting a
+# capability is not checked by anything -- so check it here. Every `help <x>`
+# named by a dep block in src/forth must answer.
+hint_bad=""
+hint_seen=""
+# DERIVED from setup.sh, never restated here. Checking against a wider path
+# would pass on pages the user cannot reach; checking against a copy of the
+# path would keep passing after setup.sh changed, which is the same bug one
+# level up. Sourced in a subshell so its exports do not leak into the suite,
+# which stays environment-independent.
+hint_docs=$(cd "$REPO_ROOT" && . ./setup.sh >/dev/null 2>&1 && printf '%s' "$BASICFORTH_DOCS")
+while read -r topic; do
+    hint_seen="$hint_seen $topic"
+    hint_out=$(printf 'help %s\nbye\n' "$topic" \
+        | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 5 $FORTH 2>&1)
+    printf '%s' "$hint_out" | grep -q "no help for" && hint_bad="$hint_bad $topic"
+done < <(grep -hoE '^(needs-cmd|needs-lib)[^\\]*help [a-zA-Z0-9_-]+' "$FORTH_LIB"/*.fs \
+         | grep -oE 'help [a-zA-Z0-9_-]+$' | awk '{print $2}' | sort -u)
+# A Guides page is narrative, so its "## " headings ARE its help sub-topics --
+# and the indexer takes EVERY word of a heading as a topic name. "## Get the
+# source" therefore published `help Get` and `help source`, the second of which
+# collides with a real word. So a Guides heading must be a single token, and it
+# must answer with its own page rather than something that shadows it.
+# (Language-Reference is exempt: there a heading legitimately names several
+# words before its stack effect.)
+guide_bad=""
+guide_n=0
+# What the other sections already answer. Checked against the FILES, not by
+# asking help: on a collision help does not lose, it APPENDS -- `help allot`
+# would print Memory's real entry AND a slab of the install guide, so a test
+# that only asked "did my page come back" sees nothing wrong.
+#
+# The two lookups fold differently, and the gate has to match each or it
+# rejects headings that are actually fine. Measured against the binary:
+#   page name   `-` and `_` are equivalent   defining_words -> Defining-Words.md
+#   word entry  they are NOT                 next_ch -> no help, only next-ch
+#   neither     separators are never dropped definingwords -> no help
+guide_page_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_' '-'; }
+guide_word_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md \
+               "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null \
+            | xargs -n1 basename | sed 's/\.md$//' | tr 'A-Z' 'a-z' | tr '_' '-' | sort -u)
+# Tutorial "## " headings are lesson steps, not word entries, and the indexer
+# skips them -- so they are not names anything answers.
+# This mirrors (head-word?) in core.fs, token for token, because every
+# approximation of it has been wrong in a different way:
+#   - cutting at the first "(" loses PARENTHESIZED words -- "## (dlopen) ( ... )"
+#     yields nothing, though `help (dlopen)` answers FFI:
+#   - cutting at the first " (" is still wrong where the effect does not open
+#     with a bare paren: "## Number prefixes ($ hex, % binary, # decimal)"
+#     really does publish `%`, `hex,` and `decimal)` as topics
+# The rule: split on whitespace and stop at a token that is EXACTLY "(" --
+# except as the first token, where "(" is the word itself.
+ref_words=$(grep -h "^## " "$REPO_ROOT"/docs/Language-Reference/*.md | sed 's/^## //' \
+            | awk '{ for (i = 1; i <= NF; i++) {
+                         if ($i == "(") { if (i == 1) print $i; break }
+                         print $i } }' \
+            | tr 'A-Z' 'a-z' | grep -v '^$' | sort -u)
+while read -r file; do
+    page=$(basename "$file" .md)
+    while read -r head; do
+        guide_n=$((guide_n + 1))
+        if [ "$(printf '%s' "$head" | wc -w)" -ne 1 ]; then
+            guide_bad="$guide_bad ${page}:'${head}'(multi-word)"
+            continue
+        fi
+        # Ask the binary whether the heading is really reachable -- but NOT
+        # under emulation. `help <word>` scans every "## " heading in every
+        # doc file, which costs 10s per call under qemu against 0.08s for the
+        # file-name lookup above; ten headings would add ~100s to the ARM64
+        # run to re-check a property of the DOCUMENTATION, identical on both
+        # architectures. It still runs natively, including on an ARM64 board.
+        if [[ "$FORTH" != *qemu* ]]; then
+            got=$(printf 'help %s\nbye\n' "$head" \
+                | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hint_docs" timeout 20 $FORTH 2>&1)
+            printf '%s' "$got" | grep -q "^${page}:" || guide_bad="$guide_bad ${page}:${head}(unreachable)"
+        fi
+        printf '%s\n' "$ref_pages" | grep -qxF "$(guide_page_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a page name)"
+        printf '%s\n' "$ref_words" | grep -qxF "$(guide_word_fold "$head")" \
+            && guide_bad="$guide_bad ${page}:${head}(already a reference word entry)"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_n" -gt 0 ] && [ -z "$guide_bad" ]; then
+    if [[ "$FORTH" == *qemu* ]]; then
+        printf "  ${GREEN}PASS${NC}  every Guides heading is a one-word topic no reference page answers (%d; reachability checked natively)\n" "$guide_n"; ((passed++))
+    else
+        printf "  ${GREEN}PASS${NC}  every Guides heading is a reachable one-word help topic (%d)\n" "$guide_n"; ((passed++))
+    fi
+elif [ "$guide_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides headings (no pages found)\n"
 else
-    lib_words=$(printf 'require wav.fs\nwords\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
-        | sed -n '3p' | sed 's/ ok *$//')
+    printf "  ${RED}FAIL${NC}  a Guides heading is not a usable help topic\n"
+    printf "    Bad:%s\n" "$guide_bad"; ((failed++))
+fi
+
+if [ -z "$hint_docs" ]; then
+    printf "  ${RED}FAIL${NC}  dep-block help hints: could not read BASICFORTH_DOCS from setup.sh\n"; ((failed++))
+elif [ -n "$hint_seen" ] && [ -z "$hint_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every 'see help <x>' in a dep block resolves (%s)\n" "${hint_seen# }"; ((passed++))
+elif [ -z "$hint_seen" ]; then
+    printf "  ${YELLOW}SKIP${NC}  dep-block help hints (no dep block names one)\n"
+else
+    printf "  ${RED}FAIL${NC}  a dep block promises help that does not resolve\n"
+    printf "    Unresolved:%s\n" "$hint_bad"; ((failed++))
+fi
+
+# The same audit for the LIBRARY words, which the core sweep above cannot see:
+# they exist only after a `require`, so any library could add a public name
+# with no help entry and nothing would notice. Found that way -- snd-dev and
+# snd-stream were public-looking names for raw SDL handles. Parenthesised names
+# are internal by convention and skipped, as above.
+#
+# Both checks need libSDL3, since most of the libraries will not load without
+# it -- so under qemu, or on a machine with no SDL3, this is the one part of
+# the help contract that goes unverified. Both skips are printed rather than
+# quietly dropped.
+if [[ "$FORTH" == *qemu* ]] || ! "$LDCONFIG" -p 2>/dev/null | grep -q libSDL3; then
+    printf "  ${YELLOW}SKIP${NC}  every library word has a reference entry (needs libSDL3)\n"
+    printf "  ${YELLOW}SKIP${NC}  the library audit loads every src/forth/*.fs (needs libSDL3)\n"
+else
+    # EVERY library in src/forth, for the reason the wav tree was added: a
+    # library this audit does not `require` is invisible to it, so its public
+    # names could ship undocumented. speech.fs loads without libflite (the
+    # binding is lazy), so only libSDL3 gates this.
+    #
+    # The list below is deliberately explicit rather than "these pull in the
+    # rest". Some do -- pad.fs brings sdl3.fs, which brings ffi.fs and
+    # graphics.fs; disasm.fs brings shellutil.fs -- but reasoning that way is
+    # how voice.fs and disasm.fs got left out of the first version of this
+    # sweep while a comment claimed they were covered. Both fonts are listed
+    # because each defines its own selector word.
+    #
+    # If a new .fs lands in src/forth, add it here. That is the whole contract:
+    # ls src/forth/*.fs should have nothing this loop cannot reach.
+    lib_words=$(printf 'require wav.fs\nrequire speech.fs\nrequire pad.fs\nrequire font-terminus-8x16.fs\nrequire font-vga-8x8.fs\nrequire threads.fs\nrequire voice.fs\nrequire disasm.fs\nwords\n' \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 25 $FORTH 2>&1 \
+        | sed -n '10p' | sed 's/ ok *$//')
     lib_core=$(printf 'words\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 \
         | sed -n '2p' | sed 's/ ok *$//')
     lib_missing=""
@@ -5094,10 +6247,29 @@ else
     done
     set +f
     if [ -n "$lib_words" ] && [ -z "$lib_missing" ]; then
-        printf "  ${GREEN}PASS${NC}  every audio library word has a reference entry\n"; ((passed++))
+        printf "  ${GREEN}PASS${NC}  every library word has a reference entry\n"; ((passed++))
     else
-        printf "  ${RED}FAIL${NC}  every audio library word has a reference entry\n"
+        printf "  ${RED}FAIL${NC}  every library word has a reference entry\n"
         printf "    Undocumented:%s\n" "${lib_missing:- (no words output)}"; ((failed++))
+    fi
+
+    # ...and that the sweep above really did load every library, rather than a
+    # comment claiming it did. `require` leaves an (inc:<file>) guard word per
+    # file, so the dictionary itself says what was loaded. A new src/forth/*.fs
+    # that nobody added to the list fails HERE, naming the file -- which is the
+    # only way the audit above can be trusted to have swept anything.
+    # core.fs is excluded: it loads at startup, before any require.
+    swept_missing=""
+    for f in "$REPO_ROOT"/src/forth/*.fs; do
+        b=$(basename "$f")
+        [ "$b" = "core.fs" ] && continue
+        case " $lib_words " in *" (inc:$b) "*) ;; *) swept_missing="$swept_missing $b";; esac
+    done
+    if [ -z "$swept_missing" ]; then
+        printf "  ${GREEN}PASS${NC}  the library audit loads every src/forth/*.fs\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  the library audit loads every src/forth/*.fs\n"
+        printf "    Never loaded, so never audited:%s\n" "$swept_missing"; ((failed++))
     fi
 fi
 
@@ -6037,16 +7209,16 @@ vc_check "voice.fs takes its template from the environment" \
 # zero length stores an empty template, which would wipe the default rather
 # than decline to replace it.
 vc_check "an unset variable leaves the built-in default" \
-    "$(vc_run 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run 'voice-cmd type')" "^piper -m en_US-libritts-high"
 vc_check "an empty variable leaves the built-in default" \
-    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run_env '' 'voice-cmd type')" "^piper -m en_US-libritts-high"
 # ...and so does one too LONG to hold. voice-cmd! refuses by storing nothing,
 # which is right for an explicit call but would leave a bare `require voice.fs`
 # with "no engine command set" — a working default destroyed by a variable that
 # was only ever meant to improve on it.
 vc_big="./engine %t %o$(printf '#%.0s' $(seq 1 520))"       # 534 — just past 512
 vc_check "an oversized variable leaves the built-in default" \
-    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-lessac-medium"
+    "$(vc_run_env "$vc_big" 'voice-cmd type')" "^piper -m en_US-libritts-high"
 # ...and an explicit voice-cmd! still beats the environment.
 vc_check "voice-cmd! overrides the environment" \
     "$(vc_run_env './engine %t %o' 's" ./fails %t %o" voice-cmd! s" hi" s" o.txt" voice-render .')" \
@@ -6216,11 +7388,21 @@ else
         "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
     assert_output "dis primitive: banner" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
-    # stage 2: inline data is split out of the stream, not decoded as code
-    assert_output "dis shows a literal's value" \
+    # stage 2: inline data is split out of the stream, not decoded as code.
+    # A CONSTANT is the probe for that now, because a plain number compiles to
+    # an immediate with no inline data at all (2026-08-15). The constant's cell
+    # is the case that MUST still split -- when the disassembler's calibration
+    # probe was left as `: five 5 ;` it silently stopped resolving and printed
+    # a constant's 8 data bytes as three bogus instructions.
+    assert_output "dis splits a constant's inline cell" \
+        "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "literal: 42"
+    assert_output "dis keeps the ret after a constant's cell" \
+        "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "ret"
+    # ...and a plain number is now an immediate: no call, and no cell to split.
+    # Asserted as an ABSENCE because the instruction that replaced it differs
+    # per architecture (movq $0x5 against movz #5), and this suite runs on both.
+    assert_absent "dis: a number compiles no call to lit" \
         "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "literal: 5"
-    assert_output "dis keeps the ret after a literal" \
-        "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "ret"
     assert_output "dis decodes inline strings" \
         "$(printf '%s\n: greet ." hi there" ;\ndis greet' "$dis_pre")"  's" hi there"'
     assert_output "dis names an xt literal" \
@@ -6606,7 +7788,7 @@ thr_check "a finished worker lists its real result, not a stale one" \
 'require threads.fs
 variable t
 : t42   42 throw ;
-: wait  begin t @ (t>ctx) (t-state) (acq@) finished = until ;
+: wait  begin t @ (t>ctx) (t-state) (acq@) (finished) = until ;
 : go    ['"'"'] t42 thread drop t !  wait  threads  t @ join . . ;
 go' \
 "finished  42"
@@ -6640,6 +7822,341 @@ variable a  variable b  variable t1  variable t2
       t1 @ join 2drop  t2 @ join 2drop  a @ .  b @ . ;
 go' \
 "5000 5000"
+
+# =========================================================================
+section "LOCALS (stage 1: the runtime frame and its unwind contract)"
+# =========================================================================
+# No syntax yet -- `{: ... :}` is stage 2. These drive the frame primitives
+# directly, which is the only way to test the part that actually goes wrong.
+#
+# A separate locals stack is NOT unwound by anything that unwinds the return
+# stack, so every reset path has to release it by hand, and a missed one leaks
+# silently: nothing fails until the locals stack overflows, much later, in
+# unrelated code. So the assertion throughout is not "does it work" but "did
+# LP go back", which is a different question and the only one that fails when
+# a path is missed.
+
+# assert_result, not assert_output, wherever the expected text also occurs in
+# the input: run_forth captures the ECHOED line too, so `assert_output` would
+# match the input and pass against a completely broken engine. That is not
+# hypothetical here -- the first draft of the assignability test below stored
+# with NO frame open, faulted into the guard page, and passed anyway on the
+# echoed "9".
+assert_result "frame: first declared is local 0" \
+              "3 4 5 3 (lframe) 0 (local@) . 1 (local@) . 2 (local@) ."   "3 4 5"
+assert_output "frame: consumes its arguments"    "1 2 3 3 (lframe) depth ."       "0"
+assert_output "frame: costs exactly n cells"     "1 2 3 3 (lframe) (lp0@) (lp@) - ." "24"
+assert_output "frame: teardown restores LP"      "1 2 3 3 (lframe) 3 (lunframe) (lp@) (lp0@) = ." "-1"
+assert_output "frame: a zero-cell frame is a no-op, not a fault" \
+              "0 (lframe) (lp@) (lp0@) = ."                              "-1"
+assert_result "frame: locals are assignable"     "1 1 (lframe) 42 0 (local!) 0 (local@) . 1 (lunframe)" "42"
+assert_output "locals stack is untouched at rest" "(lp@) (lp0@) = ."      "-1"
+# Writing outside the frame hits the guard page rather than scribbling on the
+# caller's locals -- the fence is what makes a stage-2 off-by-one findable.
+assert_output "a store past the frame hits the guard page" \
+              "1 1 (lframe) 42 4 (local!)"                               "locals stack underflow"
+
+# --- the eight reset paths, one assertion each ---------------------------
+# Each opens a frame and leaves it open, then takes the path. The frame is
+# opened and abandoned within ONE line, because LP is restored to the line's
+# ENTRY value -- at the outermost level that is lp0, but saying "one line"
+# keeps the test honest about which invariant it is checking.
+assert_output "unwind: caught throw"   ": t 1 1 (lframe) 99 throw ;
+' t catch . (lp@) (lp0@) = ."                                            "99 -1"
+assert_output "unwind: uncaught throw" ": t 1 1 (lframe) 99 throw ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: QUIT"           ": t 1 1 (lframe) quit ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: aborted definition" ': bad [ 1 1 (lframe) ] nosuchword ;
+(lp@) (lp0@) = .'                                                        "-1"
+assert_output "unwind: data-stack underflow (guard page)" "1 1 (lframe) drop
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: data-stack overflow (guard page)" ": t 1 1 (lframe) begin 1 again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+assert_output "unwind: dictionary full" ": t 1 1 (lframe) begin 1 , again ;
+t
+(lp@) (lp0@) = ."                                                        "-1"
+
+# --- nesting: the case a blanket "reset to lp0" gets WRONG ----------------
+# interpret_line nests. A compiled word holding a frame can call EVALUATE, and
+# an error inside that evaluation unwinds only the INNER interpret_line -- the
+# caller is still running and its frame is still live. Resetting to lp0 there
+# would hand the caller freed slots. Both error exits are covered because they
+# are separate code paths reached by different errors: an undefined word takes
+# .Lil_err_return, a control-flow abort takes .Lcf_longjmp.
+# Verified non-vacuous: breaking either exit to reset lp0 makes its test report
+# "locals stack underflow" instead, since local 0 then sits in the guard page.
+# A distinctive value, and assert_result so the echo cannot supply it: the
+# local must read back as 4242, not merely as "something". Expecting "1" here
+# would have matched the "-1" from the LP check on the next line.
+assert_result "nesting: undefined word inside evaluate keeps the caller's frame" \
+              ': o 4242 1 (lframe) s" nosuchword" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+assert_result "nesting: control-flow abort inside evaluate keeps it too" \
+              ': o 4242 1 (lframe) s" : q then ;" evaluate 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = .'                                                        "4242"
+
+# --- per-thread ----------------------------------------------------------
+# A worker gets its own locals stack from its own allocation, so LP is per
+# thread like BASE and the CATCH chain. Neither a worker that uses locals
+# normally nor one that throws mid-frame may disturb the REPL's LP.
+thr_check "a worker's locals stack is its own" \
+'require threads.fs
+: w  7 1 (lframe) 0 (local@) drop 1 (lunframe) ;
+: go ['"'"'] w thread drop join 2drop  (lp@) (lp0@) = . ;
+go' \
+"-1"
+thr_check "a worker throwing mid-frame leaves the REPL's LP alone" \
+'require threads.fs
+: wt 1 1 (lframe) 77 throw ;
+: go ['"'"'] wt thread drop join drop .  (lp@) (lp0@) = . ;
+go' \
+"77 -1"
+
+# =========================================================================
+section "LOCALS (stage 2: {: ... :} and open-coded references)"
+# =========================================================================
+
+assert_result "locals: named in stack order"  ": t {: a b :} a . b . ; 1 2 t"   "1 2"
+assert_result "locals: read more than once"   ": u {: x :} x x + ; 21 u ."      "42"
+assert_result "locals: three arguments"       ": c {: n lo hi :} n lo < if lo exit then n hi > if hi exit then n ;
+5 0 10 c . 99 0 10 c . -3 0 10 c ."                                            "5 10 0"
+assert_result "locals: nested calls each get their own frame" \
+              ": n1 {: a :} a 2 * ;
+: n2 {: b :} b n1 b + ;
+10 n2 ."                                                                       "30"
+# Shadowing is the point, and it reaches VERBS: `i` is the natural name for a
+# counter AND the loop index. Not a bug -- but the reason a warning is next.
+assert_result "locals: a local shadows the DO index" ": sh {: i :} 3 0 do i . loop ; 7 sh"  "7 7 7"
+
+# --- the frame must balance, whichever way the word is left ---------------
+assert_output "locals: LP balances after a normal return" ": u {: x :} x ; 1 u drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after an early exit" \
+              ": e {: a :} a 5 > if a exit then 0 ; 9 e drop 1 e drop (lp@) (lp0@) = ."  "-1"
+assert_output "locals: LP balances after exit from a DO loop" \
+              ": d {: n :} 10 0 do i n = if unloop n exit then loop 0 ;
+3 d drop 50 d drop 3 d drop (lp@) (lp0@) = ."                                  "-1"
+
+# --- three ways a frame could be built without being released ------------
+# All found after stage 2 first "worked": each leaked exactly 8 bytes of LP per
+# call, silently, until the locals stack walked into its guard page. The frame
+# is built where `{:` appears but released ONCE at `;`, so anything that makes
+# the build conditional -- or repeats it -- unbalances the pair. Refusing at
+# compile time is the fix; a runtime check would cost every call.
+assert_error "locals: refused inside IF"    ": t 0 if {: a :} then ;"     "needs an empty compile-time stack"
+assert_error "locals: refused inside BEGIN" ": v begin {: a :} again ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside DO"    ": w 3 0 do {: a :} loop ;"   "needs an empty compile-time stack"
+assert_error "locals: refused inside CASE"   ": u case 1 of {: a :} endof endcase ;" "needs an empty compile-time stack"
+# No control structure at all -- the guard tests the compile-time STACK, and a
+# value left by [ ] is indistinguishable from a control-flow marker. Asserted
+# so the message can never again describe a narrower guard than the real one.
+assert_error "locals: refused after [ ] leaves a value" ": v [ 5 ] {: a :} ;"  "leave nothing behind"
+assert_error "locals: refused twice over"   ": two {: a :} {: b :} ;"     "already declared"
+# The PERMITTED side of the same boundary, which had no test until the rule in
+# the docs was found to be stricter than the rule in the code. A closed
+# structure before `{:` is fine -- the build is still unconditional and still
+# happens once -- and only a test on this side stops the wording drifting again.
+assert_result "locals: allowed after a CLOSED if" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t"                            "2 7"
+assert_result "locals: allowed after a CLOSED do loop" \
+              ": u 3 0 do i . loop {: a :} a . ; 9 u"                          "0 1 2 9"
+assert_output "locals: LP balances after a closed structure" \
+              ": t 1 if 2 . then {: a :} a . ; 7 t 7 t (lp@) (lp0@) = ."       "-1"
+# ...and the session still compiles afterwards, which is not implied by the
+# message: the definition-open guard printed correctly while wedging LATEST.
+assert_result "locals: a refusal leaves the session usable" \
+              ": t 0 if {: a :} then ;
+: fine {: z :} z 3 * ;
+4 fine ."                                                                      "12"
+assert_output "locals: a refusal leaves LP where it found it" \
+              ": t 0 if {: a :} then ;
+(lp@) (lp0@) = ."                                                              "-1"
+
+# --- does> cannot see them -----------------------------------------------
+# The created word runs long after the defining word returned and its frame was
+# popped. This did not crash -- it returned a WRONG NUMBER from a dead slot,
+# which is why it is refused rather than documented.
+assert_error "locals: does> refuses them" ": mk {: v :} create v , does> @ v + ;"  "does> cannot see"
+assert_result "locals: does> still works without them" \
+              ": mk create , does> @ 2 * ;
+5 mk ten
+ten ."                                                                         "10"
+
+# --- and a definition WITHOUT locals is untouched -------------------------
+# "Pay only if you use it" is the design claim; this is the cheapest check of
+# it that does not depend on a disassembler being installed.
+assert_result "locals: an ordinary definition is unaffected" ": sq dup * ; 7 sq ."  "49"
+
+# --- stage 3: assignment ---------------------------------------------------
+assert_result "locals: to writes a local"      ": t {: a :} 5 to a a . ; 9 t"   "5"
+assert_result "locals: to accumulates in a loop" \
+              ": s2 {: n acc :} n 0 do acc i + to acc loop acc ;
+5 0 s2 . 10 0 s2 ."                                                            "10 45"
+# The case that decides whether `to` follows the same resolution order as a
+# read: writing through a shadow to the GLOBAL would be silent and wrong.
+assert_result "locals: to writes the local, not the value it shadows" \
+              "0 value v
+7 to v
+: shadow {: v :} 99 to v v . ;
+1 shadow v ."                                                                  "99 7"
+assert_result "locals: to still writes an ordinary value" "0 value q  8 to q  q ."  "8"
+# `is` targets deferred words; a local is not one. Falling through would have
+# found the SHADOWED global and written that instead -- silently, which is the
+# shape of the does> bug.
+assert_error "locals: is refuses a local" "defer d
+: t {: d :} 5 is d ;"                                                          "is: that name is a local"
+assert_result "locals: is still works on a real defer" \
+              "defer d
+: impl 42 . ;
+' impl is d
+d"                                                                             "42"
+
+# --- stage 3: | and -- , the rest of the Forth 2012 declaration ------------
+# `|` separates names taken from the stack from UNINITIALISED locals; `--`
+# starts a stack comment ignored to `:}`. Without `|` an accumulator had to be
+# faked by pushing a 0 before `{:`, which reads like idiom but is really a
+# workaround -- and made the documented stack comment wrong, since the word
+# then took an argument it did not want.
+assert_result "locals: | gives an uninitialised local" \
+              ": running ( n -- sum )  {: n | acc :}
+    n 0 do  acc i +  to acc  loop  acc ;
+5 running . 10 running ."                                                      "10 45"
+assert_result "locals: an uninitialised local starts at zero" ": z {: | q :} q . ; z"  "0"
+assert_result "locals: -- is a comment inside the declaration" ": c {: a b -- sum :} a b + . ; 3 4 c"  "7"
+assert_result "locals: | and -- together"  ": d {: n | acc -- sum :} n acc + . ; 6 d"  "6"
+# The names after `--` are documentation, NOT locals: referring to one must
+# fall through to the dictionary and miss.
+assert_error  "locals: -- names are not locals" ": e {: a -- sum :} sum ;"     "? sum"
+assert_result "locals: | with no names after it is allowed" ": f {: a | :} a . ; 9 f"  "9"
+assert_error  "locals: only one | per declaration" ": g {: a | b | c :} ;"     "only one |"
+
+# --- the frame is OPEN-CODED (2026-08-15): the shapes its emitter branches on.
+# It writes each slot with a computed offset instead of calling a copy loop, so
+# what needs proving is that every slot still gets the RIGHT value: the mapping
+# from stack depth to slot index is now arithmetic in the emitter rather than a
+# loop counter at run time, and an off-by-one there would be invisible in the
+# 1-and-3-local cases the tests above already cover.
+assert_result "locals: a full frame of LOCALS_MAX keeps every slot distinct" \
+              ": full {: a b c d e f g h i j k l m n o p :}
+    a . b . c . d . e . f . g . h . i . j . k . l . m . n . o . p . ;
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 full" \
+              "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"
+# The highest slots are the ones a wrong offset scale reaches first.
+assert_result "locals: the deepest argument lands in slot 0" \
+              ": ends {: a b c d e f g h :} a . h . ; 11 22 33 44 55 66 77 88 ends" "11 88"
+# Arguments and vals in one frame: the args are copied, the vals zeroed, and
+# the boundary between the two loops is where an off-by-one would show.
+assert_result "locals: args and vals in one frame" \
+              ": mix {: a b c | x y :} a . b . c . x . y . ; 7 8 9 mix"          "7 8 9 0 0"
+assert_result "locals: a val is writable after being zeroed" \
+              ": wv {: a | t :} a to t  t t * . ; 6 wv"                          "36"
+
+# --- stage 3: the shadow warning -------------------------------------------
+# Shadowing is what locals are FOR, so this is a note, not an error -- but
+# Forth lets you shadow verbs, and `{: i :}` silently costs you the DO index.
+assert_output "locals: a shadowing name is called out" ": oops {: i :} 3 0 do i . loop ;"  "note: local i shadows an existing word"
+assert_result "locals: ...and the definition still works" ": oops {: i :} 3 0 do i . loop ; 7 oops"  "7 7 7"
+assert_result "locals: an ordinary name draws no note" ": fine {: n lo hi :} n . ; 1 2 3 fine"  "1"
+# Prompt only, like `redefined`: a library declaring a local named `i` must not
+# nag on every load.
+lw_dir="$(mktemp -d)"
+printf ': loaded {: i :} i ;\n' > "$lw_dir/w.fs"
+lw_out=$(printf 's" %s/w.fs" included\n3 loaded .\nbye\n' "$lw_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | sed '/^> /d; /^\.\.\. /d')
+rm -rf "$lw_dir"
+if [[ "$lw_out" == *"3"* && "$lw_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: the shadow note stays quiet during a file load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: the shadow note stays quiet during a file load\n    Got: %q\n" "$lw_out"; ((failed++))
+fi
+# ...and during a script named on the COMMAND LINE, which is a different path:
+# it goes straight to the loader, bypassing the Forth `included` wrapper. Two
+# plausible gates (source-id, and the wrapper's own counter) both let the note
+# through here while looking correct for `included`. Assert the path, not the
+# mechanism.
+ls_dir="$(mktemp -d)"
+printf ': t {: i :} i ;\n3 t .\n' > "$ls_dir/s.fs"
+ls_out=$(printf 'bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH "$ls_dir/s.fs" 2>&1)
+rm -rf "$ls_dir"
+if [[ "$ls_out" == *"3"* && "$ls_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...and during a command-line script\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...and during a command-line script\n    Got: %q\n" "$ls_out"; ((failed++))
+fi
+# ...and still after the 64-entry SOURCE TABLE is full. That table is SEE
+# metadata: src_register answers 0 once it overflows, so a gate reading
+# cur_source_id goes quiet-side-up and the 65th file loads as if typed. The
+# same trap applied to the `redefined` warning, which had gated on it for
+# months. Both now read a flag the loader sets, which cannot run out.
+lf_dir="$(mktemp -d)"
+for lf_i in $(seq 1 70); do printf ': lfw%d %d ;\n' "$lf_i" "$lf_i" > "$lf_dir/f$lf_i.fs"; done
+printf ': lft {: i :} i ;\n3 lft .\n' > "$lf_dir/last.fs"
+lf_in=""
+for lf_i in $(seq 1 70); do lf_in+="s\" $lf_dir/f$lf_i.fs\" included"$'\n'; done
+lf_in+="s\" $lf_dir/last.fs\" included"$'\n'"bye"$'\n'
+lf_out=$(printf '%s' "$lf_in" | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1 \
+    | sed '/^> /d; /^\.\.\. /d')
+rm -rf "$lf_dir"
+if [[ "$lf_out" == *"3"* && "$lf_out" != *"note: local"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...and after the source table is full\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...and after the source table is full\n    Got: %q\n" "$(echo "$lf_out" | tail -3)"; ((failed++))
+fi
+# The flag is saved on the loader's frame, and an uncaught THROW abandons that
+# frame without restoring it -- so an aborted load left "a file is loading" set
+# for the rest of the session, silencing the note (and `redefined`) at the
+# prompt. Same shape as a leaked locals frame: an abort path that skips the
+# restore. Cleared on the paths that reset to the REPL.
+lb_dir="$(mktemp -d)"
+printf ': lbboom 99 throw ;\nlbboom\n' > "$lb_dir/b.fs"
+lb_out=$(printf 's" %s/b.fs" included\n: lbafter {: i :} i ;\nbye\n' "$lb_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+rm -rf "$lb_dir"
+if [[ "$lb_out" == *"note: local i"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: an aborted load does not wedge the loading flag\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: an aborted load does not wedge the loading flag\n    Got: %q\n" "$lb_out"; ((failed++))
+fi
+# ...nor does a dictionary exhausted MID-LOAD while interpreting. dict_full
+# returns to the REPL by two routes, and the "were we compiling?" test guards
+# only one of them -- so clearing the flag under that test skipped exactly the
+# interpreting case. `[` also makes STATE 0 inside an open definition, so the
+# same test is the wrong home for the locals list too. Both clears are now
+# unconditional, above it.
+ld_dir="$(mktemp -d)"
+printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+rm -rf "$ld_dir"
+if [[ "$ld_out" == *"dictionary full"* && "$ld_out" == *"note: local i"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: ...nor a dictionary exhausted mid-load\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: ...nor a dictionary exhausted mid-load\n    Got: %q\n" "$ld_out"; ((failed++))
+fi
+# dict_full rolls back the OPEN DEFINITION too, not just the compile state.
+# `[` interprets inside an open definition, so a dictionary exhausted there
+# left the partial header alive: the definition-open guard then refused every
+# later definition and the session was wedged, with nothing on screen saying
+# why. STATE alone cannot answer "is a definition open" -- LATEST's hidden bit
+# has to be checked with it, as the ` ok` suppression already does.
+dw_out=$(printf ': dwfill 40000 0 do 1 , loop ;
+: dwt {: a :} [ dwfill dwfill dwfill dwfill dwfill dwfill dwfill dwfill ] a ;
+: dwnext 5 . ;
+dwnext
+bye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1 | sed '/^> /d; /^\.\.\. /d')
+# Echo stripped above: run_forth captures the ECHOED input too, and
+# `: dwnext 5 . ;` contains a "5" -- so this passed without dwnext ever running.
+if [[ "$dw_out" == *"dictionary full"* && "$dw_out" == *"5"* \
+      && "$dw_out" != *"definition still open"* ]]; then
+    printf "  ${GREEN}PASS${NC}  locals: dictionary full inside [ ] does not wedge the session\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  locals: dictionary full inside [ ] does not wedge the session\n    Got: %q\n" "$(echo "$dw_out" | tail -4)"; ((failed++))
+fi
 
 # =========================================================================
 section "BYE"

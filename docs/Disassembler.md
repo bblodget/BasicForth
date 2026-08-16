@@ -67,11 +67,19 @@ That turns the listing into a readable decompile of the definition.
 ## Idiom-aware listings
 
 Compiled code embeds data in the instruction stream in exactly two shapes:
-a literal is `call lit` + 8 value bytes, and `s"` / `."` / `abort"`
-compile a call to the string runtime + an 8-byte length + the characters
-(padded to 4 alignment on ARM64). A linear disassembler decodes that data
-as garbage instructions — on x86 the variable-width decode can even lose
-step and swallow the following real instructions.
+`call lit` + 8 value bytes, and `s"` / `."` / `abort"`, which compile a call
+to the string runtime + an 8-byte length + the characters (padded to 4
+alignment on ARM64). A linear disassembler decodes that data as garbage
+instructions — on x86 the variable-width decode can even lose step and
+swallow the following real instructions.
+
+**A plain number is not one of them.** Since 2026-08-15 a number compiles to
+an immediate — the value is built into an instruction, with no call and no
+inline cell — so there is nothing to split and nothing to annotate; the value
+is legible in the instruction itself. The `call lit` shape survives only where
+the cell is *storage* someone reads or patches later: a `constant`, a `value`,
+a `create` body, a deferred word, and `[']`/`postpone`, which keep it so the
+xt can still be named. Those are what the splitting below is for.
 
 `dis` knows both idioms. The dict path *scans* the word first, splitting
 it into code spans (each decoded by objdump with `--start/--stop-address`
@@ -79,7 +87,7 @@ over one shared temp file) and data spans, which are printed as what they
 are — hex column intact, meaning in the margin:
 
 ```
-  43d5f1:  05 00 00 00 00 00 00 00   \ literal: 5
+  43d5f1:  2a 00 00 00 00 00 00 00   \ literal: 42
   43d629:  08 00 ... 68 69 20 74 ..  \ s" hi there"
   43d669:  e4 16 40 00 00 00 00 00   \ xt: dup
 ```
@@ -122,8 +130,22 @@ never syntax. See docs/Shelling_Out.md.
 
 The probes run once, on first use, and are retried until they succeed — so
 installing binutils mid-session just works. Without objdump, `dis` prints
-`dis: needs objdump (binutils) on PATH` and returns; it is never loaded on
-a system where you don't ask for it (`require disasm.fs`).
+`dis: needs the command objdump -- install binutils` and returns; it is never
+loaded on a system where you don't ask for it (`require disasm.fs`).
+
+That reads like `needs-cmd`, and says the same thing on purpose — but it is
+deliberately *not* `needs-cmd`, which stops the load. A requirement checked at
+load time cannot be satisfied without reloading the file, and retrying is the
+whole point here.
+
+The file's dep block therefore declares objdump *softly*:
+
+    wants-cmd objdump         install binutils
+
+`wants-cmd` does nothing at load time — no probe, no message, no abort. The two
+do different jobs and both are needed: the runtime probe is what lets `dis`
+recover when you install binutils mid-session, and the declaration is what lets
+`deps disasm` tell you objdump is missing before you wonder why.
 
 ## Limits
 

@@ -58,8 +58,12 @@ unset _bf_arch
 # Library search for INCLUDE / REQUIRE: core.fs and friends, then the examples
 export BASICFORTH_PATH="$BASICFORTH_HOME/src/forth:$BASICFORTH_HOME/examples"
 
-# Topics for help / tutorials / apropos
-export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial"
+# Topics for help / tutorials / apropos. Three sections, and only three: the
+# rest of docs/ is design and implementation notes, which `help` should never
+# offer. Guides holds the user-facing pages that are neither word references
+# nor lessons (installing, and whatever joins it) — a library's `needs-lib`
+# hint can then say "see help install" and be telling the truth.
+export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial:$BASICFORTH_HOME/docs/Guides"
 
 # Skip the X input method (XIM) handshake: a wedged ibus-x11 silently freezes
 # SDL_Init (see docs/Graphics.md "Troubleshooting"). Costs nothing for
@@ -85,7 +89,7 @@ _bf_piper="$(command -v piper 2>/dev/null)"
 if [ -n "$_bf_piper" ]; then
     # %o/%t are voice.fs placeholders, not shell syntax — and the whole
     # template must avoid double quotes, which would end voice-cmd!'s s".
-    export VOICE_ENGINE_CMD="$_bf_piper --data-dir ${PIPER_VOICES:-$HOME/.local/share/piper-voices} -m ${PIPER_VOICE:-en_US-lessac-medium} -f %o -- %t"
+    export VOICE_ENGINE_CMD="$_bf_piper --data-dir ${PIPER_VOICES:-$HOME/.local/share/piper-voices} -m ${PIPER_VOICE:-en_US-libritts-high} -f %o -- %t"
 else
     # Nothing here — so CLEAR it rather than leaving it. Sourcing this file in
     # a second checkout is routine, and a value inherited from the first would

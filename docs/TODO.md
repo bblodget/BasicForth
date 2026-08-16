@@ -93,8 +93,62 @@ completed. See Planning.md for high-level vision and design decisions.
   A bounds-checked `execute` would turn the first into a clean error, but that
   is a feature, not a fix.
 
-- [ ] **A control-flow closer with nothing open reports `stack underflow`, not
-  `mismatched-control-flow`.** Noticed 2026-07-29 while fixing the `CASE` bug
+- [x] **A control-flow closer with nothing open reports `stack underflow`, not
+  `mismatched-control-flow`.** RESOLVED 2026-08-11. `cf_check_tag` now bounds
+  its read by `colon_dsp` before comparing, so a closer with nothing open takes
+  the mismatch path instead of walking off the compile-time stack. Two things
+  the plan below did not anticipate:
+
+  **`WHILE` had to be fixed separately.** It inlined the tag compare rather
+  than calling `cf_check_tag` (it only peeks, and the author evidently thought
+  the helper consumes — it does not). So `: q while ;` alone still reported a
+  stack underflow after the one-place fix. It now calls the helper like its
+  siblings. A "one place, both arches" fix is only one place if every caller
+  actually goes through it — grep the jumps to the error label, not just the
+  calls to the helper.
+
+  **The wording changed too, and it uses the token the interpreter already
+  banked.** `forth_interpret_line` stores every word in `err_token` before
+  `FIND`, so at `cf_check_tag` the token is literally `then`. The old code
+  threw that away and overwrote it with the string `"mismatched-control-flow"`,
+  printed under the default `? ` prefix — which is the *undefined-word* marker,
+  so `: q then ;` read as if `then` did not exist. Now `err_pfx` points at
+  `msg_cf_mismatch` (which was defined in both arches and used nowhere) and the
+  token is left alone: `mismatched control flow: then`, and `file:line:` in
+  front on a load. `cf_mismatch_name` is gone.
+
+  **Caveat: the token is the last word the OUTER interpreter parsed.** That is
+  the closer for ordinary source, but the *enclosing* word when a closer is
+  reached at run time via `' then execute` — which reports
+  `mismatched control flow: plain`. Executing a compile-only word outside a
+  definition is already undefined, and naming the closer exactly would mean a
+  name argument at eleven call sites in each arch; judged not worth it. If that
+  ever matters, the cheap route is passing the closer's dictionary entry to
+  `cf_check_tag` and reading the name out of the header — no new strings.
+
+  **A sibling defect, found by using it (2026-08-11).** With the closer fixed,
+  Brandon deleted a `then` from Dark Star and got a bare `unresolved control
+  flow` with no location, followed by `dark-star.fs:213: ? say` — the first
+  *call* to the word whose definition failed on line 167. `.Lsemi_unbalanced`
+  printed with `platform_write` and then `ret`ed, so the line never reported an
+  error: no `file:line:` prefix (the loader prints that only on a non-zero
+  return) and no stop, leaving the rest of the file to compile against a
+  missing word. It now sets `err_pfx`/`err_token` and jumps to `.Lcf_abort`,
+  which already performed the identical rollback the label open-coded.
+  Two things worth keeping:
+  - **The location and the stop are the same bit.** They looked like separable
+    changes and are not; `jnz .Lincl_error` both prints the prefix and ends the
+    load. Any "report it but keep going" variant means a second copy of the
+    reporting code.
+  - **Read a name out of a header only if the header is yours AND has one.**
+    `F_HIDDEN` alone was not enough: `:NONAME` builds a real hidden header with
+    an *empty* name (type `T_NONAME`), so the first version printed a bare
+    `unresolved control flow: `. Name bytes start at **+10** — flags at +8,
+    Flags2 at +9 — and must be copied out before `.Lcf_abort` reclaims them.
+
+  Original report follows.
+
+  Noticed 2026-07-29 while fixing the `CASE` bug
   above, and deliberately left alone there because it is not a `CASE` problem —
   it is uniform across the family:
 
@@ -116,6 +170,30 @@ completed. See Planning.md for high-level vision and design decisions.
   that it changes the message for five existing words and their tests. Worth
   checking `: q1 then ;` at the prompt *and* mid-file, since the file path is
   where a wrong diagnosis costs the most.
+
+  **How to raise it (learned 2026-08-10 doing the definition-open guard).**
+  The protocol is: store the offending token in `err_token_addr`/`err_token_len`
+  and the wording in `err_pfx_addr`/`err_pfx_len`, then jump — the CALLER
+  prints, which is what gets the `file:line` prefix on a load for free.
+  `msg_cf_mismatch` ("mismatched control flow") already exists in both arches,
+  so no new message is needed. (This line originally claimed it was "already
+  used by a site immediately above `.Lcf_abort`" — it was not used anywhere;
+  what that site used was the separate `cf_mismatch_name` token string. Wrong
+  in a way that did not matter, but recorded so the entry is not read as
+  evidence for anything.)
+
+  **Jump to `.Lcf_abort`, not `.Lcf_longjmp`.** A definition is open by
+  definition here. `.Lcf_abort` restores `colon_dsp`/`saved_latest`/
+  `saved_here`, drops the partial header and resets `state`/`do_depth`/
+  `leave_count`; the bare `.Lcf_longjmp` is for interpret-mode errors and
+  leaves the dictionary alone, which would strand the open definition as a
+  hidden LATEST. Note that some sites choose between the two by testing
+  `STATE` — that test is wrong wherever `[` can be in play, since `[`
+  interprets *inside* an open definition.
+
+  **Test obligation:** the message, and that the session can still define a
+  word afterwards. The second is not implied by the first — that is exactly
+  how the definition-open guard first went wrong.
 
 - [x] **`:noname` inside a colon definition wedges a file load.** RESOLVED
   2026-08-10, in two halves and neither was `:noname`. The wedge was fixed
@@ -839,11 +917,13 @@ docs/Graphics.md for the API.
   `ffi.fs` wrappers, libc-based integration tests, docs/FFI.md + `man ffi`.
   Deferred: float args/returns, >6 args, C-to-Forth callbacks.
 - [x] `sdl3.fs`: init/window/renderer/streaming-texture bindings; lock-texture →
-  `set-surface`; vsync'd present (`sdl-frame` / `sdl-show`); poll-event
+  `set-surface`; present (`sdl-frame` / `sdl-show`); poll-event
   decoding (`sdl-poll`/`sdl-event-type`/`sdl-key`); `tools/sdl3off.c` verifies
   constants/offsets. Dummy-driver integration test (headless).
-- [x] Animation demo: `examples/bounce.fs` — bouncing square at the display
-  refresh rate (vsync), ESC/q/close to quit
+  (Shipped vsync-paced; changed to the `sdl-fps` timer 2026-07-20 — vsync
+  blocks the present under a compositor, see docs/Graphics.md "Frame pacing".)
+- [x] Animation demo: `examples/bounce.fs` — bouncing square, one step per
+  frame, ESC/q/close to quit
 - [x] Interpreted `s"` and `."` (ANS transient-buffer semantics) — STATE-smart
   redefinitions in core.fs; two alternating 256-byte buffers; compile path
   delegates to the ASM primitives so compiled code is unchanged
@@ -947,8 +1027,8 @@ docs/Graphics.md for the API.
   Consequences: (a) a `pad-rumble?` predicate built on that property would
   confidently tell F310 owners their pad rumbles — either find better grounding
   or document it as "the driver claims it can"; (b) a test asserting the call
-  succeeds passes on hardware with no motors, so it proves nothing —
-  see [[verify-fixes-against-broken-build]]; (c) **the dev hardware cannot
+  succeeds passes on hardware with no motors, so it proves nothing (a test
+  must be run against the BROKEN build before it is trusted); (c) **the dev hardware cannot
   verify this feature at all**, which is why the tutorial was written first,
   reversing the note above.
 - [ ] **Hotplug auto-reopen.** Today a game must notice `pad?` went false and
@@ -973,22 +1053,18 @@ docs/Graphics.md for the API.
   Requires only `shellutil.fs` — no FFI, no SDL, no decoder — so it runs on
   the board and under QEMU, and its tests use a stand-in shell script rather
   than needing a TTS installed. `help voice`, `docs/Speech.md`.
-- [ ] **Speech, tier 2: speaking** — `speech.fs` with `say ( c-addr u -- )`,
-  synthesizing into memory through flite and playing on a `sound.fs` channel;
-  `talking?` is the channel's own `ch-playing?`. Verified viable before
-  planning: `flite_text_to_wave` takes **2 arguments** and returns a
-  `cst_wave*` (`rate@8 num_samples@12 channels@16 samples*@24`), which fits
-  `(ccall)` as it stands — no callback, no floats, and `RTLD_NOW` alone
-  resolves the voice library. Bind lazily from `speech-open ( -- ior )` using
-  `(dlopen)`/`(dlsym)` so a machine without libflite gets an ior rather than
-  an abort at `require` time. Freeing flite's buffer straight after `ch-put`
-  is safe — `SDL_PutAudioStreamData` copies.
-- [ ] **Dark Star phrases** — render the ~11 phrases of the original's
-  vocabulary into a `voice/` directory beside the game, restore `Speech?`,
-  and wire `SayEnd`'s random win/lose pick and `GoGoGo`'s "don't talk over
-  yourself" gate to `ch-playing?`. Costs the game **no new runtime
-  dependency** (it already has `wav.fs`), and self-rendered phrases avoid the
-  rights question hanging over the original's art.
+- [x] **Speech, tier 2: speaking — SHIPPED 2026-08-10** (`speech.fs`). `say
+  ( c-addr u -- )` synthesizes into memory through flite and plays on a
+  `sound.fs` channel; `talking?` is that channel's own `ch-playing?`. Speech
+  keeps its own channel, so successive says queue instead of overlapping and a
+  phrase never waits behind a sound effect. Binding is lazy, so `require` never
+  aborts on a machine without libflite. `say` BLOCKS while synthesizing —
+  7 ms for "Go!", 38 ms for a sentence, against a 16.7 ms frame — which is why
+  `voice.fs` stays the answer inside a game loop.
+- [x] **Dark Star phrases — SHIPPED 2026-08-09.** 14 phrases rendered with
+  piper into a `voice/` directory beside the game, played through `wav.fs`, so
+  the game gained no new runtime dependency and self-rendered audio sidesteps
+  the rights question hanging over the original's art.
 - [ ] SDL_GPU 3D backend behind the surface API (SDL3-only API; see Planning.md)
 - [ ] Game demos (snake, sprites)
 
@@ -1011,6 +1087,46 @@ docs/Graphics.md for the API.
 ---
 
 ## Phase 8: Threading and Locals
+
+- [x] **The REPL's data stack was half a worker's.** RESOLVED 2026-08-11.
+  `DATA_STACK_SIZE` was 4096 bytes (512 cells) while `thread-dstack` in
+  `src/forth/threads.fs` was 8192 — two numbers, in two files, in two
+  languages, that nothing explained. Noticed while sizing the locals stack.
+
+  Fixed by making it **one constant, not two equal ones**: `DATA_STACK_SIZE`
+  is 8192 in `src/config.inc` and `threads.fs` reads it back through
+  `(dstack-size)`, so a REPL/worker difference can no longer be expressed.
+  Two constants that are *supposed* to stay equal is the arrangement that
+  produced the drift; one makes it unrepresentable. Raised rather than
+  lowered: no working program breaks by being given more room, whereas
+  halving the workers' could break one that works today.
+
+  `THREAD_RSTACK_SIZE` stays alone — the REPL's return stack is the process
+  stack (~8 MB) from the kernel, so there is nothing to unify it with.
+
+  Nothing in the suites depended on the old figure (the `4096`s in the tests
+  are a page-size fixture, a pty read buffer and a path length); two doc pages
+  stated it and were updated. The worry that made this a separate item — that
+  the guard-page tests fault against this size — turned out not to bite: those
+  tests overflow by looping until they fault, so the size only changes how
+  long they take.
+
+- [x] **Locals word set (section 13).** SHIPPED 2026-08-11..13, both arches, in
+  three stages: the runtime frame and its unwind contract; `{: … :}` with
+  open-coded references; then `to`, the shadow note, and the rest of the
+  declaration (`|`, `--`). See docs/Locals.md for what the building of it
+  corrected in the design, and docs/Language-Reference/Locals.md for the user
+  page. `does>` is refused, deliberately.
+  **ARM64 timings: DONE 2026-08-15** on the Pi 400, and they earned their hour.
+  The "open-coding beats a call" claim held — a reference is 0.62 ns against
+  2.24 ns for the `dup` it replaces — but the measurement found the FRAME
+  costing 28 ns a call, flat in the number of locals, because its cell count
+  travelled as a `LITERAL`. Fixed (staging `115f09d`), and the literal itself
+  the day after. A reference is still six instructions on ARM64 to x86's four,
+  since finding LP takes four instructions there and one on x86; that is the
+  one gap left, it is explained rather than open, and an X20 experiment to
+  close it was built and rejected. All of it in docs/Locals.md.
+  Original research entry follows.
 
 - [ ] Locals word set (section 13) — Gforth-style separate locals stack
   - **Researched 2026-08-10: see docs/Locals.md.** Verdict: build it, runtime
@@ -1076,22 +1192,181 @@ docs/Graphics.md for the API.
     communication path — step 2; a thread-aware SIGSEGV handler (wanted for a
     nicer report now that fences make the failure loud); per-thread locals
     stack; stack sizing (fixed constants today)
-  - [ ] **`seed` should be thread-local — `random`/`rnd` are unusable from
-    workers today.** Both read-modify-write one global `seed` cell, so N
-    threads calling `rnd` fight over a single cache line: measured 2026-08-06,
-    4 threads ran **4x slower** than 1, and no lock is involved — a line simply
-    cannot be written by two cores at once. The results are also wrong, since
-    the RMW is not atomic and the threads share one stream instead of running
-    independent ones. Step 0's TLS machinery makes the cell itself a one-line
-    change; the real design question is **seeding**: `.tdata` supplies a
-    constant initial image, so every worker would start from the same seed and
-    replay the same sequence unless the trampoline mixes in something
-    per-thread. `examples/dice.fs` works around it by giving each worker a seed
-    in memory it allocated itself.
+  - [x] **`seed` is thread-local — DONE 2026-08-11** (branch tlsseed).
+    `random`/`rnd` are usable from workers now. The cell moved out of the
+    dictionary into the TLS block on both arches, exposed by an ASM word
+    `seed ( -- a-addr )` exactly like `base`, so `42 seed !` and `0 seed !`
+    read and behave as they always did — per thread.
+
+    Both halves of the old defect measured before and after: two workers
+    drawing 2000 values each shared **1707** of them (one interleaved stream,
+    with lost updates, since the read-modify-write was never atomic) and now
+    share **0**. The performance half was the 2026-08-06 finding, 4 threads
+    **4x slower** than 1 from a single contended cache line.
+
+    The design question was seeding, as flagged: `.tdata` is a constant image,
+    so every worker would have started from the same number and replayed the
+    same sequence — independent but identical, which is *harder* to spot than
+    the shared cell, because from inside one thread it looks perfect. The
+    trampoline therefore seeds each worker from `entropy`, falling back to the
+    context-block address scrambled by the golden-ratio constant — a fallback
+    that had to be per-thread too, since a constant there rebuilds the bug.
+
+    The seeding sits **before** the trampoline switches stacks, which is the
+    last point where the C stack's ABI-guaranteed alignment is still in hand.
+    Seeding after the switch calls on the worker's *return* stack, aligned only
+    as far as `ctx.rtop` happens to be — and AArch64 faults on a misaligned
+    `SP` rather than tolerating it. x86-64 also pads by 8 so `RSP` is 16-byte
+    aligned at the `call`; measured at the call site, 8 without the pad and 0
+    with it. Note the engine's Forth-side calls into the platform layer are
+    *deliberately* not SysV-aligned — `RSP` is the Forth return stack there —
+    so an alignment tripwire in `platform_random` fires on ordinary startup and
+    proves nothing about this path.
+
+    Writing the test taught the same lesson twice: the obvious check, "the
+    worker's value differs from the REPL's", **passes with the fix removed** —
+    a single shared seed also hands the worker a different (merely *next*)
+    value. It proved nothing. The real guard is cross-process: run twice and
+    require the worker's first draw to differ between runs.
+
+    `examples/dice.fs` was then simplified onto it: each worker sets its own
+    `seed` instead of `allocate`ing a cell and freeing it. Same results for
+    the same seed, and the same speed (200M battles: 82.1/21.1/6.68 s at
+    1/4/16 workers, against 82.2/21.3/6.69 s before), which is the point worth
+    recording — a TLS cell is per-thread memory, so there is no false sharing
+    to reintroduce.
+
+    **The dictionary is case-insensitive, so dice.fs's `value SEED` had been
+    silently redefining the core `seed` for months.** Harmless until the file
+    wanted the core word, then `seed !` wrote through an integer and
+    segfaulted. Renamed to `RUN-SEED`. Note the redefinition warning is
+    interactive-only — loading from a file says nothing, so a user library can
+    shadow a core word with no sign at all.
+
+- [x] **`random` is splitmix64, not xorshift64 — DONE 2026-08-11** (branch
+  tlsseed). Two reasons, and the first is the one that made it worth doing:
+  - xorshift64 has a **fixed point at 0**, so `0 seed !` killed the generator
+    dead. That needed a special case inside `random` and a paragraph in
+    `help random` explaining why zero was not like other seeds. splitmix64 has
+    no bad state — the guard, the paragraph, and the `1 or` idiom in every
+    seeding example all deleted.
+  - xorshift64 is **F2-linear**: the 64 bits of one output are linear
+    combinations of each other, so slicing one draw into several numbers is
+    wrong. `examples/dice.fs` found it the hard way, with a tail ~50% too
+    heavy while matching on a naive counter, the mean AND the standard
+    deviation.
+
+  Speed is a wash (20M draws: xorshift 1086/1061 ms, splitmix 1221/1027 ms) —
+  in STC you are timing dispatch, not the multiplies. Nothing asserted a
+  literal random value, so no documented output moved.
+
+  Testing it took three attempts, which is the part worth remembering. Property
+  tests (repeats, differs, non-zero) pass on **any** self-consistent generator.
+  A marginal-uniformity test also passes on both, because xorshift64's fields
+  are individually uniform and only jointly dependent — that is exactly why
+  dice.fs's mean and sd looked right while its tail was wrong. What works is
+  (a) the published **reference vectors**, pinning the algorithm itself, and
+  (b) **xor-additivity**: F2-linearity means `f(a) xor f(b) = f(a xor b)`
+  exactly, which xorshift64 satisfies and splitmix64 does not. Instant, and it
+  names the real property.
+
+  `examples/dice.fs` then lost 28 lines and got 13% faster (200M battles:
+  71.8/18.5/6.44 s at 1/4/16 workers, from 82.1/21.1/6.68 s), because it could
+  finally delete its private splitmix64, the state address threaded through
+  `battle`/`4roll`/`escape`, the `allocate`/`free` pair, and a dozen lines of
+  `/dev/urandom` handling that `entropy` replaces with one word.
 
 ---
 
 ## Future / Usability
+
+- [x] **`help <word>` missed 53 names across six libraries — DONE 2026-08-11**
+  (branch helpcov). The reference audit swept the core dictionary, the
+  wav/audio tree and `speech.fs`, but no further — and a library this audit
+  does not `require` is invisible to it. Found 2026-08-10 when `help on-stop`
+  answered "no help". The real count was **53**, not the ~40 estimated —
+  and not the 51 first claimed here, which was arithmetic over two partial
+  measurements rather than one measurement of the whole. Verified by running
+  the finished audit against a worktree of the pre-change commit:
+  - **31 in `pad.fs`** — the button, axis and event constants, described in
+    `Pad.md`'s at-a-glance block but with no `##` entry. Given **7 grouped
+    headings** (`## pad-south pad-east pad-west pad-north ( -- b )` and so
+    on): a heading indexes every name before its `( `, verified to at least
+    15, so one entry covers a whole family without 31 stubs. Chosen over
+    teaching the audit that at-a-glance names count, which would have turned
+    the audit green while `help pad-south` still failed — the audit is the
+    proxy, `help <word>` is the contract.
+  - **12 raw SDL names** (11 in `sdl3.fs`, plus `SDL_INIT_GAMEPAD` in
+    `pad.fs`), split by the rule below. Documented: `sdl-width`,
+    `sdl-height`, `sdl-event`, `sdl-error`. Parenthesised: `(sdl-win)`,
+    `(sdl-ren)`, `(sdl-tex)` and the five raw SDL enums.
+  - **10 more the estimate never counted**, found by measuring every library
+    rather than the two named: 3 in `fontcore.fs`, 5 in `threads.fs`, and the
+    two font **selector words** `terminus-8x16` / `vga-8x8` — which only
+    became visible once the audit loaded the font files themselves, and are
+    the last two names anyone would guess were missing, since switching fonts
+    is the headline feature of that page. Of those, `running` and `finished`
+    became `(running)`/`(finished)` — internal ctx.state values, and as bare
+    names in a flat dictionary two of the likeliest words for a game to want.
+  - **A third broken heading separator**, the cause of the whole `fontcore`
+    group: `## font-w ( -- n ) · font-h ( -- n )` — a middle dot, where the
+    earlier fix was for `/`. The indexer stops at the first `(`, so every
+    name after it was lost. Only two headings used it; both converted.
+
+  The audit now `require`s **every** `src/forth/*.fs`, and a second check
+  proves it rather than asserting it: each `require` leaves an `(inc:<file>)`
+  guard word, so the dictionary reports what was loaded and an unswept file
+  fails by name. Worth knowing why that check exists — the first version of
+  this fix listed five libraries and claimed in a comment that the rest came
+  in transitively. `graphics.fs` did (via `sdl3.fs`); `shellutil.fs`,
+  `voice.fs` and `disasm.fs` were simply never loaded. The hole the audit
+  exists to close had reopened inside the fix for it, hidden behind a comment.
+
+  The rule applied, unchanged from the `snd-dev`/`snd-stream` case: a name a
+  user is expected to pass to something is API and needs a `##` entry; a
+  handle or an internal enum is `(parenthesised)`.
+
+  An earlier bug from the same session was already fixed: four entries used a
+  `## a ( eff ) / b ( eff )` heading, so `help pad-closeall`,
+  `help pad-hasaxis?`, `help pad-dy` and `help on-stop` all failed. The
+  supported form is `## a b ( eff )`.
+
+- [x] **`docs/Install.md` — one page from `git clone` to a working setup —
+  DONE 2026-08-11** (branch install). Leads with the property that was
+  invisible before: nothing is required to build but `binutils`, `gcc` and
+  `make`, because every library is `dlopen`ed on demand and a missing one
+  costs exactly its own feature. Covers clone, all three build cases, the
+  four test targets, `. ./setup.sh` and what it exports, first run, and the
+  optional libraries with what each one buys. `README.md` and
+  `docs/BasicForth_Manual.md` lost their duplicate §Prerequisites and point
+  at it; `Graphics.md`, `Speech.md` gained cross-references.
+
+  Facts pinned down while writing it, each verified on this machine:
+  - **`gcc` is required to BUILD, not just for unit tests** — both the README
+    and the Manual said "for unit tests". It links the binary
+    (`$(CC) -nostartfiles -no-pie … -ldl`), which is what makes the FFI's
+    `dlopen` work at all. The claim had been wrong in two places at once.
+  - **SDL3 has no apt package on Ubuntu 22.04 / Debian bookworm.** Built
+    3.4.12 from source into a scratch prefix to check the recipe end to end,
+    and confirmed with `LD_DEBUG=libs` that BasicForth loaded *that* build,
+    then opened a window and drew on it. cmake's default prefix is
+    `/usr/local`; `sudo ldconfig` afterwards is required, not optional.
+  - **cmake's "Enabled backends" summary is the check that matters.** SDL
+    builds happily with no video or audio backend when the dev headers are
+    missing, and the failure only shows up later at `sdl-open`. SDL's own
+    `docs/README-linux.md` has the per-distribution package list, so the page
+    points at it rather than copying a list that would rot.
+  - **A missing library does not degrade gracefully in the way you might
+    assume.** `require sdl3.fs` prints `sdl3.fs: needs the library
+    libSDL3.so.0 -- see help install` (it was `dlopen: cannot load library`
+    before `needs-lib`) and the session continues — but loading *stops
+    there*, so the words are simply
+    absent and a later `snd-open` reports `? snd-open`. Verified under
+    `bwrap` with `/usr/local/lib` hidden. The page says so, since "why is
+    this word missing" is the question that actually gets asked.
+  - `help`/`tutorial` without `BASICFORTH_DOCS` answer
+    `(BASICFORTH_DOCS not set)` — quoted literally, since that string is what
+    someone will search for.
 
 - [x] **REPL "option B": emit the newline lazily, before the first byte of
   output — DONE 2026-07-28** (branch lazy-newline). The one untried idea from
@@ -1433,10 +1708,34 @@ docs/Graphics.md for the API.
   Implementation stages (each independently useful, in order):
   - [x] exec primitive — landed as shellutil.fs ((cmd-run)/(cmd-open)/
     (cmd-line1) over `open-pipe`, quoted interpolation via (cmd+q))
-  - [ ] `needs-cmd` / `needs-lib` — polite system-requirement probes at
-    load time (useful today: sdl3.fs, sound.fs, future disasm.fs)
-  - [ ] `deps <name>` — soft-check a file's leading dep block without
-    loading it; report all missing requirements at once
+  - [x] `needs-cmd` / `needs-lib` — polite system-requirement probes at
+    load time. Done 2026-08-13 (branch needslib). The name is one word and
+    the rest of the line is an install hint, cut at a `\` so ordinary
+    comments still work. New `(exec?)` primitive (faccessat X_OK **and**
+    newfstatat S_IFREG — X_OK alone accepts a directory); `needs-lib`
+    probes with a real `dlopen` and keeps the handle for the bind that
+    follows. Not yet adopted by the built-in libraries — that is its own
+    step, since each one currently fails its own way.
+  - [x] `deps <name>` + the soft forms `wants-cmd` / `wants-lib`. Done
+    2026-08-14 (branch deps). A soft requirement is a **declaration, not a
+    check**: it parses its line and does nothing else — no probe, no
+    message, no abort — so speech.fs keeps answering `speech-open
+    ( -- ior )`, voice.fs keeps treating piper as a default that
+    `voice-cmd!` replaces, and disasm.fs keeps re-probing for objdump on
+    every `dis` (installing binutils mid-session still works without a
+    reload). All three now carry a dep block; `needs-*` in any of them
+    would have broken a published contract.
+    `deps` re-runs the block with a mode flag set, so the same word that
+    would act at load time reports instead — one parser, not two. It
+    follows `require` into the files named there, because the flat answer
+    can lie (`require sound.fs  found` is no comfort where sound.fs itself
+    cannot load), and nested files print **only if something in them is
+    missing**. File-only resolution for now: `.fs` appended if absent,
+    CWD then BASICFORTH_PATH. A word-name fallback via the header's
+    srcid — `deps dis` finding disasm.fs the way `see` does — was
+    considered and deferred: it can only answer for words you already
+    have, and the main question ("what will this need *before* I load
+    it?") can only go through the file.
   - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
     BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
     third-party packages)
@@ -2264,6 +2563,13 @@ the hunt starts in the feature, not the compiler. Optimizers want a stable,
 well-covered base underneath precisely so a regression tells you which
 layer moved. Building one now taxes the debugging of everything else.
 
+**The intent is a dedicated optimisation pass once the feature set settles**
+(confirmed 2026-08-16), not a series of opportunistic tweaks. Two consequences
+worth acting on when it opens: start by reading what other Forths already do —
+see the Mecrisp item at the end of this section — and expect the items here to
+share machinery rather than each carry its own, since the inliner and constant
+folding both want the same "what did I just compile" state.
+
 **Re-entry conditions** — reopen when *both* hold:
 
 1. The module/editing interface has stopped changing shape (the use-testing
@@ -2334,20 +2640,312 @@ smaller risk surface.
   loop. Smaller win than the inliner (0.41 s → ~0.36 s on the empty
   benchmark) but a cute, self-contained peephole.
 
+- [ ] **Constant folding.** *(Deferred — see above.)* `1024 4 *` written in
+  ordinary code should compile to `4096`, not to two pushes and a call. This is
+  the automatic cousin of `[ 1024 4 * ] literal`, and the distinction is worth
+  keeping straight: `[ … ]` is a *semantic escape* — it runs arbitrary code at
+  compile time, including a file read — while folding is the compiler noticing
+  that operands are already known and a word is pure. They overlap on exactly
+  one case, constant arithmetic; neither subsumes the other.
+  - **The 2026-08-16 literal change made this cheap.** A number now compiles
+    through one choke point, `compile_literal_imm`, which knows the value it
+    emitted and how many bytes it took. So a fold is not a compiler pass: keep
+    the last one or two (value, address, size) triples, and when a foldable
+    word arrives with literals immediately behind it, rewind `HERE` and emit a
+    single literal. That is a small amount of compile-time state, in the one
+    place that already has it.
+  - **Three hazards, in order of how quietly they bite.** (a) *Which words are
+    foldable* is a curated list — `+ * and or xor lshift rshift` yes, anything
+    touching memory, I/O or the return stack no — and a wrong entry silently
+    miscompiles, the same failure class as the inliner's byte table. (b)
+    *Boundaries*: the literals must be genuinely adjacent in the instruction
+    stream and not jumped into, so a branch target, a `[`, or an immediate word
+    between them all forbid the fold. Tracking "what was compiled last" is easy;
+    knowing nothing can *arrive* at that address is the real work. (c) `dis`
+    readability again — folded code stops resembling the source, which the
+    Machine-Code tutorial trades on.
+  - **Interaction worth checking early:** folding and the peephole inliner want
+    the same "what did I just compile" state, so whichever lands first should
+    put that state somewhere the other can use rather than growing its own.
+
+- [ ] **Read other Forths' optimisers before starting the pass.**
+  **Mecrisp** (<https://mecrisp.sourceforge.net/>, Matthias Koch) is the one to
+  study first: it compiles to native code on small targets and does constant
+  folding and peephole optimisation in a compiler that stays remarkably small,
+  which is the shape this project wants — not a separate optimising pass over an
+  IR, but a compiler that emits better code as it goes. Worth understanding what
+  it folds, what it refuses to fold, and how it decides, before designing ours.
+  Note the target difference when reading: Mecrisp-Stellaris is Cortex-M, where
+  code size and flash matter more than branch prediction, so its trade-offs are
+  not automatically ours. gforth's `compile,`-time behaviour and CMForth are the
+  other obvious references.
+
+### Measured 2026-08-15 on the Pi 400 — the literal is the engine's slowest step
+
+`tests/bench-locals.fs`, run natively on both arches (ARM64 numbers are the Pi
+400 at 1.8 GHz, ondemand but pinned at max throughout; run-to-run spread ~1%).
+Per-access, with the shared `drop` subtracted:
+
+| | ARM64 | x86-64 |
+|---|---|---|
+| local reference | 0.62 ns (~1.1 cyc) | 0.10 ns |
+| `dup` | 2.24 ns | 0.82 ns |
+| colon call | 1.94 ns | 0.80 ns |
+| **LITERAL** | **10.6 ns (~19 cyc)** | **1.68 ns** |
+| `variable @` | 15.1 ns | 9.9 ns |
+| locals frame, build+release | 27.8 ns | 7.2 ns |
+
+The open-coded reference is vindicated: ~1 cycle, cheaper than the `dup` it
+replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
+4. What the trip actually found is below.
+
+**The `LITERAL` row is history as of 2026-08-16.** It is what justified the
+work below, and is kept for that reason — but a number now compiles to an
+immediate, and the row is indistinguishable from a bare call+ret on both
+arches. Re-measured figures are in docs/Locals.md, "The literal was fixed too".
+The whole-word locals-vs-juggling result moved by less than the run-to-run
+spread, so nothing below needs revisiting.
+
+- [x] **Inline the locals frame instead of calling it.** DONE 2026-08-15
+  (branch `locals-frame`): `(lframe,)` emits the build open-coded and
+  `compile_local_release` the release, on both arches. Frame build+release
+  **27.8 ns → 0.4 ns on ARM64**, 7.2 → 0.4 on x86; the whole-word case went
+  15.2 → 6.4 ns on x86, which now BEATS the juggled spelling's 8.6. Verified on
+  Pi 400 hardware, not QEMU, since this writes code at run time. **The ARM64
+  whole-word case is still 26.0 vs 19.6 and the parts do not explain the
+  residual — see the next item.** Original report follows.
+
+  The frame costs 27.8 ns per call on ARM64 and is FLAT in the
+  number of locals — a frame of 1 costs what a frame of 3 does. That flatness is
+  the tell: the cell count reaches `(lframe)`/`(lunframe)` as a runtime
+  `LITERAL`, twice per call, and two literals are ~21 of the 28 ns. The count is
+  a compile-time constant, so it should never be pushed at all. Emit the frame
+  open-coded, the way references already are: read LP, adjust, straight-line
+  moves into the slots, zeros written directly into the `|` slots (each of which
+  currently costs its own literal — `{: a | x y z :}` pays three more).
+  Consequence today, measured with the same function written both ways:
+  `(a+b)*(b+c)` runs **49.0 ns with locals vs 19.6 ns juggled on ARM64**
+  (15.2 vs 8.6 on x86), so a word needs ~17 references before locals break even.
+  This is NOT an ARM64 defect — x86 has it at 1.8x and the Pi only magnified it
+  3.5x. It was invisible because the x86 timing done when locals shipped
+  measured *references*, never a whole word.
+
+- [x] ~~**ARM64: a locals word still loses to juggling, and the parts do not say
+  why.**~~ EXPLAINED and CLOSED 2026-08-15, not by a fix. Counted rather than
+  guessed: the locals spelling is 196 bytes / 49 instructions against the
+  juggled one's 36 / 9 plus 3-instruction primitives — 2.1x the instructions
+  for 1.35x the time, at *better* IPC. A reference is six instructions on
+  ARM64 and **four of them just find LP** (`MRS` + two `ADD`s + load), where
+  x86 does it in one `mov %fs:`. That difference is the whole gap.
+  **An X20 LP-cache was built and rejected** (branch discarded): references
+  6 → 2 instructions, `f-locals` 26.4 → 23.0 ns, code 27% smaller, all Pi
+  suites green including fault recovery — and **no measurable change on a
+  realistic workload** (an `acc` loop with `to s`: 0.213 s → 0.214 s), because
+  real loop bodies are dominated by primitive calls, not references. A
+  synthetic row that moves while the workload it stands for does not is the
+  signal to stop. Full write-up, including what a *global* X20 reservation
+  would and would not buy and why its failure mode is a silent frame leak, is
+  in docs/Locals.md. **Reopen only if a real workload shows locals costing
+  something on ARM64** — not on the strength of a microbenchmark.
+
+- [x] **Compile a literal as an immediate, not as `call lit` + inline data.**
+  DONE 2026-08-16 (branch `literal-immediate`, merge `84cf285`), on both
+  arches. A 10M-iteration loop of `i 5 * drop` went **0.172 s → 0.065 s on
+  ARM64** and 0.033 → 0.020 on x86; a loop containing a constant is now faster
+  than the same loop containing a `dup`, where it used to be two and a half
+  times slower. The readers were scoped first as the plan required — `dis` now
+  decodes the immediate forms — and `compile_literal`'s *other* job, allocating
+  a patchable cell at a known offset for `>body`/`TO`/`IS`/`CREATE`, is
+  unchanged: those keep the call form, because there the cell is storage rather
+  than a value, which is why docs/Defining_Words.md needed no edit. `[']` and
+  `POSTPONE` keep it too, deliberately — they are cold, and `dis` naming what
+  they point at (`\ xt: dup`) is what the Machine-Code tutorial teaches. So the
+  win is on plain numbers, which is where the volume is. Original report
+  follows.
+  The single biggest lever in the engine, because literals are in nearly every
+  word: every number, `[']`, `postpone literal`. `forth_lit` finds its operand
+  through its own return address and returns past it, so **every literal
+  mispredicts the return-stack predictor** — that is where the 19 cycles go.
+  Emitting "materialise the immediate, bump DSP, store" instead removes the call
+  entirely. **This is not the `lit`-cannot-be-inlined case noted above**: that
+  rules out copying `lit`'s BODY into the caller, which really is impossible
+  since the body depends on the return-address trick. Emitting a different
+  instruction sequence has no call and no return address, so the objection does
+  not apply. The size is close to free: ARM64 is 12 bytes today (BL + 8-byte
+  value) and 12 bytes inlined for a small value (`movz`/`sub`/`str`); on x86 a
+  value fitting a signed 32-bit immediate gets *smaller*, and only full 64-bit
+  values grow ~4 bytes.
+  **Scope the readers of compiled code FIRST.** `dis` decodes the current shape
+  by recognising `call lit` plus payload (it prints `\ literal: 3`), and
+  anything else that walks compiled code will too — find them all before
+  touching the emitter, or every word in the system decompiles wrongly. Same
+  class as a message change breaking a consumer keyed to the old format.
+  Do this AFTER the frame fix, which proves the inlining machinery on a smaller
+  blast radius.
+
+- [ ] **ARM64: `to <local>` looks disproportionately expensive.** Ten
+  `a to a` pairs — a reference and a store, both open-coded, no call in either —
+  cost **6.5 ns per pair on ARM64 against 0.54 ns on x86**, a 12x gap where the
+  reference alone shows only 6x. Either the ARM64 store emitter has a
+  pathological sequence (a redundant TLS read? a needless dependency chain?), or
+  the row is an artifact of being the one measurement with no `drop` in it and
+  so no serialising call between iterations. Not diagnosed — the number is
+  recorded here rather than explained. Check the emitted bytes first, and
+  re-measure with a `drop` in the loop to separate the two hypotheses before
+  changing anything.
+
 ## Future / Hardening
 
-- [ ] **Sweep the other libraries for public-looking names with no help entry.**
+- [x] **Sweep the other libraries for public-looking names with no help entry
+  — DONE 2026-08-11** (branch helpcov, with the `help`-coverage item above).
   The reference audit only ran over the CORE dictionary, so anything that
   appears after a `require` was invisible to it — `sound.fs` had `snd-dev` and
   `snd-stream`, raw SDL handles with undecorated names and no documentation,
   and nothing noticed. Brandon spotted it by trying `help snd-dev`.
-  Fixed for the audio tree, and there is now an audit covering
-  `require wav.fs`. The same check should be extended to `sdl3.fs`,
-  `graphics.fs`, `fontcore.fs` and `shellutil.fs` — a quick look shows sdl3.fs
-  leaves `SDL_INIT_VIDEO`, `XRGB8888`, `TEX_STREAMING` and `SCALE_NEAREST`
-  bare and undocumented, which is the same shape.
-  The rule to apply: a name a user is expected to pass to something is API and
+  The audit now loads every `src/forth/*.fs`, with a companion check that
+  fails by name if a library is not swept — see the `help`-coverage item for
+  why asserting transitive coverage in a comment was not enough.
+  The rule applied: a name a user is expected to pass to something is API and
   needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
+
+- [x] ~~**Sweep for `STATE`-only tests that mean "is a definition open".**~~
+  DONE 2026-08-16. Every `state` read on both arches was classified. Most are
+  legitimate — an IMMEDIATE word choosing compile-vs-interpret behaviour is
+  exactly what STATE is for, and so is the locals lookup, since a local does not
+  exist at compile time and must NOT resolve inside `[ ]`.
+  **Two were bugs, both in error paths that decide whether to abandon a
+  definition.** `: foo [ nosuchword` left the partial header alive, so the next
+  `:` was refused — naming the wrong word, because the guard reports the name
+  being defined and not the one actually open — and only `] ;` could recover,
+  while the identical typo one word to the left abandoned the definition
+  cleanly. The compile-only path was worse: it jumped straight to the error
+  return and never consulted STATE at all, so `: foo [ if` did the same. Both
+  now use the two-part test, and the compile-only exit routes through the shared
+  abort decision instead of past it.
+  **Found while fixing it, NOT fixed, filed below:** an error inside a nested
+  `EVALUATE` is swallowed — the line reports ` ok` and a broken word gets
+  defined. The first version of the fix made that worse by abandoning the outer
+  definition mid-line while the line kept compiling, so the abort is now gated
+  to the outermost `interpret_line`.
+  **Considered and deliberately kept:** the continuation prompt is STATE-only,
+  so `: foo [ ` shows `> ` rather than `... `. That is arguably correct — you
+  really are interpreting — and the line editor's scroll margin tracks STATE the
+  same way, so changing one would desynchronise the pair.
+  Original report follows.
+
+- [ ] ~~Sweep for `STATE`-only tests that mean "is a definition open".~~ Three
+  wedges in one week came from conflating them, because `[` interprets *inside*
+  an open definition: the definition-open guard (2026-08-10), the locals-list
+  clears, and `dict_full`'s rollback (2026-08-13) — the last of which left a
+  partial header alive and then refused every subsequent definition, silently.
+  The correct test is `STATE` **or** `F_HIDDEN` on LATEST; `main.s` has had the
+  right idiom, with the reasoning in a comment, since the ` ok` suppression was
+  written. Grep both arches for `state` reads that decide whether to roll back,
+  abort, or suppress, and check each against `: t [ … ] ;`.
+
+- [ ] **An error inside a nested `EVALUATE` is swallowed.** Found 2026-08-16
+  during the STATE sweep, pre-existing and unrelated to it:
+
+      : foo 1 [ s" nosuchword" evaluate ] 2 + . ;   \ prints ` ok`
+
+  No `? nosuchword`, no failure — and `foo` is defined, built from whatever
+  survived. The nested `interpret_line` returns an error status that `EVALUATE`
+  discards, so the outer line carries on as though nothing happened.
+  **This is why the STATE-sweep abort had to be gated to the outermost level.**
+  Aborting from a nested error tore the enclosing definition down while its own
+  line kept compiling into the hole — trading a silent wrong answer for a
+  silent vanishing, which is worse. The real fix is propagation: an error inside
+  `EVALUATE` should abort the whole line the way one at the top level does, and
+  that means `EVALUATE` (and the `INCLUDED` path beside it) passing the status
+  up rather than dropping it. Pinned by a test in the meantime, so the current
+  behaviour cannot change without someone noticing.
+
+  **The same nesting flaw exists on the compiling arm, and is older.** When
+  `STATE` is non-zero the abort is not gated at all, so an error inside a
+  nested evaluation rolls back to the *global* anchor and takes the enclosing
+  definition with it:
+
+      : foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+      \ both foo and inner vanish, silently, and the line still prints ` ok`
+
+  Verified identical before and after the 2026-08-16 sweep, so it is not that
+  change's doing — but it is why the gate added there covers only the
+  STATE-0 route. Gating this arm as well is NOT the fix: skipping the abort
+  would leave a hidden header and `STATE` set, wedging the session harder than
+  the bug it avoids. The anchor (`saved_latest`/`saved_here`/`colon_dsp`) is
+  global by design — see the recovery-anchor note — so the real repair is the
+  same one: propagate the error out of `EVALUATE` so the outer line aborts too,
+  rather than trying to unwind one level from the inside.
+
+- [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
+  gating the locals shadow warning: it returns 0 at the prompt *and* during a
+  file load, so it cannot distinguish the two, which is most of what the word
+  is for. Forth 2012 says SOURCE-ID is 0 for the user input device, -1 for
+  EVALUATE, and a file id when INCLUDED-ing.
+  Nothing depends on the broken behaviour today — both the `redefined` and the
+  locals shadow warning gate on the internal `cur_source_id`, now reachable
+  from Forth as `(loading?)`. So this is a conformance gap rather than a live
+  bug, but it is a trap: the obvious word for "am I loading a file" silently
+  answers no.
+  **Three plausible substitutes are all wrong**, worth recording since each
+  looks right under casual testing:
+  - `(ldg-n)` is pushed by the *Forth* `included` wrapper, so a script named on
+    the command line bypasses it and reads as though someone were typing.
+  - `cur_source_id` is SEE metadata from a 64-entry table; `src_register`
+    answers 0 once it is full, so the 65th file of a session loads with the
+    flag clear. **The `redefined` warning had gated on this for months** and
+    would have started firing mid-load on a big enough session.
+  - `source-id` itself, per the entry above.
+
+  All three now read `in_load`, a flag `forth_included` sets and restores
+  around each file, exposed to Forth as `(loading?)`. It cannot run out and it
+  covers every path a file arrives by. Each wrong gate passed a test against
+  `included`; only testing the *other* paths — command line, and a session past
+  64 files — separated them.
+
+  Two things `in_load` itself needed, both the same shape as bugs the locals
+  work already hit:
+  - **It is saved on the loader's frame, and an uncaught `THROW` abandons that
+    frame.** An aborted load left the flag set for the rest of the session,
+    silencing both warnings at the prompt. Cleared on the paths that reset to
+    the REPL, exactly like `locals_count`.
+  - **`dict_full` reaches the REPL by two routes**, and its "were we
+    compiling?" test guards only one. Clearing the flag under that test skipped
+    the interpreting case, so a dictionary exhausted mid-load wedged it. Both
+    clears are unconditional now. x86 only: ARM64 already had them above.
+  - **...and that test was wrong for the ROLLBACK too**, which is the bigger
+    find. `[` interprets *inside* an open definition, so a dictionary exhausted
+    within `[ … ]` left the partial header alive — and the definition-open
+    guard then refused **every later definition**, wedging the session with
+    nothing on screen to explain it. A pre-existing bug, older than the locals
+    work, exposed only because moving the locals clear raised the question of
+    what else that test was guarding. `dict_full` now checks LATEST's hidden
+    bit alongside `STATE` and drops the header, as `.Lcf_abort` does. Fixed on
+    both arches. This is [[state-is-not-definition-open]] for the third time in
+    a week: **"are we compiling" is never the same question as "is a definition
+    open"**, and every place that conflates them is a latent wedge.
+  - **On x86 the save changed the parity of `forth_included`'s entry pushes**,
+    and the line loop counts its own 16-byte alignment from there ("3 pushes +
+    an 8-byte pad"). An odd push silently inverts what that padding achieves,
+    so the flag is pushed as a pair. ARM64 was unaffected — `STP` is already a
+    16-byte pair, which is the rare case where the fixed-width architecture is
+    the more forgiving one. Fixing it means returning the file id from the
+  loader, and checking `EVALUATE` reports -1 while it is at it.
+
+- [ ] **A skip whose reason depends on how the suite was invoked reads as a
+  fact about the machine.** The integration suite is deliberately
+  environment-independent — it never sources `setup.sh` — so the real-engine
+  render test skips with `(VOICE_ENGINE_CMD not set)` on a machine that has
+  piper installed and working. During the v0.16.0 verification that was read as
+  "piper is not on the Pi", and reported as such, when in fact sourcing
+  `setup.sh` first makes the test run and PASS: the Pi then matches x86 exactly
+  at 1180/1180 with no skips anywhere. Two fixes worth considering, and they
+  are not exclusive: word the skip so it names the remedy
+  (`VOICE_ENGINE_CMD not set — source setup.sh`), and have the suite derive the
+  engine the way `setup.sh` does (`command -v piper`) so the capability, not
+  the caller's shell, decides. Found 2026-08-16. The general point is the one
+  in `derive-dont-record`: a skip is a claim about the world, and this one was
+  really a claim about the command line.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
@@ -2368,6 +2966,19 @@ smaller risk surface.
   A stricter follow-up worth considering: make `assert_result` compare the
   result line **exactly** rather than by substring, so a test cannot pass on a
   coincidental match either.
+
+- [ ] **The EVALUATE error-wording bracketing has no probe that still bites.**
+  `assert_output "a nested evaluate does not leak its error wording"` worked by
+  raising a wording-*less* error after a nested `EVALUATE`, and the only such
+  site reachable at run time was `cf_check_tag`. Since 2026-08-11 that site
+  sets its own wording, so it overwrites any leak instead of exposing one —
+  the test now asserts the wording is right, which is worth having but is not
+  what its name claims. To restore the probe, find another site that sets
+  `err_token` but not `err_pfx` and is reachable inside one outer token:
+  `.Lsq_no_close` (unterminated `s"`) is one; `.Lto_not_found` and
+  `.Lpostpone_not_found` are others. Then verify it the only way that counts —
+  remove the bracketing and watch the test go red. Noted rather than fixed
+  because the honest fix is a new test, not an edit to this one.
 
 - [ ] **A stale binary against a new `core.fs` now produces WRONG OUTPUT, not
   an obvious failure — make the mismatch loud.** Found the hard way

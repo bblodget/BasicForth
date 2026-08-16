@@ -29,6 +29,11 @@ At a glance:
     included        ( c u -- )                include, name on the stack
     require <name>  ( "name" -- )             include, only if not yet loaded
     required        ( c u -- )                require, name on the stack
+    needs-cmd <cmd> ( "name" ccc -- )         this file needs a system command
+    needs-lib <so>  ( "name" ccc -- )         this file needs a shared library
+    wants-cmd <cmd> ( "name" ccc -- )         ...and works without it
+    wants-lib <so>  ( "name" ccc -- )         ...and works without it
+    deps <name>     ( "name" -- )             check a file's requirements
     open-pipe       ( c u fam -- fid ior )    pipe over a shell command
     close-pipe      ( fid -- wret wior )      finish a pipe, reap the child
     stdin stdout stderr  ( -- fileid )        the standard streams
@@ -142,6 +147,122 @@ otherwise meet that as an unexplained `? name` further down:
 Like `require`, with the filename as a string on the stack.
 
     \ s" sdl3.fs" required
+
+## needs-cmd ( "name" ccc -- )
+State that this file needs an external command, and stop the load if it is not
+on `PATH`. Goes at the top of a file with the `require` lines — together they
+are its **dep block**, everything it needs before its first definition.
+
+    needs-cmd objdump         install binutils
+
+The name is one word. Everything after it on the line is a hint for whoever
+has to fix it — the part the name itself cannot tell them, since `objdump`
+does not say "binutils". The hint is optional, and stops at a `\` so an
+ordinary trailing comment still works.
+
+    disasm.fs: needs the command objdump -- install binutils
+
+The load stops **there**, before any of the file's definitions exist, so a
+package never half-loads: you either have the words or you have the reason you
+do not. It is a `-2 throw`, the same as `abort"`, so `catch` sees it.
+
+A name containing `/` is taken as a path and used as-is, with no search. What
+counts as found is what a shell would accept: a regular file this user can
+execute. A directory does not count, however searchable it is.
+
+The `PATH` walk follows the shell's rules exactly, including the two that
+surprise people. An **empty element means the current directory** — and `PATH`
+holds one more element than it has colons, so `:/usr/bin`, `/usr/bin:`,
+`/bin::/usr/bin` and the empty string all contain one. An **unset** `PATH` is
+different from an empty one: it falls back to `/bin:/usr/bin` and does not
+search the current directory at all.
+
+## needs-lib ( "name" ccc -- )
+The same, for a shared library — the ones the FFI opens by soname.
+
+    needs-lib libSDL3.so.0    see help install
+
+    sdl3.fs: needs the library libSDL3.so.0 -- see help install
+
+The probe is a real `dlopen`, so it answers the question that matters (will
+this library load, here, now) rather than guessing from a filename. The handle
+is kept and handed to the next `dlopen` of the same name, so declaring a
+library costs nothing over binding it — and guarantees the library that was
+checked is the library that gets bound.
+
+Declaring is worth it even though `dlopen` fails perfectly well on its own,
+because the two failures say different things. `dlopen` can only report what
+it tried; `needs-lib` reports what you should do about it.
+
+## wants-cmd ( "name" ccc -- )
+State that this file *uses* an external command but works without it. Same
+syntax as `needs-cmd`, opposite behaviour: it does not probe, does not print,
+and never stops the load.
+
+    wants-cmd objdump         install binutils
+
+A soft requirement is a **declaration, not a check**. It exists to be read by
+`deps`, and it stays silent at load time because a file that declares one is a
+file designed to run without it — saying anything would nag every user who is
+perfectly happy.
+
+Use it wherever aborting would break a promise the file makes. `disasm.fs`
+re-probes for `objdump` on every `dis`, so installing binutils mid-session
+works without a reload; `voice.fs` names `piper` only as a default that
+`voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )` rather
+than aborting. `needs-cmd` in any of those would take that away.
+
+## wants-lib ( "name" ccc -- )
+The same, for a shared library.
+
+    wants-lib libflite.so.1   install flite
+
+## deps ( "name" -- )
+Report what a file requires, and whether this machine has it — without loading
+a line of the file.
+
+    deps sdl3
+
+    sdl3.fs
+      require ffi.fs            loaded
+      require graphics.fs       found
+      needs-lib libSDL3.so.0    MISSING -- see help install
+    sdl3.fs will not load: 1 requirement missing.
+
+`.fs` is added if you leave it off, and the file is looked for in the current
+directory first and then on `BASICFORTH_PATH` — the same order `require` uses,
+so `deps` answers for the same file the load would pick.
+
+It reads only the **dep block**: the file's leading run of blank lines,
+whole-line comments and requirements, stopping at the first line that is none
+of those. Each requirement is then re-run in a reporting mode, by the same word
+that would run it at load time, so what you are shown is what would happen.
+
+A `require` gets one of three answers — `loaded` (already in memory), `found`
+(on disk, not yet loaded) or `MISSING`. The verdict has three forms too: all
+met, will-load-but-degraded, and will-not-load.
+
+`deps` follows `require` into the files named there, because the flat answer
+can lie — `require sound.fs  found` is no comfort on a machine where sound.fs
+itself cannot load. Those nested files print **only if something in them is
+missing**, so a healthy machine sees one short list and a broken one sees
+exactly the section that explains itself:
+
+    dark-star.fs
+      require sdl3.fs           found
+      require sound.fs          found
+      sdl3.fs
+        needs-lib libSDL3.so.0    MISSING -- see help install
+    dark-star.fs will not load: 1 requirement missing.
+
+A file already loaded is not followed: it is in memory, so its own
+requirements were met when it got there.
+
+The traversal is bounded at 64 files. If a dep graph outruns that, `deps` says
+so rather than reporting on what it managed to read — a bound that truncated
+quietly would produce exactly the false "all requirements met" this word exists
+to prevent. A requirement that is definitely missing still outranks the notice,
+since that verdict stays true however much went unread.
 
 ## open-pipe ( c-addr u fam -- fileid ior )
 Run a shell command with a pipe over its stdout (`r/o`: read what it prints)

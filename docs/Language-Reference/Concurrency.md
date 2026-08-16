@@ -57,7 +57,24 @@ Check `status` first — it is on top — and only read `result` when it is 0.
 
 Status codes follow their source: **positive** values are the system's `errno`
 (`EDEADLK` 35, `EINVAL` 22), **negative** ones are BasicForth's. The one you
-are likely to meet is `-60`, a spent or unknown handle.
+are likely to meet is `bad-handle`, a spent or unknown handle.
+
+## bad-handle ( -- n )
+The `join` status for a handle that is not live — already joined, or never was
+a handle. `-60`, but compare by name:
+
+    : try ( t -- )
+        join                            ( result status )
+        dup bad-handle = if  ." already joined" cr 2drop
+        else                 throw  .   ( the worker's throw code )  then ;
+
+    ' w thread throw value t
+    t try             \ 0    — ran to completion
+    t try             \ already joined
+
+It is the one status you can provoke by mistake rather than by system failure,
+since joining twice is an easy slip and the second call must not touch the
+memory the first one freed.
 
 Every thread must be joined — nothing else frees its memory — and joined
 **exactly once**. A second join is caught and reported as `-60` rather than
@@ -91,7 +108,21 @@ Once a thread reads `finished`, its `result` is the real one — the listing and
 A worker does not share the prompt's stacks. It is handed a fresh data stack
 and return stack, so `depth` inside a worker starts at 0 and its arithmetic
 cannot disturb yours. `BASE` is per-thread too — a worker calling `hex` leaves
-the prompt in decimal.
+the prompt in decimal — and so is `seed`, so `random` and `rnd` give every
+worker an independent sequence (`help random`).
+
+**The locals stack is per-thread as well**, which is what makes `{: … :}` safe
+to call from several workers at once: each has its own frames, so a `|` local
+is genuinely private scratch space where a shared `variable` would race
+(`help locals`).
+
+`seed` earns its place there twice over. Shared, it was not merely slow but
+**wrong**: `random` reads the cell, mixes, and writes it back, and two threads
+doing that without atomicity walk one interleaved sequence and lose each
+other's updates — measured, 1707 of one worker's 2000 draws also appeared in
+the other's. It was slow as well, because a cache line cannot be written by
+two cores at once: four threads ran four times slower than one, with no lock
+anywhere in sight.
 
 Those stacks are **fenced**: run off either end — too deep a recursion, or one
 `drop` too many — and the thread dies at once rather than quietly reading and
@@ -101,6 +132,15 @@ obvious; that is the intent. Worker stacks are a fixed size and do not grow.
     : w   hex ;
     : go  ['] w thread throw  join throw throw  base @ . ;
     go                \ 10
+
+## thread-dstack thread-rstack ( -- n )
+The size in bytes of a worker's data stack and return stack — 8192 and 65536
+as shipped. `constant`s, read when `thread` allocates: they describe what a
+worker gets, and changing them is a source edit, not a `to`.
+
+Worth knowing when a worker recurses deeply, since the fence turns an overrun
+into an immediate death rather than corruption. The return stack is the larger
+of the two because that is the one recursion consumes.
 
 ## Errors come back as a value
 A worker that throws does not reset the prompt — it ends that thread, and the

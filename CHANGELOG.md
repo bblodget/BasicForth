@@ -1,5 +1,966 @@
 # Changelog
 
+## v0.16.0 — 2026-08-16
+
+Three headline changes: **local variables** (`{: a b c :}`), a compiler change
+that makes **a number an immediate** instead of a call, and **`deps`**, which
+answers what a file needs before you load it.
+
+It is also the first release exercised on real ARM64 hardware rather than under
+emulation, and that is where the `SIGILL` fix below came from — a bug that every
+QEMU suite had passed, because QEMU does not model an incoherent instruction
+cache.
+
+### Added: local variables — `{: a b c :}`
+
+- Forth 2012 section 13. Names the top n stack items for the rest of the
+  definition, so a word with three or four arguments stops being an exercise in
+  `rot swap over`:
+
+      : clamp ( n lo hi -- n )  {: n lo hi :}
+          n lo < if lo exit then
+          n hi > if hi exit then
+          n ;
+
+- **A local reference is open-coded** — three loads and a store on x86-64, six
+  instructions on ARM64, and no call on either. That was the condition the whole
+  feature rested on: a reference costing a `create`/`does>`-class call would
+  have made locals *slower* than the juggling they replace, and no correctness
+  test would have noticed. Measured on a Raspberry Pi 400: 0.62 ns a reference,
+  against 2.24 ns for the `dup` it replaces.
+- **The frame is open-coded too**, and that took a second pass to get right.
+  Building and releasing it are once-per-call, so a call there looked free —
+  but the cell count reached the runtime as a `LITERAL`, twice per invocation
+  plus one per `|` local, and a literal was the most expensive thing the engine
+  did. The frame cost 27.8 ns on ARM64 and was *flat* in the number of locals,
+  which is the tell: frame cost that ignores frame size is not frame work. Now
+  **0.4 ns**. On x86-64 a three-argument word written with locals went from
+  15.2 ns to 6.4 ns, beating the juggled spelling's 8.6. On ARM64 the same word
+  is 26 ns against 19.6 juggled — still behind, because locating the locals
+  pointer takes four instructions there and one on x86-64. `docs/Locals.md`
+  records the measurements and the experiment that did not close it.
+- **A definition that declares no locals is byte-for-byte unchanged.**
+  `: sq dup * ;` is still 11 bytes on x86-64.
+- Locals live on **their own per-thread stack**, fenced by its own guard pages,
+  with `lp`/`lp0` in the existing TLS block — so they do not interact with
+  `>r`/`r>` or with `do`/`loop` control parameters, and a worker cannot disturb
+  another thread's frames. `see` prints them verbatim; `help {:` documents them.
+- A separate stack is not unwound by anything that unwinds the return stack, so
+  **every reset path releases it by hand**: caught and uncaught `throw`, `QUIT`,
+  an aborted definition, both guard-page faults, `dict_full`, and worker exit.
+  A missed one leaks silently — nothing fails until the locals stack overflows
+  much later, in unrelated code — so each has an assertion that `lp` came back,
+  which is a different question from "does it work". Overflowing it reports
+  `locals stack overflow`, distinct from the data stack's message, so a report
+  points at the right stack.
+- The one unconditional cost anywhere else is a cell in the `catch` frame,
+  which `throw` needs because it unwinds past an arbitrary number of frames at
+  once. Frame setup happens only where locals are declared, and teardown is a
+  fixed add, because the frame size is known at compile time.
+- The frame primitives underneath — `(lframe)`, `(lunframe)`, `(local@)`,
+  `(local!)`, `(lp@)`, `(lp0@)`, `(lstack-size)` — shipped and were tested
+  before any syntax existed, so the part that actually goes wrong could be
+  exercised on its own.
+- **Locals shadow, including verbs.** `{: i :}` beats the `DO` loop index inside
+  that definition. That is what the standard requires and what every language
+  does for variables, but Forth lets you shadow *verbs*, so it bites harder —
+  `i` and `j` are the names to watch, since they are the natural names for a
+  counter *and* the loop indices. The compiler says so when it happens
+  (`note: local i shadows an existing word`), interactively only, so a
+  `require`d library never nags about its own locals.
+- **`{:` may appear once per definition, where the compile-time stack is
+  empty** — in practice, not inside an unclosed `if`, `begin`, `do` or `case`. A
+  closed one before it is fine. The frame is built where `{:` appears but
+  released once when the definition returns, so anything that makes the build
+  conditional, or repeats it, unbalances the pair: each of those cases leaked
+  8 bytes of the locals stack per call, silently, until it walked into its guard
+  page.
+- **`does>` cannot refer to them**, and says so at compile time. Its body runs
+  when the *created* word is executed, long after the defining word's frame was
+  released — which did not crash, it returned a wrong number from a dead slot.
+- **The full Forth 2012 declaration**: `{: <arg>… [| <val>…] [-- comment] :}`.
+  Names after `|` take nothing from the stack and start at zero — a counter or
+  accumulator that belongs to the word rather than its caller — and everything
+  after `--` is ignored, so a declaration can carry its own stack comment.
+  Without `|` an accumulator had to be faked by pushing a `0` before `{:`,
+  which reads like idiom but is a workaround, and quietly makes the word take
+  an argument it does not want.
+- **`to` writes a local**, following the same resolution order as reading one,
+  so it can never write through a shadow to a global `value` of the same name.
+  The write is open-coded like the read — `to x` in a loop is as hot as reading
+  `x`. `is` is the exception: it targets deferred words, and a local is not one,
+  so `is` on a local name is a compile error rather than a silent write to
+  whatever it was shadowing.
+- **The compiler says when a local shadows an existing word** —
+  `note: local i shadows an existing word`. A note, not an error: shadowing is
+  what locals are for. Prompt only, like the `redefined` warning, so a library
+  declaring a local named `i` does not nag on every load.
+
+### Added: `tutorial Locals` — stop juggling the stack
+
+- Sixteen steps, from a three-argument word written by juggling to a
+  six-argument circle-collision test. Covers `{: a b c :}`, `|` locals, `to`,
+  and using `--` inside the declaration so the stack comment stops being a
+  comment.
+- **It measures rather than asserts.** One step defines the same function both
+  ways and times them, and the next explains why the answer differs by
+  architecture — locals win on x86-64 and lose on ARM64, because a reference is
+  four instructions there against six — so neither result reads as a fault. Nothing is promised about the numbers themselves, and the
+  step warns that a timing taken under emulation describes the translator and
+  the host CPU — emulation does not preserve what instructions cost relative to
+  one another, so the result belongs to neither machine.
+- Teaches the two traps directly: a local shadowing `i` inside a `DO` loop, and
+  `{:` refused where a control structure is still open. Both are shown
+  happening rather than described.
+
+### Changed: the docs catch up with locals and `deps`
+
+- **`tutorial Modules` gains two steps**: `require`, and the dep block that
+  `deps` reads. Nine lessons opened with `require sdl3.fs` as a magic
+  prerequisite line and none of them explained it; the lesson about keeping
+  your work as a program is where a program's dependencies belong. It uses
+  `fontcore.fs`, which is pure Forth, so the steps work with no library
+  installed — and shows that a `require` typed at the prompt is captured like a
+  definition, so `save` writes it into the file.
+- **README's "What's next" listed two shipped features as future work** — the
+  locals word set, and speech at the prompt without writing a file first, which
+  is `say`. The README's own feature list documented `SAY` thirty lines above.
+- **README gains locals and dependency-declaration entries** in the feature
+  list, where two of this release's three headline changes were missing.
+- **The Manual gains a `## Locals` section** and its `## Stack` section stops
+  saying that stack words "will be documented here as they become available".
+
+### Changed: a number compiles to an immediate, not a call
+
+`5` inside a definition used to compile a call to `lit` followed by eight bytes
+of payload; `lit` reached that operand through its own return address and
+returned past it, so **every literal mispredicted the return-stack predictor**.
+It was the most expensive step in the engine — 10.6 ns on a Raspberry Pi 400,
+against 1.94 ns for an ordinary call.
+
+The value is now built straight into an instruction. No call, no inline data.
+
+- **An ordinary loop containing one constant is 2.6x faster on ARM64** (0.172 s
+  → 0.065 s over ten million iterations), 1.6x on x86-64. A loop with a
+  constant in it is now *faster* than the same loop with a `dup`, where before
+  it was two and a half times slower.
+- `begin 1+ dup <n> = until` over 10^9 iterations: **3.66 s → 2.90 s**, so the
+  gap between choosing `do`/`loop` and choosing `begin`/`until` narrows from 9x
+  to 7x. `docs/Performance.md` is re-measured.
+- Usually *smaller*, not just faster, since the old form always carried an
+  8-byte payload. x86-64: **13 bytes before, 11 now** for a value fitting a
+  signed 32-bit immediate, 17 for one that does not. ARM64: **12 before, 8 now**
+  for a small value — one `MOVZ` plus the push — rising to 20 for an arbitrary
+  64-bit constant. A small negative also takes the 8-byte form, via `MOVN`,
+  because `-1` is `true` and deserved better than a four-move sequence.
+- **The call form is deliberately kept where the inline cell is *storage*** —
+  `>body` reads it, `TO` writes it, `IS` patches a deferred word's xt, a
+  `CREATE` body holds its data-field address there. `[']` and `POSTPONE` keep it
+  too, so `dis` can still name what it points at (`\ xt: dup`). Only values that
+  are purely pushed became immediates.
+- `dis` follows: a plain number now reads as the instruction it is, while a
+  `constant`, `value`, `create` body or deferred word still has its data split
+  out and labelled. The `tutorial machine-code` step that taught this uses a
+  constant for the demonstration now, because a plain number no longer hides
+  anything.
+
+### Added: a file can say what it needs from the machine
+
+- `needs-cmd <name>` and `needs-lib <soname>` go at the top of a file with its
+  `require` lines. If the command is not on `PATH`, or the library will not
+  `dlopen`, the load stops **there** — before any of the file's definitions
+  exist, so a package never half-loads. It is a `-2 throw`, like `abort"`, so
+  `catch` sees it.
+- Everything after the name is a hint for whoever has to fix it, which is the
+  point: `objdump` does not say "binutils", and `libSDL3.so.0` does not say
+  "on Debian you build it from source". The hint stops at a `\`, so an ordinary
+  trailing comment still works.
+
+      needs-cmd objdump         install binutils
+      needs-lib libSDL3.so.0    see help install
+
+      disasm.fs: needs the command objdump -- install binutils
+
+- What counts as a command is what a shell would accept: a **regular file this
+  user can execute**. Both halves matter and each has its own test — `X_OK`
+  alone accepts a *directory* (on a directory it means "searchable", so `/bin`
+  passes), and the mode bits alone ignore ownership, ACLs and mount flags. The
+  new `(exec?)` primitive asks `faccessat` and `newfstatat` and requires both.
+- The `PATH` walk follows the shell's rules, including the two that catch
+  people out: an **empty element means the current directory** (and `PATH` has
+  one more element than it has colons, so `:x`, `x:`, `x::y` and `""` all
+  contain one), while an **unset** `PATH` falls back to `/bin:/usr/bin` and
+  does not search the current directory. Both were measured against `/bin/sh`
+  rather than read off the spec, because the shell is what ends up running the
+  command — a walk that stopped when the characters ran out would report a
+  command missing that `(cmd-run)` would then happily run.
+- `needs-lib` probes by actually opening the library, so it answers the
+  question that matters — will this load, here, now — rather than guessing from
+  a filename. The handle is kept and handed to the next `dlopen` of the same
+  name, so declaring a library costs nothing over binding it, and the library
+  that was checked is the one that gets bound.
+- `dlopen` now names the library it could not load. "cannot load library" in a
+  session that has required three of them says nothing.
+
+### Changed: sdl3.fs and sound.fs declare the library they need
+
+- Both now open with a dep block, so a machine without SDL3 is told which file
+  wanted the library and what to do about it, instead of being told only that
+  something could not be loaded:
+
+      require sdl3.fs
+      sdl3.fs: needs the library libSDL3.so.0 -- see help install
+
+  The pointer earns its place here: SDL3 is not packaged on Debian or Ubuntu
+  yet, so "install libsdl3" is not advice anyone can act on, and `help install`
+  has the cmake recipe.
+- The failure point is unchanged — `dlopen` already aborted the load — and the
+  probe hands its handle to the bind that follows, so declaring the
+  requirement costs no second `dlopen`.
+- **Deliberately not adopted** by `speech.fs`, `voice.fs` and `disasm.fs`.
+  Those three do not abort today: they return an `ior`, or probe at first use
+  and retry, so a game runs without flite and installing binutils mid-session
+  works. `needs-lib` stops the load, which would turn `require speech.fs` into
+  a hard failure on any machine without flite and break a published stack
+  effect. `disasm.fs` now *words* its message like `needs-cmd` — same
+  sentence, same shape — while still firing at first use, not at load. (The
+  soft forms below give those three a dep block after all, without the abort.)
+- `docs/Guides/` is a third help section, and `Install.md` moved into it. The
+  hint says `see help install`, and that has to be true at the prompt where
+  the error appears — but `docs/` itself is design and implementation notes,
+  which `help` should never offer, so the page had nowhere reachable to live.
+  `setup.sh` exports the new section; `help install` answers; `help` lists
+  Guides beside Language-Reference and Tutorial. Guides is for user-facing
+  pages that are neither word references nor lessons, and installing is only
+  the first.
+- A dep block that promises `help <x>` is now **checked**: the suite extracts
+  every such hint from `src/forth/*.fs` and asks the help system, against the
+  docs path *read from* `setup.sh` rather than a copy of it — a copy would keep
+  passing after `setup.sh` changed, which is the same bug one level up.
+  `help install` had been a broken promise from the moment it was written, and
+  prose asserting a capability is not checked by anything unless you check it.
+- Guides headings are checked too: each must be one token, and one that no
+  reference page already answers. `help` does not *lose* a collision, it
+  appends — a `## allot` in a guide would leave `help allot` printing Memory's
+  entry with a slab of the install guide after it.
+- The degraded path is now tested where it is actually used. It ran only under
+  QEMU before, where the SDL tests are skipped wholesale, so "library missing"
+  was never asserted anywhere. The suite now hides libSDL3 with `bwrap` on a
+  machine that has it, and checks the message, the surviving session, and the
+  absent words.
+
+### Added: `wants-cmd` / `wants-lib` — requirements a file can live without
+
+- Same syntax as `needs-cmd`/`needs-lib`, opposite behaviour: no probe, no
+  message, and the load never stops. A soft requirement is a **declaration,
+  not a check** — it exists to be read by `deps`.
+
+      wants-cmd piper           the default engine; voice-cmd! takes another
+      wants-lib libflite.so.1   install flite
+
+- `disasm.fs`, `speech.fs` and `voice.fs` now carry a dep block for the first
+  time. Each deliberately keeps working without its dependency — `disasm.fs`
+  re-probes for objdump on every `dis`, so installing binutils mid-session
+  works without a reload; `voice.fs` treats piper as a default that
+  `voice-cmd!` replaces; `speech.fs` answers `speech-open ( -- ior )`. Using
+  `needs-*` in any of them would have broken a contract the file publishes on
+  purpose, which is why they had no dep block at all until now — and why
+  `deps speech` used to be able to say nothing about the one optional
+  dependency worth checking.
+- The silence is deliberate. A warning on every load would nag every user who
+  is running perfectly well without the thing.
+
+### Added: `deps <file>` — what a file needs, without loading it
+
+- `deps sdl3` reads a file's leading dep block and reports each requirement
+  against this machine, without running a line of the file:
+
+      deps sdl3
+      sdl3.fs
+        require ffi.fs            loaded
+        require graphics.fs       found
+        needs-lib libSDL3.so.0    MISSING -- see help install
+      sdl3.fs will not load: 1 requirement missing.
+
+  `.fs` is added if you leave it off, and the file is looked for in the current
+  directory first and then on `BASICFORTH_PATH` — the same order `require`
+  uses, so `deps` answers for the file the load would actually pick.
+- **One parser, not two.** `deps` re-runs the block with a mode flag set, and
+  each word takes a reporting branch through the same parse and the same probe
+  it uses at load time. A second implementation of the syntax would have been
+  free to drift from the first, and would eventually have said a file loads
+  when it does not.
+- **It follows `require`,** because the flat answer can lie: `require sound.fs
+  found` is no comfort on a machine where sound.fs itself cannot load for want
+  of SDL3. Nested files print **only if something in them is missing**, so a
+  healthy machine sees one short list and a broken one sees exactly the section
+  that explains itself. A file already loaded is not followed — it is in
+  memory, so its requirements were met when it got there.
+- A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
+  too — all met, will-load-but-degraded, and will-not-load.
+- **The traversal is bounded at 64 files, and says so when it runs out** rather
+  than reporting on the part it managed to read. dark-star.fs already follows
+  11 files, so the bound is reachable, and a quiet truncation would have
+  produced the one thing this word exists to prevent — a confident "all
+  requirements met" from a check that stopped looking.
+
+### Fixed: ARM64 could not run at all on a Cortex-A72
+
+- `platform_flush_icache` stepped from the caller's start address by the cache
+  line size. `DC CVAU` and `IC IVAU` act on the whole line containing an
+  address, so from an unaligned start the loop walked past the **final** line
+  whenever the range's last byte fell beyond the last address visited — leaving
+  it neither cleaned to the point of unification nor invalidated. Both loops
+  now align the start down, each against its own cache's line size.
+- Callers pass a code start that is only 4-byte aligned, so this was the common
+  case, and the line it missed was the tail of a word about to be called. On a
+  Raspberry Pi 400 `basicforth` died with `SIGILL` while loading `core.fs`,
+  before printing anything: `dict_space` is BSS, and the all-zero word is a
+  permanently undefined encoding on AArch64.
+- **Nothing could have caught this in emulation.** qemu does not model an
+  incoherent instruction cache, x86-64 keeps its caches coherent in hardware
+  and needs no maintenance at all, and the C unit tests write one small
+  function into a cold region and call it once — the pattern that happens to be
+  safe. It is microarchitecture dependent, which is why an earlier ARM board
+  ran the interpreter fine.
+- All four suites now pass on the hardware: 123 unit, 1022 integration, 36 pty,
+  23 lessons (8 skipped for libSDL3).
+
+### Added: `ch-claim` / `ch-release` — keeping a channel
+
+- `next-ch` treats a channel as busy only while audio is **queued** on it, so a
+  channel held for later came straight back into rotation the moment it fell
+  silent. "Keep a channel" was therefore not something a caller could do, and
+  nothing said so: measured, a held channel was handed back out **3 times in
+  200 calls**, which is how speech ended up sharing a queue with sound effects.
+- `ch-claim ( ch -- ch flag )` takes a channel out of the rotation until
+  `ch-release ( ch -- )` puts it back. `next-ch` skips claimed channels in both
+  passes — the round-robin scan and the steal-the-oldest fallback — and answers
+  `-1` when there is nothing to give, which `ch-claim` refuses and every
+  channel word ignores. The channel comes back on the stack so the usual
+  phrasing reads straight: `next-ch ch-claim if to music-ch else drop ... then`.
+- **The only check `ch-claim` makes is whether somebody already holds it.** A
+  claim is a note in a table, not a capability: anyone can release anyone's
+  channel, the same way anyone can `ch-stop` anyone's sound. An earlier version
+  of this grew claim tokens and an ownership predicate to make that impossible;
+  it was deleted. Forth hands you the machine, and a program wanting guarantees
+  can build them on top.
+- **A claim outlives a device cycle.** `snd-open` no longer clears the claim
+  table, because a claim belongs to whoever took it rather than to the device.
+  That single decision removes a whole family of defects rather than guarding
+  against them: with claims cleared, a subsystem holding a channel silently
+  lost it on `snd-close`/`snd-open` and went on playing onto a channel
+  `next-ch` had since given to someone else — and detecting *that* is what
+  drove the tokens, which in turn needed identity a channel number could not
+  carry. Nothing invalidates the number behind the holder's back now, so there
+  is nothing to detect. Each owner releases its own: `snd-close` drops `tone`'s,
+  `speech-close` drops speech's.
+
+### Changed: `tone` claims a channel instead of owning channel 0
+
+- `snd-open` can now fail because there is no channel left for `tone` — only
+  reachable if something claimed every channel while the device was shut, since
+  `snd-close` frees `tone`'s own. It reports **its own ior and its own reason**
+  rather than going through the SDL failure path, which would have handed back
+  SDL's last error: reproduced before fixing as ior 1 with an *empty*
+  `snd-why`, and ior 1 is what a failed `SDL_Init` returns, so the caller was
+  told the wrong thing twice over.
+
+- `tone-ch` was `0 constant` and `next-ch` was written never to return it.
+  Now `snd-open` **claims** a channel for `tone` like any other subsystem, and
+  `snd-close` releases it; `tone-ch` is a `value`, `-1` while closed.
+- Same guarantee, no special case: `next-ch` skips it because it is claimed,
+  not because of its number. A run of tones still cannot be interrupted by a
+  sound effect, and `next-ch`'s exhaustion path no longer has to decide whether
+  handing back the tone channel is acceptable — it never was.
+- `tutorial Sound` taught that `tone-ch` is a **constant** and demonstrated
+  that `to tone-ch` fails. The practice is unchanged and the *reason* is
+  rewritten: what makes the channel `tone`'s is the claim, not the number.
+
+### Changed: `snd-channels` is a constant, 64
+
+- It was a settable `value`, clamped at open. **Nothing outside its own tests
+  ever changed it** — no example, no lesson, no library — and the stated
+  justification (letting the suite force channel reuse cheaply) was stale: the
+  stealing test fills all 64 and pays the 228 ms. Measured, 64 vs 4 channels is
+  228 ms vs 11 ms for that one fill.
+- Removing it deletes the clamp in `snd-open`, the ordering hazard where the
+  close had to come *before* the change, `snd-close`'s walk-to-the-ceiling
+  subtlety, the two tests that only tested the feature — one of them the
+  regression test for a dangling-handle bug that can no longer happen — and a
+  claim-leak corner where a claim could outlive the channel it named.
+- `snd-max-channels` went with it; the two names now meant the same number.
+  One line to make it settable again if a target ever needs fewer.
+
+### Added: `speech.fs` — `say`, speaking text with no file anywhere
+
+- `say ( c-addr u -- )` synthesizes through flite into memory and queues the
+  samples on a channel. Nothing is rendered, nothing is loaded, nothing touches
+  disk — the complement to `voice.fs`, which records a phrase properly and is
+  what a game should use.
+- **`say` blocks while it synthesizes, and that is the whole reason both exist.**
+  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for "Dark Star, ready.",
+  38 ms for a full sentence. A frame at 60 Hz is 16.7 ms. Instant at a prompt,
+  frame-dropping in a loop. The docs say that with the numbers rather than as a
+  vague caution.
+- Speech takes **its own channel** at open time and keeps it. A channel is a
+  sequential queue, so one decision buys two properties: successive `say`s wait
+  for each other instead of talking over themselves, and a phrase never queues
+  up behind a sound effect.
+- Binding is lazy, so `require speech.fs` never touches flite and a machine
+  without it gets an `ior` from `speech-open` rather than an abort mid-load —
+  the shape `snd-open` already uses for a machine without audio.
+- The voice is a library/symbol pair (`speech-voice!`) rather than a short name.
+  Deriving `register_cmu_us_slt` from `slt` would have broken for the `indic`
+  and `grapheme` voices, which are exactly the ones someone goes looking for.
+  The soname matters too: a runtime install has `libflite.so.1` and no
+  `libflite.so`, because the bare name ships in the `-dev` package.
+- `say` refuses a phrase over `say-max` (240) with a reason. The FFI's
+  NUL-terminating buffer is 256 bytes and aborts past it; checking first means
+  the complaint names the phrase rather than a buffer the caller never
+  mentioned.
+- `speech-ready?` asks two things: is the voice bound, and is speech's channel
+  live. Nothing more is needed, because a claim outlives a device cycle — the
+  channel speech took is still speech's when the device comes back. Getting
+  there took several passes, all chasing the same question the wrong way: the
+  channel number (reissued after a cycle), then the channel's stream pointer
+  (an address is not an identity — over 40 cycles one came back 8 times), then
+  a claim token. Making claims survive the cycle deleted the question instead
+  of answering it.
+- `speech-open` checks for a device **before** checking idempotence. The other
+  order reported success after `snd-close`, with no device to speak through.
+- Found while testing: `say` leaked a cell. `dup >r` put the `cst_wave` on both
+  stacks and only the return-stack copy was consumed, so every call grew the
+  stack by one. Caught because a timing harness printed a nonsense number, then
+  pinned by running `say` with junk underneath and checking `depth` — the test
+  that now guards it.
+- The missing-libflite path cannot be reached on a machine that has flite, so
+  its test masks the library with `bwrap`. Without that, both the `ior` branch
+  and the promise that `require` never aborts would have shipped unexercised.
+- The audio-word reference audit now `require`s `speech.fs` as well as `wav.fs`
+  — a library it does not require is invisible to it, the same gap that let
+  `snd-dev` and `snd-stream` ship undocumented. It caught `speech-ready?`
+  immediately.
+
+### Changed: `random` is splitmix64, and has no bad seed
+
+- xorshift64 had a **fixed point at 0** — the state stayed there and every draw
+  was 0 forever — so `0 seed !`, the obvious thing to type after reading that a
+  known seed makes runs repeatable, quietly killed the generator. That needed a
+  special case inside `random` and a paragraph explaining it in `help random`.
+  splitmix64 has no bad state, so the guard, the paragraph and the `1 or` idiom
+  in the seeding examples are all gone.
+- The deeper reason: xorshift64 is **F2-linear**, so the 64 bits of one output
+  are linear combinations of each other. Invisible while you take a couple of
+  bits per draw, and wrong the moment you slice one draw into several numbers —
+  `examples/dice.fs` packs 32 two-bit rolls into one value and got a tail ~50%
+  too heavy, while matching bit-for-bit on a naive counter, on the mean and on
+  the standard deviation. A generator you can slice is worth more here than one
+  saved instruction.
+- Speed is a wash: 20M draws, alternating, xorshift 1086/1061 ms against
+  splitmix 1221/1027 ms. In an STC threaded interpreter the two multiplies
+  disappear into dispatch cost.
+- Sequences change for a given seed. Nothing depended on a literal value —
+  every test and example asserted a property (repeats, differs, non-zero) — so
+  no documented output moved.
+- Two new tests. One pins the algorithm to the **published reference vectors**
+  (seed 0 gives `E220A8397B1DCDAF`, `6E789E6AA1B965F4`), since a
+  merely-self-consistent generator passes every property test. The other checks
+  the generator is **not xor-additive**: F2-linearity means
+  `f(a) xor f(b) = f(a xor b)` exactly, which xorshift64 satisfies and
+  splitmix64 does not. A marginal-uniformity test was written first and thrown
+  away — both generators pass it, because the fields are individually uniform
+  and only jointly dependent.
+
+### Fixed: `seed` is per-thread, so `random` works from a worker
+
+- `random` and `rnd` read one global `seed` cell, mixed it, and wrote it back
+  — with no atomicity and no per-thread state. Two workers therefore drew from
+  a **single interleaved stream** and lost each other's updates: measured,
+  1707 of one worker's 2000 values also appeared in the other's, and a
+  duplicate appeared *inside* a single worker's own draws, which xorshift64
+  cannot produce in 2000 tries. It was also slow — 4 threads ran **4× slower**
+  than 1, purely from two cores writing one cache line, no lock involved.
+- The cell moves into thread-local storage on both architectures, exposed by
+  an ASM word `seed ( -- a-addr )` in the same shape as `base`. Nothing about
+  the API changes: `42 seed !`, `0 seed !` and `seed @` behave exactly as
+  before, per thread. Overlap between two workers is now **0 of 2000**.
+- **Each worker is seeded in the thread trampoline**, not by the `.tdata`
+  image. That image is a constant, so seeding from it would start every worker
+  at the same number and replay the same sequence — independent streams that
+  are identical, which is harder to notice than the shared cell it replaces,
+  since from inside one thread it looks perfect. Entropy failure falls back to
+  the context-block address scrambled by the golden-ratio constant, which is
+  per-thread for the same reason: a constant fallback would rebuild the bug.
+- The seeding happens **before** the trampoline switches to the worker's
+  stacks — the last point where the C stack, and therefore its ABI-guaranteed
+  alignment, is still in hand. Seeding afterwards would have called on the
+  worker's *return* stack, whose alignment derives from `ctx.rtop`, an
+  allocation address this code does not control; on ARM64 a misaligned `SP`
+  faults outright. x86-64 additionally pads by 8 so `RSP` is 16-byte aligned
+  at the `call`, as SysV requires. Measured at the call site: 8 without the
+  pad, 0 with it.
+- A worker still cannot be made repeatable from outside, since no thread can
+  reach another's cell — `help random` shows the pattern for a worker that
+  seeds itself from a number the parent leaves for it.
+- The test for this was written wrong first, in a way worth recording: "the
+  worker's value differs from the REPL's" **passes with the fix removed**,
+  because a shared seed also hands the worker a different (merely next) value.
+  Both shipped tests were checked against a deliberately broken build.
+- `examples/dice.fs` is **28 lines shorter and 13% faster**, because the two
+  changes above let it delete what it was carrying: its private splitmix64
+  (`(mix)`, `(next)`), the state-address threaded through `battle`, `4roll`,
+  and `escape`'s `allocate`/`free` pair, and a dozen lines of open/read/close
+  on `/dev/urandom` that `entropy` now does in one word. `battle` is a loop
+  over `random`. 200M battles at 1/4/16 workers: 71.8/18.5/6.44 s, against
+  82.1/21.1/6.68 s — dropping the address-passing dropped real per-iteration
+  stack shuffling.
+- It also says where the problem comes from — Pokémon soft-lock picking, and
+  the Python script that brute-forces it — and what the escape actually costs:
+  P(177 or better in 231 rolls) is **1.2e-60**, one battle in 8.3e59, so at the
+  3.5e7 battles/second this reaches on 8 cores a single hit is 7.5e44 years
+  away, about 5e34 times the age of the universe.
+- And what the speedup really is, measured rather than claimed: the video's
+  Python script does 1,447 battles/s (a billion in ~8 days), one worker here
+  does 2,824,021, and 16 workers do 35,335,689 — a billion in 28 s, 24,400x.
+  Only **12.5x of that is threads** (good scaling for 8 cores with SMT); the
+  other 1,950x is one worker against one Python process. Threading is the
+  multiplier people reach for first and the smallest one here.
+- Plus a table of what `Best` should be at each battle count, with the caveat
+  that `Best` is a *maximum* and wanders: only the outer column, the 1-in-1000
+  bound, means anything is wrong.
+- Its value `SEED` is renamed `RUN-SEED`. The dictionary is case-insensitive,
+  so it had been silently redefining the core `seed` for months; harmless
+  until the file wanted to use the core word, then `seed !` wrote through an
+  integer and segfaulted. Worth knowing generally: the redefinition warning is
+  **interactive-only**, so a library loaded with `require` can shadow a core
+  word with no sign at all.
+
+### Fixed: a control-flow closer with nothing open blamed the data stack
+
+- `: q then ;` reported `stack underflow`. So did `else`, `until`, `repeat`,
+  `while`, `again`, `loop`, `+loop`, `endof` and `endcase` — the whole family.
+  `cf_check_tag` read the top of the compile-time stack before checking
+  anything, so with nothing open it walked off the top, hit the guard page, and
+  the fault handler got there first. The definition rolled back correctly and no
+  wrong code was ever emitted; the message simply named the wrong thing, and
+  sent a beginner who typed `then` with no `if` off to look at their stack.
+  It now bounds the read by `colon_dsp`, the way `ENDCASE` already did.
+- `WHILE` needed its own fix: it inlined the tag compare instead of calling
+  `cf_check_tag` (which only peeks — it never consumed), so it kept reporting a
+  stack underflow after the shared fix landed.
+
+### Fixed: an unbalanced definition reported nowhere, then let the load run on
+
+- `: Say ... if ... ;` with the `then` left off printed a bare
+  `unresolved control flow` — no file, no line, no name — and then **returned**,
+  so the file went on loading against a word that never got defined. The only
+  line number you ever saw came from the first *call* to the missing word.
+  Found in the Dark Star port, where the typo was on line 167 and the sole
+  reported location was 213.
+- It now reports like every other compile error, naming the definition read out
+  of its own half-built header:
+  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  also stops the load at that line instead of producing a second, unrelated
+  looking failure further down. `;` was the last compile error that let a load
+  continue.
+- A `:noname` has no name to give — it builds a hidden header with an empty
+  name — so it reports the token instead: `unresolved control flow: ;`.
+- Names print as the dictionary stores them, which is lower case.
+
+### Changed: control-flow errors name the word you typed
+
+- `? mismatched-control-flow` is now `mismatched control flow: then`. The `?`
+  prefix is BasicForth's *undefined word* marker, so the old report read as
+  though `then` did not exist, and the token position was spent on a fixed
+  string that said nothing the prefix had not. The outer interpreter already
+  banks each word in `err_token` before `FIND`, so naming the actual closer
+  cost nothing — and inside a file you get
+  `game.fs:2: mismatched control flow: then`.
+- One wrinkle worth knowing: the token is the last word the **outer
+  interpreter** parsed. That is the closer for ordinary source, but the
+  enclosing word when a closer is reached at run time through
+  `' then execute` — a construction that is already undefined, since it
+  bypasses the compile-only check.
+
+### Fixed: an error inside `[ ... ]` left the definition open
+
+`[` interprets *inside* an open definition, so `STATE` is 0 there while a
+half-built word is still on the dictionary. Two error paths asked `STATE`
+whether to abandon that definition, and so did not:
+
+    : foo [ nosuchword
+    ? nosuchword
+    : bar 1 ;
+    definition still open: bar        \ ...and it is foo that is open
+
+The next `:` was refused for the rest of the session unless you knew to type
+`] ;`, and the message named the word being defined rather than the one
+actually open. The identical typo one word to the left — `: foo nosuchword` —
+abandoned the definition cleanly, which is the behaviour both now share. The
+compile-only path (`: foo [ if`) was the same bug one step worse: it jumped
+straight to the error return and never consulted `STATE` at all.
+
+The abort is gated to the outermost `interpret_line`, because returning an
+error ends the *line* only at the top level — a nested one (an `EVALUATE`, or a
+load) returns into a caller that carries on with the rest of its own line.
+Without that gate, `: foo [ s" nosuchword" evaluate ] ;` tore the enclosing
+definition down mid-line while the line kept compiling into the hole. Two
+routes needed it: the shared error exit, and `'` failing to find a name.
+
+The same flaw on the *compiling* arm is older and still there — an error inside
+a nested evaluation while `STATE` is set rolls back to the global anchor and
+takes the enclosing definition with it. Unchanged by this work, pinned by a
+test, and filed: the real repair is for `EVALUATE` to propagate the error so
+the outer line aborts too.
+
+Found by sweeping every `state` read on both architectures for the same
+confusion, which had already produced four bugs — three of them silent session
+wedges. Most reads turned out to be legitimate: an IMMEDIATE word choosing
+compile-vs-interpret behaviour is what `STATE` is *for*, and so is the locals
+lookup, since a local does not exist at compile time and must not resolve
+inside `[ ]`. The continuation prompt stays `STATE`-only on purpose — inside
+`[` you really are interpreting, and the line editor's scroll margin tracks it
+the same way.
+
+### Changed: tunable sizes live in one shared file
+
+- `src/config.inc` now holds every tunable size — `CELL`, `DATA_STACK_SIZE`,
+  `LOCALS_STACK_SIZE` and `THREAD_RSTACK_SIZE` — included by `core.s` and
+  `main.s` on both architectures. The Makefiles depend on it, so changing a
+  value forces a rebuild: a stack assembled from a different number than its
+  guard pages would be worse than no sharing at all.
+- `threads.fs` states no size of its own. `thread-dstack`, `thread-rstack` and
+  the worker locals stack read back through `(dstack-size)`, `(thread-rsize)`
+  and `(lstack-size)`, so the Forth side cannot disagree with the assembler
+  about how big a stack is or where to fence it.
+
+### Changed: the data stack is 1024 cells, and one size for every thread
+
+- Collecting the numbers in one file exposed that the REPL's data stack was
+  **half a worker's** — 4096 bytes against 8192 — set in two files, in two
+  languages, with nothing explaining why the thread you actually type at got
+  the smaller one.
+- Now a single `DATA_STACK_SIZE` of **8192 bytes (1024 cells)** serves both, so
+  a REPL/worker difference cannot be expressed at all. Two constants that are
+  supposed to stay equal is the arrangement that produced the drift. Raised
+  rather than lowered: no working program breaks by being given more room.
+- Same principle as `LOCALS_STACK_SIZE`, which was shared from the start —
+  what a computation can hold, and how deep it can recurse, should not depend
+  on which thread runs it. `THREAD_RSTACK_SIZE` stays alone, since the REPL's
+  return stack is the process stack handed over by the kernel.
+
+### Added: `docs/Install.md` — clone to a working prompt
+
+- There was no single place saying what BasicForth needs. The build toolchain
+  was documented twice (`README.md` and the Manual, free to drift), SDL3 had
+  no install instructions at all beyond a parenthetical in `Graphics.md`,
+  flite was undocumented, piper was documented only inside `Speech.md`, and
+  neither `git clone` nor `. ./setup.sh` appeared anywhere as a step.
+- The page leads with what none of that made visible: **nothing is required
+  to build but `binutils`, `gcc` and `make`.** Every library is `dlopen`ed on
+  demand, so a missing one cannot break the build, cannot stop the binary
+  starting, and costs exactly its own feature. `ldd` on the binary lists libc
+  and nothing else.
+- **`gcc` is required to build, not just to run the unit tests** — the README
+  and the Manual both said otherwise. It links the binary, which is what
+  makes the FFI's `dlopen` work at all.
+- A missing library does not degrade the way the "loaded on demand" story
+  might suggest, and the page says so: `require sdl3.fs` reports
+  `sdl3.fs: needs the library libSDL3.so.0 -- see help install` and the session
+  continues, but loading stops there, so the words are absent and a later
+  `snd-open` reports `? snd-open`.
+- The SDL3-from-source recipe was verified end to end rather than written
+  from memory — built into a scratch prefix, confirmed with `LD_DEBUG=libs`
+  that BasicForth loaded that build, then opened a window and drew on it. Two
+  traps documented: cmake's "Enabled backends" summary is the check that
+  matters, since SDL builds happily with no video backend when the dev
+  headers are missing and only fails later at `sdl-open`; and `sudo ldconfig`
+  after installing to `/usr/local` is required, not optional.
+- `README.md` and `docs/BasicForth_Manual.md` lose their duplicate
+  §Prerequisites and point at the page. `Graphics.md` and `Speech.md` gain
+  cross-references.
+
+### Changed: `help libraries` leads with the one command that usually works
+
+- **SDL3 is packaged now**, on Debian 13 (trixie) and Raspberry Pi OS 64-bit
+  among others, so the optional half of the install is `sudo apt install
+  libsdl3-dev libflite1` and nothing else. The page used to say "from source,
+  see below" unconditionally and then spend fifty lines on cmake — a build
+  most readers no longer need, presented as the only route.
+- The from-source recipe is intact, moved to its own topic: `help
+  sdl3-source`. Nothing was cut, only reordered so the common case is not
+  behind the rare one. flite and the speech engines moved out the same way, to
+  `help flite` and `help engines`. **A `###` subsection does not end a `help`
+  topic** — the page is read to the next `##` — so a detail section only stops
+  padding the overview once it becomes a topic in its own right. `help
+  libraries` is 37 source lines where it was 96.
+- **`help install` now answers with the commands, not with a table of
+  contents.** The complete install — build tools, clone, `make`, `setup.sh`,
+  and the one `apt` line that buys graphics, sound, gamepads and `say` — is in
+  the first screen, before the topic list. `help quickstart` carries the same
+  commands with a line on what each is for.
+- **`help engines` carries the piper install itself.** It used to point at
+  `docs/Speech.md`, which is design documentation and deliberately off
+  `BASICFORTH_DOCS` — so from the prompt, where the reader is, the pointer went
+  nowhere. Same broken promise `help install` was created to fix. Speech.md
+  keeps the reasoning; the guide keeps the commands and the one trap that
+  silently costs you the engine (`pipx ensurepath` needs a fresh shell).
+- **The version gap is documented as checked rather than hoped.** Debian ships
+  SDL 3.2.10 where BasicForth is developed against 3.4.12: every SDL function
+  the Forth side binds is present in 3.2.10, and all 51 constants and struct
+  offsets are identical between the two. `tools/sdl3off.c` is what settles
+  this, and `help sdl3-source` now says so, since the question recurs with
+  every distribution.
+
+### Changed: the default piper voice is `en_US-libritts-high`
+
+- **The old default was the wrong thing to point people at.** It is trained on
+  the Blizzard Challenge 2013 Lessac data, whose licence restricts use to
+  "Research Purposes" and excludes "any commercial purpose" — while the
+  workflow these pages recommend is to render a vocabulary once and *ship the
+  WAVs*. Whatever one concludes about generated audio specifically, a default
+  should not put that question in front of every user.
+- `en_US-libritts-high` is **trained from scratch** on LibriTTS
+  (openslr.org/60), which is **CC BY 4.0**. Switched everywhere the old voice
+  was named — `setup.sh`, `voice.fs`'s built-in template, three suite
+  assertions and four documentation pages.
+- **A permissive dataset licence is not enough on its own, which is the trap
+  worth writing down.** Most piper voices are *fine-tuned from* the Lessac
+  model, so the restriction travels into voices whose own dataset is
+  perfectly free: `en_US-libritts_r-medium` advertises CC BY 4.0 and is
+  "fine-tuned from English lessac medium". The first replacement chosen here
+  was that voice, for exactly that reason. A voice is clear only if its
+  dataset licence *and* its training lineage are both clear, and the docs now
+  say so.
+- **The docs record where the terms are, and stop reasoning about how they
+  combine.** Three things carry their own — the engine (`piper-tts`,
+  GPL-3.0-or-later by its package metadata), the voice model, and its training
+  data — and what that means for generated audio is a question for the reader,
+  not for an install guide. Earlier drafts of this entry answered it three
+  different ways and each was an overreach, so the pages now give the facts
+  and the sources: `pip show piper-tts`, and the model cards at
+  huggingface.co/rhasspy/piper-voices, which `download_voices` does not
+  fetch.
+- `voice.fs` runs the engine as a separate program and never links against it,
+  which is stated as the architectural fact it is, without the conclusion the
+  earlier drafts drew from it.
+
+### Fixed: `help see` printed 29 sections, and eight other words were padded
+
+- A `## ` heading with no stack effect is a prose section, not a word entry —
+  but every word in it was being indexed as one, and a collision **appends**
+  rather than shadows. `## See Also` appears in 29 reference pages, so
+  `help see` printed its real entry followed by 28 unrelated cross-reference
+  blocks. `## Double and mixed precision` did the same to `help and`,
+  `## Errors come back as a value` to `help value`, and so on for `words`,
+  `back`, `is`, `space` and `#`.
+- A word entry now has to **state a stack effect** to be indexed as one, which
+  fixes all nine without touching a page and drops about 490 junk topic names
+  (`help precision`, `help prefixes`, `help heap`). `help see` prints one
+  section.
+- Sections differ, and now say so in one place: **Tutorial** contributes no
+  word entries (a lesson step is not a definition — already true), **Guides**
+  indexes every word of its single-token headings by design, and
+  **Language-Reference** requires the effect. `docs/Help_System.md` documents
+  the rule and why.
+- **A locals declaration is not a stack effect**, and `## clamp {: n lo hi :}`
+  is therefore prose. Deliberate: `{: a b | c :}` leaves `c` off the stack
+  entirely, everything after `--` inside `{: … :}` is text the compiler
+  ignores, and it says nothing about what the word *leaves*. Locals are how a
+  word is built, not what it takes — `see` is there for the implementation, and
+  `{:` documents itself in stack notation.
+- **The old rule was hiding an undocumented word.** `number
+  ( c-addr u -- n true | c-addr u false )` had no entry at all and answered "no
+  help"; the audit passed anyway because `## Number prefixes ($ hex, % binary,
+  # decimal)` published the token `Number`. It is now documented, including the
+  asymmetric stack effect it shares with `find` — success replaces the string,
+  failure keeps it, so the miss path has to clean up — and that `base` decides
+  whether `12ab` is a number at all.
+- The coverage audit re-implements the heading rule in `awk` and had to be
+  changed with it. Verified by breaking a heading rather than by reading:
+  before the audit was updated, `## dup {: x :}` still read as documenting
+  `dup` while `help dup` answered nothing. There is now also a test that asks
+  the **binary** what a fixture page indexes, so the two models cannot drift
+  apart in silence again.
+
+### Fixed: four `help` entries were unreachable by their second name
+
+- `help on-stop`, `help pad-closeall`, `help pad-hasaxis?` and `help pad-dy`
+  all answered "no help", while the first name of each pair worked. The
+  headings read `## a ( eff ) / b ( eff )`, and the index takes the words up to
+  the first `(` — so only `a` was ever registered. The supported form is
+  `## a b ( eff )`.
+- Nothing caught it because the reference audit never `require`s `pad.fs`, the
+  same blind spot that let `snd-dev` ship undocumented. Adding it turns the
+  audit red with about 40 further names, in two groups — described-but-unindexed
+  in `pad.fs`, and genuinely undocumented raw handles in `sdl3.fs` — so that is
+  filed in `docs/TODO.md` rather than bolted on here.
+
+### Fixed: `help <word>` missed 53 names across six libraries
+
+- The reference audit swept the core dictionary, the wav/audio tree and
+  `speech.fs` and stopped there — and a library the audit does not `require`
+  is invisible to it. So `help pad-south`, `help sdl-width`, `help font-h`,
+  `help bad-handle` and 49 others answered "no help", several of them for
+  names the page beside them explains in full.
+- **31 in `pad.fs`** — the button, axis and event constants. They now have
+  **7 grouped headings** (`## pad-south pad-east pad-west pad-north ( -- b )`
+  and so on) rather than 31 stubs: a heading indexes every name before its
+  `( `, which holds to at least 15. The alternative — teaching the audit that
+  a name in an at-a-glance table counts — was rejected because it would have
+  turned the audit green while `help pad-south` still failed. The audit is the
+  proxy; `help <word>` is the contract.
+- **12 raw SDL names** — 11 in `sdl3.fs` plus `SDL_INIT_GAMEPAD` in
+  `pad.fs` — split by the existing rule (a name you pass to
+  something is API; a handle or internal enum is parenthesised). `sdl-width`,
+  `sdl-height`, `sdl-event` and `sdl-error` are documented — the first two
+  are what a game clamps against, and `sdl-event` is the buffer `pad.fs`
+  itself reads offsets from. `sdl-win`, `sdl-ren`, `sdl-tex` and the five raw
+  SDL enums became `(sdl-win)`, `(XRGB8888)` and friends.
+- **10 the estimate never counted.** Measuring every library rather than the
+  two named found 3 more in `fontcore.fs`, 5 in `threads.fs`, and the two font
+  **selector words** `terminus-8x16` and `vga-8x8` — the words you call to
+  switch fonts, documented in prose but never as entries. `running` and
+  `finished` became `(running)` / `(finished)`: internal ctx.state values, and
+  as bare names in a flat dictionary two of the likeliest words a game would
+  want for itself.
+- **A third broken heading separator**, which is why `fontcore` had a group at
+  all: `## font-w ( -- n ) · font-h ( -- n )` — a middle dot, where the
+  earlier fix was for `/`. The index stops at the first `(`, so every name
+  after it was lost. Two headings used it; both converted.
+- The audit now `require`s **every** library in `src/forth`, and a second
+  check proves it: `require` leaves an `(inc:<file>)` guard word per file, so
+  the dictionary itself reports what was loaded, and a new `.fs` nobody added
+  to the list fails by name. The first version of this fix listed five
+  libraries and carried a comment claiming the other four came in
+  transitively — `graphics.fs` did, but `shellutil.fs`, `voice.fs` and
+  `disasm.fs` were simply absent, which is the very hole the audit exists to
+  close. A comment cannot be the thing that keeps a sweep complete.
+- Both checks need libSDL3 to load the libraries at all, so under QEMU or on a
+  machine without SDL3 they now print two `SKIP` lines rather than one — the
+  new check would otherwise have disappeared there without saying so.
+
+### Fixed: the docs still said frames present vsync'd
+
+- Pacing moved to the `sdl-fps` timer in v0.12.0 because
+  `SDL_SetRenderVSync(1)` blocks the present under a compositing desktop —
+  Mutter throttles the swap to about 1 fps once the window settles. The
+  reference page (`help sdl3`) was updated then; nowhere else was, and
+  `sdl3.fs` ended up **contradicting itself**, its file header promising
+  "vsync paces the loop" a hundred lines above the comment explaining why
+  vsync is off.
+- Corrected in `docs/Graphics.md` (five claims, including `sdl-show` "blocks
+  until the display refresh" and the demo running "one step per display
+  refresh"), `sdl3.fs`'s own header, `examples/bounce.fs`'s header,
+  `docs/Planning.md`, and two completed `docs/TODO.md` entries that were the
+  only record there of how pacing works and recorded it wrongly.
+- `docs/Graphics.md` gains a **Frame pacing** section stating the mechanism
+  and, more importantly, *why it is not vsync* — the missing "why" is what let
+  a settled decision read as an oversight waiting to be tidied up. `sdl-fps`
+  is now in the word table too; it was absent.
+
+### Fixed: `make` now refreshes the build directory's copy of `core.fs`
+
+- The binary reads `core.fs` at startup from beside itself, and that copy was
+  made by a `cp` line inside each `run-*` target. So a plain `make` left it
+  alone: edit `src/forth/core.fs`, run the binary directly, and you were
+  testing new machine code against an old core — with nothing on screen to say
+  so. It is now a real rule, `core.fs: $(FORTH_DIR)/core.fs`, and the default
+  goal builds it alongside the binary.
+- The copy was also `cp ... 2>/dev/null || true`, so a copy that *failed* said
+  nothing either, and the same line appearing in five targets meant two
+  concurrent `run-*` targets could copy over the file the other was reading.
+  One rule fixes all three, and a failure now stops the build.
+- The rule compares by **content**, not by timestamp. A timestamp rule misses
+  an edit made in the same clock tick as the previous copy — the kernel's
+  coarse clock gives both files the identical mtime and `make` reads "not
+  older" as "up to date". Measured while building this: two of three
+  back-to-back edits were skipped. Scripts write files back to back and people
+  do not, which is exactly what would make it an hour lost to a phantom bug.
+- Deliberate behaviour change: a missing `src/forth/core.fs` is now a build
+  error rather than a silent skip. The binary cannot start without it, so the
+  build had nothing to gain by continuing.
+- The binary is **not** made to depend on `core.fs`. It genuinely does not —
+  saying otherwise would relink on every edit to a `.fs` file and assert a
+  relationship that is not there.
+
+### Fixed: the integration suite assumed the machine it was written on
+
+Five defects, all found by running the suite on a Raspberry Pi 400 the day
+SDL3 was installed there. Each reported something other than itself, which is
+what made them worth fixing rather than merely correcting.
+
+- **Two `wav-play` tests loaded `/usr/share/sounds/sound-icons/pipe.wav`** — a
+  file from Debian's `sound-icons` package, which the suite never installs and
+  Raspberry Pi OS does not ship. Without it `wav-load` failed, both `wav-play`
+  calls returned the same inert channel, and the failure read as a fault in a
+  perfectly good SDL3. The sample now lives in the repo as
+  `tests/sample-16k-mono.wav`, so it cannot be missing and cannot fail to
+  build. (The `wavcore.fs` fixtures next to it are still built in Forth, for a
+  reason that does not apply here: there the byte layout *is* what is under
+  test, malformed chunks and all, while this one only has to be a valid sample
+  of a known length.) It is deliberately 16 kHz against a 44100 device, because
+  a sample that agreed with the device would make the format assertion vacuous.
+  Both expected strings are unchanged, which is what shows this was an
+  environment fix rather than a re-baseline.
+- **The no-libflite test hard-coded `/lib/x86_64-linux-gnu/libflite.so.1`.**
+  On any other architecture `bwrap` failed to bind over a file that was not
+  there and the test reported *that* as the speech output — so the degraded
+  path went untested on precisely the machines it was not written on. The path
+  now comes from `ldconfig`, which is not merely portable but correct:
+  `speech.fs` dlopens the bare SONAME, so the file `ldconfig` names is by
+  construction the one the loader would have opened.
+- **Every "is this library installed" gate read `ldconfig` off `$PATH`, and
+  failed silently to good news.** `ldconfig` lives in `/sbin`, which is not on
+  every developer's `PATH` — and `! ldconfig -p | grep -q libSDL3` is *true*
+  when the command is missing, so the SDL, sound and speech sections all
+  skipped and the run still ended `0 failed`. Nothing was red; the tests simply
+  did not happen. Resolved once now, by absolute path when the bare name is not
+  found. This was invisible on both machines' interactive shells and appeared
+  only over `ssh`, which is how the ARM64 runs are driven.
+- **`VISUAL` in the environment failed 18 `edit` tests.** `core.fs` runs the
+  editor as `${VISUAL:-${EDITOR:-vi}}`, so a `VISUAL` inherited from a
+  developer's shell outranks the `EDITOR` each test sets for itself: the real
+  editor opened, waited for a human, and was killed by the per-test timeout —
+  18 failures whose output mentions neither `VISUAL` nor the environment, on a
+  suite documented as environment-independent. The Pi had both set, which is an
+  entirely ordinary thing to have. `test_lessons.py` had been passing
+  `VISUAL="true"` all along; the integration suite never got the same
+  treatment. **Stripping variables finds what a suite needs; it cannot find
+  what a suite is poisoned by**, so run it in a normal developer environment as
+  well as a bare one.
+- **A binary that cannot start reported a thousand assertion failures instead
+  of saying so.** Every assertion compares captured output against an
+  expectation, so a dead binary produced ~1000 identical-looking failures that
+  never said why — indistinguishable from `core.fs` not being found, which
+  sends you off checking `BASICFORTH_PATH`. That is exactly what happened when
+  the ARM64 I-cache bug above made `basicforth` die with `SIGILL` before
+  printing a byte. The suite now runs one trivial command first and stops with
+  a specific reason: killed by a named signal, timed out, or exited non-zero.
+  Missing `core.fs` is deliberately a warning rather than fatal — tested rather
+  than assumed, since a binary without it still starts and still evaluates
+  `3 4 + .` from its built-in primitives.
+
+### Fixed: the lesson suite stopped recognising a missing libSDL3
+
+The graphics and sound lessons are meant to SKIP where libSDL3 is absent, which
+under QEMU is always. The gate matched one literal string, `dlopen: cannot load
+library` — and that message had changed twice, first to name the library and
+later to be intercepted by `needs-lib`. Six lessons had been *failing* rather
+than skipping, and the sentinel had been dead since well before the change that
+exposed it.
+
+Worse in the other direction: `needs-lib`'s wording matched none of the error
+patterns, so `examples/bounce.fs` and `examples/gamepad.fs` reported **PASS on
+ARM64 having loaded nothing at all**. That only surfaced because the pass count
+*fell* when the skip came back.
+
+The soname is now read from `sdl3.fs`'s own `needs-lib` line rather than spelled
+in the test, and the library named in a failure is compared with `=`, so it
+cannot prefix-match a different library. A missing library that is *not* SDL is
+now a failure rather than a skip wearing SDL's name.
+
 ## v0.15.1 — 2026-08-10
 
 A patch release: two crash/data-loss fixes, no new features and no changed
@@ -41,6 +1002,7 @@ wording anywhere else.
 - `docs/Locals.md` — a design note for the planned locals word set: what a
   runtime frame costs (measured), the paths that must release it, and the
   decisions taken. No code; the feature is not built.
+
 
 ## v0.15.0 — 2026-08-09
 

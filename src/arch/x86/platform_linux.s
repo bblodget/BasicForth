@@ -403,6 +403,25 @@ platform_init_guard_pages:
     test %rax, %rax
     jnz .Lguard_fail
 
+    # The locals stack is fenced the same way. Its underflow guard catches an
+    # unbalanced teardown (an engine bug, not a user one); its overflow guard
+    # catches recursion deeper than LOCALS_STACK_SIZE allows.
+    mov $SYS_mprotect, %rax
+    lea lguard_page_underflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
+    mov $SYS_mprotect, %rax
+    lea lguard_page_overflow(%rip), %rdi
+    mov $PAGE_SIZE, %rsi
+    xor %edx, %edx
+    syscall
+    test %rax, %rax
+    jnz .Lguard_fail
+
     # mprotect(dict_space, dict_space_end - dict_space, RWX)
     # STC compiles machine code into the dictionary; the dynamically-linked
     # binary maps .bss read-write only (unlike the old `ld -N` RWX segment).
@@ -487,10 +506,29 @@ sigsegv_handler:
     # Check if fault is in overflow guard page
     lea guard_page_overflow(%rip), %rcx
     cmp %rcx, %rax
-    jb .Lsig_unknown
+    jb .Lsig_check_lunder
     lea guard_page_overflow+PAGE_SIZE(%rip), %rcx
     cmp %rcx, %rax
     jb .Lsig_overflow
+
+.Lsig_check_lunder:
+    # The locals stack's own pair. Named separately from the data stack's so a
+    # report says which stack went, rather than sending someone to look at the
+    # wrong one -- the whole lesson of the control-flow closer errors.
+    lea lguard_page_underflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_check_lover
+    lea lguard_page_underflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_lunderflow
+
+.Lsig_check_lover:
+    lea lguard_page_overflow(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_unknown
+    lea lguard_page_overflow+PAGE_SIZE(%rip), %rcx
+    cmp %rcx, %rax
+    jb .Lsig_loverflow
 
 .Lsig_unknown:
     # Not our guard page — re-raise default SIGSEGV
@@ -530,6 +568,27 @@ sigsegv_handler:
     lea msg_overflow(%rip), %rsi
     mov $msg_overflow_len, %rdx
     syscall
+    jmp .Lsig_recover
+
+.Lsig_lunderflow:
+    # LP went back above lp0: a frame was torn down that was never set up. That
+    # is an engine bug, not a program one, so say so rather than implying the
+    # user did something -- there is no Forth code that can cause it.
+    call pay_pending_nl
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_lunderflow(%rip), %rsi
+    mov $msg_lunderflow_len, %rdx
+    syscall
+    jmp .Lsig_recover
+
+.Lsig_loverflow:
+    call pay_pending_nl
+    mov $SYS_write, %rax
+    mov $STDOUT, %rdi
+    lea msg_loverflow(%rip), %rsi
+    mov $msg_loverflow_len, %rdx
+    syscall
 
 .Lsig_recover:
     # Modify ucontext registers to resume at repl_loop with clean state
@@ -543,9 +602,21 @@ sigsegv_handler:
     mov %fs:sp0@tpoff, %rax
     mov %rax, GREGS_R15(%rbx)           # R15 = sp0 (DSP = empty)
 
+    # LP back to empty. This is one of the eight reset paths, and the awkward
+    # one: recovery here happens by REWRITING the ucontext, not by executing a
+    # reset, which is why grepping for the usual `rp0(%rip), %rsp` idiom does
+    # not find it. LP lives in TLS rather than a register, so the handler can
+    # store to it directly -- no ucontext edit needed, but it does have to be
+    # remembered. A leaked frame is silent until the locals stack overflows,
+    # much later, in unrelated code.
+    mov %fs:lp0@tpoff, %rax
+    mov %rax, %fs:lp@tpoff
+
     # Always restore LATEST and HERE — a fault during forth_colon may
     # have partially modified R12/R13 before STATE was set to compiling.
     movq $0, state(%rip)
+    movq $0, locals_count(%rip)         # the names die with the definition
+    movq $0, in_load(%rip)              # and any abandoned loader frame
     mov saved_latest(%rip), %rax
     mov %rax, GREGS_R12(%rbx)           # R12 = saved LATEST
     mov saved_here(%rip), %rax
@@ -562,6 +633,10 @@ msg_underflow:  .ascii "stack underflow\n"
 .equ msg_underflow_len, . - msg_underflow
 msg_overflow:   .ascii "stack overflow\n"
 .equ msg_overflow_len, . - msg_overflow
+msg_loverflow:  .ascii "locals stack overflow\n"
+.equ msg_loverflow_len, . - msg_loverflow
+msg_lunderflow: .ascii "locals stack underflow (engine bug -- please report)\n"
+.equ msg_lunderflow_len, . - msg_lunderflow
 msg_guard_fail: .ascii "fatal: guard page setup failed\n"
 .equ msg_guard_fail_len, . - msg_guard_fail
 
@@ -604,8 +679,11 @@ stat_buf:
 .equ SYS_chdir,   80
 .equ SYS_openat,  257
 .equ SYS_renameat, 264
+.equ SYS_faccessat, 269
+.equ SYS_newfstatat, 262
 
 .equ AT_FDCWD,    -100
+.equ X_OK,        1         # faccessat: test for execute permission
 .equ O_RDONLY,    0
 .equ O_WRONLY,    1
 .equ O_RDWR,      2
@@ -620,6 +698,9 @@ stat_buf:
 
 # st_size is at offset 48 in struct stat (x86-64)
 .equ STAT_ST_SIZE, 48
+.equ STAT_ST_MODE, 24       # x86-64 struct stat: st_mode follows st_nlink
+.equ S_IFMT,       0xF000
+.equ S_IFREG,      0x8000
 
 .text
 
@@ -1085,6 +1166,47 @@ platform_getcwd:
 platform_chdir:
     mov $SYS_chdir, %rax
     syscall
+    ret
+
+# platform_exec_q ( RDI=path -- RAX=0 if runnable, else nonzero )
+# "Is there a command here?" — two questions, because either alone answers
+# wrongly:
+#   faccessat(X_OK)  can THIS process execute it (ownership, ACLs, mount
+#                    flags), which mode bits alone cannot tell you. It tests
+#                    the REAL uid, exactly as a shell's PATH search does.
+#   newfstatat       is it a regular FILE. X_OK on a directory means
+#                    "searchable", so /bin passes X_OK and `needs-cmd bin`
+#                    would find a directory and report a command.
+# Both follow symlinks, so a dangling link fails at the stat.
+.global platform_exec_q
+platform_exec_q:
+    push %rbx
+    mov %rdi, %rbx                  # keep pathname across both syscalls
+    mov %rdi, %rsi                  # pathname
+    mov $AT_FDCWD, %rdi
+    mov $X_OK, %rdx
+    mov $SYS_faccessat, %rax
+    syscall
+    test %rax, %rax
+    jnz .Lexq_ret                   # not executable → -errno
+    mov $AT_FDCWD, %rdi
+    mov %rbx, %rsi
+    lea stat_buf(%rip), %rdx
+    xor %r10d, %r10d                # flags = 0 (follow symlinks)
+    mov $SYS_newfstatat, %rax
+    syscall
+    test %rax, %rax
+    jnz .Lexq_ret                   # stat failed → -errno
+    movl stat_buf+STAT_ST_MODE(%rip), %eax
+    and $S_IFMT, %eax
+    cmp $S_IFREG, %eax
+    je .Lexq_yes
+    mov $1, %rax                    # executable, but not a regular file
+    jmp .Lexq_ret
+.Lexq_yes:
+    xor %eax, %eax
+.Lexq_ret:
+    pop %rbx
     ret
 
 # platform_mmap_file ( RDI=fd RSI=size -- RAX=addr )

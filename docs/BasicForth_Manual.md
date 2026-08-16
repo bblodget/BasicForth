@@ -5,27 +5,17 @@ start coding — games, robots, whatever you want.
 
 ## Prerequisites
 
-### x86-64 (native build)
-
 ```
-sudo apt install binutils gcc make
+sudo apt install git binutils gcc make
 ```
 
-### ARM64 (cross-compile from x86-64)
+That is the whole list — `git` to fetch the source, and `binutils`, `gcc` and
+`make` to build it. The source is assembly, and every library BasicForth can
+use (SDL3, flite, a speech engine) is `dlopen`ed on demand rather than linked,
+so none of them is needed to build or to run.
 
-```
-sudo apt install binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu make qemu-user-static
-```
-
-- `binutils-aarch64-linux-gnu` — cross-assembler and linker (`as`, `ld`)
-- `gcc-aarch64-linux-gnu` — cross-compiler (needed for unit tests)
-- `qemu-user-static` — user-mode emulation to run ARM64 binaries on x86
-
-### ARM64 (native build on ARM64 board)
-
-```
-sudo apt install binutils gcc make
-```
+**[Install.md](Guides/Install.md)** covers the rest: the ARM64 cross-compile, the
+optional libraries and what each one buys, and `setup.sh`.
 
 ## Building and Running
 
@@ -207,6 +197,25 @@ file required by several libraries still loads once. After editing a file,
 use `include` to force a reload. A missing file is an error for both
 (`cannot open <name>`); only the silent startup loads (core.fs, the session
 file) skip quietly.
+
+Those `require` lines, together with any `needs-cmd` / `needs-lib` (things the
+*machine* must supply, whose absence stops the load) and their soft
+counterparts `wants-cmd` / `wants-lib` (declared but not checked, for files
+that work without them), make up a file's **dep block** — everything it needs
+before its first definition. `DEPS` reads that block and reports it against
+this machine without loading anything:
+
+```
+> deps sdl3
+sdl3.fs
+  require ffi.fs            loaded
+  require graphics.fs       found
+  needs-lib libSDL3.so.0    MISSING -- see help install
+sdl3.fs will not load: 1 requirement missing.
+```
+
+It follows `require` into the files named there, and prints a nested file's
+section only when something in it is missing. See `help deps`.
 
 ### Executable Scripts (`#!`)
 
@@ -758,11 +767,14 @@ sq: 11 bytes at 0043AEE4 (dictionary)
 ```
 
 Works on both architectures (objdump does the decoding). `dis` also knows
-the compiler's inline-data idioms — a literal's 8 bytes after `call lit`,
-a string's length+characters after its runtime call — and prints those
-spans as data instead of letting the decoder chew them into garbage:
-`\ literal: 5`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`. See
-`docs/Disassembler.md`, or take the interactive lesson:
+the compiler's inline-data idioms — the 8 bytes after a `call lit`, a
+string's length+characters after its runtime call — and prints those spans
+as data instead of letting the decoder chew them into garbage:
+`\ literal: 42`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`.
+A plain number needs none of that: it compiles to an immediate, so the
+value is legible in the instruction itself. The `call lit` form is left
+where the cell is storage — a `constant`, a `value`, a `create` body, a
+deferred word. See `docs/Disassembler.md`, or take the interactive lesson:
 `tutorial machine-code`.
 
 ## How Fast Is It (time)
@@ -799,11 +811,13 @@ BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
 more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
 
 ```
-$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial ./basicforth
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
 > help                           \ list the topics, three to a row
 Language-Reference
   Arithmetic           Comparison           Compiler
   ...
+Guides
+  Install
 Tutorial:  type  tutorials  to list the interactive tutorials.
 
 help <topic>  - that topic's summary       (help stack)
@@ -1072,8 +1086,9 @@ and `2` is not a valid binary digit.
 ## Stack
 
 BasicForth uses a data stack to pass values between words. Numbers are pushed
-onto the stack as they are entered. Stack manipulation words will be
-documented here as they become available in the interactive environment.
+onto the stack as they are entered. `help stack` is the full reference; the
+table below is the handful you reach for constantly, and `## Locals` below
+covers what to do when juggling them stops being readable.
 
 ### Stack Words
 
@@ -1087,3 +1102,42 @@ documented here as they become available in the interactive environment.
 | `CLEARSTACK` | `( ... -- )`       | Discard everything on the stack |
 
 See `help stack` for the full set of stack manipulation words.
+
+## Locals
+
+Three arguments is roughly where `rot swap over` stops being readable. `{: … :}`
+takes items off the stack and gives them names for the rest of the definition:
+
+```
+> : tween ( a b pct -- n )  {: a b pct :}  b a -  pct 100 */  a + ;
+ ok
+> 0 100 50 tween .
+50  ok
+```
+
+The line is now the formula. Written by juggling it is `>r over - r> 100 */ +`,
+where the `>r` and the `over` are bookkeeping rather than arithmetic — a name
+stays available whether or not you have used it already, so nothing needs
+parking or copying.
+
+Names are listed in stack order, deepest first, the same order you write a
+stack comment in. Names after `|` take nothing from the stack and start at zero
+— a counter or accumulator belonging to the word rather than its caller — and
+anything after `--` is ignored, so the declaration can carry its own stack
+comment and stop it drifting: `{: x1 y1 r1 x2 y2 r2 -- flag :}`. `to` writes a
+local, following the same resolution order as reading one.
+
+A reference is **open-coded** — a memory load written into your word, never a
+call — which is what makes locals worth having at all: a call there would have
+made them slower than the juggling they replace. They cost more code, though:
+four instructions on x86-64 and six on ARM64 against a stack operation's single
+call, so a small word compiles several times larger. Whether that is also
+slower depends on the machine; locals win on x86-64 and lose by a similar margin
+on ARM64, where locating the locals pointer is dearer. `dis` shows both, and
+`tests/bench-locals.fs` measures them.
+
+Locals live on their own per-thread stack, so they neither use nor disturb the
+return stack, and a worker cannot reach another thread's frames. `{:` may appear
+once per definition, where no control structure is still open. `tutorial Locals`
+works through all of it; `help locals` is the reference, and `docs/Locals.md`
+records the design and the measurements.

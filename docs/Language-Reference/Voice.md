@@ -96,7 +96,7 @@ Everything else is shell syntax, passed through verbatim. The two
 substitutions are **quoted**, so a phrase containing an apostrophe, a `$`, a
 backtick or a semicolon is data and never syntax.
 
-    s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!   \ the default
+    s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!   \ the default
     s" espeak-ng -w %o -- %t" voice-cmd!
     s" printf '%s' %t | some-engine --out %o" voice-cmd!      \ stdin engines
 

@@ -73,19 +73,37 @@ ecosystem concern, not just a convenience (see Prerequisites).
 A package that needs another states it in the dep block: `require ffi.fs`.
 Load-once semantics make diamond dependencies safe. No resolver.
 
-### On the system: `needs-cmd` and `needs-lib` (new words)
+### On the system: `needs-cmd` and `needs-lib` — **shipped** 2026-08-13
 
 `require` can't express "objdump must be on PATH" or "libSDL3 must be
-installed". Two new words fill the gap, aborting with a friendly message at
-load time:
+installed". Two words fill the gap, aborting with a friendly message at load
+time. The name is one word and the rest of the line is an install hint, cut at
+a `\` so an ordinary comment still works:
 
-        needs-cmd objdump        \ "dis needs the 'objdump' command (install binutils)"
-        needs-lib libSDL3.so.0   \ dlopen probe
+        needs-cmd objdump         install binutils
+        needs-lib libSDL3.so.0    see help install
 
-`needs-lib` is nearly free given the FFI. `needs-cmd` needs a PATH search
-(stat-based, or via the exec primitive below).
+`needs-lib` probes with a real `dlopen` and keeps the handle for the bind that
+follows. `needs-cmd` walks PATH by the shell's rules, and asks both
+`faccessat(X_OK)` and `newfstatat` — on a directory, X_OK means "searchable",
+so `/bin` passes the first test on its own.
 
-### Checking without loading: `deps` (new word)
+### Requirements a package can live without: `wants-cmd` / `wants-lib` — **shipped** 2026-08-14
+
+Aborting is wrong for a file designed to run without the thing. `disasm.fs`
+re-probes for objdump on every `dis`, so installing binutils mid-session works
+without a reload; `voice.fs` names piper only as a default `voice-cmd!`
+replaces; `speech.fs` answers an `ior`. The soft forms take the same line and
+do nothing with it at load time — no probe, no message:
+
+        wants-cmd objdump         install binutils
+        wants-lib libflite.so.1   install flite
+
+A soft requirement is a **declaration, not a check**. It exists so `deps` can
+report the one optional dependency worth knowing about, and it stays silent
+because a file that declares one is a file that is fine without it.
+
+### Checking without loading: `deps` — **shipped** 2026-08-14
 
 The same dep block serves two modes:
 
@@ -94,15 +112,26 @@ The same dep block serves two modes:
 - **Soft mode** — `deps dis` reads only the leading dep block from the file
   (without loading the package) and reports *everything* missing at once:
 
-        deps dis
-          require ffi.fs          ok (installed)
-          needs-cmd objdump       MISSING — install binutils
-          needs-lib libSDL3.so.0  ok
+        deps sdl3
+          require ffi.fs            loaded
+          require graphics.fs       found
+          needs-lib libSDL3.so.0    MISSING -- see help install
+        sdl3.fs will not load: 1 requirement missing.
 
 One source of truth, two modes, no per-package boilerplate (a per-package
 check word would collide in the flat dictionary and depend on authors
-remembering to write it). `install` runs the soft check automatically when
-it finishes, so "what else do I need?" is answered immediately.
+remembering to write it). It is one parser, not two: `deps` re-runs the block
+with a mode flag set, and each word takes a reporting branch through the same
+parse and the same probe it would use at load time.
+
+`deps` follows `require` into the files named there — the flat answer can lie,
+since `require sound.fs  found` is no comfort on a machine where sound.fs
+itself cannot load — and prints a nested file's section **only if something in
+it is missing**. A file already loaded is not followed: its requirements were
+met when it got there.
+
+`install` should run the soft check automatically when it finishes, so "what
+else do I need?" is answered immediately.
 
 ### Dependency rule: main registry only
 

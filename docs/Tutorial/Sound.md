@@ -112,25 +112,24 @@ is queued, and how fast depends on the machine and on what it is doing.
 Do not read an exact figure there. What matters is that it is greater than zero
 — sound is still waiting — and that `ch-playing?` says so too. Type `next`.
 
-## What is special about channel zero
+## The channel tone keeps
 
     tone-ch .          \ 0
 
-`tone` and `beep` are `tone-on` with the channel filled in, and the channel
-they fill in is 0. That is the whole reason two `tone`s queue instead of
-mixing.
+`tone` and `beep` are `tone-on` with the channel filled in, and that is the
+channel they fill in. It is why two `tone`s queue instead of mixing.
 
-Channel 0 is an ordinary channel in everything it can *do* — queue it, set its
-volume, stop it, like any other:
+It is an ordinary channel in everything it can *do* — queue it, set its volume,
+stop it, like any other:
 
     440 200 tone-ch tone-on  snd-wait
 
-What is special is who owns it. `tone-ch` is a **constant**, not a `value`, so
-`tone` cannot be pointed elsewhere:
+What makes it `tone`'s is that `snd-open` **claimed** it. A claimed channel is
+one nothing else will be handed, so no sound effect can land in the middle of
+your tones. Nothing about the number 0 is special — ask `tone-ch` rather than
+assuming, since it is whichever channel was free when the device opened.
 
-    \ 9 to tone-ch     \ tone-ch: not a value or deferred word
-
-Channel 0 is reserved for your tones, and the next step shows what that buys.
+The next step shows how to get a channel of your own.
 
 ## Letting the system choose
 

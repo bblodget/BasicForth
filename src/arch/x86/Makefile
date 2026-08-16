@@ -15,9 +15,16 @@ OBJS    = $(SRCS:.s=.o)
 TEST_DIR = ../../../tests
 TEST_BIN = test_basicforth
 
-.PHONY: all test run run-test run-integration run-pty clean help FORCE
+.PHONY: all build test run run-test run-integration run-pty clean help FORCE
 
-# Default: build binary only.
+# The binary reads core.fs at startup, so a build is not usable without a
+# current copy of it beside the binary — which is why the default goal is
+# `build` rather than the binary alone. The two are separate targets because
+# the binary does not DEPEND on core.fs: making it a prerequisite would relink
+# on every edit to a .fs file, and claim a relationship that does not exist.
+.DEFAULT_GOAL := build
+build: $(BIN) core-copy
+
 # Dynamically linked (gcc, not ld) so the FFI can dlopen C libraries (SDL3).
 # -nostartfiles keeps our own _start; ld.so still runs libc's initializers
 # before jumping to it, which is what makes dlopen/dlsym usable. The
@@ -27,7 +34,11 @@ TEST_BIN = test_basicforth
 $(BIN): $(OBJS)
 	$(CC) -nostartfiles -no-pie -o $@ $(OBJS) -ldl
 
-main.o: main.s version.inc
+main.o: main.s version.inc ../../config.inc
+
+# Shared tunables: a size change must force a rebuild, or the guard pages and
+# the stack they fence would be assembled from different numbers.
+core.o: core.s ../../config.inc
 
 %.o: %.s
 	$(AS) -o $@ $<
@@ -49,23 +60,36 @@ $(TEST_BIN): core.o $(TEST_DIR)/test_basicforth.c $(TEST_DIR)/test_helper_x86.s
 
 FORTH_DIR = ../../forth
 
-run: $(BIN)
-	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+# The build directory's core.fs is a COPY of the real one in src/forth (it is
+# gitignored, and `clean` removes it). It used to be `cp ... 2>/dev/null ||
+# true` inside five separate run targets: a plain `make` refreshed nothing, a
+# failed copy said nothing, and two targets running at once could copy over
+# the file the other was reading.
+#
+# Compared by CONTENT, not by timestamp, and checked on every build. A
+# timestamp rule misses an edit made in the same clock tick as the previous
+# copy — the kernel's coarse clock hands both files the identical mtime, and
+# make reads "not older" as "up to date". Measured: two of three back-to-back
+# edits were skipped that way. Scripts write files back to back; people do
+# not, which is what makes it the kind of staleness you would chase for an
+# hour. Same idiom as version.inc above, and a cmp of 180 KB costs nothing.
+.PHONY: core-copy
+core-copy:
+	@cmp -s $(FORTH_DIR)/core.fs core.fs || cp $(FORTH_DIR)/core.fs core.fs
+
+run: $(BIN) core-copy
 	./$(BIN)
 
 run-test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-run-integration: $(BIN)
-	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+run-integration: $(BIN) core-copy
 	$(TEST_DIR)/test_integration.sh ./$(BIN)
 
-run-pty: $(BIN)
-	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+run-pty: $(BIN) core-copy
 	python3 $(TEST_DIR)/test_line_editor_pty.py ./$(BIN)
 
-run-lessons: $(BIN)
-	cp $(FORTH_DIR)/core.fs . 2>/dev/null || true
+run-lessons: $(BIN) core-copy
 	python3 $(TEST_DIR)/test_lessons.py ./$(BIN)
 
 clean:
@@ -74,7 +98,7 @@ clean:
 help:
 	@echo "BasicForth x86-64 Build"
 	@echo ""
-	@echo "  make                 Build basicforth binary"
+	@echo "  make                 Build basicforth (binary + its core.fs)"
 	@echo "  make test            Build unit test (C harness)"
 	@echo "  make all             Build basicforth and unit test"
 	@echo "  make run             Run basicforth interactively"

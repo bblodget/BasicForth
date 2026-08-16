@@ -37,7 +37,7 @@ nothing a sound effect does not already cost.
 
 The engine is named by a command template, not baked in:
 
-    s" piper -m en_US-lessac-medium -f %o -- %t" voice-cmd!
+    s" piper -m en_US-libritts-high -f %o -- %t" voice-cmd!
 
 `%t` expands to the text and `%o` to the output path, both **quoted**, so a
 phrase containing an apostrophe or a `$` is data rather than shell syntax.
@@ -52,7 +52,26 @@ at all, including the board and the QEMU aarch64 test run.
 ## Installing an engine
 
 Nothing here ships an engine; the machine provides one. Piper is a good
-default: neural, offline, small, and permissively licensed.
+default: neural, offline, and small.
+
+Rendering a vocabulary and shipping the WAVs makes the licensing worth a look
+before you commit to a voice. Three things carry their own terms — the engine,
+the voice model, and its training data — and how they bear on generated audio
+is a question for you and not for this page. Where to read them:
+
+`piper-tts` declares GPL-3.0-or-later in its package metadata. Each voice has
+a card at `huggingface.co/rhasspy/piper-voices` giving the training dataset,
+that dataset's licence, and what the model was trained *from* — read the last
+two together, because many piper voices are fine-tuned from a research-only
+model and a permissive dataset line alone will not show that.
+`download_voices` fetches the model without its card.
+
+`en_US-libritts-high` is *"Trained from scratch on train-clean-360"* with
+dataset LibriTTS under CC BY 4.0. It is the default because neither its data
+nor its lineage carries a use restriction, which keeps the question out of the
+way for most projects.
+
+`voice.fs` runs the engine as a separate program and never links against it.
 
     sudo apt install pipx                 # or your distribution's package
     pipx ensurepath                       # once: puts ~/.local/bin on PATH
@@ -62,7 +81,7 @@ default: neural, offline, small, and permissively licensed.
     mkdir -p ~/.local/share/piper-voices
     "$(dirname "$(readlink -f "$(command -v piper)")")/python" \
         -m piper.download_voices \
-        --data-dir ~/.local/share/piper-voices en_US-lessac-medium
+        --data-dir ~/.local/share/piper-voices en_US-libritts-high
 
 **`pipx ensurepath` matters, and it needs a fresh shell.** It edits a shell
 profile (`~/.bashrc` or similar), so the change reaches the shell you are
@@ -87,7 +106,7 @@ is a module rather than an app. Hence the incantation above — it follows the
 beside it, rather than naming a pipx directory. That matters because pipx has
 moved its venvs (older versions used `~/.local/pipx/venvs`, newer ones
 `~/.local/share/pipx/venvs`), and a written-down path is right only for the
-version you happened to test. The voice is about 60 MB; `--data-dir` is what
+version you happened to test. The voice is about 130 MB; `--data-dir` is what
 both commands call it.
 
 `setup.sh` builds the template from whatever `piper` is on `PATH` and exports
@@ -122,7 +141,7 @@ distributions:
 
 Both are robotic next to a neural voice, and both are useful precisely
 because they are tiny and always available — good for a smoke test that a
-template is wired up correctly before downloading a 60 MB model.
+template is wired up correctly before downloading a 130 MB model.
 
 ## Checking a render worked
 
@@ -144,13 +163,35 @@ the clearance is verified rather than assumed. If the path could not be
 cleared the render stops there and says so, instead of judging the engine by
 a file it was never able to replace.
 
-## Where speech goes next
+## Speaking with speech.fs
 
-`speech.fs` puts `say` at the prompt, synthesizing into memory through the
-FFI and playing on a `sound.fs` channel — no file, no shell, and `talking?`
-answered by the channel itself. flite suits that job: its
-`flite_text_to_wave` takes two arguments and hands back a buffer, which fits
-the FFI as it stands and needs no callback.
+`speech.fs` puts `say` at the prompt, synthesizing into memory through the FFI
+and playing on a `sound.fs` channel — no file, no shell, and `talking?`
+answered by the channel itself. On Debian and Ubuntu the engine and its voices
+are one package, `libflite1` ([Install.md](Guides/Install.md)). flite suits the job:
+`flite_text_to_wave` takes two arguments and hands back a `cst_wave`
+(`sample_rate@8`, `num_samples@12`, `num_channels@16`, `samples*@24`, verified
+by calling it), which fits the FFI as it stands and needs no callback. The
+samples go straight to `ch-put` and the wave is freed on the next line,
+because SDL copies.
+
+Speech takes **its own channel**, with `next-ch` at open time, and keeps it. A
+channel is a sequential queue, so that single decision buys both properties
+worth having: successive `say`s wait for each other instead of talking over
+themselves, and a phrase never queues up behind a sound effect.
+
+Binding is lazy — `require speech.fs` never touches flite, and `speech-open`
+returns an `ior`. A machine without the library gets a reason it can print
+rather than an abort while loading a file, which is the same shape `snd-open`
+uses for a machine without audio.
+
+The cost that shapes everything else: **`say` blocks while it synthesizes**.
+Measured with `cmu_us_slt`, "Go!" is 7 ms, a full sentence 38 ms, against a
+16.7 ms frame at 60 Hz. Fast enough to feel instant at a prompt, too slow to
+sit in a frame loop — which is the whole reason `voice.fs` exists beside it
+rather than being replaced by it.
+
+## Where speech goes next
 
 Longer term, an engine that streams while it speaks would let BasicForth
 start talking before a sentence is finished. That wants a C callback into

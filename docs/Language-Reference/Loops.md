@@ -86,7 +86,7 @@ Exit the innermost enclosing *counted* loop immediately and carry on after it.
     upto3             \ 0 1 2 3
 
 It is counted-loop-only: inside a plain `begin` loop it is a compile error
-(`mismatched-control-flow`). Inside a `begin` loop that sits within a `do`
+(`mismatched control flow: leave`). Inside a `begin` loop that sits within a `do`
 loop it compiles and ends the **`do`** loop, abandoning the rest of the
 `begin` body — to leave just the inner loop, use its own exit test.
 

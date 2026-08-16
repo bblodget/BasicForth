@@ -9,6 +9,7 @@ At a glance:
     decimal  ( -- )                 switch base to 10
     hex      ( -- )                 switch base to 16
     binary   ( -- )                 switch base to 2
+    number   ( c u -- n true | c u false )   read a whole string as a number
     >number  ( ud c u -- ud c u )   convert string digits to a number
 
     Literal prefixes (any time, whatever the base):
@@ -51,6 +52,34 @@ the prefix (`-$FF` and `$-FF` both work).
 
 The `#` prefix earns its keep when the base is *not* ten — as in the last
 example, or inside a hex-mode debugging session.
+
+## number ( c-addr u -- n true | c-addr u false )
+Read a string as a **whole** number, the way the interpreter does when it meets
+a word that is not in the dictionary. The current `base` applies, and so do the
+prefixes above, with the sign on either side of one.
+
+**The stack effect is asymmetric, like `find`.** On success the string is
+*replaced* by the value; on failure the string is still there, under a `false`.
+The two arms therefore clean up differently, and a miss path has to `2drop` (or
+`type` it, as here):
+
+    : n? ( c-addr u -- )
+        number if  ." got " .  else  ." not a number: " type  then  cr ;
+
+    s" 42"   n?       \ got 42
+    s" -$ff" n?       \ got -255
+    s" xyz"  n?       \ not a number: xyz
+
+The test lives in a definition because `if` is compile-only; at the prompt,
+reach for a word like `n?` rather than an inline conditional.
+
+The whole string must be a number — `number` is all-or-nothing, and that is the
+difference from `>number`, which converts what it can and hands back the rest.
+So the base matters to whether a string is a number at all:
+
+    decimal  s" 12ab" n?      \ not a number: 12ab
+    hex      s" 12ab" n?      \ got 12AB
+    decimal
 
 ## >number ( ud c-addr u -- ud c-addr u )
 Convert leading digits of a string into a double, in the current base. Returns

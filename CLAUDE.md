@@ -24,6 +24,20 @@ as the code evolves:
 - ARM64_Quick_Reference.md — ARM64 instruction and register reference
 - x86_Quick_Reference.md — x86-64 AT&T syntax reference
 
+Three subdirectories are on BASICFORTH_DOCS, and so reachable from `help`:
+
+- docs/Language-Reference/ — one page per topic, `## word ( stack )` entries
+- docs/Tutorial/ — the interactive lessons `tutorial` replays
+- docs/Guides/ — user-facing task pages (installing, and whatever joins it).
+  Same page shape, but a Guide's `## ` headings must each be a SINGLE word:
+  with no stack effect to stop the token scan, every word of a heading becomes
+  a `help` topic. See docs/Help_System.md; the suite enforces it.
+
+Everything else in docs/ is design and implementation notes, deliberately not
+on that path — `help` should never offer them. docs/dev-notes/ likewise holds
+notes on the development environment itself — the machines, boards and links
+we build and test on, not the language.
+
 ## Development Environment
 
 - Development on x86 Linux laptop using Claude Code
