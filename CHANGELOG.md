@@ -67,6 +67,33 @@
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
 
+### Fixed: an error inside `[ ... ]` left the definition open
+
+`[` interprets *inside* an open definition, so `STATE` is 0 there while a
+half-built word is still on the dictionary. Two error paths asked `STATE`
+whether to abandon that definition, and so did not:
+
+    : foo [ nosuchword
+    ? nosuchword
+    : bar 1 ;
+    definition still open: bar        \ ...and it is foo that is open
+
+The next `:` was refused for the rest of the session unless you knew to type
+`] ;`, and the message named the word being defined rather than the one
+actually open. The identical typo one word to the left — `: foo nosuchword` —
+abandoned the definition cleanly, which is the behaviour both now share. The
+compile-only path (`: foo [ if`) was the same bug one step worse: it jumped
+straight to the error return and never consulted `STATE` at all.
+
+Found by sweeping every `state` read on both architectures for the same
+confusion, which had already produced four bugs — three of them silent session
+wedges. Most reads turned out to be legitimate: an IMMEDIATE word choosing
+compile-vs-interpret behaviour is what `STATE` is *for*, and so is the locals
+lookup, since a local does not exist at compile time and must not resolve
+inside `[ ]`. The continuation prompt stays `STATE`-only on purpose — inside
+`[` you really are interpreting, and the line editor's scroll margin tracks it
+the same way.
+
 ### Changed: a number compiles to an immediate, not a call
 
 `5` inside a definition used to compile a call to `lit` followed by eight bytes

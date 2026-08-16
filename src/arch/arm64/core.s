@@ -2714,10 +2714,16 @@ forth_tick:
     ADR X10, err_token_addr
     STR X9, [X10]
     ADD X19, X19, #2*CELL           // drop c-addr u
+    // Abandon the definition if one is open. STATE alone cannot decide -- `[`
+    // interprets INSIDE an open definition -- so also check LATEST's hidden
+    // bit, the same pair the ` ok` suppression and dict_full's rollback use.
     ADR X9, state
     LDR X9, [X9]
     CBNZ X9, .Lcf_abort             // compiling: abandon the definition
-    B .Lcf_longjmp                  // interpreting: error, keep the stack
+    LDRB W9, [X22, #8]              // LATEST flags
+    TST W9, #F_HIDDEN               // definition open but interpreting?
+    B.NE .Lcf_abort
+    B .Lcf_longjmp                  // nothing open: error, keep the stack
 
 // ---------- INTERPRET-LINE ----------
 // ( -- ) Returns status in X0: 0=success, 1=error
@@ -2862,10 +2868,33 @@ forth_interpret_line:
     STR X9, [X10]
     ADD X19, X19, #2*CELL           // clean up c-addr and u
 
-    // If we were compiling, abort the definition
-    ADR X9, state
+    // If a definition is open, abort it. Not STATE alone: `[` interprets inside
+    // an open definition, and gating on STATE left `: foo [ nosuchword` with a
+    // live partial header, so the next `:` was refused and only `] ;` could
+    // recover -- while the same typo OUTSIDE a bracket abandoned it cleanly.
+.Lil_err_maybe_abort:               // shared: every error exit that may have a
+    ADR X9, state                   // definition open behind it comes here
     LDR X10, [X9]
-    CBZ X10, .Lil_err_return
+    CBNZ X10, .Lil_err_abort
+    LDRB W10, [X22, #8]             // LATEST flags
+    TST W10, #F_HIDDEN              // definition open but interpreting?
+    B.EQ .Lil_err_return
+    // Only the OUTERMOST interpret_line may abandon a definition on this route.
+    // Returning an error ends the LINE only at the top level; a nested one --
+    // EVALUATE, or a load -- returns into a caller that carries on with the
+    // rest of its own line, which left it compiling into a definition that no
+    // longer existed. Derived from il_sp rather than counted, because the
+    // longjmp path unwinds without running an epilogue.
+    //
+    // NOTE the offset: entry does `STP X10, X11` with X10 = old il_sp, so here
+    // the previous value is at [il_sp, #0] and LP at #8 -- the REVERSE of the
+    // x86 mirror, where LP is at 0. Reading #8 would test LP, which is never
+    // zero, so the abort would simply never fire.
+    ADR X10, il_sp
+    LDR X10, [X10]
+    LDR X10, [X10]                  // previous il_sp: 0 only at the top level
+    CBNZ X10, .Lil_err_return
+.Lil_err_abort:
     STR XZR, [X9]                   // reset to interpret mode
     ADR X9, locals_count
     STR XZR, [X9]                   // ...and the names it declared
@@ -2922,7 +2951,11 @@ forth_interpret_line:
     MOV X9, #err_pfx_conly_len
     ADR X10, err_pfx_len
     STR X9, [X10]
-    B .Lil_err_return               // err_token was saved before FIND
+    B .Lil_err_maybe_abort          // err_token was saved before FIND. Not
+                                    // .Lil_err_return: this path skipped the
+                                    // abort decision entirely, so `: foo [ if`
+                                    // left the definition open where the same
+                                    // mistake without the bracket did not.
 
 // ---------- PAREN (comment word, IMMEDIATE) ----------
 // ( "ccc)" -- )
