@@ -1086,8 +1086,9 @@ and `2` is not a valid binary digit.
 ## Stack
 
 BasicForth uses a data stack to pass values between words. Numbers are pushed
-onto the stack as they are entered. Stack manipulation words will be
-documented here as they become available in the interactive environment.
+onto the stack as they are entered. `help stack` is the full reference; the
+table below is the handful you reach for constantly, and `## Locals` below
+covers what to do when juggling them stops being readable.
 
 ### Stack Words
 
@@ -1101,3 +1102,42 @@ documented here as they become available in the interactive environment.
 | `CLEARSTACK` | `( ... -- )`       | Discard everything on the stack |
 
 See `help stack` for the full set of stack manipulation words.
+
+## Locals
+
+Three arguments is roughly where `rot swap over` stops being readable. `{: … :}`
+takes items off the stack and gives them names for the rest of the definition:
+
+```
+> : tween ( a b pct -- n )  {: a b pct :}  b a -  pct 100 */  a + ;
+ ok
+> 0 100 50 tween .
+50  ok
+```
+
+The line is now the formula. Written by juggling it is `>r over - r> 100 */ +`,
+where the `>r` and the `over` are bookkeeping rather than arithmetic — a name
+stays available whether or not you have used it already, so nothing needs
+parking or copying.
+
+Names are listed in stack order, deepest first, the same order you write a
+stack comment in. Names after `|` take nothing from the stack and start at zero
+— a counter or accumulator belonging to the word rather than its caller — and
+anything after `--` is ignored, so the declaration can carry its own stack
+comment and stop it drifting: `{: x1 y1 r1 x2 y2 r2 -- flag :}`. `to` writes a
+local, following the same resolution order as reading one.
+
+A reference is **open-coded** — a memory load written into your word, never a
+call — which is what makes locals worth having at all: a call there would have
+made them slower than the juggling they replace. They cost more code, though:
+four instructions on x86-64 and six on ARM64 against a stack operation's single
+call, so a small word compiles several times larger. Whether that is also
+slower depends on the machine; locals win on x86-64 and lose by a similar margin
+on ARM64, where locating the locals pointer is dearer. `dis` shows both, and
+`tests/bench-locals.fs` measures them.
+
+Locals live on their own per-thread stack, so they neither use nor disturb the
+return stack, and a worker cannot reach another thread's frames. `{:` may appear
+once per definition, where no control structure is still open. `tutorial Locals`
+works through all of it; `help locals` is the reference, and `docs/Locals.md`
+records the design and the measurements.
