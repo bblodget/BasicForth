@@ -68,7 +68,17 @@ release**, since the banner comes from `git describe`.
 
        git checkout staging && git merge --ff-only main
 
-7. Push: `git push && git push origin vX.Y.Z`
+7. Push **both branches and the tag, naming them explicitly**:
+
+       git push origin main staging vX.Y.Z
+
+   Not `git push`. Step 6 leaves you on `staging`, which has no upstream, so a
+   bare push fails outright — and if it were configured, `push.default=simple`
+   would publish only the current branch, leaving `main` on the remote at the
+   *previous* release. The tag needs naming too: tags are not pushed by
+   default. Verify with `git ls-remote origin refs/heads/main
+   refs/heads/staging` rather than trusting the local `origin/*` refs, which
+   only say what the last fetch saw.
 
 Step 4 is the part that is easy to get wrong. Tagging on `staging` would put
 the release on a commit `main` does not contain, so `git describe` on `main`
