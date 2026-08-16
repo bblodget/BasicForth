@@ -111,6 +111,11 @@ cannot disturb yours. `BASE` is per-thread too — a worker calling `hex` leaves
 the prompt in decimal — and so is `seed`, so `random` and `rnd` give every
 worker an independent sequence (`help random`).
 
+**The locals stack is per-thread as well**, which is what makes `{: … :}` safe
+to call from several workers at once: each has its own frames, so a `|` local
+is genuinely private scratch space where a shared `variable` would race
+(`help locals`).
+
 `seed` earns its place there twice over. Shared, it was not merely slow but
 **wrong**: `random` reads the cell, mixes, and writes it back, and two threads
 doing that without atomicity walk one interleaved sequence and lose each

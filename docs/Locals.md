@@ -26,7 +26,9 @@ top of the stack, so the zeros land exactly on those slots — the same trick th
 into the word's stack effect. *(Superseded 2026-08-15: the zeros are now
 written straight into their slots by the open-coded frame — see "The frame was
 a call, and that was the wrong call" below. Each of those pushes was a
-`LITERAL`, which turned out to be the most expensive thing the engine does.)*
+`LITERAL`, which at the time was the most expensive thing the engine did. That
+is no longer true of literals themselves — see "The literal was fixed too"
+below — but the frame is still better off not pushing anything.)*
 
 The hard part was none of that. It was answering "am I loading a file?", which
 took four attempts — `source-id` (answers 0 inside an included file too),
@@ -240,6 +242,11 @@ where it is shared. This is the ARM64 run the section above says is owed.
 | frame build+release, **before** | 27.8 ns | 7.2 ns |
 | frame build+release, **after** | 0.4 ns | 0.4 ns |
 
+*The `LITERAL` row is a record of what it cost on 2026-08-15, and is what made
+the frame worth open-coding. It no longer describes the engine — literals were
+fixed the next day. See "The literal was fixed too" below for the current
+figures. The rest of the table still holds.*
+
 **The open-coding decision holds.** A reference is cheaper than the `dup` it
 replaces and cheaper than a call, on both architectures, even at ARM64's six
 instructions to x86's four. Had it been a `create`/`does>` word it would have
@@ -272,6 +279,39 @@ costs an 8-byte store.
 On ARM64 the whole-word comparison improved from 49.0 ns to 26.0 ns but still
 trails the juggled spelling at 19.6 ns; on x86 it went 15.2 → 6.4 ns and now
 wins against 8.6 ns. The next section is why, and what was tried.
+
+## The literal was fixed too
+
+Re-measured 2026-08-16, after `LITERAL` stopped being a call (a number now
+compiles to an immediate). Raw `tests/bench-locals.fs` PART 1 figures, ps per
+access, each carrying the shared `drop` call that the calibration row isolates:
+
+| | ARM64 (Pi 400) | x86-64 |
+|---|---|---|
+| colon call (calibration) | 1940 | 820 |
+| **literal** | **1960** | **880** |
+| local reference | 2620 | 900 |
+| `dup` | 4300 | 1640 |
+| `variable @` | 17040 | 6820 |
+
+**A literal is now indistinguishable from the calibration baseline** — the row
+sits within noise of a bare call+ret on both architectures, where it used to
+stand at 10.6 ns on ARM64. Subtracting the shared call leaves ~0.02 ns on ARM64
+and ~0.06 ns on x86, which is below what this harness can resolve; the honest
+statement is that it costs nothing measurable, not that it costs 0.02 ns.
+
+**This does not change any locals conclusion.** The whole-word comparison is
+where the decision lives, and it moved by less than the run-to-run spread:
+
+| `(a+b)*(b+c)`, ps/call | ARM64 | x86-64 |
+|---|---|---|
+| locals | 26000 | 6400 |
+| juggled | 20000 | 9000 |
+
+So locals still win on x86 and still lose on ARM64, for the reason the next
+section gives. The frame work was worth doing on its own terms — it removed
+work rather than making a slow instruction faster — and nothing about it needs
+revisiting now that the literal is cheap.
 
 ## Why ARM64 still loses, and the experiment that did not fix it
 

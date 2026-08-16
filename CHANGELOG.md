@@ -64,7 +64,10 @@ cache.
 - **Locals shadow, including verbs.** `{: i :}` beats the `DO` loop index inside
   that definition. That is what the standard requires and what every language
   does for variables, but Forth lets you shadow *verbs*, so it bites harder —
-  `i` and `j` are the names to watch. A warning is planned.
+  `i` and `j` are the names to watch, since they are the natural names for a
+  counter *and* the loop indices. The compiler says so when it happens
+  (`note: local i shadows an existing word`), interactively only, so a
+  `require`d library never nags about its own locals.
 - **`{:` may appear once per definition, where the compile-time stack is
   empty** — in practice, not inside an unclosed `if`, `begin`, `do` or `case`. A
   closed one before it is fine. The frame is built where `{:` appears but
@@ -92,6 +95,23 @@ cache.
   `note: local i shadows an existing word`. A note, not an error: shadowing is
   what locals are for. Prompt only, like the `redefined` warning, so a library
   declaring a local named `i` does not nag on every load.
+
+### Added: `tutorial Locals` — stop juggling the stack
+
+- Sixteen steps, from a three-argument word written by juggling to a
+  six-argument circle-collision test. Covers `{: a b c :}`, `|` locals, `to`,
+  and using `--` inside the declaration so the stack comment stops being a
+  comment.
+- **It measures rather than asserts.** One step defines the same function both
+  ways and times them, and the next explains why the answer differs by
+  architecture — locals win on x86-64 and lose on ARM64, because a reference is
+  four instructions there against six — so neither result reads as a fault. Nothing is promised about the numbers themselves, and the
+  step warns that a timing taken under emulation describes the translator and
+  the host CPU — emulation does not preserve what instructions cost relative to
+  one another, so the result belongs to neither machine.
+- Teaches the two traps directly: a local shadowing `i` inside a `DO` loop, and
+  `{:` refused where a control structure is still open. Both are shown
+  happening rather than described.
 
 ### Fixed: an error inside `[ ... ]` left the definition open
 
