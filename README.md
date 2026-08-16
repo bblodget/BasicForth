@@ -36,31 +36,40 @@ and project phases.
 
 ## Status
 
-**v0.15.0** — **Give it a voice and a controller.** `voice-render` turns text
-into a WAV file through whatever text-to-speech engine the machine has — the
-engine is a **command template**, so nothing here is tied to one, and a game
-renders its phrases once at build time rather than paying synthesis in the
-frame loop. **Game controllers** arrive with `pad.fs`: four slots, compass
-button names, hot-plug handled where SDL actually reports it. A program can
-**read its environment** now (`getenv`), which is how `voice.fs` finds its
-engine, and startup's own five lookups go through the same platform call
-instead of five hand-written copies per architecture.
+**v0.16.0** — **Names instead of juggling, and a number that is just a number.**
+**Local variables** arrive (Forth 2012 section 13): `{: a b c :}` names a word's
+arguments, so three or four of them stop being an exercise in `rot swap over`.
+`| t` adds a zeroed scratch value the caller never supplies, `TO` writes one,
+and a trailing `-- comment` lets the declaration carry its own stack comment.
+The point was never the syntax — a reference and the frame are **open-coded**,
+a load rather than a call, because locals that cost a call would be slower than
+the juggling they replace. Measured on a Raspberry Pi 400: 0.62 ns a reference
+against 2.24 ns for the `dup` it stands in for.
 
-The random generator is **seeded from the kernel** rather than the clock:
-`ms@` gave two processes started in the same millisecond an identical stream —
-200 parallel launches produced 87 distinct first values, now 200 of 200 — and
-`0 seed !`, the obvious thing to type for a repeatable run, used to kill the
-generator dead. Both fixed. The sound API also lost its odd corners:
-`snd-open` returns an `ior` like `open-file`, `snd-alloc` is `next-ch`, and
-`snd-vol` is `tone-amp` — named for what it is, since it is not a volume.
+Chasing that led somewhere better. **A number now compiles to an immediate**
+instead of a call to `lit` with eight bytes of payload behind it. The old form
+reached its operand through its own return address and returned past it, so
+every literal mispredicted the return-stack predictor — the most expensive step
+in the engine. A loop containing one constant is **2.6x faster on ARM64**, 1.6x
+on x86-64, and usually smaller too. The call form is deliberately kept wherever
+the inline cell is *storage* someone reads or patches later, which is what let
+the two cases be separated instead of traded off.
 
-And BasicForth **runs Forth on OS threads** — `thread`, `join`, `threads`, with
-`BASE`, `sp0` and the exception handler moved into thread-local storage and
-worker stacks fenced by guard pages. Plus `<=`, `>=`, `u<=`, `u>=` as
-primitives; a compile-only word now aborts the line and names itself instead of
-letting the rest of it run; and a child process no longer prints onto the
-command line you typed. Builds on v0.13.0.
-123 unit tests + 951 integration tests + 36 PTY tests + 26 lesson replays.
+A file can now **say what it needs from the machine**, and you can ask before
+you load it. `NEEDS-CMD` and `NEEDS-LIB` stop a load that cannot work, with a
+message naming the file and what to do about it; `WANTS-CMD` and `WANTS-LIB`
+declare what a file runs degraded without, which is why `disasm.fs`, `speech.fs`
+and `voice.fs` finally have a dep block without giving up their retry-and-report
+behaviour. `DEPS <file>` reports the lot against this machine without running a
+line — following `require` into the files named there, because "found" is no
+comfort when the file underneath it cannot load. And **speech needs no file at
+all** now: `say` synthesizes through flite straight onto a channel.
+
+This is also the first release exercised on **real ARM64 hardware** rather than
+under emulation, which is where the boot-time `SIGILL` fix came from — a
+cache-maintenance bug every QEMU suite had passed, because QEMU models neither
+an incoherent instruction cache nor weak memory ordering. Builds on v0.15.0.
+123 unit tests + 1180 integration tests + 36 PTY tests + 32 lesson replays.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -164,9 +173,9 @@ What works today:
 - Control-flow safety: tag mismatch and balance checking
 
 What's next: a GPU backend (SDL_GPU) behind the surface API and sockets —
-plus a package registry and more games. (Threading shipped in v0.14.0;
-rendering speech to a file in v0.15.0 and `say` shortly after, so speech at
-the prompt needs no file at all; the locals word set in v0.16.0.)
+plus the rest of the package registry and more games. (Threading shipped in
+v0.14.0; rendering speech to a file in v0.15.0, and in v0.16.0 both `say`, so
+speech at the prompt needs no file at all, and the locals word set.)
 
 ## Building
 

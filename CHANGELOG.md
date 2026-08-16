@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.16.0 — 2026-08-16
 
 Three headline changes: **local variables** (`{: a b c :}`), a compiler change
 that makes **a number an immediate** instead of a call, and **`deps`**, which
@@ -129,46 +129,6 @@ cache.
   list, where two of this release's three headline changes were missing.
 - **The Manual gains a `## Locals` section** and its `## Stack` section stops
   saying that stack words "will be documented here as they become available".
-
-### Fixed: an error inside `[ ... ]` left the definition open
-
-`[` interprets *inside* an open definition, so `STATE` is 0 there while a
-half-built word is still on the dictionary. Two error paths asked `STATE`
-whether to abandon that definition, and so did not:
-
-    : foo [ nosuchword
-    ? nosuchword
-    : bar 1 ;
-    definition still open: bar        \ ...and it is foo that is open
-
-The next `:` was refused for the rest of the session unless you knew to type
-`] ;`, and the message named the word being defined rather than the one
-actually open. The identical typo one word to the left — `: foo nosuchword` —
-abandoned the definition cleanly, which is the behaviour both now share. The
-compile-only path (`: foo [ if`) was the same bug one step worse: it jumped
-straight to the error return and never consulted `STATE` at all.
-
-The abort is gated to the outermost `interpret_line`, because returning an
-error ends the *line* only at the top level — a nested one (an `EVALUATE`, or a
-load) returns into a caller that carries on with the rest of its own line.
-Without that gate, `: foo [ s" nosuchword" evaluate ] ;` tore the enclosing
-definition down mid-line while the line kept compiling into the hole. Two
-routes needed it: the shared error exit, and `'` failing to find a name.
-
-The same flaw on the *compiling* arm is older and still there — an error inside
-a nested evaluation while `STATE` is set rolls back to the global anchor and
-takes the enclosing definition with it. Unchanged by this work, pinned by a
-test, and filed: the real repair is for `EVALUATE` to propagate the error so
-the outer line aborts too.
-
-Found by sweeping every `state` read on both architectures for the same
-confusion, which had already produced four bugs — three of them silent session
-wedges. Most reads turned out to be legitimate: an IMMEDIATE word choosing
-compile-vs-interpret behaviour is what `STATE` is *for*, and so is the locals
-lookup, since a local does not exist at compile time and must not resolve
-inside `[ ]`. The continuation prompt stays `STATE`-only on purpose — inside
-`[` you really are interpreting, and the line editor's scroll margin tracks it
-the same way.
 
 ### Changed: a number compiles to an immediate, not a call
 
@@ -623,6 +583,46 @@ The value is now built straight into an instruction. No call, no inline data.
   `' then execute` — a construction that is already undefined, since it
   bypasses the compile-only check.
 
+### Fixed: an error inside `[ ... ]` left the definition open
+
+`[` interprets *inside* an open definition, so `STATE` is 0 there while a
+half-built word is still on the dictionary. Two error paths asked `STATE`
+whether to abandon that definition, and so did not:
+
+    : foo [ nosuchword
+    ? nosuchword
+    : bar 1 ;
+    definition still open: bar        \ ...and it is foo that is open
+
+The next `:` was refused for the rest of the session unless you knew to type
+`] ;`, and the message named the word being defined rather than the one
+actually open. The identical typo one word to the left — `: foo nosuchword` —
+abandoned the definition cleanly, which is the behaviour both now share. The
+compile-only path (`: foo [ if`) was the same bug one step worse: it jumped
+straight to the error return and never consulted `STATE` at all.
+
+The abort is gated to the outermost `interpret_line`, because returning an
+error ends the *line* only at the top level — a nested one (an `EVALUATE`, or a
+load) returns into a caller that carries on with the rest of its own line.
+Without that gate, `: foo [ s" nosuchword" evaluate ] ;` tore the enclosing
+definition down mid-line while the line kept compiling into the hole. Two
+routes needed it: the shared error exit, and `'` failing to find a name.
+
+The same flaw on the *compiling* arm is older and still there — an error inside
+a nested evaluation while `STATE` is set rolls back to the global anchor and
+takes the enclosing definition with it. Unchanged by this work, pinned by a
+test, and filed: the real repair is for `EVALUATE` to propagate the error so
+the outer line aborts too.
+
+Found by sweeping every `state` read on both architectures for the same
+confusion, which had already produced four bugs — three of them silent session
+wedges. Most reads turned out to be legitimate: an IMMEDIATE word choosing
+compile-vs-interpret behaviour is what `STATE` is *for*, and so is the locals
+lookup, since a local does not exist at compile time and must not resolve
+inside `[ ]`. The continuation prompt stays `STATE`-only on purpose — inside
+`[` you really are interpreting, and the line editor's scroll margin tracks it
+the same way.
+
 ### Changed: tunable sizes live in one shared file
 
 - `src/config.inc` now holds every tunable size — `CELL`, `DATA_STACK_SIZE`,
@@ -887,7 +887,7 @@ The value is now built straight into an instruction. No call, no inline data.
 
 ### Fixed: the integration suite assumed the machine it was written on
 
-Three defects, all found by running the suite on a Raspberry Pi 400 the day
+Five defects, all found by running the suite on a Raspberry Pi 400 the day
 SDL3 was installed there. Each reported something other than itself, which is
 what made them worth fixing rather than merely correcting.
 
@@ -919,6 +919,28 @@ what made them worth fixing rather than merely correcting.
   did not happen. Resolved once now, by absolute path when the bare name is not
   found. This was invisible on both machines' interactive shells and appeared
   only over `ssh`, which is how the ARM64 runs are driven.
+- **`VISUAL` in the environment failed 18 `edit` tests.** `core.fs` runs the
+  editor as `${VISUAL:-${EDITOR:-vi}}`, so a `VISUAL` inherited from a
+  developer's shell outranks the `EDITOR` each test sets for itself: the real
+  editor opened, waited for a human, and was killed by the per-test timeout —
+  18 failures whose output mentions neither `VISUAL` nor the environment, on a
+  suite documented as environment-independent. The Pi had both set, which is an
+  entirely ordinary thing to have. `test_lessons.py` had been passing
+  `VISUAL="true"` all along; the integration suite never got the same
+  treatment. **Stripping variables finds what a suite needs; it cannot find
+  what a suite is poisoned by**, so run it in a normal developer environment as
+  well as a bare one.
+- **A binary that cannot start reported a thousand assertion failures instead
+  of saying so.** Every assertion compares captured output against an
+  expectation, so a dead binary produced ~1000 identical-looking failures that
+  never said why — indistinguishable from `core.fs` not being found, which
+  sends you off checking `BASICFORTH_PATH`. That is exactly what happened when
+  the ARM64 I-cache bug above made `basicforth` die with `SIGILL` before
+  printing a byte. The suite now runs one trivial command first and stops with
+  a specific reason: killed by a named signal, timed out, or exited non-zero.
+  Missing `core.fs` is deliberately a warning rather than fatal — tested rather
+  than assumed, since a binary without it still starts and still evaluates
+  `3 4 + .` from its built-in primitives.
 
 ### Fixed: the lesson suite stopped recognising a missing libSDL3
 
