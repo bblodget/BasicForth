@@ -27,10 +27,21 @@ address onto the hardware stack, so no prolog is needed.
 
 ### Instruction Sizes
 
-| Architecture | CALL/BL | RET           | Literal (CALL LIT + value) |
-|--------------|---------|---------------|----------------------------|
-| x86-64       | 5 bytes | 1 byte        | 13 bytes                   |
-| ARM64        | 4 bytes | 4 bytes       | 12 bytes                   |
+| Architecture | CALL/BL | RET     | Number (immediate) | Patchable cell (CALL LIT + value) |
+|--------------|---------|---------|--------------------|-----------------------------------|
+| x86-64       | 5 bytes | 1 byte  | 11 or 17 bytes     | 13 bytes                          |
+| ARM64        | 4 bytes | 4 bytes | 8 to 20 bytes      | 12 bytes                          |
+
+A number compiles to an **immediate** — the value built into the instruction
+stream, no call and no inline data. x86 uses 11 bytes when the value fits a
+signed 32-bit immediate (smaller than the old idiom) and 17 otherwise; ARM64
+needs one `MOVZ`, or one `MOVN` for a small negative, up to four moves for an
+arbitrary 64-bit value, plus the push.
+
+The `CALL LIT` + cell form remains where the cell is **storage** rather than a
+value: `>body` reads it, `TO` writes it, `IS` patches a deferred word's xt, and
+a `CREATE` body holds its data-field address there. `[']` and `POSTPONE` also
+keep it, so `dis` can still name the xt.
 
 ARM64 prolog (STP) and epilog (LDP + RET) add 4 + 8 = 12 bytes of overhead
 per compiled word.
@@ -66,7 +77,7 @@ For numbers:
 ```
 NUMBER returns ( n true ):
   STATE == 0?     leave n on stack (interpreting)
-  STATE != 0?     compile_literal (emit CALL LIT + inline value)
+  STATE != 0?     compile_literal_imm (build the value into an instruction)
 ```
 
 ## Defining a Word: `:` and `;`
@@ -226,5 +237,6 @@ internally:
 |-------------------|---------------|---------------|----------------------------|
 | `compile_call`    | 5 bytes/call  | 4 bytes/call  | Emit CALL/BL at HERE       |
 | `compile_ret`     | 1 byte        | 8 bytes       | Emit RET or LDP+RET epilog |
-| `compile_literal` | 13 bytes      | 12 bytes      | Emit CALL LIT + 8-byte value |
+| `compile_literal_imm` | 11/17 bytes | 8-20 bytes | Build a value into an immediate — no call |
+| `compile_literal` | 13 bytes      | 12 bytes      | Emit CALL LIT + 8-byte value (a PATCHABLE cell) |
 | `compile_prolog`  | n/a           | 4 bytes       | Emit STP prolog (ARM64 only) |

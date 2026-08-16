@@ -767,11 +767,14 @@ sq: 11 bytes at 0043AEE4 (dictionary)
 ```
 
 Works on both architectures (objdump does the decoding). `dis` also knows
-the compiler's inline-data idioms — a literal's 8 bytes after `call lit`,
-a string's length+characters after its runtime call — and prints those
-spans as data instead of letting the decoder chew them into garbage:
-`\ literal: 5`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`. See
-`docs/Disassembler.md`, or take the interactive lesson:
+the compiler's inline-data idioms — the 8 bytes after a `call lit`, a
+string's length+characters after its runtime call — and prints those spans
+as data instead of letting the decoder chew them into garbage:
+`\ literal: 42`, `\ s" hi there"`, and `['] dup` reads as `\ xt: dup`.
+A plain number needs none of that: it compiles to an immediate, so the
+value is legible in the instruction itself. The `call lit` form is left
+where the cell is storage — a `constant`, a `value`, a `create` body, a
+deferred word. See `docs/Disassembler.md`, or take the interactive lesson:
 `tutorial machine-code`.
 
 ## How Fast Is It (time)

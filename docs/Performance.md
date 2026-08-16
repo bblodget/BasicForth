@@ -17,6 +17,11 @@ startup (BasicForth's startup is below `time(1)`'s resolution, so wall
 clock is loop time), best of five runs. Compared against g++ 11.4 at
 `-O0`, gforth 0.7.3, and CPython 3.10.
 
+The `begin`/`until` row was re-measured on 2026-08-15, same machine and same
+best-of-five method, after literals stopped compiling to a call: it was 3.66 s
+before that change. Every other row is untouched by it — `do`/`loop` evaluates
+its bounds once at entry, so its literals never sat in the loop.
+
     C++ -O0, counter only                       0.36 s
     BasicForth   do loop (empty)                0.41 s
     C++ -O0, accumulator (two increments)       0.47 s
@@ -25,7 +30,7 @@ clock is loop time), best of five runs. Compared against g++ 11.4 at
     gforth       do loop                        1.24 s
     gforth-fast  do 1+ loop                     1.28 s
     gforth       do 1+ loop                     1.58 s
-    BasicForth   begin 1+ dup <n> = until       3.66 s
+    BasicForth   begin 1+ dup <n> = until       2.90 s
     Python       while n += 1                  45.3  s
 
 Two honesty notes on the C++ rows. First, they are `-O0` on purpose: at
@@ -49,30 +54,33 @@ vs 0.36 s), and adding one word to the body costs us more than it should
     : b1 1000000000 0 do loop ;
     dis b1
 
-    b1: 66 bytes at 0043E7AC (dictionary)
-      43e7ac:  e8 33 38 fc ff        call   0x401fe4  \ lit
-      43e7b1:  00 ca 9a 3b 00 00 00 00    \ literal: 0x3b9aca00
-      43e7b9:  e8 26 38 fc ff        call   0x401fe4  \ lit
-      43e7be:  00 00 00 00 00 00 00 00    \ literal: 0
-      43e7c6:  49 8b 07              mov    (%r15),%rax      \ DO: pop limit
-      43e7c9:  49 8b 57 08           mov    0x8(%r15),%rdx   \     and index
-      43e7cd:  49 83 c7 10           add    $0x10,%r15
-      43e7d1:  48 39 c2              cmp    %rax,%rdx        \ zero-trip check
-      43e7d4:  0f 84 13 00 00 00     je     0x43e7ed
-      43e7da:  52                    push   %rdx             \ park them on the
-      43e7db:  50                    push   %rax             \  return stack
-      43e7dc:  58                    pop    %rax             \ LOOP: take them back
-      43e7dd:  5a                    pop    %rdx
-      43e7de:  48 ff c0              inc    %rax             \ index+1
-      43e7e1:  48 39 c2              cmp    %rax,%rdx        \ reached the limit?
-      43e7e4:  74 07                 je     0x43e7ed
-      43e7e6:  52                    push   %rdx
-      43e7e7:  50                    push   %rax
-      43e7e8:  e9 ef ff ff ff        jmp    0x43e7dc
-      43e7ed:  c3                    ret
+    b1: 62 bytes at 0044DE04 (dictionary)
+      44de04:  49 83 ef 08           sub    $0x8,%r15        \ push the limit
+      44de08:  49 c7 07 00 ca 9a 3b  movq   $0x3b9aca00,(%r15)
+      44de0f:  49 83 ef 08           sub    $0x8,%r15        \ push the start
+      44de13:  49 c7 07 00 00 00 00  movq   $0x0,(%r15)
+      44de1a:  49 8b 07              mov    (%r15),%rax      \ DO: pop limit
+      44de1d:  49 8b 57 08           mov    0x8(%r15),%rdx   \     and index
+      44de21:  49 83 c7 10           add    $0x10,%r15
+      44de25:  48 39 c2              cmp    %rax,%rdx        \ zero-trip check
+      44de28:  0f 84 13 00 00 00     je     0x44de41
+      44de2e:  52                    push   %rdx             \ park them on the
+      44de2f:  50                    push   %rax             \  return stack
+      44de30:  58                    pop    %rax             \ LOOP: take them back
+      44de31:  5a                    pop    %rdx
+      44de32:  48 ff c0              inc    %rax             \ index+1
+      44de35:  48 39 c2              cmp    %rax,%rdx        \ reached the limit?
+      44de38:  74 07                 je     0x44de41
+      44de3a:  52                    push   %rdx
+      44de3b:  50                    push   %rax
+      44de3c:  e9 ef ff ff ff        jmp    0x44de30
+      44de41:  c3                    ret
 
-The two `call lit`s run once, at entry. The loop itself is the eight
-instructions from `43e7dc` to `43e7e8`: index and limit live on the
+The two bounds are built straight into instructions and run once, at entry —
+no call, no inline data to fetch (before 2026-08-15 each was a `call lit`
+plus eight bytes of payload, and cost about five times a plain call because
+`lit` returns past its own operand and mispredicts). The loop itself is the
+eight instructions from `44de30` to `44de3c`: index and limit live on the
 hardware return stack (`push`/`pop`, which is what makes `i` work inside
 the body), the compare and branch are inline machine instructions, and
 **nothing in the loop is a subroutine call**. That is the whole
@@ -133,30 +141,36 @@ increment. We dispatch with a plain `call` — cheap, and it is why the loop
 itself is fast — but our data stack is pure memory, so `1+` is a
 read-modify-write at `(%r15)`, and it cannot be folded into the caller.
 
-## Why `begin`/`until` is 9× the cost
+## Why `begin`/`until` is 7× the cost
 
 Same count, different loop structure:
 
     : b3 0 begin 1+ dup 1000000000 = until . ;
     dis b3
 
-      43e7b9:  e8 a9 31 fc ff        call   0x401967  \ 1+
-      43e7be:  e8 34 2f fc ff        call   0x4016f7  \ dup
-      43e7c3:  e8 1c 38 fc ff        call   0x401fe4  \ lit
-      43e7c8:  00 ca 9a 3b 00 00 00 00    \ literal: 0x3b9aca00
-      43e7d0:  e8 cb 31 fc ff        call   0x4019a0  \ =
-      43e7d5:  49 8b 07              mov    (%r15),%rax     \ UNTIL: pop flag
-      43e7d8:  49 83 c7 08           add    $0x8,%r15
-      43e7dc:  48 85 c0              test   %rax,%rax
-      43e7df:  0f 84 d4 ff ff ff     je     0x43e7b9
+      44de0f:  e8 e0 3a fb ff        call   0x4018f4  \ 1+
+      44de14:  e8 69 38 fb ff        call   0x401682  \ dup
+      44de19:  49 83 ef 08           sub    $0x8,%r15       \ the limit, inline
+      44de1d:  49 c7 07 00 ca 9a 3b  movq   $0x3b9aca00,(%r15)
+      44de24:  e8 04 3b fb ff        call   0x40192d  \ =
+      44de29:  49 8b 07              mov    (%r15),%rax     \ UNTIL: pop flag
+      44de2c:  49 83 c7 08           add    $0x8,%r15
+      44de30:  48 85 c0              test   %rax,%rax
+      44de33:  0f 84 d6 ff ff ff     je     0x44de0f
 
-Four calls per iteration instead of zero — the counter bump, the copy, the
-limit literal, and the comparison are all words here, while `do`/`loop`
-does the equivalent compare inline and keeps the counter off the data
-stack entirely. 3.66 s versus 0.41 s.
+Three calls per iteration instead of zero — the counter bump, the copy and
+the comparison are all words here, while `do`/`loop` does the equivalent
+compare inline and keeps the counter off the data stack entirely. 2.90 s
+versus 0.41 s.
+
+It was 3.66 s until 2026-08-15, when the limit stopped being a `call lit`
+plus eight bytes of payload and became the two inline instructions above.
+That one change is the whole 0.75 s: a literal used to cost about five
+times a plain call, because `lit` reaches its operand through its own
+return address and returns past it, mispredicting every time.
 
 **This is the biggest lever in the language.** Same algorithm, same
-machine, same compiler: choosing the right loop structure is worth 9×. No
+machine, same compiler: choosing the right loop structure is worth 7×. No
 amount of cleverness inside the body recovers what the wrong loop shape
 costs.
 
