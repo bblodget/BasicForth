@@ -113,6 +113,23 @@ cache.
   `{:` refused where a control structure is still open. Both are shown
   happening rather than described.
 
+### Changed: the docs catch up with locals and `deps`
+
+- **`tutorial Modules` gains two steps**: `require`, and the dep block that
+  `deps` reads. Nine lessons opened with `require sdl3.fs` as a magic
+  prerequisite line and none of them explained it; the lesson about keeping
+  your work as a program is where a program's dependencies belong. It uses
+  `fontcore.fs`, which is pure Forth, so the steps work with no library
+  installed — and shows that a `require` typed at the prompt is captured like a
+  definition, so `save` writes it into the file.
+- **README's "What's next" listed two shipped features as future work** — the
+  locals word set, and speech at the prompt without writing a file first, which
+  is `say`. The README's own feature list documented `SAY` thirty lines above.
+- **README gains locals and dependency-declaration entries** in the feature
+  list, where two of this release's three headline changes were missing.
+- **The Manual gains a `## Locals` section** and its `## Stack` section stops
+  saying that stack words "will be documented here as they become available".
+
 ### Fixed: an error inside `[ ... ]` left the definition open
 
 `[` interprets *inside* an open definition, so `STATE` is 0 there while a
