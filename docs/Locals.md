@@ -269,15 +269,76 @@ no locals is still byte-for-byte unchanged. Words with several `|` locals can
 come out *smaller*, since each of those used to cost a 13-byte literal and now
 costs an 8-byte store.
 
-**Still open, and honestly unexplained.** On ARM64 the whole-word comparison
-improved from 49.0 ns to 26.0 ns but still trails the juggled spelling at
-19.6 ns; on x86 it went 15.2 → 6.4 ns and now wins against 8.6 ns. The parts do
-not account for the ARM64 residual: frame 0.4 + four references at ~1.2 + three
-primitive calls at ~1.9 predicts a win, and about 7 ns is unaccounted for. A
-plausible candidate is that the inlined sequence is ~45 instructions where the
-juggled one is six calls into primitives that stay hot in I-cache — but that is
-a hypothesis, not a measurement, and the honest state is that the sum of the
-parts is smaller than the whole. Filed in TODO.md rather than explained away.
+On ARM64 the whole-word comparison improved from 49.0 ns to 26.0 ns but still
+trails the juggled spelling at 19.6 ns; on x86 it went 15.2 → 6.4 ns and now
+wins against 8.6 ns. The next section is why, and what was tried.
+
+## Why ARM64 still loses, and the experiment that did not fix it
+
+**Counted, not guessed.** `f-locals` compiles to **196 bytes / 49
+instructions**; `f-juggle` to **36 bytes / 9**, calling primitives that are
+3 instructions each (`over`, `>r`, `r>`, `drop` are all `LDR`/`STR`/`RET`). So
+roughly **58 executed instructions against 27** — the locals spelling runs 2.1×
+the instructions for 1.35× the time. It is not fetch-starved or
+cache-thrashing; it executes at *better* IPC (~1.2 vs ~0.8, since it makes half
+as many calls) and simply has far more to do.
+
+**Where the instructions are.** A reference is six instructions on ARM64, and
+**four of them are spent finding LP**: `MRS TPIDR_EL0`, two `ADD`s for the TLS
+offset, then the load. That sequence is identical at every reference in the
+word. On x86 the same thing is *one* instruction, `mov %fs:lp@tpoff,%rax` —
+which is the whole reason x86 wins this comparison and ARM64 does not. Same
+design, four instructions against one.
+
+**The experiment (2026-08-15, branch discarded).** Cache LP in `X20` — which is
+documented as available — for the duration of a word that has locals: the frame
+build saves the caller's `X20` and the release restores it, ordinary
+callee-saved discipline. References then cost **two** instructions instead of
+six. Correctness was never the problem; it was verified on Pi hardware across
+all four suites, deep recursion, nesting, early `exit`, and a deliberate
+locals-stack overflow followed by recovery. Two properties made it cheaper than
+it looks: `X20` is only ever live between a build and its matching release, so
+**the signal handler needs no change** (after a fault it holds garbage that
+nothing reads before the next build overwrites it), and registers are
+per-thread already, so threads need nothing either.
+
+| | before | after |
+|---|---|---|
+| `f-locals` | 26.4 ns | 23.0 ns |
+| code size | 196 B / 49 instrs | 144 B / 36 |
+| **realistic `acc` loop** | **0.213 s** | **0.214 s** |
+
+**It was rejected on the third row.** 13% on a reference-dense synthetic, 27%
+smaller code — and *nothing at all* on a real workload. The `acc` loop
+(`{: n | s :}` with `to s` inside `?do`) is dominated by its primitive calls and
+loop overhead, so cheaper references dilute to zero. A microbenchmark row that
+moves while the workload it stands for does not is the signal to stop.
+
+**What was left on the table**, if this is ever revisited: reserving `X20`
+globally rather than per-word would also remove the TLS access from the frame
+itself (build 8 instructions → 1, release 8 → 1), predicting ~16 ns — a win
+over 19.6, but a modest one, and the same reasoning says it would show up in
+synthetics and not in the `acc` loop, since a frame is built once per call and
+`acc` calls it once per 100,000 iterations. Against that: a global reservation
+must reset `X20` in the signal handler's ucontext (the handler carries a
+comment saying LP lives in TLS *"so no ucontext edit needed, but it must be
+remembered"*), must change two places that use `X20` as scratch, and fails by
+leaking a frame **silently** — surfacing much later as an overflow in unrelated
+code, which is the shape of every serious bug this project has had.
+
+**A note on the reasoning, because it was wrong three times.** The residual was
+first attributed to I-cache pressure, then to being purely instruction-count
+bound; both were refuted by counting. The surviving model — time tracks
+instructions, but calls cost more per instruction than inline code — is only
+*directional*: it predicted 20.5 ns for the experiment and reality was 23.0.
+Treat any further estimate here as an argument for measuring, not as a result.
+
+**The standing conclusion:** a local reference is cheaper than the `dup` it
+replaces on both architectures, and locals are a clear win on x86. On ARM64 a
+small, reference-dense word is modestly slower than the same word written with
+stack juggling, because finding LP costs four instructions there and one on
+x86. That is a property to know about, not a defect to fix — until a real
+workload shows it costing something.
 
 ## The unwind contract
 

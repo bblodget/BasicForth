@@ -2671,21 +2671,23 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   3.5x. It was invisible because the x86 timing done when locals shipped
   measured *references*, never a whole word.
 
-- [ ] **ARM64: a locals word still loses to juggling, and the parts do not say
-  why.** After the frame fix, `(a+b)*(b+c)` is 26.0 ns with locals against
-  19.6 ns juggled on the Pi 400. But the pieces measure: frame 0.4, a reference
-  in context ~1.2 (four of them), a primitive call ~1.9 (three of them) — which
-  predicts locals winning. **About 7 ns is unaccounted for**, and until that is
-  explained any "fix" is guesswork. x86 has no such residual (6.4 vs 8.6, a win).
-  One hypothesis worth testing FIRST, not assuming: the locals spelling is ~45
-  inline instructions where the juggled one is six calls into primitives that
-  stay hot in I-cache, so this may be instruction-fetch cost that no
-  per-primitive microbenchmark can see. A second: `TLS_ADDR` is recomputed for
-  every reference (three instructions of the six), and it is loop-invariant
-  within a word — hoisting it, or keeping LP in a register across a definition,
-  would cut a reference roughly in half. **Both predict "locals slower"; they
-  are separated by whether the gap tracks code SIZE or reference COUNT.** Vary
-  each independently before touching the emitter.
+- [x] ~~**ARM64: a locals word still loses to juggling, and the parts do not say
+  why.**~~ EXPLAINED and CLOSED 2026-08-15, not by a fix. Counted rather than
+  guessed: the locals spelling is 196 bytes / 49 instructions against the
+  juggled one's 36 / 9 plus 3-instruction primitives — 2.1x the instructions
+  for 1.35x the time, at *better* IPC. A reference is six instructions on
+  ARM64 and **four of them just find LP** (`MRS` + two `ADD`s + load), where
+  x86 does it in one `mov %fs:`. That difference is the whole gap.
+  **An X20 LP-cache was built and rejected** (branch discarded): references
+  6 → 2 instructions, `f-locals` 26.4 → 23.0 ns, code 27% smaller, all Pi
+  suites green including fault recovery — and **no measurable change on a
+  realistic workload** (an `acc` loop with `to s`: 0.213 s → 0.214 s), because
+  real loop bodies are dominated by primitive calls, not references. A
+  synthetic row that moves while the workload it stands for does not is the
+  signal to stop. Full write-up, including what a *global* X20 reservation
+  would and would not buy and why its failure mode is a silent frame leak, is
+  in docs/Locals.md. **Reopen only if a real workload shows locals costing
+  something on ARM64** — not on the strength of a microbenchmark.
 
 - [ ] **Compile a literal as an immediate, not as `call lit` + inline data.**
   The single biggest lever in the engine, because literals are in nearly every
