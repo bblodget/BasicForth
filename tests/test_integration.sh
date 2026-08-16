@@ -7828,6 +7828,27 @@ assert_error  "locals: -- names are not locals" ": e {: a -- sum :} sum ;"     "
 assert_result "locals: | with no names after it is allowed" ": f {: a | :} a . ; 9 f"  "9"
 assert_error  "locals: only one | per declaration" ": g {: a | b | c :} ;"     "only one |"
 
+# --- the frame is OPEN-CODED (2026-08-15): the shapes its emitter branches on.
+# It writes each slot with a computed offset instead of calling a copy loop, so
+# what needs proving is that every slot still gets the RIGHT value: the mapping
+# from stack depth to slot index is now arithmetic in the emitter rather than a
+# loop counter at run time, and an off-by-one there would be invisible in the
+# 1-and-3-local cases the tests above already cover.
+assert_result "locals: a full frame of LOCALS_MAX keeps every slot distinct" \
+              ": full {: a b c d e f g h i j k l m n o p :}
+    a . b . c . d . e . f . g . h . i . j . k . l . m . n . o . p . ;
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 full" \
+              "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"
+# The highest slots are the ones a wrong offset scale reaches first.
+assert_result "locals: the deepest argument lands in slot 0" \
+              ": ends {: a b c d e f g h :} a . h . ; 11 22 33 44 55 66 77 88 ends" "11 88"
+# Arguments and vals in one frame: the args are copied, the vals zeroed, and
+# the boundary between the two loops is where an off-by-one would show.
+assert_result "locals: args and vals in one frame" \
+              ": mix {: a b c | x y :} a . b . c . x . y . ; 7 8 9 mix"          "7 8 9 0 0"
+assert_result "locals: a val is writable after being zeroed" \
+              ": wv {: a | t :} a to t  t t * . ; 6 wv"                          "36"
+
 # --- stage 3: the shadow warning -------------------------------------------
 # Shadowing is what locals are FOR, so this is a note, not an error -- but
 # Forth lets you shadow verbs, and `{: i :}` silently costs you the DO index.

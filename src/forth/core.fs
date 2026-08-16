@@ -3299,25 +3299,26 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
         then
     then ;
 
-\ Emit the frame build: `n (lframe)`, taking the values already on the stack.
-\ Both parts are POSTPONEd so they run when {: runs -- i.e. while the user's
-\ definition is being compiled -- rather than when {: itself was compiled.
 \ How many names came before `|`; -1 until one is seen. Everything after it is
 \ an UNINITIALISED local -- a name that takes nothing from the stack. Recording
 \ the split as a count means the difference gives the number of them, with no
 \ second flag to keep in step.
 variable (loc-args)
 
-\ Emit the frame build. Uninitialised locals get a compiled `0` push each,
-\ immediately before it: the last-declared local sits at the TOP of the stack,
-\ so pushing the zeros last lands them exactly on the val names' slots. The
-\ standard says such locals are merely uninitialised; zeroing them costs one
-\ instruction each and turns "whatever was there" into something you can rely
-\ on.
+\ Emit the frame build, open-coded by (lframe,) -- which needs only the two
+\ counts, because both are known now, while {: is running and the user's
+\ definition is being compiled.
+\
+\ This used to POSTPONE a `0` push per uninitialised local and then
+\ `n (lframe)`, so a frame cost two LITERALs plus one per val, each of them the
+\ engine's most expensive dispatch (10.6 ns on a Pi 400 -- see docs/Locals.md).
+\ (lframe,) writes the zeros straight into the val slots instead, so they cost
+\ a store each rather than a push and a copy. The standard says such locals are
+\ merely uninitialised; zeroing them turns "whatever was there" into something
+\ you can rely on, and now it is cheaper than not doing it.
 : (loc-frame!) ( -- )
-    (loc-args) @ dup 0< if  drop 0  else  (loc-count) swap -  then   ( nvals )
-    0 ?do  0 postpone literal  loop
-    (loc-count) postpone literal  postpone (lframe) ;
+    (loc-args) @ dup 0< if  drop (loc-count)  then   ( nargs )
+    (loc-count) (lframe,) ;
 
 \ `--` starts a stack comment inside the declaration: ignore everything up to
 \ `:}` (Forth 2012 -- "this eases documentation by allowing a complete stack

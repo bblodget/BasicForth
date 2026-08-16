@@ -19,11 +19,14 @@ and what the building of it corrected.
 `x`); the shadow note when a local hides an existing word; `is` refused on a
 local; and the rest of the declaration, `|` and `--`.
 
-`|` needs no new primitive: uninitialised locals get one compiled `0` push
+`|` needs no new primitive: uninitialised locals got one compiled `0` push
 each, immediately before the frame build. The last-declared local sits at the
 top of the stack, so the zeros land exactly on those slots — the same trick the
 `0 {: n acc :}` workaround used, moved into the compiler where it cannot leak
-into the word's stack effect.
+into the word's stack effect. *(Superseded 2026-08-15: the zeros are now
+written straight into their slots by the open-coded frame — see "The frame was
+a call, and that was the wrong call" below. Each of those pushes was a
+`LITERAL`, which turned out to be the most expensive thing the engine does.)*
 
 The hard part was none of that. It was answering "am I loading a file?", which
 took four attempts — `source-id` (answers 0 inside an included file too),
@@ -37,8 +40,9 @@ answers 0 once full, which `redefined` had gated on for months), and finally
 `{: a b c :}` as an immediate word in `core.fs`, name resolution ahead of the
 dictionary in the outer interpreter, and an **open-coded** reference: x86-64
 emits 23 bytes (a TLS load, an offset load, and a push), ARM64 24 bytes / six
-instructions. Neither calls anything. Frame build and release remain ordinary
-calls, since they happen once per invocation rather than once per mention.
+instructions. Neither calls anything. Frame build and release remained ordinary
+calls, since they happen once per invocation rather than once per mention —
+**which was wrong, and is fixed; see below.**
 
 **The relocations are not hand-encoded.** Both emitters copy a code template
 written as real instructions, so the assembler and linker fill in the TLS
@@ -200,8 +204,9 @@ stack-neutral before timing.
 - **A `variable`-style access costs 4–5 ns** — four times a primitive. That is
   the `create`/`does>` call, not the fetch.
 
-Not measured on ARM64: the only ARM64 target here is QEMU, where timings mean
-nothing. Worth repeating on the Pumpkin board before committing to the design.
+Not measured on ARM64 at the time: the only ARM64 target then was QEMU, where
+timings mean nothing. **Measured on a Raspberry Pi 400 on 2026-08-15** — see
+below, and `tests/bench-locals.fs`, which is that measurement kept.
 
 ## The one thing that decides this
 
@@ -218,6 +223,61 @@ juggling they replaced.**
 
 That is the failure mode to design against, and it is invisible to a
 correctness test.
+
+## The frame was a call, and that was the wrong call
+
+Measured on a Raspberry Pi 400 (1.8 GHz), 2026-08-15, with `drop` subtracted
+where it is shared. This is the ARM64 run the section above says is owed.
+
+| | ARM64 | x86-64 |
+|---|---|---|
+| local reference, back to back | 0.62 ns | 0.10 ns |
+| local reference, in context | ~1.2 ns | — |
+| `dup` | 2.24 ns | 0.82 ns |
+| colon call | 1.94 ns | 0.80 ns |
+| **LITERAL** | **10.6 ns** | **1.68 ns** |
+| `variable @` | 15.1 ns | 9.9 ns |
+| frame build+release, **before** | 27.8 ns | 7.2 ns |
+| frame build+release, **after** | 0.4 ns | 0.4 ns |
+
+**The open-coding decision holds.** A reference is cheaper than the `dup` it
+replaces and cheaper than a call, on both architectures, even at ARM64's six
+instructions to x86's four. Had it been a `create`/`does>` word it would have
+cost 15 ns and locals would have been a pessimisation, exactly as predicted.
+
+**The frame was the mistake.** "Once per invocation rather than once per
+mention" is true and was the wrong conclusion, because it was never the *call*
+that cost — it was the `LITERAL` in front of it. The cell count is known while
+`{:` is running, yet it was pushed at run time by `forth_lit`, which reaches
+its operand through its own return address and returns past it, mispredicting
+the return-stack predictor every time. Two per invocation, plus one per
+uninitialised val.
+
+**The tell was flatness.** A frame of 1 cost the same 28 ns as a frame of 3.
+Frame cost that ignores frame size is not frame work.
+
+`(lframe,)` now emits the build open-coded — read LP, adjust, straight-line
+moves into the slots, zeros written directly — and the release likewise. The
+primitives `(lframe)`/`(lunframe)` remain, since the unwind tests drive them
+directly, but nothing compiles a call to them any more.
+
+**What this cost in space:** a definition using locals grows by roughly 20–40
+bytes, because inlining trades one shared copy for a private one, and the copy
+loop becomes straight-line moves that scale with the number of locals. It is
+paid once per definition against a saving on every call, and a definition with
+no locals is still byte-for-byte unchanged. Words with several `|` locals can
+come out *smaller*, since each of those used to cost a 13-byte literal and now
+costs an 8-byte store.
+
+**Still open, and honestly unexplained.** On ARM64 the whole-word comparison
+improved from 49.0 ns to 26.0 ns but still trails the juggled spelling at
+19.6 ns; on x86 it went 15.2 → 6.4 ns and now wins against 8.6 ns. The parts do
+not account for the ARM64 residual: frame 0.4 + four references at ~1.2 + three
+primitive calls at ~1.9 predicts a win, and about 7 ns is unaccounted for. A
+plausible candidate is that the inlined sequence is ~45 instructions where the
+juggled one is six calls into primitives that stay hot in I-cache — but that is
+a hypothesis, not a measurement, and the honest state is that the sum of the
+parts is smaller than the whole. Filed in TODO.md rather than explained away.
 
 ## The unwind contract
 

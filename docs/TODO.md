@@ -2628,6 +2628,98 @@ smaller risk surface.
   loop. Smaller win than the inliner (0.41 s → ~0.36 s on the empty
   benchmark) but a cute, self-contained peephole.
 
+### Measured 2026-08-15 on the Pi 400 — the literal is the engine's slowest step
+
+`tests/bench-locals.fs`, run natively on both arches (ARM64 numbers are the Pi
+400 at 1.8 GHz, ondemand but pinned at max throughout; run-to-run spread ~1%).
+Per-access, with the shared `drop` subtracted:
+
+| | ARM64 | x86-64 |
+|---|---|---|
+| local reference | 0.62 ns (~1.1 cyc) | 0.10 ns |
+| `dup` | 2.24 ns | 0.82 ns |
+| colon call | 1.94 ns | 0.80 ns |
+| **LITERAL** | **10.6 ns (~19 cyc)** | **1.68 ns** |
+| `variable @` | 15.1 ns | 9.9 ns |
+| locals frame, build+release | 27.8 ns | 7.2 ns |
+
+The open-coded reference is vindicated: ~1 cycle, cheaper than the `dup` it
+replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
+4. What the trip actually found is below.
+
+- [x] **Inline the locals frame instead of calling it.** DONE 2026-08-15
+  (branch `locals-frame`): `(lframe,)` emits the build open-coded and
+  `compile_local_release` the release, on both arches. Frame build+release
+  **27.8 ns → 0.4 ns on ARM64**, 7.2 → 0.4 on x86; the whole-word case went
+  15.2 → 6.4 ns on x86, which now BEATS the juggled spelling's 8.6. Verified on
+  Pi 400 hardware, not QEMU, since this writes code at run time. **The ARM64
+  whole-word case is still 26.0 vs 19.6 and the parts do not explain the
+  residual — see the next item.** Original report follows.
+
+  The frame costs 27.8 ns per call on ARM64 and is FLAT in the
+  number of locals — a frame of 1 costs what a frame of 3 does. That flatness is
+  the tell: the cell count reaches `(lframe)`/`(lunframe)` as a runtime
+  `LITERAL`, twice per call, and two literals are ~21 of the 28 ns. The count is
+  a compile-time constant, so it should never be pushed at all. Emit the frame
+  open-coded, the way references already are: read LP, adjust, straight-line
+  moves into the slots, zeros written directly into the `|` slots (each of which
+  currently costs its own literal — `{: a | x y z :}` pays three more).
+  Consequence today, measured with the same function written both ways:
+  `(a+b)*(b+c)` runs **49.0 ns with locals vs 19.6 ns juggled on ARM64**
+  (15.2 vs 8.6 on x86), so a word needs ~17 references before locals break even.
+  This is NOT an ARM64 defect — x86 has it at 1.8x and the Pi only magnified it
+  3.5x. It was invisible because the x86 timing done when locals shipped
+  measured *references*, never a whole word.
+
+- [ ] **ARM64: a locals word still loses to juggling, and the parts do not say
+  why.** After the frame fix, `(a+b)*(b+c)` is 26.0 ns with locals against
+  19.6 ns juggled on the Pi 400. But the pieces measure: frame 0.4, a reference
+  in context ~1.2 (four of them), a primitive call ~1.9 (three of them) — which
+  predicts locals winning. **About 7 ns is unaccounted for**, and until that is
+  explained any "fix" is guesswork. x86 has no such residual (6.4 vs 8.6, a win).
+  One hypothesis worth testing FIRST, not assuming: the locals spelling is ~45
+  inline instructions where the juggled one is six calls into primitives that
+  stay hot in I-cache, so this may be instruction-fetch cost that no
+  per-primitive microbenchmark can see. A second: `TLS_ADDR` is recomputed for
+  every reference (three instructions of the six), and it is loop-invariant
+  within a word — hoisting it, or keeping LP in a register across a definition,
+  would cut a reference roughly in half. **Both predict "locals slower"; they
+  are separated by whether the gap tracks code SIZE or reference COUNT.** Vary
+  each independently before touching the emitter.
+
+- [ ] **Compile a literal as an immediate, not as `call lit` + inline data.**
+  The single biggest lever in the engine, because literals are in nearly every
+  word: every number, `[']`, `postpone literal`. `forth_lit` finds its operand
+  through its own return address and returns past it, so **every literal
+  mispredicts the return-stack predictor** — that is where the 19 cycles go.
+  Emitting "materialise the immediate, bump DSP, store" instead removes the call
+  entirely. **This is not the `lit`-cannot-be-inlined case noted above**: that
+  rules out copying `lit`'s BODY into the caller, which really is impossible
+  since the body depends on the return-address trick. Emitting a different
+  instruction sequence has no call and no return address, so the objection does
+  not apply. The size is close to free: ARM64 is 12 bytes today (BL + 8-byte
+  value) and 12 bytes inlined for a small value (`movz`/`sub`/`str`); on x86 a
+  value fitting a signed 32-bit immediate gets *smaller*, and only full 64-bit
+  values grow ~4 bytes.
+  **Scope the readers of compiled code FIRST.** `dis` decodes the current shape
+  by recognising `call lit` plus payload (it prints `\ literal: 3`), and
+  anything else that walks compiled code will too — find them all before
+  touching the emitter, or every word in the system decompiles wrongly. Same
+  class as a message change breaking a consumer keyed to the old format.
+  Do this AFTER the frame fix, which proves the inlining machinery on a smaller
+  blast radius.
+
+- [ ] **ARM64: `to <local>` looks disproportionately expensive.** Ten
+  `a to a` pairs — a reference and a store, both open-coded, no call in either —
+  cost **6.5 ns per pair on ARM64 against 0.54 ns on x86**, a 12x gap where the
+  reference alone shows only 6x. Either the ARM64 store emitter has a
+  pathological sequence (a redundant TLS read? a needless dependency chain?), or
+  the row is an artifact of being the one measurement with no `drop` in it and
+  so no serialising call between iterations. Not diagnosed — the number is
+  recorded here rather than explained. Check the emitted bytes first, and
+  re-measure with a `drop` in the loop to separate the two hypotheses before
+  changing anything.
+
 ## Future / Hardening
 
 - [x] **Sweep the other libraries for public-looking names with no help entry

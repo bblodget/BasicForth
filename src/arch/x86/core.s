@@ -4921,11 +4921,16 @@ forth_source:
 .equ LOCAL_NAME_MAX,  31
 .equ LOCAL_ENTRY,     32            # 1 length byte + 31 name bytes
 
-# The template compile_local_fetch copies. Written as a real instruction so the
-# assembler and linker fill in the TLS offset; the emitter copies the bytes.
+# The templates the locals emitters copy. Written as real instructions so the
+# assembler and linker fill in the TLS offset; the emitters copy the bytes.
+# Hand-encoding these would be guessing at a number that is not ours to compute.
 lp_load_tmpl:
     mov %fs:lp@tpoff, %rax
 .equ LP_LOAD_LEN, . - lp_load_tmpl
+
+lp_store_tmpl:
+    mov %rax, %fs:lp@tpoff
+.equ LP_STORE_LEN, . - lp_store_tmpl
 
 # ---------- Locals frame primitives ----------
 # Stage 1 of the locals work: the runtime substrate, with no syntax on top.
@@ -5155,17 +5160,147 @@ compile_local_store:
     pop %rbx
     ret
 
-# compile_local_release — emit `n (lunframe)` if this definition has locals.
-# Unlike a reference, this runs ONCE per exit, so an ordinary call costs
-# nothing worth open-coding for. Emits nothing at all when no locals were
-# declared, which is what keeps an ordinary definition byte-for-byte unchanged.
+# (lframe,) ( nargs ntotal -- )  Emit an OPEN-CODED frame build.
+#
+# This used to compile `n (lframe)` -- a LITERAL and a call. The count is known
+# HERE, at compile time, so pushing it at run time paid the engine's most
+# expensive dispatch for a number we already had: forth_lit finds its operand
+# through its own return address and returns past it, so every literal
+# mispredicts the return-stack predictor. Measured on a Pi 400 (2026-08-15):
+# 10.6 ns per literal, and a frame of 1 cost the same 28 ns as a frame of 3 --
+# that flatness was the tell that the fixed part, not the copying, dominated.
+# Each uninitialised val cost a further literal to push its zero.
+#
+# Emitted, for nargs arguments and ntotal-nargs vals:
+#
+#   mov %fs:lp@tpoff, %rax              template (carries the TLS relocation)
+#   sub $ntotal*CELL, %rax
+#   mov %rax, %fs:lp@tpoff              template
+#   mov (nargs-1-j)*CELL(%r15), %rdx  ] per argument j -- x1 is DEEPEST on the
+#   mov %rdx, j*CELL(%rax)            ] data stack and must land in slot 0
+#   movq $0, k*CELL(%rax)               per val slot k: zeroed, not left dirty
+#   add $nargs*CELL, %r15               drop the arguments
+#
+# Every slot offset fits a disp8 (LOCALS_MAX is 16, so the largest is 120),
+# which is why there is no size-dependent encoding path here to get wrong.
+# A zero-cell frame emits NOTHING, matching (lframe)'s own no-op case.
+.global forth_lframe_comma
+forth_lframe_comma:
+    mov (%r15), %rax                # ntotal
+    mov CELL(%r15), %rsi            # nargs -- RSI survives CHECK_DICT
+    add $2*CELL, %r15
+    test %rax, %rax
+    jz .Llfc_done                   # no locals: emit nothing at all
+    # Worst case, derived rather than counted by hand: an argument pair and a
+    # val store are both 8 bytes here, so the mix does not matter -- but the
+    # ARM64 mirror of this line was 8 bytes short from exactly that kind of
+    # hand arithmetic, so both are now expressions.
+    CHECK_DICT (LP_LOAD_LEN + 6 + LP_STORE_LEN + LOCALS_MAX * 8 + 7)
+    push %rbx
+    push %rbp
+    mov %rax, %rbx                  # RBX = ntotal
+    mov %rsi, %rbp                  # RBP = nargs
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x48, 0(%r13)             # sub $ntotal*CELL, %rax
+    movb $0x2D, 1(%r13)
+    mov %rbx, %rax
+    shl $3, %rax
+    mov %eax, 2(%r13)
+    add $6, %r13
+    lea lp_store_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_STORE_LEN, %rcx
+    cld
+    rep movsb                       # mov %rax, %fs:lp@tpoff
+    mov %rdi, %r13
+    xor %ecx, %ecx                  # j = 0
+.Llfc_args:
+    cmp %rbp, %rcx
+    jae .Llfc_vals
+    movb $0x49, 0(%r13)             # mov (nargs-1-j)*CELL(%r15), %rdx
+    movb $0x8B, 1(%r13)
+    movb $0x57, 2(%r13)
+    mov %rbp, %rax
+    sub %rcx, %rax
+    dec %rax
+    shl $3, %rax
+    movb %al, 3(%r13)
+    movb $0x48, 4(%r13)             # mov %rdx, j*CELL(%rax)
+    movb $0x89, 5(%r13)
+    movb $0x50, 6(%r13)
+    mov %rcx, %rax
+    shl $3, %rax
+    movb %al, 7(%r13)
+    add $8, %r13
+    inc %rcx
+    jmp .Llfc_args
+.Llfc_vals:
+    mov %rbp, %rcx                  # k = nargs
+.Llfc_valloop:
+    cmp %rbx, %rcx
+    jae .Llfc_dsp
+    movb $0x48, 0(%r13)             # movq $0, k*CELL(%rax)
+    movb $0xC7, 1(%r13)
+    movb $0x40, 2(%r13)
+    mov %rcx, %rax
+    shl $3, %rax
+    movb %al, 3(%r13)
+    movl $0, 4(%r13)
+    add $8, %r13
+    inc %rcx
+    jmp .Llfc_valloop
+.Llfc_dsp:
+    test %rbp, %rbp
+    jz .Llfc_pop                    # `{: | a b :}` consumes nothing
+    movb $0x49, 0(%r13)             # add $nargs*CELL, %r15
+    movb $0x81, 1(%r13)
+    movb $0xC7, 2(%r13)
+    mov %rbp, %rax
+    shl $3, %rax
+    mov %eax, 3(%r13)
+    add $7, %r13
+.Llfc_pop:
+    pop %rbp
+    pop %rbx
+.Llfc_done:
+    ret
+
+# compile_local_release — emit an OPEN-CODED frame release if this definition
+# has locals. Open-coded for the same reason as the build: the call was never
+# the cost, the LITERAL in front of it was. Emits nothing at all when no locals
+# were declared, which is what keeps an ordinary definition byte-for-byte
+# unchanged. Runs at `;` and at every `exit`.
 compile_local_release:
     mov locals_count(%rip), %rax
     test %rax, %rax
     jz .Lclr_none
-    call compile_literal            # push n
-    lea forth_lunframe(%rip), %rax
-    call compile_call
+    CHECK_DICT 24
+    push %rbx
+    mov %rax, %rbx                  # RBX = n
+    lea lp_load_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_LOAD_LEN, %rcx
+    cld
+    rep movsb                       # mov %fs:lp@tpoff, %rax
+    mov %rdi, %r13
+    movb $0x48, 0(%r13)             # add $n*CELL, %rax
+    movb $0x05, 1(%r13)
+    mov %rbx, %rax
+    shl $3, %rax
+    mov %eax, 2(%r13)
+    add $6, %r13
+    lea lp_store_tmpl(%rip), %rsi
+    mov %r13, %rdi
+    mov $LP_STORE_LEN, %rcx
+    cld
+    rep movsb                       # mov %rax, %fs:lp@tpoff
+    mov %rdi, %r13
+    pop %rbx
 .Lclr_none:
     ret
 
@@ -6325,7 +6460,8 @@ DEFWORD dict_prot_none,   "(prot-none)",  forth_prot_none,   dict_acq_fetch
 DEFWORD dict_thr_tramp,   "(thread-tramp)", forth_thread_tramp_addr, dict_prot_none
 DEFWORD dict_lframe,      "(lframe)",     forth_lframe,      dict_thr_tramp
 DEFWORD dict_lunframe,    "(lunframe)",   forth_lunframe,    dict_lframe
-DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lunframe
+DEFWORD dict_lframe_comma, "(lframe,)",   forth_lframe_comma, dict_lunframe
+DEFWORD dict_local_fetch, "(local@)",     forth_local_fetch, dict_lframe_comma
 DEFWORD dict_local_store, "(local!)",     forth_local_store, dict_local_fetch
 DEFWORD dict_lp_fetch,    "(lp@)",        forth_lp_fetch,    dict_local_store
 DEFWORD dict_lp0_fetch,   "(lp0@)",       forth_lp0_fetch,   dict_lp_fetch
