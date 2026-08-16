@@ -15,10 +15,10 @@ as the single source of truth.
 
 Every release is a git tag: `v0.1.0`, `v0.2.0`, etc.
 
-Create a tag:
-
-    git tag v0.1.0
-    git push origin v0.1.0
+Tags are annotated, and a release tags the `staging`-into-`main` merge — see
+**Workflow** below for the whole sequence. Do not follow a `git tag` / `git
+push origin <tag>` pair from memory: pushing the tag without its branches
+publishes a release naming a commit the remote's `main` does not contain.
 
 ## Startup Banner
 
@@ -68,17 +68,34 @@ release**, since the banner comes from `git describe`.
 
        git checkout staging && git merge --ff-only main
 
-7. Push **both branches and the tag, naming them explicitly**:
+7. Push **both branches and the tag, named explicitly, in one atomic push**:
 
-       git push origin main staging vX.Y.Z
+       git push --atomic origin main staging vX.Y.Z
 
    Not `git push`. Step 6 leaves you on `staging`, which has no upstream, so a
    bare push fails outright — and if it were configured, `push.default=simple`
    would publish only the current branch, leaving `main` on the remote at the
    *previous* release. The tag needs naming too: tags are not pushed by
-   default. Verify with `git ls-remote origin refs/heads/main
-   refs/heads/staging` rather than trusting the local `origin/*` refs, which
-   only say what the last fetch saw.
+   default.
+
+   `--atomic` because the three refs are one release. Without it the push is
+   three independent updates, so a rejection on any one of them — someone
+   else's commit landing on `staging` between your last fetch and the push is
+   enough — leaves the other two published: a tag on the remote naming a commit
+   that remote's `main` does not contain. All-or-nothing turns that into a
+   clean failure you retry.
+
+8. Verify against the remote, **including the tag**:
+
+       git ls-remote origin refs/heads/main refs/heads/staging 'refs/tags/vX.Y.Z*'
+
+   Check the remote, not the local `origin/*` refs — those only report what the
+   last fetch saw. An annotated tag prints **two** lines, and the difference
+   matters: `refs/tags/vX.Y.Z` is the sha of the tag *object* and will not equal
+   anything else, while `refs/tags/vX.Y.Z^{}` is the commit it names. It is that
+   second line that must match `main` and `staging`. For v0.16.0 the tag object
+   was `62c5097` and the commit `15eed45` — compare the wrong one and a correct
+   release looks broken.
 
 Step 4 is the part that is easy to get wrong. Tagging on `staging` would put
 the release on a commit `main` does not contain, so `git describe` on `main`
