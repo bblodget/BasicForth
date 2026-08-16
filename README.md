@@ -73,6 +73,12 @@ What works today:
 - `EDIT <word>` recalls a definition onto the prompt, pre-filled and editable
 - Colon definitions (`: square dup * ;`) and anonymous (`:NONAME`)
 - Defining words: `CREATE`, `CONSTANT`, `VARIABLE`, `VALUE`/`TO`, `DOES>`
+- Locals (Forth 2012 section 13): `{: a b c :}` names a word's arguments so
+  three of them stop being an exercise in `rot swap over`; `| t` adds a
+  zeroed scratch value the caller never supplies, `TO` writes one, and a
+  trailing `-- comment` lets the declaration carry its own stack comment.
+  References and the frame are open-coded — a load, never a call — and the
+  locals stack is per-thread
 - Late binding & redefinition: `DEFER`/`IS` (vectored words), `REDO`
 - Control flow: `IF ELSE THEN`, `BEGIN UNTIL AGAIN WHILE REPEAT`
 - Counted loops: `DO LOOP +LOOP I J UNLOOP LEAVE`, `?DO` (skip-if-equal)
@@ -149,14 +155,18 @@ What works today:
   (`cat.fs`, `sort.fs`, `tac.fs`, `echo.fs`, `lines.fs`) — x86-64 and ARM64
 - File loading: auto-load `core.fs` (and `session.fs`) at startup;
   `BASICFORTH_PATH` multi-directory search
+- Dependencies: a file states what it needs at the top — `NEEDS-CMD` and
+  `NEEDS-LIB` stop the load with an actionable message rather than half-loading,
+  `WANTS-CMD`/`WANTS-LIB` declare what it can run degraded without, and
+  `DEPS <file>` reports the lot against this machine without loading a line
 - Integer literals (decimal, `$hex`, `%binary`, `#decimal`)
 - Guard pages catch stack overflow/underflow with clean recovery
 - Control-flow safety: tag mismatch and balance checking
 
 What's next: a GPU backend (SDL_GPU) behind the surface API and sockets —
-plus a package registry, the locals word set, live speech at the prompt, and
-more games. (Threading shipped in v0.14.0; rendering speech to a file, in
-v0.15.0 — what is left is saying a phrase without writing it down first.)
+plus a package registry and more games. (Threading shipped in v0.14.0;
+rendering speech to a file in v0.15.0 and `say` shortly after, so speech at
+the prompt needs no file at all; the locals word set in v0.16.0.)
 
 ## Building
 

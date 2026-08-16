@@ -6,9 +6,17 @@ open-coded references, stage 3 assignment (`to`), the shadow note, and the rest
 of the Forth 2012 declaration (`|`, `--`). Phase 8 (`docs/TODO.md`, "Threading
 and Locals").
 
-Still open: the ARM64 timings (a reference is six instructions there to x86's
-four, and only x86 has been measured), and `does>` is refused rather than
-supported — deliberately, see below.
+The ARM64 timings the note originally called for were taken on a Raspberry Pi
+400 on 2026-08-15 and changed two things: the frame stopped being a call (28 ns
+→ 0.4), and the day after, so did every `LITERAL` in the engine. See "The frame
+was a call, and that was the wrong call", "The literal was fixed too", and "Why
+ARM64 still loses", which explains the one performance gap that remains: a
+reference costs six instructions on ARM64 to x86's four, because finding LP
+takes four instructions there and one on x86. That is measured and accounted
+for — a property to know about, not an open question or a defect.
+
+Still open by design: `does>` is refused rather than supported — deliberately,
+see below.
 
 This note records what the runtime-frame design costs, where it can go wrong,
 and what the building of it corrected.
