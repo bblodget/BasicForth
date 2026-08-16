@@ -2736,7 +2736,32 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   The rule applied: a name a user is expected to pass to something is API and
   needs a `##` entry; a handle or an internal SDL enum is `(parenthesised)`.
 
-- [ ] **Sweep for `STATE`-only tests that mean "is a definition open".** Three
+- [x] ~~**Sweep for `STATE`-only tests that mean "is a definition open".**~~
+  DONE 2026-08-16. Every `state` read on both arches was classified. Most are
+  legitimate — an IMMEDIATE word choosing compile-vs-interpret behaviour is
+  exactly what STATE is for, and so is the locals lookup, since a local does not
+  exist at compile time and must NOT resolve inside `[ ]`.
+  **Two were bugs, both in error paths that decide whether to abandon a
+  definition.** `: foo [ nosuchword` left the partial header alive, so the next
+  `:` was refused — naming the wrong word, because the guard reports the name
+  being defined and not the one actually open — and only `] ;` could recover,
+  while the identical typo one word to the left abandoned the definition
+  cleanly. The compile-only path was worse: it jumped straight to the error
+  return and never consulted STATE at all, so `: foo [ if` did the same. Both
+  now use the two-part test, and the compile-only exit routes through the shared
+  abort decision instead of past it.
+  **Found while fixing it, NOT fixed, filed below:** an error inside a nested
+  `EVALUATE` is swallowed — the line reports ` ok` and a broken word gets
+  defined. The first version of the fix made that worse by abandoning the outer
+  definition mid-line while the line kept compiling, so the abort is now gated
+  to the outermost `interpret_line`.
+  **Considered and deliberately kept:** the continuation prompt is STATE-only,
+  so `: foo [ ` shows `> ` rather than `... `. That is arguably correct — you
+  really are interpreting — and the line editor's scroll margin tracks STATE the
+  same way, so changing one would desynchronise the pair.
+  Original report follows.
+
+- [ ] ~~Sweep for `STATE`-only tests that mean "is a definition open".~~ Three
   wedges in one week came from conflating them, because `[` interprets *inside*
   an open definition: the definition-open guard (2026-08-10), the locals-list
   clears, and `dict_full`'s rollback (2026-08-13) — the last of which left a
@@ -2745,6 +2770,40 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   right idiom, with the reasoning in a comment, since the ` ok` suppression was
   written. Grep both arches for `state` reads that decide whether to roll back,
   abort, or suppress, and check each against `: t [ … ] ;`.
+
+- [ ] **An error inside a nested `EVALUATE` is swallowed.** Found 2026-08-16
+  during the STATE sweep, pre-existing and unrelated to it:
+
+      : foo 1 [ s" nosuchword" evaluate ] 2 + . ;   \ prints ` ok`
+
+  No `? nosuchword`, no failure — and `foo` is defined, built from whatever
+  survived. The nested `interpret_line` returns an error status that `EVALUATE`
+  discards, so the outer line carries on as though nothing happened.
+  **This is why the STATE-sweep abort had to be gated to the outermost level.**
+  Aborting from a nested error tore the enclosing definition down while its own
+  line kept compiling into the hole — trading a silent wrong answer for a
+  silent vanishing, which is worse. The real fix is propagation: an error inside
+  `EVALUATE` should abort the whole line the way one at the top level does, and
+  that means `EVALUATE` (and the `INCLUDED` path beside it) passing the status
+  up rather than dropping it. Pinned by a test in the meantime, so the current
+  behaviour cannot change without someone noticing.
+
+  **The same nesting flaw exists on the compiling arm, and is older.** When
+  `STATE` is non-zero the abort is not gated at all, so an error inside a
+  nested evaluation rolls back to the *global* anchor and takes the enclosing
+  definition with it:
+
+      : foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+      \ both foo and inner vanish, silently, and the line still prints ` ok`
+
+  Verified identical before and after the 2026-08-16 sweep, so it is not that
+  change's doing — but it is why the gate added there covers only the
+  STATE-0 route. Gating this arm as well is NOT the fix: skipping the abort
+  would leave a hidden header and `STATE` set, wedging the session harder than
+  the bug it avoids. The anchor (`saved_latest`/`saved_here`/`colon_dsp`) is
+  global by design — see the recovery-anchor note — so the real repair is the
+  same one: propagate the error out of `EVALUATE` so the outer line aborts too,
+  rather than trying to unwind one level from the inside.
 
 - [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
   gating the locals shadow warning: it returns 0 at the prompt *and* during a

@@ -2328,8 +2328,10 @@ build_header_anon:
     # because the guard refused before touching it.
     #
     # STATE is not the test for which of the two to use (`[` makes it 0 while
-    # a definition is open), which is exactly the trap the tick-not-found site
-    # sidesteps by testing state when IT cannot be inside brackets.
+    # a definition is open). The tick-not-found site was assumed to be exempt
+    # -- "it cannot be inside brackets" -- and that was simply wrong: `: foo
+    # [ ' nosuchword` reaches it with STATE 0 and a definition open. It now
+    # tests F_HIDDEN as well, gated to the outermost interpret_line.
     jmp .Lcf_abort
 
 # ---------- COLON (Forth-level) ----------
@@ -2492,9 +2494,26 @@ forth_tick:
     mov CELL(%r15), %rax            # c-addr
     mov %rax, err_token_addr(%rip)
     add $2*CELL, %r15               # drop c-addr u
+    # Abandon the definition if one is open. STATE alone cannot decide -- `[`
+    # interprets INSIDE an open definition -- so also check LATEST's hidden
+    # bit, the same pair the ` ok` suppression and dict_full's rollback use.
+    # Gated on STATE alone, `: foo [ if` left the partial header alive and the
+    # definition-open guard then refused every later `:`, naming the WRONG word
+    # ("definition still open: bar" when it is foo that is open).
     cmpq $0, state(%rip)
     jne .Lcf_abort                  # compiling: abandon the definition
-    jmp .Lcf_longjmp                # interpreting: error, keep the stack
+    testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
+    jz .Lcf_longjmp
+    # ...but only the OUTERMOST interpret_line may abandon it, for the reason
+    # spelled out at .Lil_err_maybe_abort: a nested one returns into a caller
+    # that carries on with the rest of ITS line. This route is `'` failing to
+    # find a name, and it needs the same gate -- without it,
+    # `: foo [ s" ' nosuchword" evaluate ] ;` destroyed foo mid-line.
+    mov il_rsp(%rip), %rax
+    cmpq $0, 8(%rax)                # previous il_rsp: 0 only at the top level
+    jne .Lcf_longjmp
+    jmp .Lcf_abort
+    # (fall-through impossible; both arms jump)
 
 # ---------- INTERPRET-LINE ----------
 # ( -- ) Returns status in RAX: 0=success, 1=error
@@ -2633,9 +2652,35 @@ forth_interpret_line:
     add $2*CELL, %r15               # clean up c-addr and u
                                     # wording stays the per-token default, "? "
 
-    # If we were compiling, abort the definition
-    cmpq $0, state(%rip)
-    je .Lil_err_return
+    # If a definition is open, abort it. Not STATE alone: `[` interprets inside
+    # an open definition, and gating on STATE left `: foo [ nosuchword` with a
+    # live partial header, so the next `:` was refused and only `] ;` could
+    # recover -- while the same typo OUTSIDE a bracket abandoned the definition
+    # cleanly. The two now behave the same.
+.Lil_err_maybe_abort:               # shared: every error exit that may have a
+    cmpq $0, state(%rip)            # definition open behind it comes through here
+    jne .Lil_err_abort
+    testb $F_HIDDEN, 8(%r12)        # definition open but interpreting?
+    jz .Lil_err_return
+    # On THIS route -- STATE 0 with a definition open, which is what the test
+    # above newly reaches -- only the OUTERMOST interpret_line may abandon it.
+    # The STATE != 0 arm above deliberately keeps its pre-existing behaviour and
+    # is NOT gated: a nested error while compiling still rolls back to the global
+    # anchor and can take an outer definition with it. That is a real bug, filed
+    # in TODO.md beside the swallowed-EVALUATE one, and not this change's to fix
+    # -- skipping the abort there would leave a hidden header and STATE set,
+    # which wedges the session harder than the bug being avoided.
+    # Returning an error ends the LINE only at the top level; a nested one --
+    # EVALUATE, or a load -- returns into a caller that carries on with the rest
+    # of its own line. Dropping the header there left the outer line compiling
+    # into a definition that no longer existed, and its `;` operating on whatever
+    # LATEST had become. il_rsp is saved and restored around each nesting level,
+    # so the previous value being zero IS "outermost"; it is derived rather than
+    # counted because the longjmp path unwinds without running an epilogue.
+    mov il_rsp(%rip), %rax
+    cmpq $0, 8(%rax)                # previous il_rsp: 0 only at the top level
+    jne .Lil_err_return
+.Lil_err_abort:
     movq $0, state(%rip)            # reset to interpret mode
     movq $0, locals_count(%rip)     # ...and the names it declared
     mov colon_dsp(%rip), %r15       # restore DSP (drop compile-time stack)
@@ -2679,7 +2724,11 @@ forth_interpret_line:
     lea err_pfx_conly(%rip), %rax   # report as "compile only: <token>"
     mov %rax, err_pfx_addr(%rip)
     movq $err_pfx_conly_len, err_pfx_len(%rip)
-    jmp .Lil_err_return             # err_token was saved before FIND
+    jmp .Lil_err_maybe_abort        # err_token was saved before FIND. Not
+                                    # .Lil_err_return: this path skipped the
+                                    # abort decision entirely, so `: foo [ if`
+                                    # left the definition open where the same
+                                    # mistake without the bracket did not.
 
 # ---------- PAREN (comment word, IMMEDIATE) ----------
 # ( "ccc)" -- )
