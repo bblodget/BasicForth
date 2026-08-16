@@ -729,6 +729,44 @@ The value is now built straight into an instruction. No call, no inline data.
   which is stated as the architectural fact it is, without the conclusion the
   earlier drafts drew from it.
 
+### Fixed: `help see` printed 29 sections, and eight other words were padded
+
+- A `## ` heading with no stack effect is a prose section, not a word entry —
+  but every word in it was being indexed as one, and a collision **appends**
+  rather than shadows. `## See Also` appears in 29 reference pages, so
+  `help see` printed its real entry followed by 28 unrelated cross-reference
+  blocks. `## Double and mixed precision` did the same to `help and`,
+  `## Errors come back as a value` to `help value`, and so on for `words`,
+  `back`, `is`, `space` and `#`.
+- A word entry now has to **state a stack effect** to be indexed as one, which
+  fixes all nine without touching a page and drops about 490 junk topic names
+  (`help precision`, `help prefixes`, `help heap`). `help see` prints one
+  section.
+- Sections differ, and now say so in one place: **Tutorial** contributes no
+  word entries (a lesson step is not a definition — already true), **Guides**
+  indexes every word of its single-token headings by design, and
+  **Language-Reference** requires the effect. `docs/Help_System.md` documents
+  the rule and why.
+- **A locals declaration is not a stack effect**, and `## clamp {: n lo hi :}`
+  is therefore prose. Deliberate: `{: a b | c :}` leaves `c` off the stack
+  entirely, everything after `--` inside `{: … :}` is text the compiler
+  ignores, and it says nothing about what the word *leaves*. Locals are how a
+  word is built, not what it takes — `see` is there for the implementation, and
+  `{:` documents itself in stack notation.
+- **The old rule was hiding an undocumented word.** `number
+  ( c-addr u -- n true | c-addr u false )` had no entry at all and answered "no
+  help"; the audit passed anyway because `## Number prefixes ($ hex, % binary,
+  # decimal)` published the token `Number`. It is now documented, including the
+  asymmetric stack effect it shares with `find` — success replaces the string,
+  failure keeps it, so the miss path has to clean up — and that `base` decides
+  whether `12ab` is a number at all.
+- The coverage audit re-implements the heading rule in `awk` and had to be
+  changed with it. Verified by breaking a heading rather than by reading:
+  before the audit was updated, `## dup {: x :}` still read as documenting
+  `dup` while `help dup` answered nothing. There is now also a test that asks
+  the **binary** what a fixture page indexes, so the two models cannot drift
+  apart in silence again.
+
 ### Fixed: four `help` entries were unreachable by their second name
 
 - `help on-stop`, `help pad-closeall`, `help pad-hasaxis?` and `help pad-dy`
