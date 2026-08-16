@@ -2694,6 +2694,13 @@ The open-coded reference is vindicated: ~1 cycle, cheaper than the `dup` it
 replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
 4. What the trip actually found is below.
 
+**The `LITERAL` row is history as of 2026-08-16.** It is what justified the
+work below, and is kept for that reason — but a number now compiles to an
+immediate, and the row is indistinguishable from a bare call+ret on both
+arches. Re-measured figures are in docs/Locals.md, "The literal was fixed too".
+The whole-word locals-vs-juggling result moved by less than the run-to-run
+spread, so nothing below needs revisiting.
+
 - [x] **Inline the locals frame instead of calling it.** DONE 2026-08-15
   (branch `locals-frame`): `(lframe,)` emits the build open-coded and
   `compile_local_release` the release, on both arches. Frame build+release
@@ -2736,7 +2743,20 @@ replaces and far cheaper than a call, even at ARM64's 6 instructions to x86's
   in docs/Locals.md. **Reopen only if a real workload shows locals costing
   something on ARM64** — not on the strength of a microbenchmark.
 
-- [ ] **Compile a literal as an immediate, not as `call lit` + inline data.**
+- [x] **Compile a literal as an immediate, not as `call lit` + inline data.**
+  DONE 2026-08-16 (branch `literal-immediate`, merge `84cf285`), on both
+  arches. A 10M-iteration loop of `i 5 * drop` went **0.172 s → 0.065 s on
+  ARM64** and 0.033 → 0.020 on x86; a loop containing a constant is now faster
+  than the same loop containing a `dup`, where it used to be two and a half
+  times slower. The readers were scoped first as the plan required — `dis` now
+  decodes the immediate forms — and `compile_literal`'s *other* job, allocating
+  a patchable cell at a known offset for `>body`/`TO`/`IS`/`CREATE`, is
+  unchanged: those keep the call form, because there the cell is storage rather
+  than a value, which is why docs/Defining_Words.md needed no edit. `[']` and
+  `POSTPONE` keep it too, deliberately — they are cold, and `dis` naming what
+  they point at (`\ xt: dup`) is what the Machine-Code tutorial teaches. So the
+  win is on plain numbers, which is where the volume is. Original report
+  follows.
   The single biggest lever in the engine, because literals are in nearly every
   word: every number, `[']`, `postpone literal`. `forth_lit` finds its operand
   through its own return address and returns past it, so **every literal
