@@ -108,22 +108,50 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Detail: §Module System / Forth-as-Shell, use-testing queue.
 
 - [ ] **`[ENGINE]` Propagate errors out of `EVALUATE`.** The engine's worst
-      failure class:
-      `: z 1 [ s" nosuchword" evaluate ] 2 + . ;` reports ` ok` and defines a
-      broken word. Root of two filed items — the swallowed error and the
-      compiling arm that takes the enclosing definition — and both dissolve if
-      the status propagates. Two pins in the suite currently record the wrong
-      behaviour and get flipped, so acceptance is unambiguous.
-      **Enumerate every abort route and commit that list before changing code.**
-      This is the most bug-dense area in the engine (seven wedges so far, three
-      of them found in error paths during the 2026-08-16 STATE sweep), and
-      `recovery-anchor-is-global` records an obvious-looking fix here that
-      segfaulted. Best done early in a cycle, not late: a mistake here is
-      silent, and a week of other sessions on the tree is the detector.
+      failure class. **Wider than this entry first said** — brackets and
+      definitions have nothing to do with it, and the minimal case is one line
+      at a bare prompt (measured 2026-08-16 against `v0.16.0-14-gbad2f78`):
+
+          > s" nosuchword" evaluate                  \ ` ok`. No error at all.
+          > s" nosuchword" evaluate 7 .              \ `7  ok` — the line runs on
+          > : q s" nosuchword" evaluate 42 . ;  q    \ `42  ok`
+          > : z 1 [ s" nosuchword" evaluate ] 2 + . ;  z   \ `3  ok`
+
+      Root of two filed items — the swallowed error and the compiling arm that
+      takes the enclosing definition — and both dissolve if the status
+      propagates. **Scope is all four forms** (decided 2026-08-16): the third
+      line above is the one that constrains the design, because `evaluate`
+      compiled into a definition and run later has no surviving status
+      register, so the channel cannot be the return value.
+      `INCLUDED` is the near miss to copy from and not break — it *does* report
+      `file:line: ? token`, and it *does* return 1; the outer line prints ` ok`
+      and carries on regardless, because the single site that could consult that
+      status (`.Lil_found_execute`) never looks at it. Nothing upstream is
+      missing — which is why the fix is not "return the error properly".
+      **The abort-route enumeration is committed: `docs/Abort_Routes.md`.**
+      It lists every route, which are gated by nesting depth and which are not,
+      and the six constraints any fix has to satisfy. This is the most bug-dense
+      area in the engine (seven wedges so far, three of them found in error
+      paths during the 2026-08-16 STATE sweep), and `recovery-anchor-is-global`
+      records an obvious-looking fix here that segfaulted. Best done early in a
+      cycle, not late: a mistake here is silent, and a week of other sessions on
+      the tree is the detector.
       **Only one engine change per week** — this and user package dirs both
       edit hand-mirrored asm and both need a full suite run; do not run them in
       parallel worktrees.
-      Done when: both pinned tests are inverted and pass, on both arches.
+      Done when: the seven-row acceptance table in `docs/Abort_Routes.md` §The
+      pins passes on both arches. **Reporting the error is only half** — an
+      error that prints and then lets the line finish is not propagated, which
+      is precisely what `INCLUDED` does today. Three rows cover that half and no
+      existing test does; one of them (`' bad catch .` returning non-zero) is
+      the strongest single check, being the difference between the error being
+      *announced* and it having *happened*. Two rows are regression guards, for
+      `INCLUDED`'s `file:line:` prefix and for the deliberate rule that a typo
+      leaves the data stack alone.
+      **Not "the pins are inverted"** — of the four assertions in that cluster,
+      one (`a nested error while compiling still takes the outer definition`)
+      expects `MISSING` and still expects `MISSING` after the fix, for the
+      opposite reason, so it would read as confirmation while proving nothing.
       Detail: §Future / Hardening.
 
 - [ ] **`[ENGINE]` User package dirs — `~/.basicforth/lib` and `docs/`.**
@@ -3017,7 +3045,12 @@ spread, so nothing below needs revisiting.
   abort, or suppress, and check each against `: t [ … ] ;`.
 
 - [ ] **An error inside a nested `EVALUATE` is swallowed.** Found 2026-08-16
-  during the STATE sweep, pre-existing and unrelated to it:
+  during the STATE sweep, pre-existing and unrelated to it.
+  **Nesting turned out not to be the condition** — see the Up next entry: a
+  bare `s" nosuchword" evaluate` at the prompt is silent too, and so is an
+  `evaluate` compiled into a definition. The example below is one symptom of a
+  wider fault, not the boundary of it. Every abort route is enumerated in
+  `docs/Abort_Routes.md`, which is the precondition artifact for the fix.
 
       : foo 1 [ s" nosuchword" evaluate ] 2 + . ;   \ prints ` ok`
 
