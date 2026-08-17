@@ -38,12 +38,6 @@ taking, and let the branch list be the claim.
 objects; `BasicForth-2`, `BasicForth-3` after that), so the number is read off
 `git worktree list` rather than recorded anywhere that can go stale.
 
-> **Until the rename lands**, the directories are still `BasicForth` (1),
-> `BasicForth-movefix` (2) and `BasicForth-docs` (3) — the numbers are not yet
-> readable off the paths, so use that mapping. `git worktree move` handles the
-> two linked worktrees; the main checkout stays put, which is why it is 1.
-> Delete this note once `git worktree list` shows the numbered names.
-
 The number is not for ownership — it is so the branch list answers *which
 session* at a glance, without matching long paths by eye. Marking the same thing
 in this file was tried and dropped: a `[2 working]` beside an item is invisible
