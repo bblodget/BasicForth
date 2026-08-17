@@ -377,7 +377,7 @@ section "Stack Display"
 # =========================================================================
 
 assert_contains ".s empty"           ".s"                  "<0>"
-assert_contains ".s with items"      "1 2 3 .s"            "1 2 3"
+assert_result ".s with items"      "1 2 3 .s"            "1 2 3"
 
 # =========================================================================
 section "Comparison Words"
@@ -536,7 +536,7 @@ assert_contains "define upper use lower" ": DOUBLE dup + ; 5 double ." "10  ok"
 section "Number Parsing"
 # =========================================================================
 
-assert_contains "decimal"            "42 ."                "42  ok"
+assert_result   "decimal"            "42 ."                "42  ok"
 assert_contains "negative"           "-7 ."                "-7  ok"
 assert_contains "hex"                ': test $FF . ; test' "255  ok"
 assert_contains "hex lowercase"      ': test $ff . ; test' "255  ok"
@@ -552,7 +552,7 @@ section "Compile Mode Error Recovery"
 
 assert_error  "unknown in def"     ": test badword ;"    "? badword"
 assert_contains "recover after error" "$(printf ': test badword ;\n1 2 + .')" "3  ok"
-assert_contains "redefine after fail" "$(printf ': foo badword ;\n: foo 42 . ;\nfoo')" "42"
+assert_result "redefine after fail" "$(printf ': foo badword ;\n: foo 42 . ;\nfoo')" "42"
 
 # =========================================================================
 section "Error Handling"
@@ -568,7 +568,7 @@ assert_error  "compile-only >r"    ">r"                  "compile only"
 assert_error  "tick of undefined word"  "' nosuchword execute"  "? nosuchword"
 assert_contains "tick error keeps the stack" \
     "$(printf "1 2 3 ' nosuchword catch\ndepth . . . .")"  "3 3 2 1"
-assert_contains "tick error aborts definition cleanly" \
+assert_result "tick error aborts definition cleanly" \
     "$(printf ": t ' missingword ;\n: t2 42 . ;\nt2")"  "42"
 
 # =========================================================================
@@ -591,7 +591,7 @@ assert_contains "nested catch rethrows outward" \
     ": inner 7 throw ; : outer ['] inner catch 100 + throw ; ' outer catch ."  "107"
 assert_contains "throw across evaluate restores source" \
     ": t s\" 5 throw\" evaluate 999 ; ' t catch . 123 ."  "5 123"
-assert_contains "outer catch survives error inside evaluate" \
+assert_result "outer catch survives error inside evaluate" \
     ": bad s\" nosuchword\" evaluate ; : run ['] bad catch drop 42 throw ; ' run catch ."  "42"
 
 # throw out of an INCLUDED file: the load stops, the code reaches the catch,
@@ -619,13 +619,13 @@ assert_contains "backslash in def"     ': inc 1+ ; \ simple increment
 section "IF / ELSE / THEN"
 # =========================================================================
 
-assert_contains "if true exec"       ": test 1 if 42 . then ; test"             "42"
+assert_result "if true exec"       ": test 1 if 42 . then ; test"             "42"
 assert_contains "if false skip"      ": test 0 if 42 . then ; test"             "ok"
-assert_contains "if else true"       ": test 1 if 42 else 99 then ; test ."     "42"
-assert_contains "if else false"      ": test 0 if 42 else 99 then ; test ."     "99"
-assert_contains "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
-assert_contains "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
-assert_contains "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
+assert_result "if else true"       ": test 1 if 42 else 99 then ; test ."     "42"
+assert_result "if else false"      ": test 0 if 42 else 99 then ; test ."     "99"
+assert_result "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
+assert_result "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
+assert_result "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
 assert_error  "if without then"  ": test if ;"                               "unresolved control flow: test"
 assert_error  "begin without until" ": test begin ;"                         "unresolved control flow: test"
 # :NONAME builds a hidden header with an EMPTY name, so there is nothing to
@@ -669,8 +669,13 @@ assert_error  "endcase with nothing open" ": q endcase ;"    "mismatched control
 # and none of them leaves the session wedged. Not implied by the message above:
 # the definition-open guard printed correctly while stranding the half-built
 # header as LATEST, which then refused every later definition.
-assert_contains "define after a stray then" ": q then ; : ok2 42 . ; ok2"     "42"
-assert_contains "define after a stray loop" ": q loop ; : ok3 43 . ; ok3"     "43"
+# On its OWN line: a stray closer aborts the rest of the line it appears on,
+# so a same-line definition never runs. This asks the question the name asks --
+# is the SESSION still usable afterwards -- rather than whether one line is.
+assert_result "define after a stray then" ": q then ;
+: ok2 42 . ; ok2"                                            "42"
+assert_result "define after a stray loop" ": q loop ;
+: ok3 43 . ; ok3"                                            "43"
 # Mid-FILE is where a wrong diagnosis costs the most, and it is a different
 # report path: the loader prefixes file:line. Assert the LINE too -- the error
 # is on line 2, and a report that always said line 1 would still contain the
@@ -708,8 +713,8 @@ else
     printf "    Expected: 'stray.fs:2: mismatched control flow: then' and '44'\n    Got: %q\n" "$cfl_out"; ((failed++))
 fi
 # and the well-formed cases still compile and run, including nested both ways
-assert_contains "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
-assert_contains "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+assert_result "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
+assert_result "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
 assert_contains "while loop still runs" ": t begin dup while 1- repeat ; 3 t ." "0"
 assert_contains "leave still runs"      ": t 10 0 do i . i 3 = if leave then loop ; t" "0 1 2 3"
 
@@ -728,13 +733,17 @@ assert_contains "stray ; aborts the line, stack untouched" "1 2 ; + .
 .s"                                                         "<2> 1 2"
 # and it is still perfectly good at the end of a definition
 assert_contains "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
-assert_contains "; still ends a :noname"       ":noname 9 ; execute ."        "9"
+assert_result "; still ends a :noname"       ":noname 9 ; execute ."        "9"
 # The same rejection inside EVALUATE, which runs the same outer interpreter.
-# EVALUATE swallows the report (it returns the status to its caller and nothing
-# prints it -- true of an undefined word there too, not special to this), so
-# what is observable is that the line inside EVALUATE stopped: the definition
-# resumes afterwards and the stray `;` did not end it.
-assert_contains "stray ; inside evaluate stops that line" \
+# UPDATED 2026-08-16 with the propagation fix: EVALUATE no longer swallows the
+# report, so the error prints AND stops the caller. This assertion used to
+# expect "42" -- the rest of the word running on -- which was true before the
+# fix and false after it. It never noticed the change, because "42" is in its
+# own input and the old substring match was satisfied by the echo alone. It is
+# the reason the sweep that found it exists.
+assert_result "a stray ; inside evaluate reports" \
+              ": t s\" ; 999 .\" evaluate 42 . ; t"          "compile only: ;"
+assert_absent "...and stops the word that asked" \
               ": t s\" ; 999 .\" evaluate 42 . ; t"                        "42"
 # The wording is per-token state, and a nested EVALUATE runs a whole interpret
 # loop inside ONE outer token -- so EVALUATE brackets it, like the source
@@ -835,7 +844,7 @@ outer ."                                                    "5"
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"
 # =========================================================================
 
-assert_contains "begin until"   ": test 5 begin 1- dup 0= until ; test ."      "0"
+assert_result "begin until"   ": test 5 begin 1- dup 0= until ; test ."      "0"
 assert_contains "begin while repeat" \
     ": test 3 begin dup while 1- repeat ; test ."                             "0"
 assert_contains "countdown" \
@@ -866,7 +875,7 @@ section "LEAVE"
 # =========================================================================
 
 assert_contains "leave basic"        ": test 10 0 do i 5 = if leave then i . loop ; test"   "0 1 2 3 4"
-assert_contains "leave first iter"   ": test 10 0 do leave loop 99 . ; test"                "99"
+assert_result "leave first iter"   ": test 10 0 do leave loop 99 . ; test"                "99"
 assert_contains "leave nested inner" \
     ": test 3 0 do 5 0 do i 2 = if leave then i . loop 32 emit loop ; test"  "0 1  0 1  0 1"
 assert_contains "leave nested outer" \
@@ -878,14 +887,14 @@ assert_error  "leave outside do"  ": test leave ;"                              
 section "Defining Words"
 # =========================================================================
 
-assert_contains "constant"           "42 constant answer answer ."              "42"
+assert_result "constant"           "42 constant answer answer ."              "42"
 assert_contains "constant arith"     "42 constant x x x + ."                   "84"
-assert_contains "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
+assert_result "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
 assert_contains "here"               "here 0 <> ."                             "-1"
 assert_contains "comma"              "here 42 , here swap - ."                 "8"
-assert_contains "variable"           "variable x 99 x ! x @ ."                "99"
+assert_result "variable"           "variable x 99 x ! x @ ."                "99"
 assert_contains "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
-assert_contains "variable starts 0"  "variable z0 z0 @ ."                      "0"
+assert_result "variable starts 0"  "variable z0 z0 @ ."                      "0"
 # A fresh dictionary is zeros anyway, so the case that bites is a rollback:
 # marker/reload replay the definition over space something else has since
 # used. `create 1 cells allot` handed back those stale bytes.
@@ -896,9 +905,9 @@ assert_contains "variable 0 after rollback" \
 section "DOES>"
 # =========================================================================
 
-assert_contains "does> constant"    ": myconst create , does> @ ; 42 myconst answer answer ."  "42"
+assert_result "does> constant"    ": myconst create , does> @ ; 42 myconst answer answer ."  "42"
 assert_contains "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 myconst y x y + ."  "30"
-assert_contains "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
+assert_result "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
 
 # =========================================================================
 section "MARKER"
@@ -913,7 +922,7 @@ assert_contains "MARKER reclaims HERE" \
 assert_error "MARKER forgets its words" \
     "marker -w  : mzap 7 ;  -w  mzap"  "mzap"
 # The reclaimed space is reusable: a fresh definition after the marker works.
-assert_contains "MARKER space is reusable" \
+assert_result "MARKER space is reusable" \
     "marker -w  : mfoo 1 ;  -w  : mfoo 999 ;  mfoo ."  "999"
 # Nested markers: the outer marker forgets the inner one too.
 assert_error "MARKER nested (outer forgets inner)" \
@@ -929,7 +938,7 @@ assert_contains ".module reports an empty module" \
 # if they leaked in the count would be hundreds), and the name is listed.
 assert_contains ".module counts only your words" \
     ": zonk ;  .module"  "1 word in this module"
-assert_contains ".module lists your word's name" \
+assert_result ".module lists your word's name" \
     ": zonk ;  .module"  "zonk"
 # Words of every kind count, newest-first (matching WORDS' chain order).
 assert_contains ".module lists newest-first" \
@@ -952,7 +961,7 @@ if [[ "$char_safe" == *"4242"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  char with no word crashed the REPL\n    Expected 4242\n    Got: %q\n" "$char_safe"; ((failed++))
 fi
-assert_contains "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
+assert_result "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
 assert_contains "char still works at interpret level"  'char * .'                      "42"
 # [char] with no word at the very end of a page-sized included file: the byte
 # after the mmap is an unmapped page, so dereferencing parse-word's (now NULL)
@@ -973,11 +982,11 @@ fi
 section "String Words"
 # =========================================================================
 
-assert_contains "type"              ': test s" Hello" type ; test'                "Hello"
+assert_result "type"              ': test s" Hello" type ; test'                "Hello"
 assert_contains "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
-assert_contains "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
+assert_result "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
 assert_contains "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
-assert_contains "dot-paren"         '.( Hello World!)'                           "Hello World!"
+assert_result   "dot-paren"         '.( Hello World!)'                           "Hello World!"
 # .( must not leak the parsed text onto the stack (regression: it used to push
 # one cell per character). depth 0 = . prints -1 only when the stack is clean.
 assert_contains "dot-paren clean stack" '.( hi) depth 0 = .'                     "-1"
@@ -998,15 +1007,15 @@ assert_error  "s-quote interp too long" 'create ebuf 320 allot ebuf 320 char x f
 section "PICK"
 # =========================================================================
 
-assert_contains "0 pick"            "1 2 3 0 pick ."                              "3"
-assert_contains "2 pick"            "1 2 3 2 pick ."                              "1"
+assert_result "0 pick"            "1 2 3 0 pick ."                              "3"
+assert_result "2 pick"            "1 2 3 2 pick ."                              "1"
 
 # =========================================================================
 section "core.fs Words"
 # =========================================================================
 
 assert_contains "CR defined"           "1 2 + ."                        "3"
-assert_contains "SPACE defined"        ": test space 42 . ; test"       "42"
+assert_result "SPACE defined"        ": test space 42 . ; test"       "42"
 assert_contains "BL defined"           "bl ."                           "32"
 assert_contains "TRUE"                 "true ."                         "-1"
 assert_contains "FALSE"                "false ."                        "0"
@@ -1017,7 +1026,7 @@ assert_contains "CELLS"               "3 cells ."                      "24"
 assert_contains "<>"                   "3 4 <> ."                       "-1"
 assert_contains "<> false"             "5 5 <> ."                       "0"
 assert_contains "0<>"                  "42 0<> ."                       "-1"
-assert_contains "0<> false"            "0 0<> ."                        "0"
+assert_result "0<> false"            "0 0<> ."                        "0"
 assert_contains "2OVER"                "1 2 3 4 2over . . . . . ."     "2 1 4 3 2 1"
 assert_contains "2SWAP"                "1 2 3 4 2swap . . . ."         "2 1 4 3"
 assert_contains "*/"                   "3 7 2 */ ."                     "10"
@@ -1154,7 +1163,7 @@ assert_contains "gr stamp-scale at 1x does not magnify" "$GRP
 create d1 %10000000 c,
 : g s red d1 0 0 1 1 1 stamp-scale  0 0 p 1 0 p ; g"   "16711680 0"
 # a big magnification hanging off any edge clips like stamp -- no crash, clean
-assert_contains "gr stamp-scale clips off-screen" "$GRP
+assert_result "gr stamp-scale clips off-screen" "$GRP
 create d2 %10000000 c,
 : g s red d2 99 99 1 1 3 stamp-scale
   red d2 -2 -2 1 1 3 stamp-scale  depth . ; g"         "0"
@@ -1200,7 +1209,7 @@ create cr1 \$DB c, 13 c, \$DB c,
 assert_contains "font glyph clips off-screen" "$FNT
 : g s red \$DB -4 0 glyph  red \$DB 99 99 glyph  0 0 p depth . ; g"  "16711680 0"
 # >glyph: consecutive characters are font-h bytes apart in the table
-assert_contains "font >glyph stride is font-h" "$FNT
+assert_result "font >glyph stride is font-h" "$FNT
 : g [char] B >glyph  [char] A >glyph  - . ; g"         "16"
 # text with colour chosen per call: same bytes, two colours
 assert_contains "font colour is per call" "$FNT
@@ -1259,7 +1268,7 @@ assert_contains "vga font cell is 8x8"  "$VGA
 assert_contains "vga glyph fills an 8x8 cell" "$VGA
 : g s red \$DB 0 0 glyph  0 0 p  7 7 p  0 8 p ; g"     "16711680 16711680 0"
 # glyphs are font-h bytes apart, so 8 here where terminus is 16
-assert_contains "vga >glyph stride is 8" "$VGA
+assert_result "vga >glyph stride is 8" "$VGA
 : g [char] B >glyph  [char] A >glyph  - . ; g"         "8"
 # newline drops font-h, which is now 8
 assert_contains "vga text newline drops 8" "$VGA
@@ -1282,7 +1291,7 @@ section "FFI (dlopen / dlsym / ccall)"
 # too (the emulated ld.so resolves libc.so.6 inside the -L sysroot).
 FFI="$FORTH_LIB/ffi.fs"
 assert_contains "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlopen s\" getpid\" dlsym >r 0 r> (ccall) 0> . ; t"  "-1"
-assert_contains "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
+assert_result "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
 assert_contains "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
 assert_contains "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
 assert_contains "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "cannot load libnosuch.so.99"
@@ -2470,15 +2479,15 @@ assert_contains "sm/rem"             ": test 7 s>d -2 sm/rem . . ; test"  "-3 1"
 section "Pictured Numeric Output"
 # =========================================================================
 
-assert_contains "u. zero"            "0 u."                             "0"
-assert_contains "u. simple"          "42 u."                            "42"
-assert_contains "u. large"           "999999 u."                        "999999"
+assert_result "u. zero"            "0 u."                             "0"
+assert_result "u. simple"          "42 u."                            "42"
+assert_result "u. large"           "999999 u."                        "999999"
 assert_contains ".r right-just"      "42 5 .r"                          "   42"
-assert_contains ".r narrow"          "100 2 .r"                         "100"
+assert_result ".r narrow"          "100 2 .r"                         "100"
 assert_contains ".r negative"       ': test -42 6 .r ; test'           "   -42"
 assert_contains ". INT64_MIN"       ': test -9223372036854775808 . ; test'  "-9223372036854775808  ok"
 assert_contains "*/mod"              "3 7 2 */mod . ."                  "10 1"
-assert_contains "decimal"            ": test decimal 42 . ; test"       "42"
+assert_result   "decimal"            ": test decimal 42 . ; test"       "42"
 
 # =========================================================================
 section "BASE and Number Formatting"
@@ -2486,13 +2495,15 @@ section "BASE and Number Formatting"
 
 assert_contains "hex output"         'hex #255 . decimal'       "FF"
 assert_contains "hex u. output"      'hex #255 u. decimal'      "FF"
-assert_contains "hex input"          ': hex 16 base ! ; FF . decimal'              "FF"
-assert_contains "hex $ prefix"       ': hex 16 base ! ; $FF . decimal'             "FF"
+assert_result "hex input"          'hex FF . decimal'                            "FF"
+# $ parses as hex with the base left DECIMAL, so the answer differs from the
+# input text -- the prefix cannot be confused with the base here.
+assert_result "hex $ prefix"       '$FF .'                                       "255"
 assert_contains "dec # in hex"       'hex #100 . decimal'                         "64"
 assert_contains "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
-assert_contains "bin % prefix"       '%1010 .'                                      "10"
+assert_result "bin % prefix"       '%1010 .'                                      "10"
 assert_contains "binary output"      'binary #10 . decimal'                         "1010"
-assert_contains "binary input"       'binary 1011 decimal .'                        "11"
+assert_result "binary input"       'binary 1011 decimal .'                        "11"
 assert_contains ".s follows BASE"    'binary 110 .s decimal'                        "<1> 110"
 assert_contains ".s hex"             '30 hex .s decimal'                            "<1> 1E"
 assert_contains ".s decimal format"  '1 2 3 .s'                                     "<3> 1 2 3"
@@ -2508,19 +2519,19 @@ section "Batch 1: Simple Core Words"
 
 # LSHIFT / RSHIFT
 assert_contains "lshift"            '1 4 lshift .'                        "16"
-assert_contains "lshift zero"       '42 0 lshift .'                       "42"
+assert_result "lshift zero"       '42 0 lshift .'                       "42"
 assert_contains "rshift"            '256 4 rshift .'                      "16"
-assert_contains "rshift zero"       '42 0 rshift .'                       "42"
+assert_result "rshift zero"       '42 0 rshift .'                       "42"
 
 # 2* / 2/
 assert_contains "2*"                '21 2* .'                             "42"
 assert_contains "2/ positive"       '42 2/ .'                             "21"
 assert_contains "2/ negative"       '-7 2/ .'                             "-4"
-assert_contains "2/ -1"             '-1 2/ .'                             "-1"
+assert_result "2/ -1"             '-1 2/ .'                             "-1"
 
 # U<
 assert_contains "u< true"           '3 10 u< .'                          "-1"
-assert_contains "u< false"          '10 3 u< .'                          "0"
+assert_result "u< false"          '10 3 u< .'                          "0"
 assert_contains "u< equal"          '5 5 u< .'                           "0"
 assert_contains "u< unsigned"       '-1 1 u< .'                          "0"
 
@@ -2577,15 +2588,15 @@ assert_contains "2! 2@"             'variable p 8 allot 10 20 p 2! p 2@ . .' "20
 
 # CHAR+ / CHARS
 assert_contains "char+"             '100 char+ .'                         "101"
-assert_contains "chars"             '10 chars .'                          "10"
+assert_result "chars"             '10 chars .'                          "10"
 
 # FILL
 assert_contains "fill"              'create buf 5 allot buf 5 65 fill buf 5 type' "AAAAA"
-assert_contains "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
+assert_result "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
 
 # MOVE
 assert_contains "move non-overlap"  'create s 3 allot create d 3 allot s 3 65 fill s d 3 move d 3 type' "AAA"
-assert_contains "move zero len"     '1 2 0 move 42 .' "42"
+assert_result "move zero len"     '1 2 0 move 42 .' "42"
 # Overlapping MOVE must be memmove-safe (regression: the overlap copy direction
 # was inverted, smearing bytes — see TODO Known Bugs). Buffer holds "ABCDE".
 assert_contains "move overlap right" 'create mr 6 allot 65 mr c! 66 mr 1+ c! 67 mr 2 + c! 68 mr 3 + c! 69 mr 4 + c! mr mr 1+ 4 move mr 5 type' "AABCD"
@@ -2594,7 +2605,7 @@ assert_contains "move zero balance"  'create mz 2 allot mz mz 1+ 0 move depth 0 
 
 # ALIGN / ALIGNED
 assert_contains "aligned"           '1 aligned .'                        "8"
-assert_contains "aligned 8"         '8 aligned .'                        "8"
+assert_result "aligned 8"         '8 aligned .'                        "8"
 assert_contains "aligned 9"         '9 aligned .'                        "16"
 
 # CHAR
@@ -2610,10 +2621,10 @@ assert_contains "state interpret"   'state @ .'                          "0"
 assert_contains "state addr"        ': test state @ ; test .'            "0"
 
 # [ and ]
-assert_contains "[ ] inline"        ': test [ 42 ] literal ; test .'    "42"
+assert_result "[ ] inline"        ': test [ 42 ] literal ; test .'    "42"
 
 # LITERAL
-assert_contains "literal"           ': five [ 5 ] literal ; five .'     "5"
+assert_result "literal"           ': five [ 5 ] literal ; five .'     "5"
 
 # [']
 assert_contains "['] execute"       ": test ['] dup execute ; 7 test . ." "7 7"
@@ -2622,10 +2633,10 @@ assert_contains "['] execute"       ": test ['] dup execute ; 7 test . ." "7 7"
 assert_contains "[char]"            ': test [char] A ; test .'          "65"
 
 # EXIT
-assert_contains "exit early"        ': test 1 . exit 2 . ; test'        "1"
+assert_result "exit early"        ': test 1 . exit 2 . ; test'        "1"
 
 # POSTPONE immediate word
-assert_contains "postpone if"       ': my-if postpone if ; immediate : test 1 my-if 42 . then ; test' "42"
+assert_result "postpone if"       ': my-if postpone if ; immediate : test 1 my-if 42 . then ; test' "42"
 
 # POSTPONE non-immediate word
 assert_contains "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
@@ -2712,14 +2723,14 @@ assert_result ">body: a constant likewise" \
 assert_contains ">in"                '>in @ .'                          "5"
 
 # SOURCE
-assert_contains "source"             ': test source nip ; test .'      ""
+assert_result "source"             ': test source nip ; test .'      ""
 
 # ABORT
 assert_contains "abort recovers"     '1 2 abort 3 .'                   "> "
 
 # ABORT"
-assert_contains 'abort" true'        ': test true abort" oops" ; test' "oops"
-assert_contains 'abort" false'       ': test false abort" oops" 42 ; test .' "42"
+assert_result   'abort" true'        ': test true abort" oops" ; test' "oops"
+assert_result   'abort" false'       ': test false abort" oops" 42 ; test .' "42"
 
 # ABORT" OUTSIDE a definition.  It is IMMEDIATE, so with no interpreting
 # branch it used to RUN at the prompt: POSTPONE its code into the dictionary
@@ -2749,7 +2760,7 @@ assert_result 'abort" message ends the line'  \
 # >NUMBER
 assert_contains ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
 assert_contains ">number hex"        ': test hex 0 0 s" FF" >number 2drop . . decimal ; test' "0 FF"
-assert_contains ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
+assert_result ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
 
 # ENVIRONMENT?
 assert_contains "environment?"       ': et s" test" environment? . ; et'  "0"
@@ -2760,18 +2771,18 @@ section "Core Extension Words"
 
 # 0>
 assert_contains "0> positive"       '5 0> .'                            "-1"
-assert_contains "0> zero"           '0 0> .'                            "0"
-assert_contains "0> negative"       '-3 0> .'                           "0"
+assert_result "0> zero"           '0 0> .'                            "0"
+assert_result "0> negative"       '-3 0> .'                           "0"
 
 # U>
 assert_contains "u> true"           '10 3 u> .'                         "-1"
-assert_contains "u> false"          '3 10 u> .'                         "0"
+assert_result "u> false"          '3 10 u> .'                         "0"
 
 # WITHIN
 assert_contains "within true"       '5 3 10 within .'                   "-1"
-assert_contains "within false"      '2 3 10 within .'                   "0"
+assert_result "within false"      '2 3 10 within .'                   "0"
 assert_contains "within edge lo"    '3 3 10 within .'                   "-1"
-assert_contains "within edge hi"    '10 3 10 within .'                  "0"
+assert_result "within edge hi"    '10 3 10 within .'                  "0"
 
 # ERASE
 assert_contains "erase"             'create buf 3 allot buf 3 65 fill buf 2 erase buf c@ .' "0"
@@ -2782,9 +2793,9 @@ assert_contains "u.r"               '42 5 u.r'                          "   42"
 # U.0R — same field, zeros for padding
 assert_contains "u.0r pads"         '42 6 u.0r'                         "000042"
 assert_contains "u.0r zero"         '0 4 u.0r'                          "0000"
-assert_contains "u.0r exact fit"    '4242 4 u.0r'                       "4242"
-assert_contains "u.0r overflows"    '255 2 u.0r'                        "255"
-assert_contains "u.0r width 0"      '7 0 u.0r'                          "7"
+assert_result "u.0r exact fit"    '4242 4 u.0r'                       "4242"
+assert_result "u.0r overflows"    '255 2 u.0r'                        "255"
+assert_result "u.0r width 0"      '7 0 u.0r'                          "7"
 assert_contains "u.0r unsigned"     '-1 4 u.0r'         "18446744073709551615"
 # follows BASE, and leaves it alone (the classic bug in this family)
 assert_contains "u.0r hex color"    'hex FF00 6 u.0r decimal'           "00FF00"
@@ -2796,33 +2807,34 @@ assert_contains "u.0r stack clean"  '42 6 u.0r space depth .'           "000042 
 assert_contains "unused"            'unused 0 > .'                      "-1"
 
 # CASE/OF/ENDOF/ENDCASE
-assert_contains "case 1"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 1 test .' "10"
-assert_contains "case 2"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 2 test .' "20"
-assert_contains "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 3 test .' "0"
+assert_result "case 1"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 1 test .' "10"
+assert_result "case 2"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 2 test .' "20"
+assert_result "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 3 test .' "0"
 
 # .(
-assert_contains "dot-paren"         '.( hello)'                         "hello"
+assert_result   "dot-paren"         '.( hello)'                         "hello"
 
 # =========================================================================
 section "Batch 1: Core Extension Words"
 # =========================================================================
 
 # PARSE-NAME
-assert_contains "parse-name"           'parse-name hello type'              "hello"
+assert_result "parse-name"           'parse-name hello type'              "hello"
 
 # PARSE
-assert_contains "parse delim"          '41 parse hello) type'               "hello"
-assert_contains "parse space"          '32 parse hello type'                "hello"
-assert_contains "parse no delim"       '41 parse hello type'                "hello"
+assert_result "parse delim"          '41 parse hello) type'               "hello"
+assert_result "parse space"          '32 parse hello type'                "hello"
+assert_result "parse no delim"       '41 parse hello
+type'                 "hello"
 
 # SOURCE-ID
 assert_contains "source-id keyboard"   'source-id .'                        "0"
 assert_contains "source-id evaluate"   ': t s" source-id ." evaluate ; t'  "-1"
 
 # VALUE / TO
-assert_contains "value"                '10 value x x .'                     "10"
-assert_contains "to interpret"         '10 value x 20 to x x .'            "20"
-assert_contains "to compile"           '10 value x : t 20 to x ; t x .'   "20"
+assert_result "value"                '10 value x x .'                     "10"
+assert_result "to interpret"         '10 value x 20 to x x .'            "20"
+assert_result "to compile"           '10 value x : t 20 to x ; t x .'   "20"
 assert_contains "value unchanged"      '10 value x x . x .'                "10 10"
 
 # +TO: add to a value. It parses the name only to fetch the current contents,
@@ -2834,7 +2846,7 @@ assert_contains "+to in a do loop"     '0 value x : t 4 0 do 10 +to x loop ; t x
 assert_contains "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y ; t x . y .'  "1 2"
 assert_contains "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
 assert_contains "+to negative"         '10 value x -4 +to x x .'                      "6"
-assert_contains "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
+assert_result "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
 # The error paths are TO's, verbatim — nothing is caught and re-reported here.
 assert_error  "+to refuses a variable"     'variable v 1 +to v'   "v: not a value or deferred word"
 assert_error  "+to on an unknown name"     '1 +to no-such-value'  "? no-such-value"
@@ -2851,10 +2863,10 @@ assert_contains "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ 
 
 # DEFER / IS (vectored execution / late binding). Note: ' and ['] contain an
 # apostrophe, escaped as '\'' to survive the single-quoted shell argument.
-assert_contains "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
-assert_contains "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
+assert_result "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
+assert_result "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
 assert_contains "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
-assert_contains "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
+assert_result "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
 assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
 assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
 # Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary,
@@ -2868,7 +2880,7 @@ assert_error  "to refuses an ordinary word"   ': w 7 ; 5 to w'      "w: not a va
 assert_error  "to refuses a constant"         '42 constant k 9 to k'  "k: not a value or deferred word"
 assert_error  "is refuses an ordinary word"   ': w 7 ; '\'' w is w'  "w: not a deferred word"
 assert_error  "is refuses a value"            '5 value v 6 is v'     "v: not a deferred word"
-assert_contains "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
+assert_result "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
 # A refused store must leave the target intact (it used to be corrupted).
 ti_out=$(printf ': w 7 ;\n5 to w\nw .\nbye\n' | timeout 2 $FORTH 2>&1)
 if [[ "$ti_out" == *"w: not a value or deferred word"* && "$ti_out" == *"7  ok"* ]]; then
@@ -2877,8 +2889,8 @@ else
     printf "  ${RED}FAIL${NC}  refused to leaves the word intact\n    Got: %s\n" "$(echo "$ti_out"|head -4)"; ((failed++))
 fi
 # defer@ / action-of (Forth 2012) and SEE's binding report.
-assert_contains "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
-assert_contains "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
+assert_result "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
+assert_result "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
 assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a deferred word"
 sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
     | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
@@ -2902,25 +2914,25 @@ fi
 
 # ?DO
 assert_contains "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
-assert_contains "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
+assert_result "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
 assert_contains "?do skip empty"       ': t 0 0 ?do i . loop ; t'          " ok"
 
 # WORDS
-assert_contains "words"                'words'                              "words"
+assert_result "words"                'words'                              "words"
 
 # =========================================================================
 section "Batch 2: Programming-Tools + String Words"
 # =========================================================================
 
 # ?
-assert_contains "question fetch"       'variable v 42 v ! v ?'              "42"
+assert_result "question fetch"       'variable v 42 v ! v ?'              "42"
 
 # DUMP
 assert_contains "dump"                 'here 16 dump'                       "|................|"
 
 # /STRING
-assert_contains "/string"              ': t s" hello world" 6 /string type ; t'  "world"
-assert_contains "/string zero"         ': t s" hello" 0 /string type ; t'        "hello"
+assert_result "/string"              ': t s" hello world" 6 /string type ; t'  "world"
+assert_result "/string zero"         ': t s" hello" 0 /string type ; t'        "hello"
 
 # COMPARE
 assert_contains "compare equal"        ': t s" hello" s" hello" compare . ; t'   "0"
@@ -2939,8 +2951,8 @@ assert_contains "cmove> zero balance"  'create cz 2 allot cz cz 1+ 0 cmove> dept
 assert_contains "cmove zero balance"   'create kz 2 allot kz kz 1+ 0 cmove depth 0 = .' "-1"
 
 # -TRAILING
-assert_contains "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"
-assert_contains "-trailing none"       ': t s" hello" -trailing type ; t'        "hello"
+assert_result "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"
+assert_result "-trailing none"       ': t s" hello" -trailing type ; t'        "hello"
 
 # BLANK
 assert_contains "blank"                'create b 5 allot b 5 blank b c@ . b 4 + c@ .'  "32 32"
@@ -2953,7 +2965,7 @@ section "Batch 3: Facility + Double-Number Words"
 assert_contains "key? no input"        'key? .'                              "0"
 
 # MS (just check it doesn't crash — timing is non-deterministic)
-assert_contains "ms"                   '1 ms 42 .'                           "42"
+assert_result "ms"                   '1 ms 42 .'                           "42"
 
 # SCREEN-WIDTH / SCREEN-HEIGHT (values depend on terminal)
 assert_contains "screen-width"         'screen-width 0 > .'                  "-1"
@@ -2961,26 +2973,26 @@ assert_contains "screen-height"        'screen-height 0 > .'                 "-1
 
 # D+
 assert_contains "d+ simple"           ': t 1 0 3 0 d+ . . ; t'              "0 4"
-assert_contains "d+ carry"            ': t -1 0 1 0 d+ . . ; t'             "1 0"
+assert_result "d+ carry"            ': t -1 0 1 0 d+ . . ; t'             "1 0"
 
 # D-
 assert_contains "d- simple"           ': t 5 0 3 0 d- . . ; t'              "0 2"
 
 # D0=
 assert_contains "d0= true"            ': t 0 0 d0= . ; t'                   "-1"
-assert_contains "d0= false"           ': t 1 0 d0= . ; t'                   "0"
+assert_result "d0= false"           ': t 1 0 d0= . ; t'                   "0"
 
 # D0<
-assert_contains "d0< true"            ': t 0 -1 d0< . ; t'                  "-1"
-assert_contains "d0< false"           ': t 0 1 d0< . ; t'                   "0"
+assert_result "d0< true"            ': t 0 -1 d0< . ; t'                  "-1"
+assert_result "d0< false"           ': t 0 1 d0< . ; t'                   "0"
 
 # D=
 assert_contains "d= true"             ': t 5 0 5 0 d= . ; t'               "-1"
-assert_contains "d= false"            ': t 5 0 6 0 d= . ; t'               "0"
+assert_result "d= false"            ': t 5 0 6 0 d= . ; t'               "0"
 
 # D.
-assert_contains "d. positive"         ': t 42 0 d. ; t'                     "42"
-assert_contains "d. negative"         ': t -42 -1 d. ; t'                   "-42"
+assert_result "d. positive"         ': t 42 0 d. ; t'                     "42"
+assert_result "d. negative"         ': t -42 -1 d. ; t'                   "-42"
 
 # =========================================================================
 section "Snake Game Prerequisites"
@@ -2991,8 +3003,8 @@ assert_contains "ms@ nonzero"          'ms@ 0 > .'                          "-1"
 assert_contains "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
 
 # CURSOR-OFF / CURSOR-ON (just check they don't crash)
-assert_contains "cursor-off"           'cursor-off 42 .'                    "42"
-assert_contains "cursor-on"            'cursor-on 42 .'                     "42"
+assert_result "cursor-off"           'cursor-off 42 .'                    "42"
+assert_result "cursor-on"            'cursor-on 42 .'                     "42"
 
 # Key constants
 assert_contains "key_up"               'key_up .'                           "129"
@@ -3120,7 +3132,7 @@ else
 fi
 
 # INCLUDE (parse-word + included)
-assert_contains "include word"         'include core.fs 42 .'                      "42"
+assert_result "include word"         'include core.fs 42 .'                      "42"
 
 # INCLUDE of a directory must error, not segfault (open succeeds on a
 # directory; the raw mmap then fails with -ENODEV, which the old check —
@@ -6600,7 +6612,7 @@ fi
 assert_contains "Arrays lesson examples work" \
     $'create nums 5 cells allot\n: nth ( i -- addr ) cells nums + ;\n: init 5 0 do i i * i nth ! loop ;\ninit\n: show 5 0 do i nth @ . loop cr ;\nshow' \
     "0 1 4 9 16"
-assert_contains "Arrays lesson table example"  \
+assert_result "Arrays lesson table example"  \
     $'create days 31 , 28 , 31 , 30 , 31 , 30 , 31 , 31 , 30 , 31 , 30 , 31 ,\n: days-in ( month -- n ) 1- cells days + @ ;\n2 days-in .' \
     "28"
 
@@ -6711,7 +6723,7 @@ shell_start=$(pwd -P)
 # pwd prints the current (startup) directory
 assert_contains "pwd shows cwd"          "pwd"                              "$shell_start"
 # cd changes directory; pwd reflects it
-assert_contains "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
+assert_result "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
 # a failed cd reports the offending path
 assert_contains "cd bad path errors"     "cd /no/such/dir"                 "cd: cannot access /no/such/dir"
 # bare cd returns to the startup directory (proves cd state really changes:
@@ -7261,7 +7273,7 @@ assert_contains "shellutil quotes embedded quotes" \
     "'a b'\\''c'"
 assert_contains "shellutil hex append" \
     "$(printf '%s\n(cmd0) 255 (cmd+x) (cmd$) type' "$shu_pre")"  "0xFF"
-assert_contains "shellutil line capture" \
+assert_result "shellutil line capture" \
     "$(printf '%s\n: t (cmd0) s" echo hello" (cmd+) (cmd-line1) if (cmd-ln) swap type then ; t' "$shu_pre")" \
     "hello"
 shu_forth="${FORTH/.\//$PWD/}"        # absolute, so it survives a cd
@@ -7628,10 +7640,10 @@ time q"                                                  "0.00"
 assert_contains "time reports a real duration" \
     ": nap 100 ms ;
 time nap"                                                "0.1"
-assert_contains "time leaves the word's results on the stack" \
+assert_result "time leaves the word's results on the stack" \
     ": q 42 ;
 time q ."                                                "42"
-assert_contains "time passes arguments through" \
+assert_result "time passes arguments through" \
     ": sink drop 7 ;
 5 time sink ."                                           "7"
 assert_contains "time works on a primitive" "1 time 1+ ."   "2"
