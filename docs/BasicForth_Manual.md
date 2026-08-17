@@ -725,7 +725,9 @@ bouncing-ball demo `examples/bounce.fs` blips off the walls.
 
 ## Recoverable Errors (catch / throw)
 
-Normally an error clears the stacks and returns to the prompt. `catch` runs a
+An `abort` or an uncaught `throw` clears the stacks and returns to the prompt
+(an ordinary typo does not — a word the interpreter cannot find leaves your
+stack as it was). `catch` runs a
 word while trapping that: it returns 0 if the word completed, or the thrown
 code with the stacks restored, and your code keeps control — so a game can
 close its window and audio device on the way out instead of aborting with
