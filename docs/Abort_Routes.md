@@ -299,3 +299,102 @@ decision that interpret-mode errors leave the data stack alone.
 
 Both architectures, per the usual rule for hand-mirrored asm — and `il_rsp` is
 spelled `il_sp` on ARM64, at a different offset.
+
+
+## Choosing the channel
+
+Written 2026-08-16, before any code. Four candidate mechanisms, scored against
+the seven rows above. **Three of them fail, each on a different row**, and the
+rows they fail on are the reason the table is worth having.
+
+### A — read the status register at `.Lil_found_execute`
+
+The value is already sitting there (`forth_execute` tail-calls, so the word's
+return lands in the interpreter's own frame). One `test`/`jnz` after the call.
+
+**Fails row 3.** A compiled `evaluate` runs from inside a definition's body,
+where there is no `.Lil_found_execute` at all and the register is overwritten by
+the next call in the body. This candidate cannot see the case that matters, and
+— worse — it *looks* complete from the prompt, where rows 1, 2 and 4 all pass.
+
+### B — a pending-error global, checked at token boundaries
+
+`forth_evaluate` sets `pending_err`; `interpret_line` checks it after each word
+it executes and routes to the shared error exit.
+
+**Fails row 3 differently, and row 5.** The flag is set mid-body of `q`, but
+nothing consults it until `q` *returns* — by which time `42 .` has already run.
+That is reporting without propagation, which is precisely the half-fix
+`INCLUDED` already ships. And a flag is not a throw, so `' bad catch .` still
+answers 0.
+
+### C — re-longjmp to the outer `interpret_line`
+
+Reuse `.Lcf_longjmp`. Once the inner level's epilogue has restored `il_rsp`, a
+jump there unwinds to the *outer* frame and returns error 1 from it — which
+does abandon the rest of `q`'s body, so row 3 passes.
+
+**Fails row 5**, and instructively. `.Lcf_longjmp` deliberately unlinks every
+exception frame whose address is below `il_rsp`. The frame established by
+`' bad catch` sits inside the current `interpret_line`, so it is *dropped* on
+the way past. The line aborts instead of `catch` returning non-zero — the error
+is handled by the interpreter rather than by the program that asked to handle
+it. Making this candidate work means teaching it about the handler chain, at
+which point it has become candidate D with more steps.
+
+### D — THROW  (recommended)
+
+Let a nested `interpret_line` error raise an exception.
+
+All seven rows pass. Row 3 works because a throw unwinds the return stack
+through `q`'s frame; row 5 works because that is what `CATCH` is for; rows 6 and
+7 are untouched because `INCLUDED` still prints before it throws, and the
+top-level path never throws at all.
+
+The strongest argument is one the code makes on its own: **`CATCH`'s frame
+already snapshots exactly the state `EVALUATE` and `INCLUDED` bracket by hand** —
+`source_addr`, `source_len`, `to_in`, `source_id`, **`il_rsp`**, `file_name_*`,
+`file_line_num`, `cur_source_id`, `cur_line_off`. Ten cells, restored by
+`THROW`. That set was not chosen with this bug in mind, and it is the set this
+bug needs. A mechanism whose recovery state already matches the problem is
+usually the intended one.
+
+### Sub-decisions inside D
+
+**1. Throw from the callers, not from `interpret_line`.** `interpret_line`
+keeps returning its status — `repl_loop` still needs it, and `INCLUDED` needs it
+to print `file:line:` first. Each caller then decides. The practical
+consequence is the point: **the change does not touch `interpret_line`'s abort
+decision at all**, which is where seven of the wedges have been, and where
+`recovery-anchor-is-global` records a fix that segfaulted. `forth_evaluate` and
+`forth_included` are the whole edit.
+
+**2. Nested only.** Gate on the same *previous `il_rsp` == 0* predicate the
+abort decision already uses — already written, already debugged, and already
+carrying the per-arch offset trap. Throwing at the top level too would make a
+plain typo clear the data stack, breaking row 7 and a deliberate documented
+behaviour. The asymmetry is real and wants a comment: at the top level there is
+no outer computation to protect, so a status return is enough.
+
+**3. A new silent throw code, not `-2`.** Uncaught, `-1` and `-2` print
+nothing (the thrower already spoke); everything else prints `uncaught
+exception: N`. Since `EVALUATE` and `INCLUDED` will have reported already, the
+code must join the silent set. Reusing `-2` would work but overloads `ABORT"`,
+and a program that wants to tell "the user's `abort"` fired" from "the text I
+evaluated was broken" has a fair claim to both. Add one code to the silent list.
+
+**4. Restore the error wording *before* throwing.** `CATCH`'s ten cells do
+**not** include `err_pfx_addr`/`err_pfx_len`; `forth_evaluate` brackets those
+itself, on the return stack a throw would skip. Restore the context first, then
+throw at the end of the routine — otherwise an error raised later in the same
+outer token inherits the inner string's wording, which is the exact regression
+`a nested evaluate does not leak its error wording` already pins.
+
+### What this does *not* fix
+
+The compiling-arm bug (`STATE != 0`, nested error rolls back to the global
+anchor and takes the enclosing definition) is **not repaired** by this — it is
+made unobservable. The rollback still happens at the nested level; the outer
+line then aborts anyway, so the definition was forfeit either way and the
+visible outcome becomes correct. Worth stating plainly so nobody later reads a
+passing test as evidence that the anchor behaviour changed. It did not.
