@@ -313,11 +313,28 @@ _start:
 
 .global repl_loop
 repl_loop:
-    # If a startup script faulted or ABORTed, recovery lands here with
-    # script_running still set (the clean-completion path clears it first) —
-    # exit non-zero rather than entering the interactive REPL.
+    # If a startup script faulted, ABORTed, or (since EVALUATE and INCLUDED
+    # propagate) threw out of a nested load, recovery lands here with
+    # script_running still set — the clean-completion path clears it first.
+    #
+    # Apply the SAME policy the command-line loader applies to a load error it
+    # gets as a return value, rather than exiting unconditionally. The two used
+    # to disagree, and nothing reached the disagreement until errors began
+    # propagating: a broken module dropped you to a fixable REPL or exited
+    # depending on which of the two routes its failure happened to take.
     cmpq $0, script_running(%rip)
-    jne .Lscript_error
+    je .Lrepl_not_script
+    cmpq $2, session_env(%rip)
+    je .Lscript_error                   # BASICFORTH_SESSION=0 → exit
+    cmpq $1, session_env(%rip)
+    je .Lrepl_script_recover            # BASICFORTH_SESSION=1 → REPL
+    xor %edi, %edi
+    call platform_isatty
+    test %rax, %rax
+    jz .Lscript_error                   # not a terminal → exit
+.Lrepl_script_recover:
+    movq $0, script_running(%rip)       # recovered; this is now a normal session
+.Lrepl_not_script:
 
     # Save return stack pointer for error recovery
     mov %rsp, rp0(%rip)
@@ -438,17 +455,10 @@ repl_loop:
 repl_error:
     # Print the error's own wording + token + newline. The wording is chosen by
     # the site that raised it (see err_pfx_addr in core.s) so every line error
-    # reads the same shape: "? nosuchword", "compile only: dup".
-    mov err_pfx_addr(%rip), %rsi
-    mov err_pfx_len(%rip), %rdx
-    call platform_write
-
-    mov err_token_len(%rip), %rdx
-    mov err_token_addr(%rip), %rsi
-    call platform_write
-
-    mov $'\n', %rdi
-    call platform_emit
+    # reads the same shape: "? nosuchword", "compile only: dup". EVALUATE prints
+    # the identical shape before it throws, so the sequence lives once, in
+    # core.s, rather than in two places that have to agree.
+    call print_line_error
     jmp repl_loop
 
 repl_empty:

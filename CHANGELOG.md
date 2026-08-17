@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: an error inside `evaluate` is no longer swallowed
+
+- `s" nosuchword" evaluate` printed ` ok` and carried on. No message, no
+  failure — the interpreter's worst failure class, since the line kept running
+  as though the evaluation had succeeded. It now reports and aborts the line,
+  and a `catch` around it sees the error instead of being told all is well.
+
+- **The bug was wider than the report.** It was filed against `[ ]` inside a
+  definition, but brackets had nothing to do with it. All four of these were
+  silent, and all four now report:
+
+      s" nosuchword" evaluate                     \ at a bare prompt
+      s" nosuchword" evaluate 7 .                 \ ...and `7` used to print
+      : q s" nosuchword" evaluate 42 . ;  q       \ ...and `42`
+      : z 1 [ s" nosuchword" evaluate ] 2 + . ;   \ the form as filed
+
+  The compiled case is why the fix is a `throw` rather than a better return
+  value: nothing survives to be inspected after the body moves on.
+
+- **Nothing upstream was broken.** `EVALUATE` and `INCLUDED` both computed the
+  right status all along — `INCLUDED` even printed `file:line: ? token` and
+  returned 1. The status was dropped at a single site, the one place in the
+  interpreter that could have read it. So the repair is a channel, not a
+  correction.
+
+- **`include` propagates too**: a file whose dependency fails to load now stops
+  rather than compiling on against words that were never defined, turning one
+  reported error into a cascade of unreported ones. `(included?)` still hands
+  back a status as a value, and a failing startup script still exits non-zero
+  or drops to a fixable REPL by exactly the rule it always used.
+
+- **A failed load stays retryable.** Fix the typo and load it again — `include`
+  reports afresh, and `require` no longer treats a file that failed halfway as
+  loaded. Both were briefly broken while this change was being written: the
+  file stayed on the loading stack and every later attempt answered *"is
+  already loading — skipped"*, which would have made the edit-fix-reload cycle
+  fail silently.
+
+- An uncaught interpreter error is `-260`, which joins `-1` and `-2` as a code
+  that prints nothing further because the thrower already spoke.
+
+- Every abort route in the engine is now written down, with the design
+  reasoning and the three rejected alternatives: `docs/Abort_Routes.md`.
+
+### Fixed: a script that failed one way exited, another way dropped to the REPL
+
+- `repl_loop` exited non-zero for any script failure that reached it, while the
+  command-line loader dropped you to a fixable REPL when the session was
+  interactive. Whether a broken module was fixable therefore depended on which
+  route its failure took. They now use the same rule.
+
 ## v0.16.0 — 2026-08-16
 
 Three headline changes: **local variables** (`{: a b c :}`), a compiler change

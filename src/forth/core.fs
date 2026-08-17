@@ -3278,6 +3278,12 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
 \ exactly how an include gets attempted mid-definition in the first place.
 : (def-open?) ( -- flag )  (latest@) 8 + c@ 64 and 0<> ;
 
+\ An interpreter error that the word raising it has ALREADY reported. Matches
+\ THROW_INTERP in core.s, where THROW's silent set is defined -- a catcher sees
+\ this rather than a bare -1, so it can tell a user's ABORT from text that would
+\ not compile.
+-260 constant (throw-interp)
+
 : included ( c-addr u -- )                  \ load + record; error if missing
     \ A definition's code compiles straight into the dictionary at HERE, so a
     \ file loaded now would interleave its headers with that code. Refuse the
@@ -3300,14 +3306,27 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     \ session. The return stack nests, so a file that includes another file
     \ is safe; two variables would not be.
     2dup >r >r
-    included                                \ the assembly INCLUDED does the work
-    r> r>
+    (included?)                             \ the assembly INCLUDED does the work
+    r> r>                                   \ ( ior c-addr u )
     (inc-opened?) 0= if
         r> (ldg-n) !                        \ pop before leaving through the ABORT,
-        ." cannot open " type cr abort      \ else a missing file stays "loading"
+        ." cannot open " type cr drop abort \ else a missing file stays "loading"
     then
-    (inc-mark)
-    r> (ldg-n) ! ;
+    rot                                     ( c-addr u ior )
+    \ Pop the loading stack FIRST, before anything below can leave through a
+    \ throw -- (inc-mark) evaluates a sentinel definition, so it can. A file
+    \ left on that stack answers "is already loading — skipped" to every later
+    \ attempt, for the rest of the session, so a typo cannot be fixed and
+    \ reloaded. The ABORT arm above already carried this exact warning.
+    r> (ldg-n) !
+    \ Record the load ONLY if it was clean. Marking a file that failed halfway
+    \ makes `require` skip it forever after, and the dependent code then
+    \ compiles against words the file never reached the point of defining --
+    \ one reported error becoming a cascade of unreported ones.
+    dup 0= if  drop (inc-mark) 0  else  >r 2drop r>  then
+    \ Propagate, last of all: the assembly used to throw this itself, which
+    \ skipped every line above.
+    if  (throw-interp) throw  then ;
 
 \ --- Local variables: {: a b c :} ------------------------------------------
 \ Forth 2012 section 13. Names the top n stack items, innermost first, for the
@@ -3784,10 +3803,15 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 \ A dep word gets its whole line handed to EVALUATE, so the hint is parsed by
 \ the same (nh-rest) that parses it at load time. Nothing else on the line can
 \ run: the dep word consumes the rest of it either way.
+\ CATCH, not a bare evaluate: since an error inside EVALUATE propagates, a bad
+\ dep line would otherwise leave (dp-mode) set for the rest of the session and
+\ every later dep word would read as a scan rather than running. Clear the mode,
+\ then re-raise -- `0 throw` is a no-op, so the clean path is unchanged.
 : (dp-dep-line) ( -- )
     1 (dp-mode) !
-    (dp-la) @ (dp-lu) @ evaluate
-    0 (dp-mode) ! ;
+    (dp-la) @ (dp-lu) @ ['] evaluate catch
+    0 (dp-mode) !
+    throw ;
 
 : (dp-do-line) ( -- more? )                 \ false ends the dep block
     (dp-tu) @ 0= if  true exit  then                    \ blank
