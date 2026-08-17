@@ -7413,14 +7413,39 @@ voice-cmd nip .  s" hi" s" d.wav" voice-render .')" \
 # and this runs; leave it unset and it skips, saying so. wavcore.fs rather
 # than wav.fs on purpose — decoding needs no SDL, so this works on a machine
 # with no audio device, and under qemu if an engine is installed there.
-if [ -n "$VOICE_ENGINE_CMD" ] && [ "${VOICE_ENGINE_CMD//\"/}" != "$VOICE_ENGINE_CMD" ]; then
+# This suite never sources setup.sh — it is deliberately environment-
+# independent — so an unset VOICE_ENGINE_CMD used to be reported as "not set",
+# which reads as a fact about the machine. It is not: it is a fact about the
+# caller's shell. On a Pi with piper installed and working, this printed
+# `(VOICE_ENGINE_CMD not set)` and was reported during the v0.16.0 verification
+# as "piper is not on the Pi". Derive the engine the way setup.sh does instead,
+# so the capability decides. Not a copy of setup.sh's value — an independent
+# derivation from the same source (PATH), which is why the two cannot drift
+# into pointing at different installs.
+vc_voices="${PIPER_VOICES:-$HOME/.local/share/piper-voices}"
+vc_engine="$VOICE_ENGINE_CMD"
+vc_why="VOICE_ENGINE_CMD not set and no engine found"
+if [ -z "$vc_engine" ]; then
+    vc_piper="$(command -v piper 2>/dev/null)"
+    if [ -z "$vc_piper" ]; then
+        vc_why="no engine: install piper, or export VOICE_ENGINE_CMD -- see help engines"
+    elif [ ! -d "$vc_voices" ]; then
+        # piper without voices is a half-finished install, not a code fault, so
+        # say which half is missing rather than failing the render.
+        vc_why="piper found but no voices in $vc_voices -- see help engines"
+    else
+        vc_engine="$vc_piper --data-dir $vc_voices -m ${PIPER_VOICE:-en_US-libritts-high} -f %o -- %t"
+    fi
+fi
+
+if [ -n "$vc_engine" ] && [ "${vc_engine//\"/}" != "$vc_engine" ]; then
     # A template is handed to voice-cmd! through s", which ends at the first
     # double quote — so one here would silently leave the DEFAULT template in
     # force and fail this test for a reason that looks nothing like the cause.
     printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD contains a \" — use single quotes)\n"
-elif [ -n "$VOICE_ENGINE_CMD" ]; then
+elif [ -n "$vc_engine" ]; then
     vc_real=$(printf 's" %s" voice-cmd!\ninclude %s/wavcore.fs\ns" you win" s" real.wav" voice-render .\n: t s" real.wav" wav-load dup 0= if drop ." LOADFAIL " wav-why type exit then\n  dup wav-frames 0> . dup wav-chans 0> . dup wav-rate . wav-free ;\nt\n' \
-        "$VOICE_ENGINE_CMD" "$FORTH_LIB")
+        "$vc_engine" "$FORTH_LIB")
     # a neural engine loads its model before it says anything: seconds, not ms
     vc_o=$( cd "$vc_dir" && printf '%s\n' "$vc_pre" "$vc_real" \
         | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $vc_forth 2>&1 )
@@ -7433,7 +7458,7 @@ elif [ -n "$VOICE_ENGINE_CMD" ]; then
         printf "  ${RED}FAIL${NC}  real engine render+decode\n    Got: %q\n" "$vc_o"; ((failed++))
     fi
 else
-    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD not set)\n"
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (%s)\n" "$vc_why"
 fi
 
 chmod -R u+w "$vc_dir" 2>/dev/null

@@ -76,10 +76,12 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       miscompile and the bare `unresolved control flow` message both came out
       of it. Lives in a private repo outside this tree for now.
 
-- [ ] **Word the voice-engine skip so it names its remedy.**
-      Done when: on a machine with piper installed, a suite run that never
-      sources `setup.sh` either runs the render test or prints a skip that says
-      what to do about it. Verify on the Pi, where the misreading happened.
+- [x] **Word the voice-engine skip so it names its remedy — DONE 2026-08-16**
+      (branch `2-suite-skip-wording`). Both fixes taken: the suite now derives
+      the engine with `command -v piper` the way `setup.sh` does, and every
+      remaining skip names what to do. Verified on both arches: the Pi, where
+      the misreading happened, now runs the test at 1180/1180 with no skips
+      without sourcing `setup.sh` at all.
       Detail: §Future / Hardening.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**
@@ -3170,8 +3172,9 @@ spread, so nothing below needs revisiting.
     the more forgiving one. Fixing it means returning the file id from the
   loader, and checking `EVALUATE` reports -1 while it is at it.
 
-- [ ] **A skip whose reason depends on how the suite was invoked reads as a
-  fact about the machine.** The integration suite is deliberately
+- [x] **A skip whose reason depends on how the suite was invoked reads as a
+  fact about the machine — FIXED 2026-08-16** (branch `2-suite-skip-wording`).
+  The integration suite is deliberately
   environment-independent — it never sources `setup.sh` — so the real-engine
   render test skips with `(VOICE_ENGINE_CMD not set)` on a machine that has
   piper installed and working. During the v0.16.0 verification that was read as
@@ -3184,6 +3187,26 @@ spread, so nothing below needs revisiting.
   the caller's shell, decides. Found 2026-08-16. The general point is the one
   in `derive-dont-record`: a skip is a claim about the world, and this one was
   really a claim about the command line.
+
+  **Both fixes landed.** The suite derives the engine itself when
+  `VOICE_ENGINE_CMD` is unset — `command -v piper`, the same source `setup.sh`
+  reads, so the two are independent derivations rather than a copied value and
+  cannot drift into pointing at different installs. Three skip reasons replace
+  the one: no engine (says to install piper or export the variable), piper but
+  no voices directory (names the directory), and the pre-existing double-quote
+  case. The voices check is there so a half-finished install skips with the
+  missing half named instead of failing a render for what is not a code fault.
+
+  Verified on x86 across all four paths, including the one that matters most:
+  with the fix removed the same run SKIPs at 1179 and with it PASSes at 1180,
+  so the change is not vacuous.
+
+  **Confirmed on the Pi**, the machine the wrong conclusion was drawn on, with
+  the same before/after pair and no `setup.sh` sourced: 1179 and a
+  `(VOICE_ENGINE_CMD not set)` skip before, 1180 passed with **zero skips in
+  the whole run** after. `~/.local/bin` is on the Pi's non-interactive PATH,
+  which is what lets the derivation find piper where the bare variable could
+  not.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
