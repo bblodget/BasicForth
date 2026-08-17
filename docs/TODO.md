@@ -5,6 +5,185 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Up next
+
+The bucket. Add to it during the week as things come up; on release day, take
+what's done and leave the rest here.
+
+Releases are cut on Sunday by convention — a week's work, whatever that turned
+out to be. **This is a guideline, not a rule:** a good set of items early in the
+week is a reason to release early, and a quiet week is a reason to skip. Nothing
+here blocks a release; an unfinished item just stays in the bucket. See
+`docs/Versioning.md` for how a release is actually cut, and `CHANGELOG.md`'s
+`## Unreleased` for what has already landed.
+
+Each item carries a **Done when** line, because release day's only real question
+is *in or out* and that needs an observable answer rather than a judgment call.
+
+**Before taking an item, check who already has it:**
+
+```
+git branch --format='%(refname:short)  %(worktreepath)'
+```
+
+Branches and worktree paths are shared between all worktrees of the repo, so
+that command sees work in progress *now*. This file cannot: a claim written
+here lives on a branch, and no other worktree sees it until that branch merges
+— by which point the work is done. So name a branch after the item you're
+taking, and let the branch list be the claim.
+
+**Put your worktree number in the branch name: `<n>-<item>`** —
+`2-files-lesson`, `3-make-install`. Worktrees are numbered by their directory
+(`BasicForth` is 1, the main checkout and the one holding every worktree's
+objects; `BasicForth-2`, `BasicForth-3` after that), so the number is read off
+`git worktree list` rather than recorded anywhere that can go stale.
+
+> **Until the rename lands**, the directories are still `BasicForth` (1),
+> `BasicForth-movefix` (2) and `BasicForth-docs` (3) — the numbers are not yet
+> readable off the paths, so use that mapping. `git worktree move` handles the
+> two linked worktrees; the main checkout stays put, which is why it is 1.
+> Delete this note once `git worktree list` shows the numbered names.
+
+The number is not for ownership — it is so the branch list answers *which
+session* at a glance, without matching long paths by eye. Marking the same thing
+in this file was tried and dropped: a `[2 working]` beside an item is invisible
+to the other worktrees until it merges, needs a second merge to say `done`, and
+costs a conflict on the one file all three edit.
+
+### `[ENGINE]` — one at a time
+
+An item tagged **`[ENGINE]`** touches `src/arch/*/*.s` or `src/arch/*/core.fs`
+— the hand-mirrored pair. That is the same criterion that already decides
+whether a branch needs a full suite run before merge, so it is one rule under
+one name, not a new judgment call.
+
+**Take at most one `[ENGINE]` item at a time.** Not because the files
+necessarily collide — two emitters can sit far apart — but because two
+unreviewed engine changes landing in the same Sunday sweep cannot be told
+apart when something breaks, and each costs a five-suite two-arch run. Sequence
+them instead; there is always non-engine work to run alongside.
+
+**Name the branch `engine/<n>-<item>`** — `engine/2-evaluate-propagation`. The
+tag in this file is documentation and arrives only at merge time; the branch
+prefix is the part that enforces anything, because refs are shared the moment
+they exist:
+
+```
+git branch --list 'engine/*'
+```
+
+Anything listed means an engine item is live — take a different one. Docs,
+lessons, tests and tooling carry no such limit and run in parallel freely.
+
+### Queued
+
+- [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
+      test of the engine, and historically our best bug-finder: the `CASE`
+      miscompile and the bare `unresolved control flow` message both came out
+      of it. Lives in a private repo outside this tree for now.
+
+- [ ] **Word the voice-engine skip so it names its remedy.**
+      Done when: on a machine with piper installed, a suite run that never
+      sources `setup.sh` either runs the render test or prints a skip that says
+      what to do about it. Verify on the Pi, where the misreading happened.
+      Detail: §Future / Hardening.
+
+- [ ] **Audit the integration suite for assertions that cannot fail.**
+      Done when: every `assert_output` whose expected text occurs in its own
+      input is converted to `assert_result` or rewritten. Verify the way
+      `verify-fixes-against-broken-build` says to — break the word deliberately
+      and watch the test go red. **Timebox it** — ~1178 assertions is unbounded
+      work, so take a section per sitting rather than opening the whole suite.
+      Detail: §Future / Hardening.
+
+- [ ] **`[ENGINE]` ARM64: diagnose `to <local>` at 6.5 ns against x86's 0.54.**
+      Done when: the two hypotheses in the entry are separated by re-measuring
+      with a `drop` in the loop on the Pi, and the result is either a fix or a
+      written explanation. Not a bug until that distinction is made.
+      Detail: §Performance / Optimizer.
+
+- [ ] **`[ENGINE]` `SOURCE-ID` conformance.**
+      Done when: `source-id` answers a file id inside an `included` file and -1
+      inside `evaluate`, with a suite case for each. `(loading?)` already covers
+      every internal caller, so this is a conformance gap, not a live bug.
+      Detail: §Future / Hardening.
+
+- [ ] **A `Files` lesson.**
+      Done when: `tutorial Files` replays green under `make run-lessons` on both
+      arches and no step pages.
+      Detail: §Module System / Forth-as-Shell, use-testing queue.
+
+- [ ] **`[ENGINE]` Propagate errors out of `EVALUATE`.** The engine's worst
+      failure class:
+      `: z 1 [ s" nosuchword" evaluate ] 2 + . ;` reports ` ok` and defines a
+      broken word. Root of two filed items — the swallowed error and the
+      compiling arm that takes the enclosing definition — and both dissolve if
+      the status propagates. Two pins in the suite currently record the wrong
+      behaviour and get flipped, so acceptance is unambiguous.
+      **Enumerate every abort route and commit that list before changing code.**
+      This is the most bug-dense area in the engine (seven wedges so far, three
+      of them found in error paths during the 2026-08-16 STATE sweep), and
+      `recovery-anchor-is-global` records an obvious-looking fix here that
+      segfaulted. Best done early in a cycle, not late: a mistake here is
+      silent, and a week of other sessions on the tree is the detector.
+      **Only one engine change per week** — this and user package dirs both
+      edit hand-mirrored asm and both need a full suite run; do not run them in
+      parallel worktrees.
+      Done when: both pinned tests are inverted and pass, on both arches.
+      Detail: §Future / Hardening.
+
+- [ ] **`[ENGINE]` User package dirs — `~/.basicforth/lib` and `docs/`.**
+      Appended at startup to `BASICFORTH_PATH` and `BASICFORTH_DOCS`. The next
+      registry stage, and the piece that gives v0.16.0's `deps` somewhere to
+      point: there is nowhere to install *to*, so a third-party package cannot
+      answer `help`. Specified already — `Package_Registry.md` §Local Layout.
+      Three things to settle first:
+      - **Suite environment-independence.** `test_integration.sh` reads the
+        real `$HOME`, so auto-appending `$HOME/.basicforth/lib` makes every run
+        depend on what the developer has installed. Sandbox `HOME` in the
+        suites, or give startup an opt-out the suites set. Same class as the
+        skip-wording item above — decide before writing, not after.
+      - **Both `main.s` files change** (x86 73–111, arm64 91–139), so this one
+        does warrant a suite run before merge, and it is hand-mirrored asm.
+      - **Append or prepend?** `require` is CWD-first today; on the end, a repo
+        file shadows an installed package of the same name, on the front the
+        reverse. Choose deliberately.
+      Done when: a file dropped in `~/.basicforth/lib` is `require`-able and its
+      `.md` answers `help`, from any directory, with the suites unaffected.
+
+- [ ] **`[ENGINE]` `deps <word>` falls back to the defining file.** `deps`
+      resolves a *file* against CWD and `BASICFORTH_PATH`; a word name falls
+      straight through to `cannot find`. So `deps dis` fails, though `dis` is
+      exactly the name a user has. Fall back to a dictionary lookup and use the
+      header's source id to name the file. Caveat worth checking early: that id
+      comes from a **64-entry table** — `src_register` answers 0 once it is
+      full, so the fallback goes quiet in a long session rather than erroring.
+      Done when: `deps dis` reports on `disasm.fs`, and a word from the 65th
+      file loaded either resolves or says why it cannot.
+
+- [ ] **`make install`.** There is no install target at all today.
+      Done when: it places the binary, `core.fs` and the docs tree somewhere a
+      login shell finds without `setup.sh`, and `basicforth -v` works from a
+      directory unrelated to the repo.
+
+### Bigger than a week
+
+Real features that need a design conversation before they are task-sized —
+parked here so they stay visible without pretending to be queue items.
+
+- **Sockets.**
+- **The GPU backend.** The stated ceiling of the project; SDL is the chosen
+  path to it.
+
+### Parked
+
+- **The optimizer.** Closed deliberately on 2026-07-25 because the base under it
+  was still moving; that reasoning has not changed. §Performance / Optimizer.
+- **A `defer`/`is` lesson.** After `Files` — the two would overlap on file
+  loading, and shipping them together doubles the review.
+
+---
+
 ## Known Bugs
 
 - [x] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
