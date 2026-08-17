@@ -79,10 +79,45 @@ words and runs them. Similar to BareMetalForth's `vi_tb.fs` testbench.
 This is the most natural way to test Forth code — the test suite runs
 inside the system it's testing.
 
+## Writing an integration assertion
+
+Two helpers match output, and the difference matters more than the names
+suggest:
+
+- **`assert_result`** — the default. Strips the prompt and continuation echoes
+  before matching, so a test cannot pass on the strength of its own input.
+- **`assert_contains`** — matches the raw capture, echo included. For the cases
+  that genuinely want a fragment of the whole transcript.
+
+`run_forth` pipes into a REPL, and a REPL echoes what it reads. So with
+`assert_contains`, an expected string that also appears in the input passes
+whatever the code does — `assert_contains "x" '-1 1 <= .' "-1"` stays green
+against a completely broken `<=`. Reach for `assert_result` unless you have a
+reason not to.
+
+## Running one section
+
+A full run is ~47 s natively and around two minutes on a Pi, which is a poor
+edit-and-check loop:
+
+    ./tests/test_integration.sh --list
+    ./tests/test_integration.sh --section VOICE ./src/arch/x86/basicforth
+
+The filter builds a subset — this file's header, the matching sections, and its
+summary footer — and runs that, so per-section setup and inline assertions come
+along. Most sections take well under a second.
+
+**A filtered run is a development aid, not proof.** 11 of the 70 sections lean
+on state an earlier section builds and will fail when run alone; the run labels
+itself `FILTERED RUN` at both ends for that reason. Release verification runs
+the whole file, which is what the `make` targets do.
+
 ## Summary
 
 | Layer              | Approach           | Status                          |
 |--------------------|--------------------|---------------------------------|
-| `core.s`           | C harness (unit)   | 119 tests, both arches          |
-| Full binary        | Shell integration   | 327 tests, both arches          |
+| `core.s`           | C harness (unit)   | 123 tests, both arches          |
+| Full binary        | Shell integration  | 1180 tests, both arches         |
+| Terminal behaviour | PTY harness        | 36 tests, both arches           |
+| Lessons + examples | Replay harness     | 32 tests, both arches           |
 | `core.fs`          | Forth testbench    | Future                          |

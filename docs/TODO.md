@@ -85,11 +85,16 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Detail: §Future / Hardening.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**
-      Done when: every `assert_output` whose expected text occurs in its own
+      Groundwork DONE (branch `2-test-harness`): the unsafe helper is now named
+      `assert_contains`, `assert_result` is documented as the default, and
+      `--section` makes checking one conversion take a second instead of 47.
+      **112 of 525 candidates remain** — measured, not estimated, by
+      instrumenting the helper.
+      Done when: every `assert_contains` whose expected text occurs in its own
       input is converted to `assert_result` or rewritten. Verify the way
       `verify-fixes-against-broken-build` says to — break the word deliberately
-      and watch the test go red. **Timebox it** — ~1178 assertions is unbounded
-      work, so take a section per sitting rather than opening the whole suite.
+      and watch the test go red. **Timebox it** — take a section per sitting
+      rather than opening the whole suite.
       Detail: §Future / Hardening.
 
 - [ ] **`[ENGINE]` ARM64: diagnose `to <local>` at 6.5 ns against x86's 0.54.**
@@ -3195,6 +3200,24 @@ spread, so nothing below needs revisiting.
   A stricter follow-up worth considering: make `assert_result` compare the
   result line **exactly** rather than by substring, so a test cannot pass on a
   coincidental match either.
+
+  **Sized 2026-08-16** by instrumenting `assert_output` to log whenever
+  `$expected` occurred in `$input`, rather than parsing the file: **112 of 525**
+  are candidates. Candidates, not verdicts — some still bite for other reasons,
+  and each conversion needs the broken-build check before it counts.
+
+  **The same flaw is in `tests/test_line_editor_pty.py`, and it is worse there**
+  — a PTY echoes by construction. Line 98 asserts
+  `"ABCDEFGHIJKLMNOP-OK" in out` where that string is what the test types, so
+  the echo alone satisfies it and the assertion would hold even if the line
+  were never submitted, which is the one thing it exists to check. Other
+  assertions there are safe by construction (`"save first? (y/n)"` is a prompt,
+  never input). Sweep both files; the PTY one is small.
+
+  **Not a language problem.** The PTY suite is Python and reproduced the defect
+  independently, so rewriting the shell suite in something else would not have
+  prevented a single one of these. The fix is echo-stripping helpers and a
+  default that is safe.
 
 - [ ] **The EVALUATE error-wording bracketing has no probe that still bites.**
   `assert_output "a nested evaluate does not leak its error wording"` worked by
