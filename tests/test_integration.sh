@@ -671,12 +671,78 @@ assert_output "stray ; inside evaluate stops that line" \
 # the wording is right, not that bracketing works. A probe that still bites
 # needs a site that inherits (`.Lsq_no_close` is one); see docs/TODO.md.
 #
-# The TOKEN here is the enclosing word, not `then`: cf_check_tag names whatever
-# the OUTER interpreter last parsed, which is the closer for ordinary source but
-# the caller when a closer is reached at run time through `execute`.
-assert_output "a nested evaluate does not leak its error wording" \
-              ": leaky s\" ;\" evaluate  0 99 ' then execute ;
-leaky"                                                      "mismatched control flow"
+# NOTE (2026-08-16): the old probe here ran a second, wording-less error AFTER a
+# failed nested evaluate in the same word. Propagation removed its premise --
+# the failed evaluate now throws, so the word never reaches the second error.
+# Replaced by the check below, which bites for a different reason: EVALUATE now
+# REPORTS the inner error itself, so the wording it prints is directly
+# observable. Printing after restoring the outer wording said "? if"; the
+# correct answer is the one the top level gives for the identical mistake.
+assert_output "an error inside evaluate reports with its OWN wording" \
+              "s\" 999 if\" evaluate"                       "compile only: if"
+assert_output "...the same wording the top level gives" \
+              "999 if"                                      "compile only: if"
+
+# --- EVALUATE propagates (2026-08-16) -----------------------------------
+# An error inside EVALUATE used to be swallowed whole: no message, and the line
+# carried on as though it had succeeded. The status was computed correctly all
+# along -- it was dropped at .Lil_found_execute, the one site that could have
+# read it -- so the fix is a THROW rather than a better return value.
+# Each of these is a form the old bug took; the compiled one is the reason a
+# status register could not have been the channel.
+assert_output "an error inside evaluate is reported at all" \
+              's" nosuchword" evaluate'                     "? nosuchword"
+assert_absent "...and the rest of the line does not run" \
+              's" nosuchword" evaluate 7 .'                 "7"
+assert_absent "...nor the rest of a COMPILED word's body" \
+              ': q s" nosuchword" evaluate 42 . ;
+q'                                                          "42"
+assert_result "...and CATCH sees it, rather than being told all is well" \
+              ': bad s" nosuchword" evaluate ;
+'"'"' bad catch .'                                          "-260"
+assert_result "a successful evaluate is untouched" \
+              's" 2 3 +" evaluate .'                        "5"
+
+# --- a failed load must stay RETRYABLE ------------------------------------
+# Propagation's first version threw from the assembly, which skipped the Forth
+# wrapper's bookkeeping: the file stayed on the loading stack, and every later
+# attempt answered "is already loading — skipped". A typo could not be fixed
+# and reloaded for the rest of the session — the edit-fix-reload cycle, broken
+# silently. The wrapper now pops that stack, declines to record a failed load,
+# and throws last of all.
+# Counted, not substring-matched: the wrong behaviour reports the error ONCE
+# and then goes quiet, which a "does the message appear" test cannot see.
+rtr_dir="$(mktemp -d)"
+printf 'nosuchword\n'  > "$rtr_dir/broken.fs"
+printf ': rtrok 1 ;\n'  > "$rtr_dir/clean.fs"
+rtr_n=$(printf 'include %s/broken.fs\ninclude %s/broken.fs\ninclude %s/broken.fs\n' \
+        "$rtr_dir" "$rtr_dir" "$rtr_dir" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | grep -c "? nosuchword")
+if [ "$rtr_n" = "3" ]; then
+    printf "  ${GREEN}PASS${NC}  a failed include can be retried (3 attempts, 3 reports)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  failed include is not retryable\n    Expected 3 reports, got %s\n" "$rtr_n"; ((failed++))
+fi
+rtr_req=$(printf 'include %s/broken.fs\nrequire %s/broken.fs\n' "$rtr_dir" "$rtr_dir" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | grep -c "? nosuchword")
+if [ "$rtr_req" = "2" ]; then
+    printf "  ${GREEN}PASS${NC}  require retries a file whose load failed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  require skipped a file that never loaded\n    Expected 2 reports, got %s\n" "$rtr_req"; ((failed++))
+fi
+# ...but a CLEAN require is still load-once, which is the whole point of it.
+assert_result "a clean require is still load-once" \
+              "require $rtr_dir/clean.fs
+require $rtr_dir/clean.fs
+rtrok ."                                                    "1"
+# The throw code -260 is written in THREE places: THROW_INTERP in each core.s,
+# and (throw-interp) in core.fs. A failed EVALUATE raises the assembly one and a
+# failed load raises the Forth one, so asserting both is what would catch the
+# two drifting apart -- nothing else compares them.
+assert_result "a failed load raises the same code a failed evaluate does" \
+              ": bi s\" $rtr_dir/broken.fs\" included ;
+' bi catch ."                                               "-260"
+rm -rf "$rtr_dir"
 # the same error with no evaluate in front, as the control
 assert_output "control-flow mismatch reports plainly" \
               ": plain 0 99 ' then execute ;
@@ -4700,40 +4766,47 @@ assert_result "a prompt-level error keeps the stack" '1 2 3 nosuchword
 assert_result "a prompt-level compile-only error keeps the stack" '1 2 if
 .s'                                                                       "<2> 1 2"
 assert_result "[ ] at compile time still works" ": c9 [ 6 7 * ] literal ; c9 ."  "42"
-# A NESTED interpret_line must not take that abort. Returning an error ends the
-# line only at the top level -- EVALUATE returns into a caller that carries on
-# with the rest of ITS line, so dropping the header there left the outer line
-# compiling into a definition that no longer existed, and its `;` operating on
-# whatever LATEST had become. The word below is wrong either way (the error
-# inside the evaluation is swallowed, which is its own pre-existing bug, filed
-# in TODO.md) -- what this pins is that it still gets DEFINED rather than
-# vanishing mid-line.
-# The same, by the OTHER abort route: `'` failing to find a name reaches
-# .Lcf_abort rather than the shared error exit, and needed the gate separately.
-# It was missed the first time precisely because a comment there asserted the
-# site "cannot be inside brackets" -- it can.
-# Records CURRENT behaviour, which is wrong and pre-existing: an error inside a
-# nested evaluation while COMPILING rolls back to the global anchor and takes
-# the enclosing definition with it. Both foo and inner vanish. Pinned so that
-# fixing it (TODO: propagate errors out of EVALUATE) is a deliberate act rather
-# than a surprise, and so this arm's exemption from the nesting gate stays
-# visible.
-assert_result "a nested error while compiling still takes the outer definition (known bug)" \
+# These four pinned the pre-propagation behaviour: an error inside a nested
+# EVALUATE was swallowed, the outer line carried on, and `foo` got defined from
+# whatever survived. EVALUATE now throws, so the outer line aborts and `foo`
+# does not exist -- three of them flip from EXISTS to MISSING.
+#
+# The FIRST one does not flip, and that is the trap worth keeping in view: it
+# expected MISSING before the fix (the compiling arm rolled back to the global
+# anchor and took foo with it) and expects MISSING after (the line aborts). Same
+# observation, opposite mechanism. On its own it would have read as confirmation
+# while proving nothing, so it now asserts the REPORT as well -- silence was
+# always the real symptom, and the dictionary probe alone cannot see it.
+# NOTE: the anchor behaviour it used to pin is NOT fixed, only made
+# unobservable. Do not read this passing as evidence that it changed.
+# The reported error is the definition-open guard, not the undefined word: with
+# `foo` open, the evaluated `: inner` cannot build a header and is refused
+# first, so `nosuchword` is never reached. What matters is that SOMETHING is
+# reported where the old behaviour printed ` ok` and moved on.
+assert_result "a nested error while compiling aborts the line (and is reported)" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+probe foo'                                                       "definition still open: inner"
+assert_result "...and the outer definition is gone either way" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
 probe foo'                                                                "MISSING"
-assert_result "a failed tick inside a nested EVALUATE does not abandon it either" \
+# The OTHER abort route: `'` failing to find a name reaches .Lcf_abort rather
+# than the shared error exit, and needed the nesting gate separately. It was
+# missed the first time precisely because a comment there asserted the site
+# "cannot be inside brackets" -- it can.
+assert_result "a failed tick inside a nested EVALUATE now abandons the outer definition" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" '"'"' nosuchword" evaluate ] 2 + . ;
-probe foo'                                                                "EXISTS"
+probe foo'                                                                "MISSING"
 assert_result "a failed tick inside [ ] DOES abandon at the top level" \
     ": g1 [ ' nosuchword
 : g2 3 ;
 g2 ."                                                                     "3"
-assert_result "an error inside a nested EVALUATE does not abandon the outer definition" \
+assert_result "an error inside a nested EVALUATE abandons the outer definition" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" nosuchword" evaluate ] 2 + . ;
-probe foo'                                                                "EXISTS"
+probe foo'                                                                "MISSING"
 
 # cancel; abandons the definition being typed — nothing defined, the rest of
 # the line discarded, a pending :e disarmed (nothing spliced, file untouched);
@@ -7578,13 +7651,18 @@ if [[ "$unb_out" == *"definition not closed (missing ;)"* && "$unb_out" == *"0  
 else
     printf "  ${RED}FAIL${NC}  stray ] at end of file\n    Got: %q\n" "$unb_out"; ((failed++))
 fi
-# Nested: the inner file reports, and the outer load carries on — same as a
-# line error in a nested file.
+# Nested: the inner file reports, and the outer load STOPS — since 2026-08-16,
+# when INCLUDED began propagating. It used to carry on, which meant a file whose
+# dependency failed to load kept compiling against words that were never
+# defined, turning one reported error into a cascade of unreported ones.
+# `outer` is defined AFTER the failing include and must therefore be missing;
+# `good` was defined by the inner file BEFORE its error and must survive, which
+# is what distinguishes "the load stopped" from "the load was rolled back".
 unn_out=$(printf 'outer .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
     BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/nest.fs" 2>&1)
-if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"5  ok"* \
+if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"? outer"* \
       && "$unn_out" == *"1  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load continues\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load stops\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  unclosed nested include\n    Got: %q\n" "$unn_out"; ((failed++))
 fi
@@ -7619,11 +7697,28 @@ fi
 # with a broken chain (it segfaulted). The file is included twice on purpose:
 # the second load adds no require sentinel, so LATEST is not shifted and
 # saved_latest lands squarely on the caller's open definition.
+# REWRITTEN 2026-08-16, and honestly labelled: the version before this one used
+# `include` for both loads, and `include` is the FORTH wrapper, which refuses
+# outright when a definition is open ("load it before, or after, the
+# definition"). The asm forth_included was therefore never reached from inside
+# `[ ]`, and this assertion had been passing without exercising its subject
+# since that guard landed. Propagation made it fail, which is the only reason
+# anyone looked.
+# (included?) goes straight to the asm entry with no such guard, so the load
+# does now happen with the caller's definition open, and the inherited-header
+# comparison is on the live path.
+# STILL NOT FULLY NON-VACUOUS, measured: deleting the incl_entry_latest guard
+# before drop_partial_header changes nothing here, because the equality check at
+# the top of .Lincl_err_tail short-circuits first -- and it always can, since
+# build_header refuses the inner file's own `:` while a definition is open, so
+# LATEST cannot diverge by that route. Whether that inner guard is now dead code
+# is filed in TODO.md; what this test does cover is that a load inside an open
+# definition neither crashes nor eats the caller's work.
 unh_dir="$(mktemp -d)"
 printf ': cbad 1\n' > "$unh_dir/inner.fs"
-printf 'include %s/inner.fs\n: keeper 7 ;\n: foo [ include %s/inner.fs ] 42 ;\nkeeper .\n' \
+printf 's" %s/inner.fs" (included?) drop\n: keeper 7 ;\n: foo [ s" %s/inner.fs" (included?) drop ] 42 ;\n' \
     "$unh_dir" "$unh_dir" > "$unh_dir/outer.fs"
-unh_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+unh_out=$(printf 'keeper .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
     timeout 5 $sv_forth "$unh_dir/outer.fs" 2>&1)
 rm -rf "$unh_dir"
 if [[ "$unh_out" == *"7"* && "$unh_out" == *"Goodbye"* && "$unh_out" != *"dumped core"* ]]; then
@@ -7881,25 +7976,50 @@ t
 (lp@) (lp0@) = ."                                                        "-1"
 
 # --- nesting: the case a blanket "reset to lp0" gets WRONG ----------------
-# interpret_line nests. A compiled word holding a frame can call EVALUATE, and
-# an error inside that evaluation unwinds only the INNER interpret_line -- the
-# caller is still running and its frame is still live. Resetting to lp0 there
-# would hand the caller freed slots. Both error exits are covered because they
-# are separate code paths reached by different errors: an undefined word takes
-# .Lil_err_return, a control-flow abort takes .Lcf_longjmp.
-# Verified non-vacuous: breaking either exit to reset lp0 makes its test report
-# "locals stack underflow" instead, since local 0 then sits in the guard page.
+# interpret_line nests. A word holding a frame can trigger a nested one, and an
+# error inside it unwinds only the INNER level -- the caller is still running
+# and its frame is still live. Resetting to lp0 there would hand the caller
+# freed slots. Both error exits are covered because they are separate code
+# paths reached by different errors: an undefined word takes .Lil_err_return, a
+# control-flow abort takes .Lcf_longjmp.
+#
+# These used to drive the nested level with EVALUATE. They cannot any more:
+# EVALUATE now THROWS on error, so the caller does not survive to be asked, and
+# the abort is the whole point of that change. The natural-looking repair --
+# wrapping the EVALUATE in CATCH so the caller continues -- was MEASURED
+# VACUOUS: THROW restores LP from CATCH's own frame, so the probe reads 4242
+# even with the interpret_line epilogue deliberately broken. It tests THROW,
+# not the epilogue it is named for.
+#
+# (included?) is the remaining caller that takes an error status as a VALUE and
+# carries on -- deliberately, since main.s and Forth code both need it that way
+# -- so it still reaches the epilogue with a live caller frame behind it.
+# Verified non-vacuous the hard way, against a build with each exit patched to
+# reset lp0: both then report "locals stack underflow", local 0 having landed
+# in the guard page.
 # A distinctive value, and assert_result so the echo cannot supply it: the
 # local must read back as 4242, not merely as "something". Expecting "1" here
 # would have matched the "-1" from the LP check on the next line.
-assert_result "nesting: undefined word inside evaluate keeps the caller's frame" \
-              ': o 4242 1 (lframe) s" nosuchword" evaluate 0 (local@) . 1 (lunframe) ;
+lpn_dir="$(mktemp -d)"
+printf 'nosuchword\n'  > "$lpn_dir/badline.fs"
+printf ': q then ;\n'  > "$lpn_dir/badcf.fs"
+assert_result "nesting: a line error inside a load keeps the caller's frame" \
+              ": o 4242 1 (lframe) s\" $lpn_dir/badline.fs\" (included?) drop 0 (local@) . 1 (lunframe) ;
 o
-(lp@) (lp0@) = .'                                                        "4242"
-assert_result "nesting: control-flow abort inside evaluate keeps it too" \
-              ': o 4242 1 (lframe) s" : q then ;" evaluate 0 (local@) . 1 (lunframe) ;
+(lp@) (lp0@) = ."                                                        "4242"
+assert_result "nesting: control-flow abort inside a load keeps it too" \
+              ": o 4242 1 (lframe) s\" $lpn_dir/badcf.fs\" (included?) drop 0 (local@) . 1 (lunframe) ;
 o
-(lp@) (lp0@) = .'                                                        "4242"
+(lp@) (lp0@) = ."                                                        "4242"
+rm -rf "$lpn_dir"
+# The CATCH path is worth its own check even though it cannot cover the
+# epilogue: THROW must restore LP to the frame CATCH recorded, or a caught
+# EVALUATE error leaves the catching word running on a frame that moved.
+assert_result "a caught evaluate error leaves the catching word's frame intact" \
+              ": inner s\" nosuchword\" evaluate ;
+: o 4242 1 (lframe) ' inner catch drop 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = ."                                                        "4242"
 
 # --- per-thread ----------------------------------------------------------
 # A worker gets its own locals stack from its own allocation, so LP is per

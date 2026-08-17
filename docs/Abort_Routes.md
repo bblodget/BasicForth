@@ -369,6 +369,11 @@ decision at all**, which is where seven of the wedges have been, and where
 `recovery-anchor-is-global` records a fix that segfaulted. `forth_evaluate` and
 `forth_included` are the whole edit.
 
+> Held up, with one correction found in implementation: "the callers" turned
+> out to mean the *Forth* wrapper for loads, not the assembly `forth_included`.
+> See §Implemented. The principle — throw from whoever owns the cleanup —
+> is what survived; this decision named the wrong layer for one of the two.
+
 **2. Nested only.** Gate on the same *previous `il_rsp` == 0* predicate the
 abort decision already uses — already written, already debugged, and already
 carrying the per-arch offset trap. Throwing at the top level too would make a
@@ -398,3 +403,94 @@ made unobservable. The rollback still happens at the nested level; the outer
 line then aborts anyway, so the definition was forfeit either way and the
 visible outcome becomes correct. Worth stating plainly so nobody later reads a
 passing test as evidence that the anchor behaviour changed. It did not.
+
+
+## Implemented — 2026-08-16
+
+Candidate D, both architectures, all eight suite runs green (x86 1192/123/32/36,
+ARM64 1123/123/24/36).
+
+The edit ended up in three places, and only two of them are assembly:
+
+- **`forth_evaluate`** reports and throws, on both arches.
+- **`print_line_error`**, one shared copy of the error format, now called by
+  `repl_error` too rather than being written out twice.
+- **`included` in `core.fs`** — the *Forth* wrapper, which owns propagation for
+  loads. The assembly `forth_included` still just returns a status; see the
+  second note below for why the first attempt put the throw there and had to
+  take it back out.
+
+`interpret_line`'s abort decision was not touched, as intended.
+
+Three things the implementation changed about the plan:
+
+**The report has to happen BEFORE the context restore, not just before the
+throw.** Sub-decision 4 said "restore the wording, then throw", and taken
+literally that is wrong: the restore puts the *outer* token's wording back, so
+printing after it reported `? if` where the top level says `compile only: if`.
+The order is report → restore → throw. Caught by testing the wording rather
+than only the propagation, and it would have shipped otherwise: every
+acceptance row still passed.
+
+**`INCLUDED` must not throw from the assembly at all** — this took two goes.
+The first version added a throwing entry point beside `forth_included`, which
+kept `main.s`'s script policy and `(included?)` working and looked right. It
+was wrong for a reason neither the design nor the acceptance table reached:
+**the Forth wrapper around `included` does bookkeeping after the call**, and a
+throw skipped every line of it. The file stayed on the loading stack, so every
+later attempt answered *"is already loading — skipped"*, and a typo could not
+be fixed and reloaded for the rest of the session. The edit-fix-reload cycle,
+broken silently — the same class of defect as the bug being fixed.
+
+The wrapper had *already recorded this hazard*: its cannot-open arm pops the
+loading stack before its `ABORT`, commented "else a missing file stays
+loading". The warning was there and the new exit route walked straight past it.
+
+So propagation for loads lives in the Forth wrapper, which pops the loading
+stack first, declines to record a failed load (or `require` would skip it
+forever, compiling the dependent file against words that were never defined),
+and throws last of all. The assembly is back to returning a status. Ordering
+inside that wrapper is deliberate: `(inc-mark)` evaluates a sentinel
+definition, so it too can throw, and it must not be able to strand the stack.
+
+**The same audit found `(dp-dep-line)`**, which set `(dp-mode)`, evaluated, and
+cleared it — leaving the mode set for the session if the line failed. It now
+uses `catch` and re-raises.
+
+**It exposed a disagreement between two script-failure policies.** `repl_loop`
+exited non-zero for anything that recovered into it with `script_running` set,
+while the command-line loader applied the interactive test. Nothing reached the
+disagreement until a nested load could throw. They now share one rule — which
+is a behaviour change for faults and `ABORT` in a script too, and deliberate.
+
+### What the tests taught
+
+Rewriting the tests was most of the work, and two of them were **already
+vacuous** before this change — visible only because propagation made them fail:
+
+- `dropping a partial header never unlinks an inherited one` drove its load with
+  `include`, and the Forth wrapper refuses outright when a definition is open,
+  so the assembly under test was never reached.
+- The two locals-nesting tests were rewritten to use `catch`, which was
+  **measured vacuous**: `THROW` restores LP from `CATCH`'s own frame, so the
+  probe reads back correctly even with the `interpret_line` epilogue
+  deliberately broken. They use `(included?)` instead — the one caller that
+  still takes an error as a value and carries on — and were verified against a
+  build with each exit patched to reset `lp0`.
+
+The general shape, worth keeping: **when a change makes a test fail, the first
+question is whether that test was testing anything before.** Two of the seven
+failures here were not.
+
+### The general lesson
+
+A new exit route from a routine invalidates the cleanup of every caller that
+had only ever seen it return. Both defects found after the acceptance table was
+green were of that shape — the loading stack and `(dp-mode)` — and neither is
+visible from the table, because the table asks what the *error* does and this
+asks what the *session* looks like afterwards.
+
+The check that would have caught both, and is worth running against any future
+propagation change: **for each caller of the newly-throwing word, does anything
+happen after the call?** If so it needs `catch`, or the throw needs to move
+after it.

@@ -45,6 +45,15 @@
 .equ T_DEFER,       1
 .equ T_VALUE,       2
 .equ T_NONAME,      3
+// THROW code for an interpreter error that has ALREADY been reported by the
+// word raising it -- EVALUATE prints "? token", INCLUDED prints "file:line: ?
+// token". It joins -1 and -2 in THROW's silent set, or the uncaught handler
+// would print "uncaught exception: N" underneath a message the user already
+// has. Distinct from -2 rather than reusing it, because a program that catches
+// has a fair claim to tell a user's ABORT" from broken text it evaluated.
+// Forth 2012 leaves -256..-4095 to the implementation. The magnitude stays
+// inside CMN's 12-bit immediate, so the uncaught test needs no scratch load.
+.equ THROW_INTERP,  -260
 
 // DROP_PARTIAL_HEADER — after an abort, LATEST can be a HALF-BUILT definition:
 // `:` built the header on an earlier input line, so the per-line recovery
@@ -3060,6 +3069,16 @@ forth_evaluate:
     BL forth_interpret_line
     MOV X26, X0                     // save result
 
+    // Report HERE, before the restore below puts the outer token's wording back.
+    // The error being reported is the INNER one, so it must be printed while the
+    // inner wording is still live: `s" 999 if" evaluate` says "compile only: if",
+    // not "? if". Printing after the restore got exactly that wrong on x86 and
+    // would have got it wrong identically here.
+    // X26 is callee-saved, so the status survives the call with no extra guard.
+    CBZ X26, .Leval_no_report
+    BL print_line_error
+.Leval_no_report:
+
     // Restore source context
     ADR X9, source_addr
     STR X23, [X9]
@@ -3080,7 +3099,25 @@ forth_evaluate:
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
+    CBNZ X0, .Leval_failed
     RET
+
+.Leval_failed:
+    // Propagate. Returning the status was correct and useless: the only site
+    // that could read it (.Lil_found_execute) never did, and when EVALUATE is
+    // COMPILED into a definition there is no such site at all -- the body just
+    // carries on. A throw is the one channel that unwinds a caller's body and
+    // that CATCH can intercept.
+    //
+    // AFTER the restores above, deliberately, and after the report. The throw
+    // skips this routine's epilogue, and CATCH's frame -- which does save the
+    // source context and il_sp -- does NOT save err_pfx; EVALUATE brackets that
+    // pair itself. Throw before restoring it and an error raised later in the
+    // same OUTER token inherits this string's wording, which is the leak the
+    // bracketing was added to close.
+    MOV X9, #THROW_INTERP           // silent code: .Leval_no_report printed
+    STR X9, [X19, #-CELL]!
+    B forth_throw
 
 // ---------- INCLUDED ----------
 // ( c-addr u -- )
@@ -6296,10 +6333,35 @@ forth_catch:
     STR XZR, [X19, #-CELL]!         // report success
     RET
 
+// print_line_error ( -- )  Print a pending line error: the wording chosen by the
+// site that raised it, then the offending token, then a newline. repl_error has
+// printed this shape since the beginning and EVALUATE now needs an identical
+// one, so it lives here rather than being written twice -- two copies that must
+// agree on an output format is exactly how one of them goes stale.
+// Uses platform_write, which pays any owed newline; a raw syscall would not.
+.global print_line_error
+print_line_error:
+    STP X29, X30, [SP, #-16]!
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
+    BL platform_write
+    ADR X9, err_token_len
+    LDR X1, [X9]
+    ADR X9, err_token_addr
+    LDR X0, [X9]
+    BL platform_write
+    MOV X0, #'\n'
+    BL platform_emit
+    LDP X29, X30, [SP], #16
+    RET
+
 // THROW ( n -- | never returns locally )  0 throw is a no-op. Otherwise
 // unwind to the innermost CATCH frame; with no handler, do what ABORT always
 // did (clear both stacks, reset to the REPL), reporting n first unless it is
-// -1 (ABORT: silent) or -2 (ABORT": the thrower already printed its message).
+// -1 (ABORT: silent), -2 (ABORT": the thrower already printed its message) or
+// THROW_INTERP (an interpreter error, likewise already printed).
 .global forth_throw
 forth_throw:
     LDR X9, [X19], #CELL            // n
@@ -6354,6 +6416,8 @@ forth_throw:
     CMN X9, #1                      // n = -1 (ABORT)?
     B.EQ .Lthrow_reset
     CMN X9, #2                      // n = -2 (ABORT")?
+    B.EQ .Lthrow_reset
+    CMN X9, #-THROW_INTERP          // EVALUATE/INCLUDED already reported it
     B.EQ .Lthrow_reset
     MOV X20, X9                     // n survives platform_write in X20
     ADR X0, msg_uncaught

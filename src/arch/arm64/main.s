@@ -365,12 +365,31 @@ _start:
 
 .global repl_loop
 repl_loop:
-    // If a startup script faulted or ABORTed, recovery lands here with
-    // script_running still set (the clean-completion path clears it first) —
-    // exit non-zero rather than entering the interactive REPL.
+    // If a startup script faulted, ABORTed, or (since EVALUATE and INCLUDED
+    // propagate) threw out of a nested load, recovery lands here with
+    // script_running still set — the clean-completion path clears it first.
+    //
+    // Apply the SAME policy the command-line loader applies to a load error it
+    // gets as a return value, rather than exiting unconditionally. The two used
+    // to disagree, and nothing reached the disagreement until errors began
+    // propagating: a broken module dropped you to a fixable REPL or exited
+    // depending on which of the two routes its failure happened to take.
     ADR X9, script_running
     LDR X9, [X9]
-    CBNZ X9, .Lscript_error
+    CBZ X9, .Lrepl_not_script
+    ADR X9, session_env
+    LDR X9, [X9]
+    CMP X9, #2
+    B.EQ .Lscript_error             // BASICFORTH_SESSION=0 → exit
+    CMP X9, #1
+    B.EQ .Lrepl_script_recover      // BASICFORTH_SESSION=1 → REPL
+    MOV X0, #0
+    BL platform_isatty
+    CBZ X0, .Lscript_error          // not a terminal → exit
+.Lrepl_script_recover:
+    ADR X10, script_running
+    STR XZR, [X10]                  // recovered; this is now a normal session
+.Lrepl_not_script:
 
     // Save return stack pointer for error recovery
     MOV X9, SP
@@ -503,21 +522,10 @@ repl_loop:
 repl_error:
     // Print the error's own wording + token + newline. The wording is chosen by
     // the site that raised it (see err_pfx_addr in core.s) so every line error
-    // reads the same shape: "? nosuchword", "compile only: dup".
-    ADR X9, err_pfx_addr
-    LDR X0, [X9]
-    ADR X9, err_pfx_len
-    LDR X1, [X9]
-    BL platform_write
-
-    ADR X9, err_token_len
-    LDR X1, [X9]
-    ADR X9, err_token_addr
-    LDR X0, [X9]
-    BL platform_write
-
-    MOV X0, #'\n'
-    BL platform_emit
+    // reads the same shape: "? nosuchword", "compile only: dup". EVALUATE prints
+    // the identical shape before it throws, so the sequence lives once, in
+    // core.s, rather than in two places that have to agree.
+    BL print_line_error
     B repl_loop
 
 repl_empty:

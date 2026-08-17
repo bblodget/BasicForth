@@ -107,7 +107,21 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       arches and no step pages.
       Detail: §Module System / Forth-as-Shell, use-testing queue.
 
-- [ ] **`[ENGINE]` Propagate errors out of `EVALUATE`.** The engine's worst
+- [x] **`[ENGINE]` Propagate errors out of `EVALUATE`.** DONE 2026-08-16,
+      both arches, all eight suite runs green. Mechanism: a `THROW` of `-260`,
+      joining the silent set, raised by `forth_evaluate` in assembly and by the
+      *Forth* `included` wrapper for loads. It is deliberately NOT raised by
+      the assembly `forth_included`: a first version added a throwing entry
+      point there, and it skipped the wrapper's bookkeeping, stranding every
+      failed file on the loading stack so no retry could ever run. Loads
+      therefore propagate from the layer that owns the cleanup.
+      `interpret_line`'s abort decision was not touched. Design, the three
+      rejected alternatives, and the two defects found after the acceptance
+      table was green: `docs/Abort_Routes.md`. **Still wants a Pi run** before
+      it is believed — qemu models neither weak ordering nor the incoherent
+      I-cache.
+      Original entry follows.
+      The engine's worst
       failure class. **Wider than this entry first said** — brackets and
       definitions have nothing to do with it, and the minimal case is one line
       at a bare prompt (measured 2026-08-16 against `v0.16.0-14-gbad2f78`):
@@ -3082,6 +3096,24 @@ spread, so nothing below needs revisiting.
   global by design — see the recovery-anchor note — so the real repair is the
   same one: propagate the error out of `EVALUATE` so the outer line aborts too,
   rather than trying to unwind one level from the inside.
+
+- [ ] **Is the `incl_entry_latest` guard before `drop_partial_header` dead
+  code?** Found 2026-08-16 while making the propagation tests non-vacuous.
+  `forth_included`'s unclosed-definition path compares LATEST against
+  `incl_entry_latest` before dropping a partial header, so it never unlinks a
+  definition inherited from the caller — a case that once segfaulted. Deleting
+  that comparison changes no observable behaviour, because the equality test at
+  the top of `.Lincl_err_tail` short-circuits first, and it always can: since
+  `build_header` refuses the included file's own `:` while a definition is
+  open, the file cannot create a header of its own, so LATEST cannot diverge by
+  that route. Either the guard is now unreachable and should be deleted with a
+  note, or there is a path to it nobody has found — and the second is the one
+  worth ruling out first, given the history.
+  **The test that was supposed to cover this had been vacuous for months** for
+  a related reason: it drove the load with `include`, and the *Forth* `included`
+  wrapper refuses outright when a definition is open, so the assembly was never
+  reached. It now uses `(included?)`, which bypasses that guard, and says in
+  its comment exactly how far its coverage goes.
 
 - [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
   gating the locals shadow warning: it returns 0 at the prompt *and* during a
