@@ -85,7 +85,7 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Detail: §Future / Hardening.
 
 - [x] **Audit the integration suite for assertions that cannot fail — DONE
-      2026-08-16** (branch `2-test-harness`). Every candidate converted; a
+      2026-08-17** (branch `2-test-harness`). Every candidate converted; a
       re-measure finds **zero** remaining. Six assertions were rewritten
       because conversion showed they had been asserting things the system does
       not do. `assert_contains` now names the unsafe helper, `assert_result` is
@@ -3235,7 +3235,7 @@ spread, so nothing below needs revisiting.
   result line **exactly** rather than by substring, so a test cannot pass on a
   coincidental match either.
 
-  **Sized 2026-08-16** by instrumenting `assert_output` to log whenever
+  **Sized 2026-08-17** by instrumenting the helper to log whenever
   `$expected` occurred in `$input`, rather than parsing the file: **112 of 525**
   are candidates. Candidates, not verdicts — some still bite for other reasons,
   and each conversion needs the broken-build check before it counts.
@@ -3253,7 +3253,7 @@ spread, so nothing below needs revisiting.
   prevented a single one of these. The fix is echo-stripping helpers and a
   default that is safe.
 
-  **SWEPT 2026-08-16.** All 111 candidates converted; a re-measure reports
+  **SWEPT 2026-08-17.** All 111 candidates converted; a re-measure reports
   zero. 102 kept passing — they had been matching real output and are now
   safe. **Six were asserting things BasicForth does not do**, and each is worth
   recording, because none is a typo:

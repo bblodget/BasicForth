@@ -735,7 +735,7 @@ assert_contains "stray ; aborts the line, stack untouched" "1 2 ; + .
 assert_contains "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
 assert_result "; still ends a :noname"       ":noname 9 ; execute ."        "9"
 # The same rejection inside EVALUATE, which runs the same outer interpreter.
-# UPDATED 2026-08-16 with the propagation fix: EVALUATE no longer swallows the
+# UPDATED 2026-08-17 with the propagation fix: EVALUATE no longer swallows the
 # report, so the error prints AND stops the caller. This assertion used to
 # expect "42" -- the rest of the word running on -- which was true before the
 # fix and false after it. It never noticed the change, because "42" is in its
