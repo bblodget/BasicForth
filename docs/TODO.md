@@ -200,10 +200,16 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Done when: `deps dis` reports on `disasm.fs`, and a word from the 65th
       file loaded either resolves or says why it cannot.
 
-- [ ] **`make install`.** There is no install target at all today.
-      Done when: it places the binary, `core.fs` and the docs tree somewhere a
-      login shell finds without `setup.sh`, and `basicforth -v` works from a
-      directory unrelated to the repo.
+- [x] **`make install` — DONE 2026-08-17.** `install` / `uninstall`, `PREFIX`
+      and `DESTDIR`, both arches, all eight suite runs green. The binary derives
+      `<prefix>/share/basicforth/...` from `/proc/self/exe` when the environment
+      does not set it, so an installed copy needs no `setup.sh` and the tree
+      stays relocatable; the environment still overrides, which is what keeps
+      checkouts and suites unaffected. `help installing` is the user page.
+      **Note for the package-dirs item below:** the derivation is the hook it
+      wanted — `~/.basicforth/lib` now has somewhere to sit *beside*, and the
+      layout is fixed in one place (the templates in `main.s`, checked against
+      the Makefile by the install test).
 
 ### Bigger than a week
 

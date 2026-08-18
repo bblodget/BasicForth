@@ -31,6 +31,7 @@ At a glance — each of these is `help <topic>`:
     clone           getting the source
     build           x86-64, ARM64 cross-compile, or both
     verify          the four test suites
+    installing      make install, for a permanent copy
     path            setup.sh, and what it exports
     first-run       your first prompt
     libraries       SDL3, flite, piper — the optional half
@@ -50,6 +51,10 @@ For one library's own page rather than its install: `help sdl3`, `help sound`,
     make
     . ./setup.sh
     basicforth
+
+That runs BasicForth out of the checkout, which is the whole of it for trying
+the language or working on it. To put a copy somewhere permanent that needs no
+`setup.sh`, add `sudo make install` — `help installing`.
 
 That is a complete installation, and a silent one. For graphics, sound,
 gamepads and `say`, one more command:
@@ -144,7 +149,8 @@ SDL3 install below clones too.
 Makefile reads `uname -m` and dispatches. `make all` builds both.
 
 The binary lands in `src/arch/x86/basicforth` or `src/arch/arm64/basicforth`.
-There is no `make install` — see `help path`.
+That is enough to run from the checkout — see `help path`. To put it somewhere
+permanent instead, `help installing`.
 
 ## verify
 
@@ -160,6 +166,65 @@ The suites set their own environment, so they pass in a bare shell without
 `setup.sh` having been sourced. Lessons and integration checks that need a
 library you have not installed report `SKIP` with a reason rather than
 failing.
+
+## installing
+
+Everything above runs BasicForth out of the checkout. To install it properly:
+
+    sudo make install                 # to /usr/local
+    make install PREFIX=~/.local      # or somewhere that needs no root
+    basicforth
+
+**An installed BasicForth needs no `setup.sh` and no environment at all.** It
+works out where its own files are from the path of the running binary, so
+`help`, `tutorial`, `include` and `require` all resolve on a bare shell:
+
+    $ env -i /usr/local/bin/basicforth
+    > help dup
+    ## dup        ( x -- x x )
+
+That also means the installed tree is **relocatable** — move or rename it and
+it keeps working, with no rebuild and nothing to edit.
+
+What lands where, under `PREFIX`:
+
+    bin/basicforth                    the binary
+    share/basicforth/forth/           core.fs and the libraries
+    share/basicforth/examples/        runnable programs
+    share/basicforth/docs/            the pages help and tutorial read
+
+`make uninstall` removes exactly those (use the same `PREFIX`). `DESTDIR` is
+honoured for package builds.
+
+**If `basicforth` is not found afterwards**, the install's `bin` directory is
+not on your `PATH` — likely with `PREFIX=~/.local`, where `~/.local/bin` often
+is not. `make install` says so when it happens, and prints the line to add.
+
+**Ten characters is a lot at a prompt you use constantly.** If you want it
+shorter, that is a shell alias rather than a second installed name:
+
+    echo "alias bforth=basicforth" >> ~/.bashrc
+
+`bforth` follows the convention the other Forths use — `gforth`, `pforth`,
+`yforth`. **`make install` never creates that name**, so nothing BasicForth
+ships can collide with it. Whether it is free on *your* machine is a question
+only your machine can answer:
+
+    command -v bforth        # prints nothing if the name is unused here
+
+Worth running first: an alias silently shadows an existing command of the same
+name, and gives no sign it has done so. Any name works — pick one that is free.
+
+An alias only applies at an interactive prompt. A script's `#!` line, or
+anything invoking BasicForth from another program, needs the real name.
+
+**The environment still wins.** Setting `BASICFORTH_PATH` or `BASICFORTH_DOCS`
+overrides what the binary works out for itself, so a checkout with `setup.sh`
+sourced keeps using the checkout even with a copy installed system-wide. That
+is what lets you develop against one and have the other installed.
+
+Nothing about installing changes the optional libraries: SDL3, flite and a
+speech engine are found the same way — see `help libraries`.
 
 ## path
 
@@ -188,10 +253,13 @@ your own checkout:
 
     echo ". $PWD/setup.sh" >> ~/.bashrc      # run from the checkout
 
-Without it, BasicForth still runs — but `include`, `require` and `help` will
-not find anything, so pass the paths yourself:
+Without it, a binary run **from the checkout** still starts, but `include`,
+`require` and `help` will not find anything, so pass the paths yourself:
 
     BASICFORTH_PATH=src/forth src/arch/x86/basicforth
+
+An **installed** binary needs none of this: it locates its own files from where
+it is, and `setup.sh` is only for working in a checkout. See `help installing`.
 
 ## first-run
 

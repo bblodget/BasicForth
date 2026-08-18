@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added: `make install`
+
+- There was no install target at all: BasicForth ran from its checkout, with
+  `setup.sh` sourced to point it at its own files. Now:
+
+      sudo make install                 # to /usr/local
+      make install PREFIX=~/.local      # or somewhere needing no root
+
+  `make uninstall` removes it, `DESTDIR` is honoured for packagers.
+
+- **An installed binary needs no environment at all.** It derives where its
+  files are from the path of the running binary — `<prefix>/bin/basicforth`
+  implies `<prefix>/share/basicforth/{forth,examples,docs}` — so `help`,
+  `tutorial`, `include` and `require` all work under `env -i`.
+
+- **Derived, not compiled in.** No prefix is baked at build time, which keeps
+  two properties worth having: the installed tree is **relocatable** (move it,
+  no rebuild, nothing to edit), and the binary the test suites exercise is
+  byte-for-byte the one that gets installed rather than a differently-built
+  object.
+
+- **The environment still wins.** `BASICFORTH_PATH` and `BASICFORTH_DOCS`
+  override the derived defaults, so a checkout with `setup.sh` sourced keeps
+  using the checkout even with a copy installed system-wide — and every test
+  suite is unaffected, since they set those variables themselves.
+
+- `make install` prints the `PATH` line to add when the install's `bin`
+  directory is not on `PATH` — the usual outcome of `PREFIX=~/.local`, and
+  otherwise a correct install that reports `command not found`.
+
 ### Fixed: an error inside `evaluate` is no longer swallowed
 
 - `s" nosuchword" evaluate` printed ` ok` and carried on. No message, no

@@ -20,6 +20,15 @@
 .include "../../config.inc"
 .equ INPUT_BUF_SIZE, 256
 .equ STARTUP_DIR_MAX, 1024          # buffer for the absolute startup directory
+# Install-tree derivation. PREFIX_MAX is the binding one: the platform layer
+# copies every path through a 255-byte scratch, so a prefix near that would
+# fail later, in a place with no way to say why. Refuse it here instead. The
+# derived buffers then cannot overflow -- the longest template holds three
+# prefixes and ~110 fixed bytes.
+.equ EXE_BUF_MAX,     1024          # /proc/self/exe answer
+.equ PREFIX_MAX,       160          # install prefix we are willing to use
+.equ PROBE_BUF_MAX,    256          # "<prefix>/share/basicforth/forth/core.fs"
+.equ DERIVED_BUF_MAX,  768          # built BASICFORTH_PATH / BASICFORTH_DOCS
 .equ F_HIDDEN, 0x40                 # header flags2 bit; must match core.s
 
 _start:
@@ -122,6 +131,10 @@ _start:
     call platform_getenv
     mov %rax, home_ptr(%rip)
     mov %rdx, home_len(%rip)
+
+    # Fall back to the install tree for anything the environment did not set.
+    # Must run after all four getenv calls above and before core.fs is loaded.
+    call derive_install_paths
 
     # Capture the absolute startup directory, so `cd` with no argument can return
     # here and session.fs stays pinned to it no matter where a later `cd` goes.
@@ -480,6 +493,151 @@ repl_bye:
 
 # cstr_eq ( RDI=a RSI=b -- RAX=1 if equal else 0 ) — compare null-terminated
 # strings byte for byte. Used to recognize the -v / --version option.
+# ---------- Install-tree fallback ----------
+# An installed binary has no setup.sh behind it, so BASICFORTH_PATH and
+# BASICFORTH_DOCS arrive unset and `include`, `help` and `tutorial` would all
+# come up empty. Derive them from where the binary actually is:
+#
+#     <prefix>/bin/basicforth  ->  <prefix>/share/basicforth/{forth,docs,...}
+#
+# DERIVED, not compiled in. The tree stays relocatable, and the binary the
+# suites test is byte-for-byte the one that ships -- a baked-in prefix would
+# make the tested build and the installed build different objects.
+#
+# The environment always wins. A repo checkout (setup.sh, or the suites, which
+# set the variables themselves) never reaches the probe below, so this whole
+# path costs a running-from-the-repo session two loads and a branch.
+#
+# expand_prefix ( RDI=tmpl RSI=tmpl_len RDX=dest RCX=cap -- RAX=len, 0 = would not fit )
+# Copy tmpl to dest, expanding each '%' to the install prefix. One loop rather
+# than open-coded concatenation, because the three templates below differ only
+# in how many times the prefix appears.
+expand_prefix:
+    push %rbx
+    push %r12
+    push %r13
+    xor %r8, %r8                    # out index
+    xor %r9, %r9                    # in index
+.Lxp_loop:
+    cmp %rsi, %r9
+    jae .Lxp_done
+    movzbl (%rdi,%r9,1), %eax
+    inc %r9
+    cmp $'%', %al
+    je .Lxp_prefix
+    cmp %r8, %rcx                   # room for one more byte?
+    jbe .Lxp_overflow
+    mov %al, (%rdx,%r8,1)
+    inc %r8
+    jmp .Lxp_loop
+.Lxp_prefix:
+    lea exe_buf(%rip), %r12
+    mov install_prefix_len(%rip), %r13
+    xor %rbx, %rbx
+.Lxp_pfx_loop:
+    cmp %r13, %rbx
+    jae .Lxp_loop
+    cmp %r8, %rcx
+    jbe .Lxp_overflow
+    movzbl (%r12,%rbx,1), %eax
+    mov %al, (%rdx,%r8,1)
+    inc %r8
+    inc %rbx
+    jmp .Lxp_pfx_loop
+.Lxp_overflow:
+    xor %rax, %rax                  # 0 = did not fit; caller leaves things unset
+    jmp .Lxp_ret
+.Lxp_done:
+    mov %r8, %rax
+.Lxp_ret:
+    pop %r13
+    pop %r12
+    pop %rbx
+    ret
+
+derive_install_paths:
+    push %rbx
+    # Nothing to do when the environment supplied both.
+    cmpq $0, basicforth_path_len(%rip)
+    je .Ldip_needed
+    cmpq $0, basicforth_docs_len(%rip)
+    jne .Ldip_ret
+.Ldip_needed:
+    lea exe_buf(%rip), %rdi
+    mov $EXE_BUF_MAX, %rsi
+    call platform_self_exe          # RAX = length, or -errno
+    test %rax, %rax
+    jle .Ldip_ret
+    cmp $EXE_BUF_MAX, %rax
+    jae .Ldip_ret                   # filled the buffer: possibly truncated, so
+    mov %rax, %rbx                  #   do not trust it
+    # Strip two path components: ".../bin/basicforth" -> ".../bin" -> "..."
+    # The base is hoisted: RIP-relative addressing cannot also carry an index.
+    lea exe_buf(%rip), %r8
+    mov $2, %ecx
+.Ldip_strip:
+    test %rbx, %rbx
+    jz .Ldip_ret
+.Ldip_scan:
+    dec %rbx
+    jz .Ldip_ret                    # hit the leading '/': no prefix above it
+    cmpb $'/', (%r8,%rbx,1)
+    jne .Ldip_scan
+    dec %ecx
+    jnz .Ldip_strip
+    # A prefix long enough to overflow the include path's own 255-byte scratch
+    # would fail later in a place that could not explain itself. Refuse here.
+    cmp $PREFIX_MAX, %rbx
+    ja .Ldip_ret
+    mov %rbx, install_prefix_len(%rip)
+
+    # Is this actually an install tree? Probe for the one file that decides it.
+    # Without this check a repo build would publish two directories that do not
+    # exist, and `help` would report a docs path rather than saying it has none.
+    lea tmpl_probe(%rip), %rdi
+    mov $tmpl_probe_len, %rsi
+    lea probe_buf(%rip), %rdx
+    mov $PROBE_BUF_MAX, %rcx
+    call expand_prefix
+    test %rax, %rax
+    jz .Ldip_ret
+    lea probe_buf(%rip), %rsi
+    mov %rax, %rdx
+    call platform_open_file         # RAX = fd, or negative
+    test %rax, %rax
+    js .Ldip_ret                    # not installed here; leave everything unset
+    mov %rax, %rdi
+    call platform_close_file
+
+    cmpq $0, basicforth_path_len(%rip)
+    jne .Ldip_docs
+    lea tmpl_path(%rip), %rdi
+    mov $tmpl_path_len, %rsi
+    lea derived_path(%rip), %rdx
+    mov $DERIVED_BUF_MAX, %rcx
+    call expand_prefix
+    test %rax, %rax
+    jz .Ldip_docs
+    mov %rax, basicforth_path_len(%rip)
+    lea derived_path(%rip), %rax
+    mov %rax, basicforth_path(%rip)
+.Ldip_docs:
+    cmpq $0, basicforth_docs_len(%rip)
+    jne .Ldip_ret
+    lea tmpl_docs(%rip), %rdi
+    mov $tmpl_docs_len, %rsi
+    lea derived_docs(%rip), %rdx
+    mov $DERIVED_BUF_MAX, %rcx
+    call expand_prefix
+    test %rax, %rax
+    jz .Ldip_ret
+    mov %rax, basicforth_docs_len(%rip)
+    lea derived_docs(%rip), %rax
+    mov %rax, basicforth_docs(%rip)
+.Ldip_ret:
+    pop %rbx
+    ret
+
 cstr_eq:
 .Lce_loop:
     movzbl (%rdi), %eax
@@ -590,6 +748,16 @@ home_name:      .ascii "HOME"
 opt_v:          .asciz "-v"
 opt_version:    .asciz "--version"
 
+# Install-tree templates. '%' expands to the derived prefix (expand_prefix).
+# The layout these describe is the one `make install` writes, and the two are
+# checked against each other by the install test rather than by eye.
+tmpl_probe:     .ascii "%/share/basicforth/forth/core.fs"
+.equ tmpl_probe_len, . - tmpl_probe
+tmpl_path:      .ascii "%/share/basicforth/forth:%/share/basicforth/examples"
+.equ tmpl_path_len, . - tmpl_path
+tmpl_docs:      .ascii "%/share/basicforth/docs/Language-Reference:%/share/basicforth/docs/Tutorial:%/share/basicforth/docs/Guides"
+.equ tmpl_docs_len, . - tmpl_docs
+
 .data
 .align 8
 start_argc:
@@ -665,3 +833,18 @@ input_buf:
 .global startup_dir
 startup_dir:
     .space STARTUP_DIR_MAX
+# Install-tree derivation (derive_install_paths). exe_buf holds the answer from
+# /proc/self/exe; install_prefix_len is how much of it is the prefix, so the
+# prefix needs no copy of its own. The derived strings must OUTLIVE the
+# derivation -- basicforth_path points into them for the whole session, exactly
+# as it otherwise points into the environment block.
+exe_buf:
+    .space EXE_BUF_MAX
+install_prefix_len:
+    .quad 0
+probe_buf:
+    .space PROBE_BUF_MAX
+derived_path:
+    .space DERIVED_BUF_MAX
+derived_docs:
+    .space DERIVED_BUF_MAX
