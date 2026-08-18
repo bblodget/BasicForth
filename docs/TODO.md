@@ -84,12 +84,13 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       without sourcing `setup.sh` at all.
       Detail: §Future / Hardening.
 
-- [ ] **Audit the integration suite for assertions that cannot fail.**
-      Done when: every `assert_output` whose expected text occurs in its own
-      input is converted to `assert_result` or rewritten. Verify the way
-      `verify-fixes-against-broken-build` says to — break the word deliberately
-      and watch the test go red. **Timebox it** — ~1178 assertions is unbounded
-      work, so take a section per sitting rather than opening the whole suite.
+- [x] **Audit the integration suite for assertions that cannot fail — DONE
+      2026-08-16** (branch `2-test-harness`). Every candidate converted; a
+      re-measure finds **zero** remaining. Six assertions were rewritten
+      because conversion showed they had been asserting things the system does
+      not do. `assert_contains` now names the unsafe helper, `assert_result` is
+      the documented default, and `--section` runs one section in about a
+      second. The PTY suite has the same flaw and is NOT swept — see below.
       Detail: §Future / Hardening.
 
 - [ ] **`[ENGINE]` ARM64: diagnose `to <local>` at 6.5 ns against x86's 0.54.**
@@ -3233,6 +3234,51 @@ spread, so nothing below needs revisiting.
   A stricter follow-up worth considering: make `assert_result` compare the
   result line **exactly** rather than by substring, so a test cannot pass on a
   coincidental match either.
+
+  **Sized 2026-08-16** by instrumenting `assert_output` to log whenever
+  `$expected` occurred in `$input`, rather than parsing the file: **112 of 525**
+  are candidates. Candidates, not verdicts — some still bite for other reasons,
+  and each conversion needs the broken-build check before it counts.
+
+  **The same flaw is in `tests/test_line_editor_pty.py`, and it is worse there**
+  — a PTY echoes by construction. Line 98 asserts
+  `"ABCDEFGHIJKLMNOP-OK" in out` where that string is what the test types, so
+  the echo alone satisfies it and the assertion would hold even if the line
+  were never submitted, which is the one thing it exists to check. Other
+  assertions there are safe by construction (`"save first? (y/n)"` is a prompt,
+  never input). Sweep both files; the PTY one is small.
+
+  **Not a language problem.** The PTY suite is Python and reproduced the defect
+  independently, so rewriting the shell suite in something else would not have
+  prevented a single one of these. The fix is echo-stripping helpers and a
+  default that is safe.
+
+  **SWEPT 2026-08-16.** All 111 candidates converted; a re-measure reports
+  zero. 102 kept passing — they had been matching real output and are now
+  safe. **Six were asserting things BasicForth does not do**, and each is worth
+  recording, because none is a typo:
+
+  - `define after a stray then` / `... stray loop` expected a definition later
+    on the SAME line to run. An abort ends the line, so it never did. Split
+    across two lines they test what their names claim — that the session
+    survives — and pass.
+  - `stray ; inside evaluate` expected `42`, i.e. the calling word running on.
+    That was TRUE before the propagation fix merged the same day and false
+    after. The test could not notice, so the change went unremarked by the one
+    assertion aimed at it. Now split: the error is reported, and the caller
+    stops.
+  - `hex input` and `hex $ prefix` both wrote `: hex 16 base ! ;`, redefining
+    `hex` instead of calling it, so the base never changed. One matched its own
+    echo; the other matched the `? FF` error. Now `hex FF . decimal` and
+    `$FF .` → `255`, whose answer differs from its input text.
+  - `parse no delim` ran `41 parse hello type`, where PARSE with no delimiter
+    swallows the rest of the line — including the `type` meant to print it.
+    Nothing was ever printed. Split across two lines it types `hello`.
+
+  **Proven non-vacuous, not assumed.** `.(` was broken to print nothing: the
+  two `dot-paren` assertions FAIL under `assert_result` and PASS under
+  `assert_contains`, same break, same run. That is the whole bug in one
+  experiment.
 
 - [ ] **The EVALUATE error-wording bracketing has no probe that still bites.**
   `assert_output "a nested evaluate does not leak its error wording"` worked by
