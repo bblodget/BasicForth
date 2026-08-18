@@ -746,6 +746,7 @@ stat_buf:
 .equ SYS_getcwd,  17
 .equ SYS_chdir,   49
 .equ SYS_renameat, 38
+.equ SYS_readlinkat, 78
 .equ SYS_faccessat, 48
 .equ SYS_newfstatat, 79
 
@@ -779,6 +780,11 @@ stat_buf:
 .balign 8
 .global platform_err_not_found
 platform_err_not_found: .quad -2    // -ENOENT
+
+// The one path platform_self_exe reads. Linux-specific by nature, which is why
+// it lives below the platform boundary rather than in main.s: another OS answers
+// the same question a different way, and only this file should know how.
+proc_self_exe: .asciz "/proc/self/exe"
 
 // fam → native open(2) flags. fam is the backend-neutral file-access enum
 // (0=read 1=write 2=read/write — see Platform_Layer.md); only the platform
@@ -1276,6 +1282,33 @@ platform_fstat:
 .global platform_getcwd
 platform_getcwd:
     MOV X8, #SYS_getcwd
+    SVC #0
+    RET
+
+// platform_self_exe ( X0=buf X1=cap -- X0=len or -errno )
+// The absolute path of the running binary, read from /proc/self/exe. The
+// result is NOT NUL-terminated -- readlink never terminates -- so the caller
+// keeps the length. A truncated answer is indistinguishable from an exact fit,
+// which is why the caller passes a buffer far larger than any real path.
+//
+// This is what lets an INSTALLED binary find core.fs and the docs without any
+// environment: the install prefix is two directories above this path. Deriving
+// it beats recording it at build time -- the tree stays relocatable, and the
+// binary the suites test is byte-for-byte the one that gets installed.
+//
+// readlinkat, not readlink: ARM64 has no plain readlink syscall, so the `at`
+// form is the one spelling that exists on both architectures.
+//
+// qemu-user answers with the GUEST binary's path rather than qemu's own
+// (verified 2026-08-17), so the ARM64 suites exercise the same derivation the
+// board does instead of silently taking a different branch.
+.global platform_self_exe
+platform_self_exe:
+    MOV X2, X0                  // buf
+    MOV X3, X1                  // bufsiz
+    ADR X1, proc_self_exe
+    MOV X0, #AT_FDCWD
+    MOV X8, #SYS_readlinkat
     SVC #0
     RET
 

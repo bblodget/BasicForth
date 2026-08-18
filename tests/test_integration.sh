@@ -8304,6 +8304,99 @@ else
 fi
 
 # =========================================================================
+section "INSTALL (make install, and what the binary derives from its own path)"
+# =========================================================================
+# An installed binary has no setup.sh behind it: BASICFORTH_PATH and
+# BASICFORTH_DOCS are unset, and it must find core.fs and the docs anyway, by
+# deriving <prefix>/share/basicforth/... from /proc/self/exe. That coupling is
+# the thing worth testing — the Makefile's layout and main.s's templates have
+# to agree, and nothing else compares them. A drift shows up here rather than
+# as a mystery "(BASICFORTH_DOCS not set)" on someone's fresh install.
+#
+# Run under `env -i`: not merely unset-what-we-set, but nothing inherited at
+# all, which is the only way to be sure the derivation is doing the work and
+# not the developer's own environment.
+#
+# The arch under test, not the host's: a cross-compiled ARM64 run must install
+# and exercise the ARM64 binary, or it verifies the x86 build twice and the
+# ARM64 derivation never.
+case "$FORTH" in
+    *qemu*) inst_arch=arm64 ;;
+    *)      [ "$(uname -m)" = "aarch64" ] && inst_arch=arm64 || inst_arch=x86 ;;
+esac
+inst_pfx="$(mktemp -d)"
+# Replace the last word of $FORTH (the binary) with the installed one, keeping
+# any qemu prefix in front of it.
+inst_run="$(printf '%s' "$FORTH" | sed "s|[^ ]*\$|$inst_pfx/bin/basicforth|")"
+
+if make -C "$REPO_ROOT" install PREFIX="$inst_pfx" ARCH="$inst_arch" >/dev/null 2>&1; then
+    printf "  ${GREEN}PASS${NC}  make install completes\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  make install completes\n"; ((failed++))
+fi
+# core.fs found. The probe must use a word core.fs DEFINES, not one the
+# assembly already provides: the first version of this test compiled
+# `: isq dup * ;` and asserted 49, which passes with core.fs missing entirely
+# because `:`, `dup`, `*` and `.` are all built-ins. It was measured passing
+# against a deliberately broken library path before anyone noticed.
+# `2over` exists only in core.fs, and 12 appears nowhere else in the output.
+ins_core=$(printf '7 5 100 200 2over + . bye\n' | (cd / && env -i $inst_run) 2>&1)
+if [[ "$ins_core" == *"12"* && "$ins_core" != *"core.fs not found"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: core.fs loads with no environment at all\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: core.fs not found\n    Got: %q\n" "$ins_core"; ((failed++))
+fi
+# Docs found: help resolves a word's page.
+ins_help=$(printf 'help dup\nbye\n' | (cd / && env -i $inst_run) 2>&1)
+if [[ "$ins_help" == *"( x -- x x )"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: help finds the docs tree\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: help found no docs\n    Got: %q\n" "$(echo "$ins_help" | head -3)"; ((failed++))
+fi
+# Libraries found: require resolves against the installed forth directory.
+# ONE line, deliberately: with the require on its own line, a failure printed an
+# error and the NEXT line still announced success — the marker said nothing
+# about the require at all. Same line means a failed require aborts before
+# reaching it, which is only true because errors now propagate out of INCLUDED.
+# The prompt lines are stripped before matching, exactly as assert_result does.
+# Without that the marker matches the ECHOED INPUT and the assertion cannot
+# fail — measured: it passed against a build whose library path was broken and
+# whose `require` therefore did not exist.
+ins_req=$(printf 'require shellutil.fs ." OK-REQ" cr bye\n' | (cd / && env -i $inst_run) 2>&1 | sed '/^> /d')
+if [[ "$ins_req" == *"OK-REQ"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: require finds the library tree\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: require failed\n    Got: %q\n" "$(echo "$ins_req" | head -3)"; ((failed++))
+fi
+# RELOCATABLE — the property that chose derivation over a compiled-in prefix.
+# Move the whole tree and it must still work, with no rebuild.
+inst_moved="${inst_pfx}-moved"
+mv "$inst_pfx" "$inst_moved"
+ins_mv_run="$(printf '%s' "$FORTH" | sed "s|[^ ]*\$|$inst_moved/bin/basicforth|")"
+ins_mv=$(printf 'help dup\nbye\n' | (cd / && env -i $ins_mv_run) 2>&1)
+if [[ "$ins_mv" == *"( x -- x x )"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: the tree can be moved without rebuilding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: moving the tree broke it\n    Got: %q\n" "$(echo "$ins_mv" | head -3)"; ((failed++))
+fi
+mv "$inst_moved" "$inst_pfx"
+# The environment still outranks the derived default, or setup.sh and every
+# suite here would be quietly overridden by an installation.
+ins_env=$(printf 'help dup\nbye\n' | (cd / && env -i BASICFORTH_DOCS=/nonexistent $inst_run) 2>&1)
+if [[ "$ins_env" == *"no help for dup"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: BASICFORTH_DOCS still overrides the derived path\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: the environment did not win\n    Got: %q\n" "$(echo "$ins_env" | head -3)"; ((failed++))
+fi
+if make -C "$REPO_ROOT" uninstall PREFIX="$inst_pfx" >/dev/null 2>&1 \
+   && [ ! -e "$inst_pfx/bin/basicforth" ] && [ ! -e "$inst_pfx/share/basicforth" ]; then
+    printf "  ${GREEN}PASS${NC}  make uninstall removes what it installed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  make uninstall left something behind\n"; ((failed++))
+fi
+rm -rf "$inst_pfx" "$inst_moved"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 
