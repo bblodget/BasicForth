@@ -84,6 +84,14 @@ def send_until_done(fd, data, timeout=60.0):
         out += d
     return out
 
+# A PTY ECHOES WHAT IT IS SENT, so `out` holds the keystrokes as well as the
+# program's answer. An assertion whose needle is part of what this test typed
+# therefore passes even when the program did nothing -- the same defect swept
+# out of the integration suite (see docs/TODO.md), and structurally worse here,
+# because there is no prompt prefix to strip and so no assert_result to hide
+# behind. Assert on something the program COMPUTES: a sum, a rendered prompt,
+# an error, a file's contents. If the needle appears in a b"..." literal above
+# the report(), the test proves nothing.
 def report(name, ok, detail=""):
     global passed, failed
     if ok:
@@ -92,10 +100,16 @@ def report(name, ok, detail=""):
         failed += 1; print(f"  FAIL  {name}  {detail}")
 
 # 1) A line wider than the terminal is submitted whole (not truncated).
+#    The check is the SUM, not the typed text: a PTY echoes what it is sent, so
+#    asserting on any of the characters typed here would hold even if the line
+#    were never submitted -- which is the one thing this test exists to prove.
+#    111111 222222 + prints 333333, which appears nowhere in the input, and it
+#    sits at the END of the line, so a truncated line cannot produce it.
 fd = spawn()
-out = send(fd, b'." ABCDEFGHIJKLMNOP-OK"\r')
+out = send(fd, b'." ' + b"A" * (COLS * 2) + b'" 111111 222222 + .\r')
 send(fd, b"bye\r"); os.close(fd)
-report("long line submitted whole", "ABCDEFGHIJKLMNOP-OK" in out.decode(errors="replace"))
+report("long line submitted whole", "333333" in out.decode(errors="replace"),
+       "the tail of a scrolled line did not run")
 
 # 2) Editing a scrolled line: Home + prepend (scroll left) and End + append
 #    (scroll right). 8 numbers + 7 '+' fully reduce to 44; prepend 1, append

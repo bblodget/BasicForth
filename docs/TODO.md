@@ -3260,13 +3260,25 @@ spread, so nothing below needs revisiting.
   are candidates. Candidates, not verdicts — some still bite for other reasons,
   and each conversion needs the broken-build check before it counts.
 
-  **The same flaw is in `tests/test_line_editor_pty.py`, and it is worse there**
-  — a PTY echoes by construction. Line 98 asserts
-  `"ABCDEFGHIJKLMNOP-OK" in out` where that string is what the test types, so
-  the echo alone satisfies it and the assertion would hold even if the line
-  were never submitted, which is the one thing it exists to check. Other
-  assertions there are safe by construction (`"save first? (y/n)"` is a prompt,
-  never input). Sweep both files; the PTY one is small.
+  **The PTY suite had the same flaw — SWEPT 2026-08-18** (branch
+  `2-pty-sweep`). Of 35 checks, exactly **one** was vacuous: "long line
+  submitted whole" asserted the very string it typed, so the echo satisfied it
+  and it would have held even if the line were never submitted — the one thing
+  it exists to prove. It now types a long line ending in `111111 222222 + .`
+  and asserts **333333**, an answer that appears nowhere in the input and that
+  only a line delivered *whole* can produce.
+
+  Five more looked suspect to the detector and are sound on inspection, which
+  is the useful half of the result: one asserts the redraw after a history
+  recall (the editor RE-PRINTING the line is program output, not echo), and
+  four read the saved **file**, where the typed text arriving is the point.
+  **A needle that was typed is a candidate, never a verdict** — the question is
+  always whether the program had to do something to produce it.
+
+  Proven the same way as the shell sweep: type the line but never press Enter,
+  and the old needle PASSES while the new one FAILS. `report()` now carries a
+  note saying to assert on something the program computes, since a PTY has no
+  prompt prefix to strip and so no `assert_result` to hide behind.
 
   **Not a language problem.** The PTY suite is Python and reproduced the defect
   independently, so rewriting the shell suite in something else would not have
