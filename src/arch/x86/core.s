@@ -4500,6 +4500,42 @@ forth_docs_path:
     mov %rax, (%r15)               # u
     ret
 
+# (forth-path) ( -- c-addr u )  the BASICFORTH_PATH value and length (0 0 unset).
+# The interpreter's own search path, which is NOT the same as getenv of that
+# name: an installed binary derives it, so the environment can be empty while
+# the path is set. Anything resolving a file must ask here, not the environment.
+.global forth_forth_path
+forth_forth_path:
+    mov basicforth_path(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # c-addr
+    mov basicforth_path_len(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # u
+    ret
+
+# (forth-path!) ( c-addr u -- )  replace the search path for the rest of the
+# session. The string is NOT copied: the caller owns storage that must outlive
+# the session (the dictionary does; PAD does not).
+.global forth_forth_path_store
+forth_forth_path_store:
+    mov (%r15), %rax                # u
+    mov %rax, basicforth_path_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, basicforth_path(%rip)
+    add $2*CELL, %r15
+    ret
+
+# (docs-path!) ( c-addr u -- )  as above, for the help/tutorial search path.
+.global forth_docs_path_store
+forth_docs_path_store:
+    mov (%r15), %rax                # u
+    mov %rax, basicforth_docs_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, basicforth_docs(%rip)
+    add $2*CELL, %r15
+    ret
+
 # FILE-SIZE ( fileid -- ud ior )  file size as a double cell, via fstat
 .global forth_file_size
 forth_file_size:
@@ -6583,7 +6619,10 @@ DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
-DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
+DEFWORD dict_forth_path,  "(forth-path)", forth_forth_path,  dict_docs_path
+DEFWORD dict_forth_path_st, "(forth-path!)", forth_forth_path_store, dict_forth_path
+DEFWORD dict_docs_path_st, "(docs-path!)", forth_docs_path_store, dict_forth_path_st
+DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path_st
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
 DEFWORD dict_entropy,     "entropy",      forth_entropy,     dict_getenv

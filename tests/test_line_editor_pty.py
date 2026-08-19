@@ -26,6 +26,10 @@ COLS = 16                      # narrow terminal: any line > ~13 chars scrolls
 # setup.sh — green in a set-up shell, three failures in a bare one.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["BASICFORTH_PATH"] = os.path.join(REPO_ROOT, "src", "forth")
+# ...and keep a developer's own ~/.basicforth/lib out of the run: a path that
+# does not exist counts as "set", so the HOME default never applies.
+os.environ["BASICFORTH_HOME"] = os.path.join(REPO_ROOT, "tests",
+                                             ".no-user-packages")
 
 UP = b"\x1b[A"; DOWN = b"\x1b[B"; LEFT = b"\x1b[D"; RIGHT = b"\x1b[C"
 CTRL_A = b"\x01"; CTRL_E = b"\x05"; BS = b"\x7f"

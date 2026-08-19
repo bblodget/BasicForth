@@ -763,6 +763,164 @@ variable (sp-end)                        \ write pointer while building a buffer
     dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
     r> (sp-end) +! ;
 
+\ ===== User package directories =====
+\ ~/.basicforth/lib joins the file search path, and two docs directories join
+\ the help path, so a package installed there is REQUIRE-able and answers `help`
+\ from any directory. The root is $BASICFORTH_HOME, else $HOME/.basicforth; with
+\ neither set the mechanism sits out entirely, which is what leaves a run under
+\ `env -i` -- and every test suite -- unaffected.
+\
+\ APPENDED, never prepended. A bundled library, help topic or lesson is found
+\ first, so an installed package cannot shadow one; CWD is still searched ahead
+\ of both, so a deliberate local override still works. One rule for code and
+\ docs alike.
+\
+\ TWO docs directories, because the help system reads a directory's ROLE from
+\ its basename: a dir named Tutorial holds lessons and is skipped by help's
+\ topic listing, anything else is a reference section shown under that name.
+\ A single flat docs/ would have appeared in `help` as a section called "docs"
+\ and could never have carried a lesson at all.
+\
+\ The reference dir is "Packages" rather than a mirror of our own three section
+\ names. Mirroring was tried and the output settled it: bare `help` iterates
+\ DIRECTORIES, so a second dir named Language-Reference printed that heading a
+\ second time and read as a bug. A section of its own also attributes what it
+\ lists, which matters because a topic collision APPENDS rather than shadows --
+\ `help sound` can print a bundled page and an installed one, and you want to
+\ see which is which. Package pages therefore take the Language-Reference
+\ shape, `## word ( stack )`, not the single-word Guides shape.
+\
+\ ----- why this is HERE, and shaped like this -----
+\ `include core.fs` re-runs this entire file into the same dictionary, and that
+\ second load finishes with about 3200 bytes to spare out of 256 KB -- a 1.2%
+\ margin. Three consequences, each of which was learned by breaking that test:
+\
+\   * The buffers are ALLOCATEd, not ALLOTted. 2816 bytes of ALLOT broke it
+\     outright. They must outlive this file anyway, since (forth-path!) and
+\     (docs-path!) are handed them UNCOPIED -- PAD would not do.
+\   * The ~14 words below are startup machinery with no runtime role, so they
+\     live inside a MARKER and are forgotten once they have run. That leaves
+\     HERE where it was but NOT the bytes above it, so the reclaimed span is
+\     erased too: a fresh session had always found that space clean, and the
+\     suite asserts it (`here 16 dump`).
+\   * They are defined HERE, mid-file, rather than at the end where they belong
+\     topically. The marker fixes the FINAL cost but not the PEAK, and at the
+\     end of a second load the peak was 3374 bytes against 3270 available. Here
+\     a second load has barely started and there is over 100 KB spare. The only
+\     non-primitive this needs is (sp-add), defined just above.
+marker (-ud-)
+1024 constant (ud-max)
+160  constant (ud-rootmax)      \ a longer root is REFUSED, not truncated: the
+                                \ include search silently SKIPS a segment whose
+                                \ "<seg>/<name>" exceeds 511 bytes, so an
+                                \ over-long root would fail later with nothing
+                                \ left to explain it
+\ Four buffers carved from one heap block (see above). A session with no package
+\ root never allocates it at all.
+variable (ud-path)  variable (ud-docs)  \ the rebuilt BASICFORTH_PATH / _DOCS
+variable (ud-try)                       \ scratch: one candidate directory
+variable (ud-rbuf)                      \ a derived $HOME/.basicforth
+variable (ud-ra)  variable (ud-ru)      \ the root
+variable (ud-dst) variable (ud-n)       \ buffer being built, and bytes used
+variable (ud-fit)                       \ false once something did not fit
+variable (ud-any)                       \ did we actually append anything?
+variable (ud-took)                      \ did either setter take our block?
+
+: (ud-dir?) ( c-addr u -- flag )        \ does this directory open?
+    r/o open-file if  drop false  else  close-file drop true  then ;
+: (ud-cat) ( c-addr u -- )              \ append to the buffer being built
+    (ud-n) @ over + (ud-max) > if  2drop  false (ud-fit) !  exit  then
+    dup >r  (ud-dst) @ (ud-n) @ +  swap cmove  r> (ud-n) +! ;
+\ One heap block, carved into the four buffers.
+: (ud-alloc) ( -- flag )
+    (ud-max) 2* 512 + 256 + allocate if  drop false exit  then   ( a )
+    dup                     (ud-path) !
+    dup (ud-max) +          (ud-docs) !
+    dup (ud-max) 2* +       (ud-try)  !
+        (ud-max) 2* 512 + + (ud-rbuf) !
+    true ;
+\ Is there any root to go looking for? Asked before allocating, so a session
+\ with neither variable set never touches the heap.
+: (ud-wanted?) ( -- flag )
+    s" BASICFORTH_HOME" getenv nip if  true exit  then
+    (home-dir) nip 0<> ;
+: (ud-begin) ( buf old-a old-u -- )     \ start from the current value
+    rot (ud-dst) !  0 (ud-n) !  true (ud-fit) !  (ud-cat) ;
+: (ud-try$) ( -- c-addr u )  (ud-try) @ (sp-end) @ over - ;
+\ Is this directory already in the value being built? `include core.fs` runs
+\ (user-dirs) a SECOND time, and without this it appends the same directories
+\ again and orphans the heap block the old value pointed into. A plain scan:
+\ the candidate is an absolute path carrying the root, so a coincidental match
+\ is not a thing that happens.
+: (ud-has?) ( c-addr u -- flag )
+    dup (ud-n) @ > if  2drop  false exit  then
+    (ud-n) @ over - 1+                  ( c-addr u limit )
+    0 ?do
+        2dup (ud-dst) @ i + over compare 0= if
+            2drop true unloop exit  then
+    loop
+    2drop false ;
+: (ud-append) ( sub-a sub-u -- )        \ add "<root>/<sub>" if it is really there
+    \ (sp-add) does not bound-check, so (ud-try)'s 512 bytes are guaranteed by
+    \ (ud-rootmax) instead: (user-dirs) refuses a root over 160 BEFORE calling
+    \ this, and the longest sub below is 22. Move that check and this overflows.
+    (ud-try) @ (sp-end) !
+    (ud-ra) @ (ud-ru) @ (sp-add)  s" /" (sp-add)  (sp-add)
+    (ud-try$) (ud-dir?) 0= if  exit  then
+    (ud-try$) (ud-has?) if  exit  then
+    (ud-n) @ if  s" :" (ud-cat)  then
+    (ud-try$) (ud-cat)  true (ud-any) ! ;
+
+\ $BASICFORTH_HOME wins; otherwise $HOME/.basicforth, built into our own buffer
+\ because (home-dir) points into the environment and the tail is ours.
+: (ud-root?) ( -- flag )
+    s" BASICFORTH_HOME" getenv  dup if  (ud-ru) !  (ud-ra) !  true exit  then
+    2drop
+    (home-dir) dup 0= if  2drop false exit  then        ( h-a h-u )
+    dup 12 + 256 > if  2drop false exit  then           \ + "/.basicforth"
+    (ud-rbuf) @ (sp-end) !
+    (sp-add)  s" /.basicforth" (sp-add)
+    (ud-rbuf) @ (ud-ra) !  (sp-end) @ (ud-rbuf) @ - (ud-ru) !  true ;
+
+: (user-dirs) ( -- )
+    (ud-wanted?) 0= if  exit  then
+    (ud-alloc) 0= if  exit  then
+    (ud-root?) 0= if  (ud-path) @ free drop  exit  then
+    (ud-ru) @ (ud-rootmax) > if
+        ." basicforth: package directory path too long - skipping "
+        (ud-ra) @ (ud-ru) @ type cr  (ud-path) @ free drop  exit  then
+    \ Only hand a buffer over if something actually went into it. Otherwise the
+    \ new block would replace a perfectly good value -- and orphan the block that
+    \ value points into, which is what a second core.fs load used to do.
+    false (ud-took) !
+    false (ud-any) !
+    (ud-path) @ (forth-path) (ud-begin)
+    s" lib" (ud-append)
+    (ud-any) @ (ud-fit) @ and if
+        (ud-path) @ (ud-n) @ (forth-path!)  true (ud-took) !  then
+    false (ud-any) !
+    (ud-docs) @ (docs-path) (ud-begin)
+    s" docs/Packages" (ud-append)
+    s" docs/Tutorial" (ud-append)
+    (ud-fit) @ 0= if
+        ." basicforth: docs search path too long - user pages not added" cr  then
+    (ud-any) @ (ud-fit) @ and if
+        (ud-docs) @ (ud-n) @ (docs-path!)  true (ud-took) !  then
+    (ud-took) @ 0= if  (ud-path) @ free drop  then ;      \ nobody took it
+\ Reclaim the machinery -- and ZERO what it leaves behind. A rollback only moves
+\ HERE; the bytes above it keep whatever the forgotten definitions wrote, and a
+\ fresh session had always found that space clean (`here 16 dump` in the suite
+\ asserts exactly that). Restoring the invariant costs one line and is cheaper
+\ than auditing everything that ALLOTs without initialising.
+(user-dirs)
+here (-ud-)  here tuck -  erase         \ ( H1 ) ... ( H0 H1-H0 ) -- the heap stays
+\ Not idempotent: `include core.fs` in a running session runs the above a second
+\ time and appends the same directories again. Left alone deliberately -- the
+\ duplicate segment is only searched twice, nothing else loads core.fs (main.s
+\ does it once; reload replays the MODULE file, not this one), and the guard
+\ would need a substring scan written out longhand, since there is no SEARCH.
+
+
 : (store-name) ( c-addr u -- )           \ copy <name> verbatim into (cur-file)
     (cf-max) min  dup (cur-file-len) !  (cur-file) swap cmove ;
 \ Remember <name> as the current file, resolved to an ABSOLUTE path so a later
@@ -1505,10 +1663,11 @@ variable (tn-w)  variable (tn-n)  variable (tn-d)
         1+ (tn-ptr-at) !                   \ ptr[j+1] = key
     loop ;
 : (collect-in) ( dir-addr dir-u -- )       \ fill (tn-*) with one dir's .md names
-    2dup r/o open-file if drop 2drop exit then   ( dir-addr dir-u fileid )
-    >r                                            ( dir-addr dir-u )   \ R: fileid
-    (basename) (sec-u) ! (sec-a) !
-    0 (tn-n) !  0 (tn-w) !
+    0 (tn-n) !  0 (tn-w) !                       \ reset BEFORE the open can fail:
+    2dup (basename) (sec-u) ! (sec-a) !          \ a dir that will not open must not
+    2dup r/o open-file if drop 2drop exit then   \ leave the PREVIOUS dir collected,
+    >r  2drop                                    \ or help reprints that whole section
+                                                 \   R: fileid
     begin
         r@ (gd@) (gd-size) (getdents)     ( n )
         dup 0> while                       ( n )
@@ -3748,7 +3907,10 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 \ --- resolving a name to a file, the way INCLUDE does it ---
 \ Current directory first, then each non-empty BASICFORTH_PATH element. That
 \ ordering is not a detail: dark-star.fs sits beside its own art.fs, and `deps`
-\ has to answer for the same file the game would load.
+\ has to answer for the same file the game would load. It reads (forth-path),
+\ NOT getenv of that name: an installed binary derives its path, so the
+\ environment is empty while the path is set, and asking the environment made
+\ `deps sound.fs` answer "cannot find" for a file `require sound.fs` loads.
 : (dp-path$) ( -- c-addr u )  (dp-path) (dp-pu) @ ;
 : (dp-p0)    ( -- )  0 (dp-pu) ! ;
 : (dp-p+)    ( c-addr u -- )
@@ -3761,7 +3923,7 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 
 : (dp-search) ( c-addr u -- flag )          \ resolve into (dp-path)
     2dup (dp-p0) (dp-p+)  (dp-path$) (dp-try) if  2drop true exit  then
-    s" BASICFORTH_PATH" getenv              ( n-a n-u p-a p-u )
+    (forth-path)                            ( n-a n-u p-a p-u )
     dup 0= if  2drop 2drop false exit  then
     (nb-path-u) !  (nb-path-a) !  true (nb-more) !
     begin (nb-next) while                   ( n-a n-u seg-a seg-u )

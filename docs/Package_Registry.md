@@ -298,31 +298,43 @@ bites everyone who develops a package they have also installed.
 
         ~/.basicforth/                  $BASICFORTH_HOME overrides this root
           lib/                          entry .fs files   -> BASICFORTH_PATH
-          docs/Language-Reference/      reference pages   -> BASICFORTH_DOCS
+          docs/Packages/                reference pages   -> BASICFORTH_DOCS
           docs/Tutorial/                lessons           -> BASICFORTH_DOCS
-          docs/Guides/                  task pages        -> BASICFORTH_DOCS
           packages/<name>/              the package's cloned repo
           sources                       the source list
           installed                     the install manifest
           index                         cached package index
+
+**Shipped 2026-08-19**, the three directories above the line. The rest is still
+design.
 
 Startup appends each of those four directories to the matching variable, if it
 exists. `$BASICFORTH_HOME` names the root; failing that `$HOME/.basicforth`;
 failing that the whole mechanism sits out, which is what makes a run under
 `env -i` — and every test suite — unaffected.
 
-**The docs directories mirror our three section names**, and that is not
+**The docs directories are named for the role they play**, and that is not
 cosmetic. The help system decides a directory's *role* from its **basename**:
 
         : (tuts-in) ( dir-addr dir-u -- )    \ tutorials: only the Tutorial sections
             2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
 
 A directory called `Tutorial` holds lessons and is skipped by `help`'s topic
-listing; anything else is a reference section displayed under its basename.
-So a package ships its lesson into `docs/Tutorial/` and its page into
-`docs/Language-Reference/`, and `help`, `tutorials` and `tutorial <Name>` all
-work with no new machinery. A single flat `docs/` would have shown up in `help`
-as a section named "docs" and could never have carried a lesson at all.
+listing; anything else is a reference section displayed under its basename. So a
+package ships its lesson into `docs/Tutorial/` and its page into
+`docs/Packages/`, and `help`, `tutorials` and `tutorial <Name>` all work with no
+new machinery. A single flat `docs/` would have shown up in `help` as a section
+named "docs" and could never have carried a lesson at all.
+
+**The reference directory is `Packages`, not a mirror of `Language-Reference`.**
+Mirroring was built first and the output settled it: `help` iterates
+*directories*, not section names, so a second directory called
+`Language-Reference` printed that heading twice and read as a bug. A section of
+its own also attributes what it lists, which matters because a topic collision
+**appends** rather than shadows — `help sound` can print a bundled page and an
+installed one, and you want to see which is which. Package pages therefore take
+the Language-Reference shape, `## word ( stack )`, rather than the single-word
+Guides shape.
 
 **Append, never prepend.** The resulting search order is:
 
@@ -713,7 +725,7 @@ suite starts depending on it.
 
 ## Shared Global Namespaces
 
-Packages write into three namespaces that everyone shares, and none has a
+Packages write into four namespaces that everyone shares, and none has a
 mechanism to keep them apart.
 
 **The dictionary is flat and case-insensitive.** Forth's hyper-static global
@@ -742,6 +754,50 @@ stop the token scan turns *every word of the heading* into a help topic — whic
 is why Guides headings must be a single word, enforced by the suite. A package
 author has no such suite, so `## Getting started with sound` would quietly
 create four topics in every user's `help`.
+
+**Installed lessons are the third, and the worst behaved.** Every `Tutorial`
+directory is scanned, and the *filename* is the lesson's name — there is no
+section to attribute it to, because the help system recognises a lessons
+directory by that exact basename. Measured 2026-08-19 with a package lesson
+called `Sound.md` beside the bundled one:
+
+        tutorials
+          Sound — One at a Time, or All at Once        <- bundled
+          Sound — a PACKAGE lesson that collides       <- the installed one
+        tutorial Sound   ->  opens the BUNDLED one
+
+So the installed lesson is **listed and unopenable** — strictly worse than
+either winning or being hidden, because the listing advertises something the
+user cannot reach. And two *packages* shipping the same filename is worse
+still: the second `install` overwrites the first's file on disk.
+
+**The flat layout is forced, so a naming rule has to carry it.** The obvious
+escape — a directory per package under `docs/Packages/` — does not work:
+`(collect-in)` reads one directory with `getdents` and filters for `.md`, with
+no recursion, so a page one level down is invisible. Measured: neither listed by
+`help` nor found by `help <word>`. Appending each package's own directory to
+`BASICFORTH_DOCS` instead is the unbounded-path-growth answer already rejected
+under Local Layout.
+
+So:
+
+- **Every file a package installs is named for the package**, not for its
+  topic — `dark-star.fs`, `dark-star.md`, `dark-star-levels.md`, and the lesson
+  `dark-star.md` in `Tutorial/`. Naming just the *entry* file that way is not
+  enough: the whole point of a package being its own repo is that it may carry
+  several pages, and they share one flat directory with every other package's.
+  The prefix is what makes that survivable.
+- **Two different failures need two different responses**, and it is worth not
+  blurring them:
+  - **Another package's file of the same name** is a genuine overwrite, in a
+    directory `install` owns. It must **refuse**, and say which package holds
+    the name. This is the only collision in the system that destroys something.
+  - **A bundled name** is not in that directory at all — it is on
+    `BASICFORTH_PATH` or `BASICFORTH_DOCS`. Nothing is overwritten; the
+    installed file simply loses every lookup while still appearing in listings.
+    `install` can only see this by resolving the search path, and the right
+    response is a **warning**, since the package installs and works — only that
+    one page or lesson is unreachable.
 
 The answer for now is not a namespace mechanism; it is **visibility**:
 
@@ -780,15 +836,14 @@ an expensive one to get wrong — see open question 6.
    layout) becomes a compatibility surface the moment two people use it.
    It is one of the things a future v1.0.0 would lock; design accordingly,
    ship deliberately.
-7. **Does a duplicated section name print its heading twice?** The docs
-   directories deliberately mirror our three section names, and `help` iterates
-   *directories*, not section names — so bare `help` may print
-   `Language-Reference` once for ours and again for the user's. Merging by name
-   keeps one coherent help system and makes the append rule mean "ours wins"
-   everywhere; a distinct section name (`Packages`) would give clean
-   attribution instead. Decide by looking at the output once the directories
-   exist. Note this is *not* the same as the confirmed bug where a
-   **nonexistent** directory makes `help` reprint the previous section.
+7. **Does a duplicated section name print its heading twice?**
+   ~~Decide by looking at the output once the directories exist.~~
+   **RESOLVED 2026-08-19: yes, it does**, so the user's reference pages went
+   into a section of their own, `Packages`. See Local Layout. The separate,
+   confirmed bug where a **nonexistent** directory made `help` reprint the
+   *previous* section is fixed: `(collect-in)` returned before resetting its
+   collection, so the previous directory's topics and heading were printed
+   again.
 8. **Copy or symlink? — include-relative resolution decides this.** A package
    is a whole repo cloned into `packages/<name>/`, but the search path must stay
    a fixed set of entries rather than growing per package, so its entry `.fs`

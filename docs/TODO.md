@@ -191,24 +191,51 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       opposite reason, so it would read as confirmation while proving nothing.
       Detail: §Future / Hardening.
 
-- [ ] **`[ENGINE]` User package dirs — `~/.basicforth/lib` and `docs/`.**
-      Appended at startup to `BASICFORTH_PATH` and `BASICFORTH_DOCS`. The next
-      registry stage, and the piece that gives v0.16.0's `deps` somewhere to
-      point: there is nowhere to install *to*, so a third-party package cannot
-      answer `help`. Specified already — `Package_Registry.md` §Local Layout.
-      Three things to settle first:
-      - **Suite environment-independence.** `test_integration.sh` reads the
-        real `$HOME`, so auto-appending `$HOME/.basicforth/lib` makes every run
-        depend on what the developer has installed. Sandbox `HOME` in the
-        suites, or give startup an opt-out the suites set. Same class as the
-        skip-wording item above — decide before writing, not after.
-      - **Both `main.s` files change** (x86 73–111, arm64 91–139), so this one
-        does warrant a suite run before merge, and it is hand-mirrored asm.
-      - **Append or prepend?** `require` is CWD-first today; on the end, a repo
-        file shadows an installed package of the same name, on the front the
-        reverse. Choose deliberately.
-      Done when: a file dropped in `~/.basicforth/lib` is `require`-able and its
-      `.md` answers `help`, from any directory, with the suites unaffected.
+- [x] **`[ENGINE]` User package dirs — DONE 2026-08-19.** `~/.basicforth/lib`
+      joins the file search path and `docs/{Packages,Tutorial}` join the help
+      path, appended so nothing installed can shadow a bundled library, topic or
+      lesson. `$BASICFORTH_HOME` relocates the root and, pointed at a path that
+      does not exist, disables the mechanism — which is how the suites stay
+      independent of what the developer has installed.
+      Three decisions the entry asked for, all settled by measurement rather
+      than argument: the policy lives in `core.fs` behind three tiny primitives
+      (`(forth-path)`, `(forth-path!)`, `(docs-path!)`) so **neither `main.s`
+      changed**; the reference directory is `Packages` and not a mirror of
+      `Language-Reference`, because `help` iterates directories and a mirror
+      printed the heading twice; and append beat prepend for the reason
+      `dice.fs` redefining `seed` records.
+      Two defects fixed on the way, both verified failing first: `deps` asked
+      the *environment* for `BASICFORTH_PATH` instead of the interpreter, so on
+      an installed binary it could not find a file `require` loads; and a docs
+      directory that would not open left the previous one collected, so `help`
+      reprinted that whole section.
+      **The one that was nearly missed:** 2816 bytes of `allot` broke
+      `include core.fs`. That test reloads this file into the same dictionary,
+      and it finishes with about **3200 bytes spare out of 256 KB** — a 1.2%
+      margin nobody knew was that thin. Three rounds to get clear of it: heap
+      instead of `allot`; a `marker` around the startup machinery so it is
+      forgotten once it has run (which also meant erasing the reclaimed span,
+      since a fresh session had always found it clean and the suite asserts
+      that); and finally **moving the block to the middle of the file**, because
+      a marker fixes the FINAL cost and not the PEAK — at the end of a second
+      load the peak was 3374 bytes against 3270 available. The feature now costs
+      that margin nothing.
+      See below for the margin itself, which is still there.
+
+- [ ] **The dictionary headroom for a second `core.fs` load is ~3 KB.**
+      `include core.fs` re-runs the file into the same 256 KB dictionary and
+      finishes with about 3200 bytes to spare, so **core.fs cannot grow by more
+      than ~1.5 KB of permanent definitions** before that test fails — and it
+      fails as `dictionary full`, which names neither the cause nor the file.
+      Found 2026-08-19 by walking into it. Not urgent, but it is a tripwire on
+      a path nobody thinks about, and the next person to hit it will spend the
+      afternoon I nearly did.
+      The mitigation found on the package-dirs branch generalises: anything
+      that defines words, uses them and forgets them should sit EARLY in the
+      file, where a second load has not yet filled the dictionary — a `marker`
+      alone does not help, because it bounds the final cost and not the peak.
+      Done when: either the margin is documented where someone adding to
+      core.fs would see it, or the failure names what ran out and why.
 
 - [ ] **`[ENGINE]` `deps <word>` falls back to the defining file.** `deps`
       resolves a *file* against CWD and `BASICFORTH_PATH`; a word name falls
@@ -1930,25 +1957,27 @@ docs/Graphics.md for the API.
   ~150-line client, real people on day one); REPL experience escalates
   pull (`msgs`) → prompt-peek (deferred hook before ` ok`) → live
   (needs threading). Destination: a BBS written in BasicForth itself,
-  merged with the package registry — boards + packages + door games.
+  merged with the package sources — boards + packages + door games.
   Network games ride the same sockets (lockstep: send inputs, not state;
   ladder = high-score server → turn-based → LAN tron → BBS lobbies).
-  Sequencing: sockets.fs → chat v1 (no threads) → registry stages →
+  Sequencing: sockets.fs → chat v1 (no threads) → package stages →
   threading → BBS.
 
-- [ ] **Package registry — sharing user-generated libraries and programs.**
-  Design captured in **docs/Package_Registry.md** (2026-07-22, nothing
-  implemented). One-file packages with a comment header + leading "dep
-  block" (`require` / new `needs-cmd` / new `needs-lib`); saved modules are
-  the distribution format (`save` → `publish` → `install`); a registry is
-  any git repo in a standard layout, main registry curated via PRs, flat
-  one-level federation (`add-registry` = explicit trust, `install
-  brandon/snake` disambiguates); git is the only network layer, so the sole
-  new primitive is run-an-external-command — the same one `dis` needs for
-  objdump. Both prerequisites have since landed: shellutil.fs (2026-07-22,
-  disasm branch) is the exec/capture plumbing, and the
-  `save`-drops-`create`-data bug is FIXED (create-data-capture branch) —
-  saved modules round-trip data now, so `publish` is unblocked.
+- [ ] **Packages — sharing user-generated libraries and programs.**
+  Design in **docs/Package_Registry.md**, rewritten 2026-08-19 and marked as
+  a sketch to be corrected by building it. A package has a comment header +
+  leading "dep block" (`require` / `needs-cmd` / `needs-lib`); a saved
+  module is its entry file (`save` → `publish` → `install`); a **source**
+  is a git repo holding a manifest, and each manifest entry points at the
+  package's **own** git repo at a pinned full commit SHA. No phone book —
+  people advertise their own sources — but one default source ships
+  preconfigured. Git is the only network layer, over shellutil.fs.
+  **Dark Star is the intended first package**, and the doc says to update
+  itself from what that teaches. Prerequisites landed: shellutil.fs is the
+  exec/capture plumbing, `save` round-trips `create` data, and the user
+  package directories shipped 2026-08-19. Still outstanding:
+  include-relative resolution, without which a multi-file package cannot
+  find its own siblings once installed.
   Implementation stages (each independently useful, in order):
   - [x] exec primitive — landed as shellutil.fs ((cmd-run)/(cmd-open)/
     (cmd-line1) over `open-pipe`, quoted interpolation via (cmd+q))
@@ -1980,16 +2009,21 @@ docs/Graphics.md for the API.
     considered and deferred: it can only answer for words you already
     have, and the main question ("what will this need *before* I load
     it?") can only go through the file.
-  - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
-    BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
-    third-party packages)
-  - [ ] main registry repo — layout, INDEX generation, CI convention checks
-  - [ ] REPL registry words — `packages` / `install` / `remove` / `run` /
-    `update` (git clone/pull via the exec primitive)
-  - [ ] federation — `add-registry` / `registries` / `name/pkg`
-    disambiguation / REGISTRIES phone book
-  - [ ] `publish` — saved module → your registry clone → commit/push
-    (was blocked on the `save`-drops-`create`-data bug; fixed 2026-07-22)
+  - [x] user package dirs — DONE 2026-08-19. `~/.basicforth/lib` +
+    `docs/{Packages,Tutorial}` appended at startup, so a third-party
+    package is require-able and answers `help` from any directory.
+    `$BASICFORTH_HOME` relocates the root and disables the mechanism when
+    it names nothing, which is what keeps the suites independent.
+  - [ ] `[ENGINE]` include-relative resolution + a word for the loading
+    file's directory — a prerequisite for `install`, see the queue above
+  - [ ] the default source — manifest format, pinned full commit SHAs,
+    client-side index generation
+  - [ ] REPL package words — `packages` / `install` / `remove` / `run` /
+    `update` (git clone/pull via shellutil.fs)
+  - [ ] federation — `add-source` / `sources` / `name/pkg` disambiguation.
+    No phone book: sources are advertised by their own authors
+  - [ ] `publish` — saved module → your own source clone → commit, then
+    STOP and print the `git push` for the human to run
 
 - [x] **`:` should say when it redefines an existing word.** Done 2026-07-22
   (branch redefined-warning), gforth's exact text: `redefined foo`. One
