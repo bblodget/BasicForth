@@ -105,6 +105,26 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       every internal caller, so this is a conformance gap, not a live bug.
       Detail: §Future / Hardening.
 
+- [ ] **`[ENGINE]` Include-relative resolution, and a word for the loading
+      file's directory.** `include` searches CWD then `BASICFORTH_PATH` and
+      nothing else, so a multi-file package cannot find its own siblings once
+      it is installed somewhere other than the directory you are standing in —
+      and an asset (`r/o bin open-file` in wavcore.fs) is not searched for at
+      all. Dark Star only works today because you `cd` into it first. This is a
+      **prerequisite for `install`**, discovered while rewriting the package
+      design; it is not needed by the user package dirs, which stand alone.
+      Order matters: the including file's directory goes **first**, ahead of
+      CWD, or a stray `art.fs` in the working directory hijacks the package's
+      own. The two orders agree wherever things work today, so this costs no
+      compatibility — and `core.fs` already records a `font.fs` in the launch
+      directory shadowing the library of that name and recursing to the guard
+      page.
+      Done when: a package in `~/.basicforth/packages/<n>/`, whose entry file is
+      linked into `lib/`, loads its own sibling `.fs` and opens its own asset
+      from an unrelated working directory — including one holding a decoy file
+      of the same name.
+      Detail: `docs/Package_Registry.md` §Multi-file packages.
+
 - [ ] **A `Files` lesson.**
       Done when: `tutorial Files` replays green under `make run-lessons` on both
       arches and no step pages.
