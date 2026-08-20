@@ -2823,7 +2823,19 @@ assert_result "parse-name"           'parse-name hello type'              "hello
 
 # PARSE
 assert_result "parse delim"          '41 parse hello) type'               "hello"
-assert_result "parse space"          '32 parse hello type'                "hello"
+# The contrast with parse-name directly above: parse-name SKIPS leading spaces,
+# PARSE does not. So a space-delimited PARSE stops on the space that separates
+# the calling word from what follows, and takes nothing -- the `42` here is text
+# that IS available and still is not parsed, which is what rules out "length 0
+# because the line had ended". It then executes normally, so the line stays
+# clean and the 0 is the only thing under test.
+#
+# This asserted "hello" until 2026-08-18 and was matching the `? hello` error
+# that proves the opposite -- the leftover word being undefined. It had never
+# tested anything. Found by flagging matches that occur ONLY inside an error
+# line, which is the same trap the `hex input` test fell into.
+assert_result "parse space takes nothing (PARSE keeps leading delimiters)" \
+                                     ': t 32 parse nip . ; t 42 drop'    "0  ok"
 assert_result "parse no delim"       '41 parse hello
 type'                 "hello"
 
