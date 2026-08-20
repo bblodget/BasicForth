@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+### Added: your own package directory
+
+- Files in `~/.basicforth/` are now found from **any** working directory, with
+  nothing to set up:
+
+      ~/.basicforth/lib/              a .fs file here is `require`-able anywhere
+      ~/.basicforth/docs/Packages/    a .md page here answers `help`
+      ~/.basicforth/docs/Tutorial/    a lesson here is listed by `tutorials`
+
+  This is where installed packages will live. Nothing creates the directory for
+  you — `make install` deliberately does not, since it may run as root and this
+  one is yours. `help packages` has the details.
+
+- **Searched last, always.** The current directory first, then
+  `BASICFORTH_PATH`, then your package directory. An installed file can never
+  shadow a bundled library, help topic or lesson, and a copy in the directory
+  you are working in still beats both. One rule for code and for docs.
+
+- **Your pages get their own `help` section**, listed as `Packages`, so you can
+  see which topics came from something you installed. Mirroring our own section
+  names was tried first and printed `Language-Reference` twice — `help` iterates
+  directories, not names.
+
+- `BASICFORTH_PACKAGES` relocates the whole thing. Pointed at a directory that does
+  not exist, the mechanism sits out entirely — which is how the test suites keep
+  a developer's own installed packages out of a test run.
+
+  It was called `BASICFORTH_HOME` for a day and a half, which collided with
+  `setup.sh`'s variable of that name — the checkout root — so in any shell that
+  had sourced `setup.sh` the feature silently looked in the wrong place and
+  found nothing. Every suite sets these variables itself, so twelve green suite
+  runs never saw it; five minutes of interactive use did.
+
+### Added: `help environment`
+
+- One page listing every environment variable BasicForth reads, what each one
+  does, and what happens when it is unset — including the two that are read by
+  SDL rather than by us, and the one `setup.sh` exports that BasicForth never
+  reads at all.
+
+### Fixed: `deps` could not see the interpreter's own search path
+
+- It asked the environment for `BASICFORTH_PATH` instead of asking the
+  interpreter. On an installed binary, which *derives* its path rather than
+  reading one, that meant `require sound.fs` loaded the file while
+  `deps sound.fs` answered `cannot find` for the same name.
+
+### Fixed: a missing docs directory made `help` repeat a section
+
+- A directory on `BASICFORTH_DOCS` that could not be opened left the *previous*
+  directory's topics collected, so `help` printed that whole section a second
+  time. It looked like a duplicate listing rather than a missing one.
+
 ### Added: `make install`
 
 - There was no install target at all: BasicForth ran from its checkout, with

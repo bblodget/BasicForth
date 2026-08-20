@@ -41,6 +41,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${BF_TEST_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 
+# Startup appends $BASICFORTH_PACKAGES/lib (default ~/.basicforth/lib) to the search
+# path, so without this a developer's own installed packages would join every
+# test run and the suite would pass or fail by what happens to be installed.
+# Pointing at a path that does not exist is deliberate: the root is "set", so
+# the HOME default never applies, and every probe below it simply finds nothing.
+# The section that tests the feature sets its own root over the top of this.
+export BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages"
+
 # --- section filter -------------------------------------------------------
 # Gating the assert helpers is not enough: most assertions here are inline
 # printf/((passed++)) blocks that never call one, so a helper-level filter
@@ -8496,6 +8504,162 @@ else
     printf "  ${RED}FAIL${NC}  make uninstall left something behind\n"; ((failed++))
 fi
 rm -rf "$inst_pfx" "$inst_moved"
+
+# =========================================================================
+section "PACKAGES (user package directories under ~/.basicforth)"
+# =========================================================================
+# Startup appends $BASICFORTH_PACKAGES/lib to the file search path and
+# .../docs/{Packages,Tutorial} to the help path, so a package installed there is
+# REQUIRE-able and answers `help` from any directory. What makes this worth
+# testing is the "from any directory" half: the failure it guards against is a
+# package that works only from the directory you installed it in.
+#
+# Every check runs from an unrelated working directory for that reason, and the
+# fixture root is handed in explicitly rather than inherited -- the suite's own
+# BASICFORTH_PACKAGES (set at the top of this file) points at nothing, so a
+# developer's real ~/.basicforth cannot reach these results.
+# These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
+# relative in a normal run, and carries a qemu prefix in a cross one.
+pkg_bin="${FORTH##* }"                        # last word is the binary
+pkg_pre="${FORTH% *}"                         # anything before it (qemu -L ...)
+[ "$pkg_pre" = "$FORTH" ] && pkg_pre=""       # single word: no prefix
+pkg_bin="$(cd "$(dirname "$pkg_bin")" && pwd)/$(basename "$pkg_bin")"
+pkg_forth="$pkg_pre $pkg_bin"
+
+pkg_home="$(mktemp -d)"
+pkg_cwd="$(mktemp -d)"
+mkdir -p "$pkg_home/lib" "$pkg_home/docs/Packages" "$pkg_home/docs/Tutorial"
+cat > "$pkg_home/lib/pkgfix.fs" <<'PKGEOF'
+\ pkgfix -- integration fixture
+: pkg-hello ." installed package speaking" cr ;
+PKGEOF
+cat > "$pkg_home/docs/Packages/Pkgfix.md" <<'PKGEOF'
+# Pkgfix
+
+## pkg-hello ( -- )
+Fixture page shipped beside an installed package.
+PKGEOF
+cat > "$pkg_home/docs/Tutorial/Pkglesson.md" <<'PKGEOF'
+# Pkglesson — a fixture lesson
+
+## Step 1
+Type `pkg-hello`.
+PKGEOF
+# Deliberately collides with a bundled lesson, to pin which one wins.
+cat > "$pkg_home/docs/Tutorial/Arrays.md" <<'PKGEOF'
+# Arrays — an installed lesson that collides with the bundled one
+
+## Step 1
+If you are reading this, an installed lesson displaced a bundled one.
+PKGEOF
+
+# assert_result cannot take a different HOME or a different working directory,
+# and hand-rolling the comparison per assertion is exactly how the ECHOED INPUT
+# gets matched instead of the output. So: one helper, stripping the prompt lines
+# the same way assert_result does.
+pkg_assert() {                      # name  cwd  input  expected
+    local name="$1" cwd="$2" input="$3" expected="$4"
+    local out
+    out=$( cd "$cwd" && printf '%s\n' "$input" \
+           | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+             BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:$REPO_ROOT/docs/Tutorial:$REPO_ROOT/docs/Guides" \
+             timeout 10 $pkg_forth 2>&1 | sed '/^> /d; /^>$/d' )
+    if [[ "$out" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got: %q\n" \
+               "$name" "$expected" "$out"; ((failed++))
+    fi
+}
+
+pkg_assert "a package in lib/ is require-able from anywhere" "$pkg_cwd" \
+    'require pkgfix.fs
+pkg-hello' "installed package speaking"
+
+# `help <word>` is the expensive lookup -- it reads INSIDE every page in every
+# docs directory, where the listing below only reads their names. Measured at
+# 21s under qemu against 0.2s native, so it is skipped when emulated rather than
+# given a timeout long enough to hide a real hang. The Pi run covers it on real
+# ARM64, which is where ARM64 coverage was ever going to come from.
+case "$FORTH" in
+    *qemu*)
+        printf "  ${YELLOW}SKIP${NC}  a package's help page answers help <word> (21s emulated; run on real ARM64: ssh pi400, make run-integration)\n"
+        ;;
+    *)
+        pkg_assert "its help page answers help <word>" "$pkg_cwd" \
+            'help pkg-hello' "Fixture page shipped beside an installed package."
+        ;;
+esac
+
+pkg_assert "its page is attributed to the Packages section" "$pkg_cwd" \
+    'help' "Packages"
+
+pkg_assert "its lesson joins the tutorials listing" "$pkg_cwd" \
+    'tutorials' "Pkglesson"
+
+pkg_assert "its lesson replays" "$pkg_cwd" \
+    'tutorial Pkglesson
+next' "Type \`pkg-hello\`"
+
+# The append rule covers docs as well as code: an installed lesson must not
+# displace a bundled one of the same name. (It is still LISTED by `tutorials`,
+# which is why a package's lesson should be named after the package -- see
+# Package_Registry.md. What must never happen is the installed one opening.)
+pkg_assert "an installed lesson does not displace a bundled one" "$pkg_cwd" \
+    'tutorial Arrays' "Your First Data Structure"
+
+# deps must read the interpreter's search path, not getenv BASICFORTH_PATH.
+# pkgfix.fs is reachable ONLY through the appended lib dir -- the environment
+# variable names $FORTH_LIB and nothing else -- so this fails if deps goes back
+# to asking the environment. That was a real regression: on an installed binary,
+# where the path is derived rather than set, `deps sound.fs` answered "cannot
+# find" for a file `require sound.fs` loads.
+pkg_assert "deps resolves against the real search path, not the environment" \
+    "$pkg_cwd" 'deps pkgfix.fs' "pkgfix.fs: no requirements declared."
+
+# A docs directory that does not exist must not make help reprint the PREVIOUS
+# section. (collect-in) used to return before resetting its collection, so the
+# previous directory's topics and heading were printed a second time. Count the
+# headings rather than matching one: the wrong output CONTAINS the right one.
+pkg_dup=$( cd "$pkg_cwd" && printf 'help\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:/nonexistent/zz:$REPO_ROOT/docs/Guides" \
+      timeout 10 $pkg_forth 2>&1 | grep -c '^Language-Reference$' )
+if [ "$pkg_dup" = "1" ]; then
+    printf "  ${GREEN}PASS${NC}  a missing docs dir does not duplicate a section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  missing docs dir duplicated a section (%s headings)\n" "$pkg_dup"; ((failed++))
+fi
+
+# An over-long root is refused rather than truncated: the include search SKIPS a
+# segment whose "<seg>/<name>" exceeds 511 bytes, so a truncated path would fail
+# later with nothing left to explain it.
+pkg_long="$pkg_home/$(printf 'd%.0s' $(seq 1 60))/$(printf 'e%.0s' $(seq 1 60))/$(printf 'f%.0s' $(seq 1 60))"
+mkdir -p "$pkg_long/lib"
+cp "$pkg_home/lib/pkgfix.fs" "$pkg_long/lib/"
+pkg_long_out=$( cd "$pkg_cwd" && printf 'bye\n' \
+    | BASICFORTH_PACKAGES="$pkg_long" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_long_out" == *"package directory path too long"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an over-long package root is refused, and says so\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  over-long package root was not refused\n    Got: %q\n" \
+           "$pkg_long_out"; ((failed++))
+fi
+
+# With no root at all the mechanism sits out entirely -- which is what keeps
+# `env -i`, and every suite above, unaffected by it.
+pkg_bare=$( cd "$pkg_cwd" && printf '(forth-path) type cr\nbye\n' \
+    | env -i BASICFORTH_PATH="$FORTH_LIB" timeout 10 $pkg_forth 2>&1 \
+    | sed '/^> /d; /^>$/d' | sed -n 1p )
+if [[ "$pkg_bare" == "$FORTH_LIB" ]]; then
+    printf "  ${GREEN}PASS${NC}  with neither HOME nor BASICFORTH_PACKAGES, nothing is appended\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  the search path changed with no package root set\n    Want: %q\n    Got: %q\n" \
+           "$FORTH_LIB" "$pkg_bare"; ((failed++))
+fi
+
+rm -rf "$pkg_home" "$pkg_cwd"
 
 # =========================================================================
 section "BYE"

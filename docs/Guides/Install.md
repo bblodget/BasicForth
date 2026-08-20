@@ -226,6 +226,47 @@ is what lets you develop against one and have the other installed.
 Nothing about installing changes the optional libraries: SDL3, flite and a
 speech engine are found the same way — see `help libraries`.
 
+## packages
+
+Files you drop in your own package directory are found from **any** working
+directory, without editing an environment variable:
+
+    ~/.basicforth/
+      lib/                a .fs file here is `require`-able anywhere
+      docs/Packages/      a .md page here answers `help`
+      docs/Tutorial/      a lesson here is listed by `tutorials`
+
+Nothing creates this for you — `make install` deliberately does not, since it
+may run as root and this directory is yours. Make it when you want it:
+
+    mkdir -p ~/.basicforth/lib ~/.basicforth/docs/Packages ~/.basicforth/docs/Tutorial
+
+Then a file `~/.basicforth/lib/greet.fs` loads with `require greet.fs` from
+wherever you happen to be, and a `greet.md` beside it in `docs/Packages/`
+answers `help greet`.
+
+Three things worth knowing:
+
+- **These are searched last.** The current directory comes first, then
+  `BASICFORTH_PATH`, then your package directory. So a file you install can
+  never shadow one that ships with BasicForth, and a copy in the directory
+  you are working in still wins over both.
+- **Your pages get their own `help` section**, listed as `Packages`, so you can
+  see at a glance which topics came from something you installed.
+- **`BASICFORTH_PACKAGES` moves the whole thing** if `~/.basicforth` is not where
+  you want it. It names the directory itself, not its parent, so
+  `BASICFORTH_PACKAGES=/opt/bf` means `/opt/bf/lib`. Set it to a directory that does
+  not exist and the mechanism sits out entirely, which is what the test suites
+  do. Every variable BasicForth reads is listed in `help environment`.
+
+**Name your files for the package, not the topic.** These directories are flat
+and shared — every package's pages sit in one `docs/Packages/`, every package's
+lessons in one `docs/Tutorial/`, and subdirectories are not searched. So a
+`Sound.md` of yours sits beside the bundled `Sound` lesson: `tutorials` lists
+both, and `tutorial Sound` opens the bundled one, leaving yours advertised and
+unreachable. Prefix instead — `dark-star.md`, `dark-star-levels.md` — and
+nothing collides.
+
 ## path
 
     . ./setup.sh
@@ -463,6 +504,12 @@ output. That is how 3.2.10 was cleared.
     docs/Guides/        task pages (this one) that `help` reads
     docs/Tutorial/      the lessons `tutorial` reads
     docs/Language-Reference/   the pages `help` reads
+
+Your own package directory sits outside the checkout — see `help packages`:
+
+    ~/.basicforth/lib/          .fs files, searched after BASICFORTH_PATH
+    ~/.basicforth/docs/Packages/    .md pages, listed under "Packages"
+    ~/.basicforth/docs/Tutorial/    lessons, listed by `tutorials`
 
 ## next-steps
 

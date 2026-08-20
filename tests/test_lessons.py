@@ -200,6 +200,9 @@ def run(lines, env_extra, cwd):
     env = dict(os.environ)
     env.update({"BASICFORTH_PATH": LIB, "BASICFORTH_SESSION": "1",
                 "BASICFORTH_DOCS": os.path.join(REPO, "docs"),
+                # keep a developer's own ~/.basicforth/lib out of the run
+                "BASICFORTH_PACKAGES": os.path.join(REPO, "tests",
+                                                ".no-user-packages"),
                 # a lesson step that opens $EDITOR must not block the suite
                 "EDITOR": "true", "VISUAL": "true"})
     env.update(env_extra)
