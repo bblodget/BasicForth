@@ -107,13 +107,34 @@ finds the same `objdump` your shell would.
 
 ## setup
 
-`setup.sh` sets the four search and speech variables above from the checkout it
-lives in, plus `PATH` so `basicforth` runs from anywhere.
+`setup.sh` sets these, from the checkout it lives in:
 
-It also exports **`BASICFORTH_HOME`**, which is *not* read by BasicForth at all
-— it is `setup.sh`'s own record of the checkout root, used to build the others.
-Do not confuse it with `BASICFORTH_PACKAGES`; they are unrelated, and one names
-a source checkout while the other names your package directory.
+    BASICFORTH_HOME     its OWN record of the checkout root -- see below
+    PATH                PREPENDS the build directory for this machine, so
+                        `basicforth` runs from anywhere
+    BASICFORTH_PATH     src/forth, then examples
+    BASICFORTH_DOCS     Language-Reference, Tutorial and Guides
+
+And these two, which deliberately do *not* come from the checkout:
+
+    XMODIFIERS          the constant @im=none -- see `display` above
+    VOICE_ENGINE_CMD    only when `command -v piper` finds one, and UNSET
+                        otherwise, so a value inherited from another checkout
+                        cannot outlive the shell that set it. Never a path
+                        inside a checkout: several worktrees source this file,
+                        and one checkout's venv would then serve all of them
+
+If it cannot find `src/forth/core.fs` it sets **nothing** and returns 1.
+Sourcing it from outside a checkout is not a partial setup; it is no setup.
+
+**It does not set `BASICFORTH_PACKAGES`,** deliberately. A checkout is not a
+package directory, so a development shell uses `~/.basicforth` like any other.
+
+**`BASICFORTH_HOME` is not read by BasicForth at all.** It is `setup.sh`'s own
+record of the checkout root, and what it builds is `PATH`, `BASICFORTH_PATH` and
+`BASICFORTH_DOCS` — nothing else. Do not confuse it with `BASICFORTH_PACKAGES`;
+they are unrelated, and one names a source checkout while the other names your
+package directory.
 
 ## precedence
 
