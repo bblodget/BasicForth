@@ -41,13 +41,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${BF_TEST_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
 
-# Startup appends $BASICFORTH_HOME/lib (default ~/.basicforth/lib) to the search
+# Startup appends $BASICFORTH_PACKAGES/lib (default ~/.basicforth/lib) to the search
 # path, so without this a developer's own installed packages would join every
 # test run and the suite would pass or fail by what happens to be installed.
 # Pointing at a path that does not exist is deliberate: the root is "set", so
 # the HOME default never applies, and every probe below it simply finds nothing.
 # The section that tests the feature sets its own root over the top of this.
-export BASICFORTH_HOME="$REPO_ROOT/tests/.no-user-packages"
+export BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages"
 
 # --- section filter -------------------------------------------------------
 # Gating the assert helpers is not enough: most assertions here are inline
@@ -8496,7 +8496,7 @@ rm -rf "$inst_pfx" "$inst_moved"
 # =========================================================================
 section "PACKAGES (user package directories under ~/.basicforth)"
 # =========================================================================
-# Startup appends $BASICFORTH_HOME/lib to the file search path and
+# Startup appends $BASICFORTH_PACKAGES/lib to the file search path and
 # .../docs/{Packages,Tutorial} to the help path, so a package installed there is
 # REQUIRE-able and answers `help` from any directory. What makes this worth
 # testing is the "from any directory" half: the failure it guards against is a
@@ -8504,7 +8504,7 @@ section "PACKAGES (user package directories under ~/.basicforth)"
 #
 # Every check runs from an unrelated working directory for that reason, and the
 # fixture root is handed in explicitly rather than inherited -- the suite's own
-# BASICFORTH_HOME (set at the top of this file) points at nothing, so a
+# BASICFORTH_PACKAGES (set at the top of this file) points at nothing, so a
 # developer's real ~/.basicforth cannot reach these results.
 # These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
 # relative in a normal run, and carries a qemu prefix in a cross one.
@@ -8549,7 +8549,7 @@ pkg_assert() {                      # name  cwd  input  expected
     local name="$1" cwd="$2" input="$3" expected="$4"
     local out
     out=$( cd "$cwd" && printf '%s\n' "$input" \
-           | BASICFORTH_HOME="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+           | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
              BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:$REPO_ROOT/docs/Tutorial:$REPO_ROOT/docs/Guides" \
              timeout 10 $pkg_forth 2>&1 | sed '/^> /d; /^>$/d' )
     if [[ "$out" == *"$expected"* ]]; then
@@ -8610,7 +8610,7 @@ pkg_assert "deps resolves against the real search path, not the environment" \
 # previous directory's topics and heading were printed a second time. Count the
 # headings rather than matching one: the wrong output CONTAINS the right one.
 pkg_dup=$( cd "$pkg_cwd" && printf 'help\n' \
-    | BASICFORTH_HOME="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
       BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:/nonexistent/zz:$REPO_ROOT/docs/Guides" \
       timeout 10 $pkg_forth 2>&1 | grep -c '^Language-Reference$' )
 if [ "$pkg_dup" = "1" ]; then
@@ -8626,7 +8626,7 @@ pkg_long="$pkg_home/$(printf 'd%.0s' $(seq 1 60))/$(printf 'e%.0s' $(seq 1 60))/
 mkdir -p "$pkg_long/lib"
 cp "$pkg_home/lib/pkgfix.fs" "$pkg_long/lib/"
 pkg_long_out=$( cd "$pkg_cwd" && printf 'bye\n' \
-    | BASICFORTH_HOME="$pkg_long" BASICFORTH_PATH="$FORTH_LIB" \
+    | BASICFORTH_PACKAGES="$pkg_long" BASICFORTH_PATH="$FORTH_LIB" \
       timeout 10 $pkg_forth 2>&1 )
 if [[ "$pkg_long_out" == *"package directory path too long"* ]]; then
     printf "  ${GREEN}PASS${NC}  an over-long package root is refused, and says so\n"; ((passed++))
@@ -8641,7 +8641,7 @@ pkg_bare=$( cd "$pkg_cwd" && printf '(forth-path) type cr\nbye\n' \
     | env -i BASICFORTH_PATH="$FORTH_LIB" timeout 10 $pkg_forth 2>&1 \
     | sed '/^> /d; /^>$/d' | sed -n 1p )
 if [[ "$pkg_bare" == "$FORTH_LIB" ]]; then
-    printf "  ${GREEN}PASS${NC}  with neither HOME nor BASICFORTH_HOME, nothing is appended\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  with neither HOME nor BASICFORTH_PACKAGES, nothing is appended\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  the search path changed with no package root set\n    Want: %q\n    Got: %q\n" \
            "$FORTH_LIB" "$pkg_bare"; ((failed++))

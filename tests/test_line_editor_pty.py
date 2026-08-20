@@ -28,7 +28,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["BASICFORTH_PATH"] = os.path.join(REPO_ROOT, "src", "forth")
 # ...and keep a developer's own ~/.basicforth/lib out of the run: a path that
 # does not exist counts as "set", so the HOME default never applies.
-os.environ["BASICFORTH_HOME"] = os.path.join(REPO_ROOT, "tests",
+os.environ["BASICFORTH_PACKAGES"] = os.path.join(REPO_ROOT, "tests",
                                              ".no-user-packages")
 
 UP = b"\x1b[A"; DOWN = b"\x1b[B"; LEFT = b"\x1b[D"; RIGHT = b"\x1b[C"

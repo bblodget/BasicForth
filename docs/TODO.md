@@ -125,6 +125,107 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       of the same name.
       Detail: `docs/Package_Registry.md` §Multi-file packages.
 
+- [ ] **`[ENGINE]` Rename `docs/Tutorial` to `docs/Tutorials`.** The section
+      headings are `Language-Reference`, `Guides`, `Packages` and `Tutorial` —
+      three count nouns plural and one singular. Worse, the *word* that lists
+      them is `tutorials`, so the interface already carries both spellings for
+      one thing. `Language-Reference` stays singular because it is a mass noun.
+
+      **Do it before any package format names the directory.** A package ships
+      `docs/Tutorial/` in its own repo; the moment that is written down,
+      renaming becomes a compatibility break for every published package, and
+      `Package_Registry.md` §6 flags the package format as a v1.0 lock. Cheap
+      now, expensive later. That is the whole argument for the timing.
+
+      Tagged `[ENGINE]` because it is **not** a documentation rename:
+
+          src/forth/core.fs         4x  `s" Tutorial"` basename switches --
+                                        BEHAVIOURAL. A directory is recognised as
+                                        holding lessons by that exact name; miss
+                                        one and lessons silently stop being found
+          src/arch/*/main.s         the tmpl_docs template a derived install path
+                                        is built from -- hand-mirrored asm
+          src/arch/*/Makefile       install file lists
+          Makefile, setup.sh        install target, BASICFORTH_DOCS
+          tests/*                   suite paths (integration, lessons)
+          docs/Tutorial/            the directory itself (git mv)
+          ~10 more                  prose
+
+      **Clean break, no dual spelling.** One name, no exceptions. The cost is
+      that an existing `~/.basicforth/docs/Tutorial` must be renamed by hand,
+      and today that is one machine. Know about the transient first: a shell
+      that sourced the OLD `setup.sh` running the NEW binary has
+      `BASICFORTH_DOCS` pointing at a directory that no longer exists, so
+      lessons vanish until it is re-sourced. Self-correcting, but alarming if it
+      happens mid-session and you have forgotten this note.
+
+      Worth folding into the same branch, since it is the same feature and the
+      same code: **`tutorials` lists the title's first word, not the name you
+      type.** Measured 2026-08-20 — a lesson file `greeting.md` titled
+      `# greet — ...` is listed as `greet`, and `tutorial greet` answers *no
+      tutorial named greet*. The listing's job is to tell you what to type, and
+      deriving that from prose is what let the two drift. Note it changes output
+      for every bundled lesson, so it needs the docs sweep that any output
+      change needs.
+
+      Done when: `tutorials` and `tutorial <name>` work from a checkout, from an
+      installed binary with no environment at all, and from a package directory;
+      all four `(basename)` sites are converted; and both arches are green
+      including the Pi.
+
+- [ ] **`help` should say where the live definition came from.** When two pages
+      document the same word, `help` gathers both — correctly — but prints them
+      in docs-path order, which need not match the dictionary. Measured
+      2026-08-19: after a package redefines `depth`, `depth .` answers the
+      package's while `help depth` prints core's entry **first**. The reader
+      takes the first as the answer and it is the one that no longer runs.
+      Reordering the path cannot fix it: the docs path is static and the
+      dictionary order is dynamic — it depends on what you required this
+      session, and in what order.
+
+      **Do not try to mark which entry is the live one.** That was the first
+      design and it cannot work: `(find-meta)` answers with the defining **`.fs`
+      file**, help entries come from **`.md` pages**, and nothing links the two.
+      No page declares which source file it documents — `Stack.md` opens with
+      `# Stack Manipulation` and never mentions `core.fs` — so there is no
+      mapping to look the answer up in. Adding one would mean a new header field
+      on all thirty-odd existing pages, for a problem this size.
+
+      Report the fact instead of inferring the match. After printing the
+      entries, add one line naming where the live definition actually came
+      from — the same lookup `where` does:
+
+          help depth
+            Stack:          ## depth  ( -- +n )   ...
+            bignum-depth:   ## depth ( -- n )     ...
+            depth is currently defined in bignum.fs
+
+      That needs no mapping, cannot be wrong, and gives the reader exactly the
+      fact they were missing. It handles the cases `see` already distinguishes:
+      a primitive says so, a word typed this session says so.
+      Small, standalone, not packaging-specific, and it makes shadowing
+      *visible* — the property missing when `dice.fs` redefined `seed`.
+      Done when: `help <word>` names the source of the definition currently in
+      force, a primitive and a REPL-defined word each report sensibly, and a
+      suite case covers a word documented on two pages where the live one is
+      NOT the first entry printed.
+
+- [ ] **Warn when a loaded file redefines a word that came from a different
+      file.** The `redefined` warning is deliberately off during file loads —
+      `core.fs` redefines on purpose, module reloads replay whole files, and
+      skipping the scan keeps loads cheap. But that also makes a library
+      silently shadow a core word, which `dice.fs` did to `seed` for months.
+      Narrower rule: warn only when the *previous* definition came from a
+      **different source file**, which leaves all three of those cases quiet.
+      This is the **probe** for the namespaces question: it measures how often
+      collisions actually happen before anyone designs a mechanism for them.
+      Right now that judgement rests on one anecdote.
+      Watch the cost — the gate currently skips a `find` per definition during
+      loads, and this reinstates it.
+      Done when: a library redefining a word from another file says so at load
+      time, `core.fs` and a module reload stay silent, and the load-time cost is
+      measured rather than assumed.
+
 - [ ] **A `Files` lesson.**
       Done when: `tutorial Files` replays green under `make run-lessons` on both
       arches and no step pages.
@@ -194,7 +295,7 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 - [x] **`[ENGINE]` User package dirs — DONE 2026-08-19.** `~/.basicforth/lib`
       joins the file search path and `docs/{Packages,Tutorial}` join the help
       path, appended so nothing installed can shadow a bundled library, topic or
-      lesson. `$BASICFORTH_HOME` relocates the root and, pointed at a path that
+      lesson. `$BASICFORTH_PACKAGES` relocates the root and, pointed at a path that
       does not exist, disables the mechanism — which is how the suites stay
       independent of what the developer has installed.
       Three decisions the entry asked for, all settled by measurement rather
@@ -237,15 +338,39 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Done when: either the margin is documented where someone adding to
       core.fs would see it, or the failure names what ran out and why.
 
-- [ ] **`[ENGINE]` `deps <word>` falls back to the defining file.** `deps`
-      resolves a *file* against CWD and `BASICFORTH_PATH`; a word name falls
-      straight through to `cannot find`. So `deps dis` fails, though `dis` is
-      exactly the name a user has. Fall back to a dictionary lookup and use the
-      header's source id to name the file. Caveat worth checking early: that id
-      comes from a **64-entry table** — `src_register` answers 0 once it is
-      full, so the fallback goes quiet in a long session rather than erroring.
-      Done when: `deps dis` reports on `disasm.fs`, and a word from the 65th
-      file loaded either resolves or says why it cannot.
+- [ ] **`where <word>` — which file did this come from?** Reshaped 2026-08-18;
+      the original entry asked for `deps <word>` to fall back to a dictionary
+      lookup, and that is the wrong place for it. The need is real — *"I have
+      `dis`, where did it come from?"* — but it is a source-metadata question,
+      not a dependency question, and answering it inside `deps` puts a
+      name-resolution rule in the layer that handles filenames.
+      Separate them instead:
+
+          > where dis
+          disasm.fs
+          > deps disasm.fs
+
+      `where` answers with exactly the argument the file words want. It is about
+      ten lines of Forth reusing what `see` already does — `(find-meta)` yields
+      `( off len srcid )` and `(source-path)` maps the srcid to a filename — and
+      it handles the same four cases `see` does: not found, primitive, typed
+      this session, from a file.
+      Named `where`, not `which`: `which` is the shell's word for executables on
+      `$PATH`, and BasicForth has a shell vocabulary already.
+      Caveat that survives the reshaping: srcids come from a **64-entry table**
+      and `src_register` answers 0 once it is full, so a word from the 65th file
+      must say it does not know rather than name the wrong file.
+      Done when: `where dis` answers `disasm.fs`, the four `see` cases each
+      report sensibly, and the 65th-file case says why it cannot answer.
+
+      Related but NOT settled, and deliberately not queued: whether the file
+      words should be strict about extensions. Today `deps sdl3` works and
+      `require sdl3` does not, which is an inconsistency — but the fix removes
+      working behaviour, so it wants a deliberate decision rather than a drive-by.
+      The argument for strictness is one rule with no exceptions (`include`,
+      `require`, `required`, `deps` all take a filename; extensions always;
+      paths allowed), with package *names* living one layer up in
+      `install`/`run`. See `Package_Registry.md` §Naming rules.
 
 - [x] **`make install` — DONE 2026-08-17.** `install` / `uninstall`, `PREFIX`
       and `DESTDIR`, both arches, all eight suite runs green. The binary derives
@@ -262,6 +387,71 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 
 Real features that need a design conversation before they are task-sized —
 parked here so they stay visible without pretending to be queue items.
+
+- **Namespaces.** The flat dictionary is the deepest unsolved problem in the
+  package design, and the case for fixing it is **composition**, not tidiness: a
+  package author can test against core and their declared dependencies, but
+  cannot foresee what *else* is installed on a user's machine. N packages each
+  individually correct, combined into something nobody tested. `dice.fs`
+  redefining `seed` for months is the small version of it.
+
+  **Hyper-static binding is not a substitute**, and it is easy to believe it is.
+  Measured 2026-08-19:
+
+      > : a 1 ;   : b a . ;   : a 2 ;
+      redefined a
+      > b     1        \ b still calls the OLD a
+      > a .   2
+
+  It protects code *already compiled* and does nothing for code compiled after,
+  so a shadow is invisible going forward — and the `redefined` warning is gated
+  off during file loads (`in_load` in `build_header`), so a library's shadow is
+  silent by construction.
+
+  **The mechanism is already specified: Forth 2012's Search-Order word set** —
+  `WORDLIST`, `GET-ORDER`/`SET-ORDER`, `GET-CURRENT`/`SET-CURRENT`,
+  `DEFINITIONS`, `SEARCH-WORDLIST`, with `ONLY`/`ALSO`/`PREVIOUS`/`FORTH` as the
+  ergonomic layer. It is a *list* rather than a tree, but a list of
+  `[package, root]` gives exactly the upward walk with siblings invisible. What
+  is unsettled is the interface, not the machinery. Cost to watch: dictionary
+  search is hand-mirrored assembly and the compiler's hottest path — though
+  hyper-static binding means it is a compile-time cost, not run-time.
+
+  **Two interfaces considered and parked, both 2026-08-19:**
+
+  - **HP 48/28-style directories** — enter a package by name, path shown in the
+    prompt, lookup walks up to the root, siblings invisible. Fits the project's
+    lineage, and it is where the idea came from. Parked because BasicForth
+    already has a real `cd` for the OS filesystem, and the observation that
+    prompted the idea was that `cd`/`ls`/`cat` are *already* disorienting — a
+    second navigation concept, with a second current location and one prompt,
+    makes that worse rather than better.
+  - **Scoped help** (`package <name>` as a scope selector). Much cheaper, but it
+    scopes *documentation* without scoping *words*, so the directory is a lie
+    the first time someone types a scoped word from the root.
+
+  **What is already measured and waiting.** Four namespaces are shared with no
+  mechanism keeping them apart: the dictionary, the help index, the
+  `on-start`/`on-stop` lifecycle hooks (found by plain `find`, so a package
+  defining either takes over the user's), and lesson filenames. And help
+  currently **disagrees with the dictionary** about which definition is live:
+
+      > depth .              0
+      > require bignum.fs
+      > depth .              99      \ the package won -- the dictionary is last-wins
+      > help depth                   \ prints CORE's entry first, then the package's
+
+  The reader takes the first entry as the answer and it is the one that no
+  longer runs. Note what that rules out: making help prefer the bundled entry
+  does not prevent shadowing, it only makes help contradict execution.
+
+  **Why not now.** There are zero third-party packages, so there is no evidence
+  to design against, and `Package_Registry.md` §6 flags the package format as
+  one of the things a v1.0 would lock — a wrong answer here is maintained
+  forever. Revisit when a second package exists and something actually collides.
+  The two cheap partials queued above — naming the source of the live
+  definition in `help`, and warning on a cross-file redefinition — would inform
+  that decision without committing to any of this.
 
 - **Sockets.**
 - **The GPU backend.** The stated ceiling of the project; SDL is the chosen
@@ -2012,7 +2202,7 @@ docs/Graphics.md for the API.
   - [x] user package dirs — DONE 2026-08-19. `~/.basicforth/lib` +
     `docs/{Packages,Tutorial}` appended at startup, so a third-party
     package is require-able and answers `help` from any directory.
-    `$BASICFORTH_HOME` relocates the root and disables the mechanism when
+    `$BASICFORTH_PACKAGES` relocates the root and disables the mechanism when
     it names nothing, which is what keeps the suites independent.
   - [ ] `[ENGINE]` include-relative resolution + a word for the loading
     file's directory — a prerequisite for `install`, see the queue above

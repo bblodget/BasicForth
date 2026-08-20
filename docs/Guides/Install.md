@@ -253,11 +253,11 @@ Three things worth knowing:
   you are working in still wins over both.
 - **Your pages get their own `help` section**, listed as `Packages`, so you can
   see at a glance which topics came from something you installed.
-- **`BASICFORTH_HOME` moves the whole thing** if `~/.basicforth` is not where
+- **`BASICFORTH_PACKAGES` moves the whole thing** if `~/.basicforth` is not where
   you want it. It names the directory itself, not its parent, so
-  `BASICFORTH_HOME=/opt/bf` means `/opt/bf/lib`. Set it to a directory that does
+  `BASICFORTH_PACKAGES=/opt/bf` means `/opt/bf/lib`. Set it to a directory that does
   not exist and the mechanism sits out entirely, which is what the test suites
-  do.
+  do. Every variable BasicForth reads is listed in `help environment`.
 
 **Name your files for the package, not the topic.** These directories are flat
 and shared — every package's pages sit in one `docs/Packages/`, every package's

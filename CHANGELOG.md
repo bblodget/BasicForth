@@ -25,9 +25,22 @@
   names was tried first and printed `Language-Reference` twice — `help` iterates
   directories, not names.
 
-- `BASICFORTH_HOME` relocates the whole thing. Pointed at a directory that does
+- `BASICFORTH_PACKAGES` relocates the whole thing. Pointed at a directory that does
   not exist, the mechanism sits out entirely — which is how the test suites keep
   a developer's own installed packages out of a test run.
+
+  It was called `BASICFORTH_HOME` for a day and a half, which collided with
+  `setup.sh`'s variable of that name — the checkout root — so in any shell that
+  had sourced `setup.sh` the feature silently looked in the wrong place and
+  found nothing. Every suite sets these variables itself, so twelve green suite
+  runs never saw it; five minutes of interactive use did.
+
+### Added: `help environment`
+
+- One page listing every environment variable BasicForth reads, what each one
+  does, and what happens when it is unset — including the two that are read by
+  SDL rather than by us, and the one `setup.sh` exports that BasicForth never
+  reads at all.
 
 ### Fixed: `deps` could not see the interpreter's own search path
 

@@ -296,7 +296,7 @@ bites everyone who develops a package they have also installed.
 
 ## Local Layout
 
-        ~/.basicforth/                  $BASICFORTH_HOME overrides this root
+        ~/.basicforth/                  $BASICFORTH_PACKAGES overrides this root
           lib/                          entry .fs files   -> BASICFORTH_PATH
           docs/Packages/                reference pages   -> BASICFORTH_DOCS
           docs/Tutorial/                lessons           -> BASICFORTH_DOCS
@@ -309,7 +309,7 @@ bites everyone who develops a package they have also installed.
 design.
 
 Startup appends each of those four directories to the matching variable, if it
-exists. `$BASICFORTH_HOME` names the root; failing that `$HOME/.basicforth`;
+exists. `$BASICFORTH_PACKAGES` names the root; failing that `$HOME/.basicforth`;
 failing that the whole mechanism sits out, which is what makes a run under
 `env -i` — and every test suite — unaffected.
 
@@ -350,7 +350,7 @@ bundled lesson — one rule covering code and docs alike. The precedent is
 
 **Local development falls out of it.** Working in `~/Dev/dark-star`, the
 current directory wins, so you get your working tree. A checkout with
-`setup.sh` sourced keeps using the checkout. `$BASICFORTH_HOME` points the
+`setup.sh` sourced keeps using the checkout. `$BASICFORTH_PACKAGES` points the
 whole user tree at a scratch directory when you want to test the installed
 path without disturbing your own. The one trap — you `cd` elsewhere and
 silently get the installed copy — is what `where` answers today, and what a

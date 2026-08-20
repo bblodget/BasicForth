@@ -766,7 +766,7 @@ variable (sp-end)                        \ write pointer while building a buffer
 \ ===== User package directories =====
 \ ~/.basicforth/lib joins the file search path, and two docs directories join
 \ the help path, so a package installed there is REQUIRE-able and answers `help`
-\ from any directory. The root is $BASICFORTH_HOME, else $HOME/.basicforth; with
+\ from any directory. The root is $BASICFORTH_PACKAGES, else $HOME/.basicforth; with
 \ neither set the mechanism sits out entirely, which is what leaves a run under
 \ `env -i` -- and every test suite -- unaffected.
 \
@@ -842,7 +842,7 @@ variable (ud-took)                      \ did either setter take our block?
 \ Is there any root to go looking for? Asked before allocating, so a session
 \ with neither variable set never touches the heap.
 : (ud-wanted?) ( -- flag )
-    s" BASICFORTH_HOME" getenv nip if  true exit  then
+    s" BASICFORTH_PACKAGES" getenv nip if  true exit  then
     (home-dir) nip 0<> ;
 : (ud-begin) ( buf old-a old-u -- )     \ start from the current value
     rot (ud-dst) !  0 (ud-n) !  true (ud-fit) !  (ud-cat) ;
@@ -871,10 +871,10 @@ variable (ud-took)                      \ did either setter take our block?
     (ud-n) @ if  s" :" (ud-cat)  then
     (ud-try$) (ud-cat)  true (ud-any) ! ;
 
-\ $BASICFORTH_HOME wins; otherwise $HOME/.basicforth, built into our own buffer
+\ $BASICFORTH_PACKAGES wins; otherwise $HOME/.basicforth, built into our own buffer
 \ because (home-dir) points into the environment and the tail is ours.
 : (ud-root?) ( -- flag )
-    s" BASICFORTH_HOME" getenv  dup if  (ud-ru) !  (ud-ra) !  true exit  then
+    s" BASICFORTH_PACKAGES" getenv  dup if  (ud-ru) !  (ud-ra) !  true exit  then
     2drop
     (home-dir) dup 0= if  2drop false exit  then        ( h-a h-u )
     dup 12 + 256 > if  2drop false exit  then           \ + "/.basicforth"
