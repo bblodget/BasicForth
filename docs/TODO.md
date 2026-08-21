@@ -3482,9 +3482,30 @@ spread, so nothing below needs revisiting.
   of `$input`, and convert the hits. Worth doing as one pass, because a green
   test that cannot fail is worse than a missing one — it is a standing claim
   that something is covered.
-  A stricter follow-up worth considering: make `assert_result` compare the
-  result line **exactly** rather than by substring, so a test cannot pass on a
-  coincidental match either.
+  **The stricter follow-up was MEASURED 2026-08-18 and rejected.** Making
+  `assert_result` compare exactly rather than by substring sounds obviously
+  right and is not. Counting how many of the 216 passing call sites each rule
+  would break:
+
+  | rule | breaks | verdict |
+  |------|--------|---------|
+  | expected must equal a whole line | **205** | dead — every test would have to carry `"  ok"` |
+  | expected must start a line | 12 | churn: the 12 are legitimately mid-line (`parse delim` keeps a leading space, `cursor-on` trails ANSI) |
+  | output contains an error marker | 14 | noise: 12 of 14 provoke errors deliberately and assert on `-260`, the stack, or abandonment |
+
+  **Do not re-derive this.** Substring matching stays.
+
+  **What IS worth keeping is the fourth rule, as a DETECTOR rather than a
+  gate**: flag an assertion whose expected text occurs *only* inside an error
+  line. That is the precise shape of the trap. It flags 4; three legitimately
+  assert about an error, and the fourth was real — `parse space` asserted
+  `hello` and was matching `? hello`, the error saying `hello` is undefined. It
+  had never tested `PARSE`. Fixed the same day.
+
+  **The two detectors see different things and neither subsumes the other.**
+  The echo detector looks for the needle in the *input*; this one looks for it
+  in the *failure*. `hex input` and `parse space` were both invisible to the
+  first. Re-run both after a batch of new tests; the recipe for each is above.
 
   **Sized 2026-08-17** by instrumenting the helper to log whenever
   `$expected` occurred in `$input`, rather than parsing the file: **112 of 525**
