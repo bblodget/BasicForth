@@ -6808,7 +6808,7 @@ lguard_page_underflow:
 # ---------- Dictionary Space ----------
 # Page-aligned: made executable at startup with mprotect (STC compiles
 # machine code into it; see platform_init_guard_pages).
-.equ DICT_SPACE_SIZE, 262144    # 256KB (64 whole pages)
+.equ DICT_SPACE_SIZE, 524288    # 512KB (128 whole pages)
 .balign 4096
 .global dict_space
 dict_space:

@@ -333,31 +333,38 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       reprinted that whole section.
       **The one that was nearly missed:** 2816 bytes of `allot` broke
       `include core.fs`. That test reloads this file into the same dictionary,
-      and it finishes with about **3200 bytes spare out of 256 KB** — a 1.2%
+      which at the time left about **3200 bytes spare out of 256 KB** — a 1.2%
       margin nobody knew was that thin. Three rounds to get clear of it: heap
       instead of `allot`; a `marker` around the startup machinery so it is
       forgotten once it has run (which also meant erasing the reclaimed span,
       since a fresh session had always found it clean and the suite asserts
       that); and finally **moving the block to the middle of the file**, because
       a marker fixes the FINAL cost and not the PEAK — at the end of a second
-      load the peak was 3374 bytes against 3270 available. The feature now costs
-      that margin nothing.
-      See below for the margin itself, which is still there.
+      load the peak was 3374 bytes against 3270 available.
+      The dictionary is 512 KB since 2026-08-20 (see below), so those figures
+      are history, not current numbers. The doubling is not: anything permanent
+      in core.fs is still paid for twice by that test.
 
-- [ ] **The dictionary headroom for a second `core.fs` load is ~3 KB.**
-      `include core.fs` re-runs the file into the same 256 KB dictionary and
-      finishes with about 3200 bytes to spare, so **core.fs cannot grow by more
-      than ~1.5 KB of permanent definitions** before that test fails — and it
-      fails as `dictionary full`, which names neither the cause nor the file.
-      Found 2026-08-19 by walking into it. Not urgent, but it is a tripwire on
-      a path nobody thinks about, and the next person to hit it will spend the
-      afternoon I nearly did.
-      The mitigation found on the package-dirs branch generalises: anything
-      that defines words, uses them and forgets them should sit EARLY in the
-      file, where a second load has not yet filled the dictionary — a `marker`
-      alone does not help, because it bounds the final cost and not the peak.
-      Done when: either the margin is documented where someone adding to
-      core.fs would see it, or the failure names what ran out and why.
+- [x] **The dictionary headroom for a second `core.fs` load — RESOLVED
+      2026-08-20 by raising the dictionary to 512 KB.** `DICT_SPACE_SIZE`,
+      one `.equ` per arch. Free space went from 131 KB to 384 KB, and the
+      `include core.fs` margin from **54 bytes to 256 KB**.
+      Found 2026-08-19 by walking into it, and nearly walked into again the
+      next day: sibling-path resolution plus `2constant`/`2variable` took the
+      margin from 3219 bytes to 54 in an afternoon of individually small
+      additions.
+      **The number that alarmed was the wrong one, and that is the lesson.**
+      3219 bytes was never a user's budget — a user had 131 KB. It was the
+      margin of one integration test that does `include core.fs`, loading a
+      SECOND full copy, which is why every byte added to core.fs cost two
+      against it. Reporting a test's headroom as though it were the product's
+      constraint made a 1.2% cost look like an emergency for two days.
+      The doubling has not gone away, only the pressure: anything that defines
+      words, uses them and forgets them should still sit EARLY in core.fs,
+      because a `marker` bounds the final cost and not the peak.
+      One test had to change with it — a dictionary-exhaustion case allotted a
+      hardcoded 300000 bytes, sized to overflow 256 KB, and silently stopped
+      overflowing. It derives the size from `unused` now.
 
 - [ ] **`where <word>` — which file did this come from?** Reshaped 2026-08-18;
       the original entry asked for `deps <word>` to fall back to a dictionary
@@ -2356,7 +2363,7 @@ docs/Graphics.md for the API.
     TI's 16x16-from-four-8x8-characters column-major quirk, that's a VDP
     artifact. Since `stamp` takes `w h`, any size works.
   - **Memory:** a 16x16 sprite is 32 bytes mono vs 1024 full-colour, 32x
-    smaller — a real win against the 256 KB dictionary, and it means art can
+    smaller — a real win against a fixed dictionary, and it means art can
     live in the dictionary instead of needing `allocate`.
   - **Decided: no per-sprite scale initially.** TI's `CALL MAGNIFY` was a
     single global 1-4 (8x8/16x16 x 1x/2x, pixel-doubling — size but not

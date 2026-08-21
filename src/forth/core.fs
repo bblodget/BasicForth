@@ -211,6 +211,20 @@
 \ reader coming from BASIC expects.
 : VARIABLE  create 0 , ;
 
+\ Forth 2012 Double-Number pair. 2CONSTANT is the shape MARKER uses further
+\ down -- body is [x1][x2], read back in that order. Both zero-init like
+\ VARIABLE does, so a 2VARIABLE that is read before it is written answers 0 0
+\ rather than whatever the dictionary last held.
+\ 2CONSTANT is what lets a package capture where it lives, which it has to do
+\ at LOAD time: (cur-src) is 0 once the file has finished loading, so `my-dir`
+\ answers nothing at run time. A package that opens its own files later --
+\ artwork, sounds -- writes `my-dir 2constant my-home` while it loads, and
+\ joins onto that afterwards.
+: 2CONSTANT ( x1 x2 "name" -- )
+    create swap , ,
+  does> ( body -- x1 x2 )  dup @ swap cell+ @ ;
+: 2VARIABLE ( "name" -- )  create 0 , 0 , ;
+
 \ Standard alias for PARSE-WORD
 : PARSE-NAME  parse-word ;
 
@@ -791,9 +805,11 @@ variable (sp-end)                        \ write pointer while building a buffer
 \ shape, `## word ( stack )`, not the single-word Guides shape.
 \
 \ ----- why this is HERE, and shaped like this -----
-\ `include core.fs` re-runs this entire file into the same dictionary, and that
-\ second load finishes with about 3200 bytes to spare out of 256 KB -- a 1.2%
-\ margin. Three consequences, each of which was learned by breaking that test:
+\ `include core.fs` re-runs this entire file into the same dictionary, so
+\ anything permanent here is paid for TWICE. That used to leave about 3200
+\ bytes out of a 256 KB dictionary -- a 1.2% margin. The dictionary is 512 KB
+\ since 2026-08-20 and the margin is comfortable again, but the DOUBLING has
+\ not gone away. Three consequences, each learned by breaking that test:
 \
 \   * The buffers are ALLOCATEd, not ALLOTted. 2816 bytes of ALLOT broke it
 \     outright. They must outlive this file anyway, since (forth-path!) and
@@ -3356,6 +3372,101 @@ variable (bn-cut)
     dup 128 > abort" require: filename too long"
     s" (inc:" (inc+)  (inc+)  s" )" (inc+) ;
 
+\ ===== "beside the file doing the requiring" =====
+\ A file being loaded already knows where it is: (cur-src) is its source id and
+\ (source-path) hands back the absolutised path INCLUDED resolved it to. So a
+\ package can find its own parts with no engine support at all.
+\
+\ (here-path) is tried FIRST, ahead of the current directory. That order is not
+\ a preference: core.fs records a user module named font.fs in the launch
+\ directory shadowing the library of the same name and requiring itself, until
+\ the data stack hit its guard page. With this first, nothing you happen to be
+\ standing next to can hijack a library's own internals.
+\
+\ Resolution changes where the file is FOUND, not what is recorded. The name as
+\ typed still keys the cycle guard, the loading stack and the load-once
+\ sentinel, so `deps` -- which asks (inc-recorded?) about the bare name in a
+\ dep block -- keeps working.
+
+: my-dir ( -- c-addr u )                    \ directory of the file being loaded
+    (cur-src) dup 0= if  drop 0 0 exit  then    \ typed at the prompt: none
+    (source-path) dup 0= if  exit  then
+    begin  dup  while
+        2dup 1- + c@ [char] / = if  1- exit  then
+        1-
+    repeat ;
+
+\ PATH-JOIN is the public half of all this. A package knows where it lives --
+\ `my-dir 2constant my-home` while it loads -- and then has to build a path for
+\ every asset it opens. Every package writing that join for itself means every
+\ package writing the length check for itself, which is one line and is the one
+\ everybody forgets: (sp-add) does not bounds-check, and a home directory is
+\ however long the machine it was installed on happens to make it. Done once
+\ here, it is done once.
+4096 constant (pj-max)                      \ heap, so generous costs nothing
+variable (pj-scratch)
+: (pj-buf) ( -- a | 0 )
+    (pj-scratch) @ ?dup if  exit  then
+    (pj-max) allocate if  drop 0 exit  then  dup (pj-scratch) ! ;
+
+\ Its own buffer, not the one (here-path) probes with: a file can call this
+\ while it loads and then `require` something, and a shared buffer would have
+\ the require quietly overwrite the path it just built.
+: path-join ( dir-a dir-u name-a name-u -- path-a path-u )
+    2over nip 0= if  2swap 2drop exit  then     \ no directory: the name is the path
+    2over nip 1+ over + (pj-max) >
+    abort" path-join: joined path too long"
+    (pj-buf) dup 0= abort" path-join: cannot allocate a path buffer"
+    (sp-end) !
+    2swap (sp-add)  s" /" (sp-add)  (sp-add)
+    (pj-scratch) @ dup (sp-end) @ swap - ;
+
+\ Refusing is the only safe answer when we cannot look. The fallback is the
+\ CURRENT DIRECTORY, so falling through would let a package load a stranger's
+\ file of the same name in place of its own -- silently, and only on the machine
+\ where the path happened to be long or memory happened to be short. A MISS is
+\ different and falls through normally: requiring a bundled library from inside
+\ a package is a miss, and is the common case.
+: (hd-refuse) ( c-addr u -- )               \ never returns
+    ." require: cannot look beside the current file for " type cr
+    true abort" refusing to search elsewhere for a file that may be beside us" ;
+
+4096 constant (hp-size)                     \ heap, so generous costs nothing
+variable (hp-scratch)
+: (hp-buf) ( -- a | 0 )
+    (hp-scratch) @ ?dup if  exit  then
+    (hp-size) allocate if  drop 0 exit  then  dup (hp-scratch) ! ;
+
+: (here-join) ( c-addr u -- c-addr' u' | 0 0 )  \ candidate, in heap scratch
+    \ Heap, not the dictionary: the probe misses far more often than it hits,
+    \ and a miss must cost nothing. Safe to reuse, unlike the copy INCLUDED
+    \ keeps, because open-file consumes it immediately and nothing nests between.
+    my-dir nip 0= if  2drop 0 0 exit  then      \ not loading a file: normal
+    my-dir nip 1+ over + (hp-size) > if  (hd-refuse)  then
+    (hp-buf) dup 0= if  drop (hd-refuse)  then  ( c-addr u buf )
+    >r  r@ (sp-end) !
+    my-dir (sp-add)  s" /" (sp-add)  (sp-add)
+    r> (sp-end) @ over - ;
+
+: (hd-open?) ( c-addr u -- flag )
+    r/o open-file if  drop false  else  close-file drop true  then ;
+
+: (here-keep) ( c-addr u -- a u )           \ stable copy: INCLUDED holds it all load
+    dup 64 + unused > if  (hd-refuse)  then
+    here >r  dup allot
+    2dup r@ swap cmove
+    nip r> swap ;
+
+: (here-path) ( c-addr u -- c-addr' u' )    \ beside us, if that is a real file
+    \ A MISS falls through to the ordinary search -- requiring a bundled library
+    \ from inside a package is a miss, and the common case. NOT being able to
+    \ look is different, and must not fall through: the fallback is the current
+    \ directory, so a package would load a stranger's file of the same name
+    \ instead of its own. (here-keep) aborts rather than let that happen.
+    2dup (here-join) dup 0= if  2drop exit  then       ( c u p-c p-u )
+    2dup (hd-open?) if  (here-keep) 2swap 2drop exit  then
+    2drop ;
+
 : (inc-recorded?) ( c-addr u -- flag )      \ was this file loaded already?
     0 (inc-n) !  (inc-sentinel+)
     (inc-buf) (inc-n) @ find
@@ -3465,6 +3576,7 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     \ session. The return stack nests, so a file that includes another file
     \ is safe; two variables would not be.
     2dup >r >r
+    (here-path)                              \ beside the requiring file first
     (included?)                             \ the assembly INCLUDED does the work
     r> r>                                   \ ( ior c-addr u )
     (inc-opened?) 0= if

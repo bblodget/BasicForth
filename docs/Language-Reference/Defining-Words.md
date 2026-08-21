@@ -78,6 +78,24 @@ Create a named constant. Running the name pushes the value.
 
     42 constant answer   answer .     \ 42
 
+## 2variable ( "name" -- )   →   name: ( -- a-addr )
+Create a named **two-cell** variable, both cells starting at 0. Running the name
+pushes the address of the first; use `2@` and `2!`.
+
+    2variable pos   pos 2@ . .        \ 0 0
+    3 4 pos 2!      pos 2@ . .        \ 4 3
+
+## 2constant ( x1 x2 "name" -- )   →   name: ( -- x1 x2 )
+Create a named two-cell constant. Running the name pushes both values back in
+the order they were given.
+
+    11 22 2constant pair   pair . .   \ 22 11
+
+The common use is a string, since a string is an address and a length — which
+is how a package records where it lives while it loads:
+
+    my-dir 2constant my-home          \ see `help my-dir`
+
 ## value ( x "name" -- )   →   name: ( -- x )
 Like a constant, but reassignable with `to`. Running the name pushes the current
 value.
