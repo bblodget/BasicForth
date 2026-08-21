@@ -6018,18 +6018,31 @@ else
 fi
 
 # Section grouping: help groups topics under their directory (section) name,
-# and apropos labels each hit with its section. A directory named "Tutorial"
+# and apropos labels each hit with its section. A directory named "Tutorials"
 # is excluded from bare help (it belongs to `tutorials`); an empty section
 # (no .md) prints no header.
 sec_base="$(mktemp -d)"
-mkdir -p "$sec_base/RefSec" "$sec_base/Tutorial" "$sec_base/EmptySec"
+mkdir -p "$sec_base/RefSec" "$sec_base/Tutorials" "$sec_base/EmptySec"
 printf '# Alpha\nwidget gear\n' > "$sec_base/RefSec/Alpha.md"
 printf '# Beta\nmore widget\n'  > "$sec_base/RefSec/Beta.md"
-printf '# Lesson\nnothing\n'    > "$sec_base/Tutorial/Lesson.md"
-printf '# Grok — Learn widgets fast\nintro\n' > "$sec_base/Tutorial/Grok.md"
-printf 'no title here\n'        > "$sec_base/Tutorial/Plain.md"
+printf '# Lesson\nnothing\n'    > "$sec_base/Tutorials/Lesson.md"
+printf '# Grok — Learn widgets fast\nintro\n' > "$sec_base/Tutorials/Grok.md"
+printf 'no title here\n'        > "$sec_base/Tutorials/Plain.md"
+# A file whose NAME and TITLE differ -- the shape every installed package has,
+# since its lesson is <pkg>::<page>.md while the title reads "# Greeting -- ...".
+printf '# Widgetry — Scoped by its package\nbodyword\n' \
+    > "$sec_base/Tutorials/pkg::widget.md"
+# A title NOT in the "# Name — description" convention: the description falls
+# back to the whole title, minus a leading copy of the name, which would
+# otherwise print the name twice on the row.
+printf '# Nodash a plain title\nintro\n' > "$sec_base/Tutorials/Nodash.md"
+printf '# Hyph - written with an ascii hyphen\nintro\n' > "$sec_base/Tutorials/Hyph.md"
+# The name is only dropped when it is a WHOLE leading word. Matching bytes
+# alone truncated mid-word: "Snug.md" titled "# Snuggle ..." lost its first
+# four characters.
+printf '# Snuggle Up With Widgets\nintro\n' > "$sec_base/Tutorials/Snug.md"
 printf 'not a topic\n'          > "$sec_base/EmptySec/readme.txt"
-sec_docs="$sec_base/RefSec:$sec_base/Tutorial:$sec_base/EmptySec"
+sec_docs="$sec_base/RefSec:$sec_base/Tutorials:$sec_base/EmptySec"
 
 sec_out=$(printf 'help\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
@@ -6041,25 +6054,25 @@ else
     printf "    Got:      %s\n" "$(echo "$sec_out" | head -6)"; ((failed++))
 fi
 
-# The Tutorial section is bare help's one exclusion — `tutorials` lists it
+# The Tutorials section is bare help's one exclusion — `tutorials` lists it
 if [[ "$sec_out" != *"Lesson"* ]]; then
-    printf "  ${GREEN}PASS${NC}  help excludes the Tutorial section\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  help excludes the Tutorials section\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  help excludes the Tutorial section\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help excludes the Tutorials section\n"; ((failed++))
 fi
 tuts_out=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
 if [[ "$tuts_out" == *"Lesson"* ]] && [[ "$tuts_out" == *"tutorial <name>"* ]] \
    && [[ "$tuts_out" != *"Alpha"* ]]; then
-    printf "  ${GREEN}PASS${NC}  tutorials lists only the Tutorial section\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  tutorials lists only the Tutorials section\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorial section\n"
+    printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorials section\n"
     printf "    Got:      %s\n" "$(echo "$tuts_out" | head -4)"; ((failed++))
 fi
 
 # The listing shows each tutorial's title line ("# Name — description"
 # convention, hashes stripped); a file with no title falls back to its name.
-if [[ "$tuts_out" == *"Grok — Learn widgets fast"* ]]; then
+if [[ "$tuts_out" == *"Grok                Learn widgets fast"* ]]; then
     printf "  ${GREEN}PASS${NC}  tutorials shows the title-line description\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  tutorials shows the title-line description\n"
@@ -6070,6 +6083,55 @@ if [[ "$tuts_out" == *"Plain"* && "$tuts_out" != *"no title here"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  tutorials falls back to the file name\n"
     printf "    Got:      %s\n" "$(echo "$tuts_out" | head -5)"; ((failed++))
+fi
+
+# The listing must print the name you TYPE, not the title's first word. These
+# two differ only for a file like pkg::widget.md, which is exactly the shape an
+# installed package has -- when the listing showed the title, `tutorials`
+# advertised "Widgetry" and `tutorial Widgetry` answered "no tutorial named".
+if [[ "$tuts_out" == *"pkg::widget"* && "$tuts_out" != *"Widgetry"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists the name, not the title's first word\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials lists the name, not the title's first word\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# A title with no em dash must not repeat the name into its own description.
+if [[ "$tuts_out" == *"Nodash              a plain title"* \
+   && "$tuts_out" != *"Nodash              Nodash"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials does not repeat the name as its description\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials does not repeat the name as its description\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# A title that merely STARTS with the name must survive intact.
+if [[ "$tuts_out" == *"Snug                Snuggle Up With Widgets"* \
+   && "$tuts_out" != *"Snug                gle Up With Widgets"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials strips the name only at a word boundary\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials strips the name only at a word boundary\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -9)"; ((failed++))
+fi
+# A plain "-" where the em dash should be is the near miss worth absorbing.
+if [[ "$tuts_out" == *"Hyph                written with an ascii hyphen"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials absorbs an ascii-hyphen title separator\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials absorbs an ascii-hyphen title separator\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# ...and that name is one `tutorial` accepts. Asserted on the lesson BODY, not
+# on the name: the name appears in the input we just echoed, so matching it
+# would pass whether or not the lesson was ever found.
+tut_named=$(printf 'tutorial pkg::widget\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$tut_named" == *"bodyword"* && "$tut_named" != *"no tutorial named"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a listed package name starts its tutorial\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a listed package name starts its tutorial\n"
+    printf "    Got:      %s\n" "$(echo "$tut_named" | head -5)"; ((failed++))
 fi
 
 # An empty section (no .md) must not print a header
@@ -6104,8 +6166,8 @@ else
 fi
 rm -rf "$sort_base"
 
-# `tutorial <name>` resolves only in Tutorial sections — a reference page with
-# the same name (e.g. Strings.md in both Language-Reference and Tutorial) must
+# `tutorial <name>` resolves only in Tutorials sections — a reference page with
+# the same name (e.g. Strings.md in both Language-Reference and Tutorials) must
 # not shadow the lesson, even when its directory comes first in the path.
 printf '# Grok reference page\nREFBODY\n' > "$sec_base/RefSec/Grok.md"
 tut_shadow=$(printf 'tutorial Grok\n' | BASICFORTH_PATH="$FORTH_LIB" \
@@ -6318,10 +6380,10 @@ guide_n=0
 #   neither     separators are never dropped definingwords -> no help
 guide_page_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_' '-'; }
 guide_word_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
-ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md \
+ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md \
                "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null \
             | xargs -n1 basename | sed 's/\.md$//' | tr 'A-Z' 'a-z' | tr '_' '-' | sort -u)
-# Tutorial "## " headings are lesson steps, not word entries, and the indexer
+# Tutorials "## " headings are lesson steps, not word entries, and the indexer
 # skips them -- so they are not names anything answers.
 # This mirrors (head-word?) in core.fs, token for token, because every
 # approximation of it has been wrong in a different way:
@@ -6484,7 +6546,7 @@ fi
 # in backticks. Skipped: indented lines (code blocks) and "#" headings, both
 # of which the renderer passes through verbatim; `...` spans are stripped
 # first because their contents are already safe.
-md_star=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+md_star=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md; do
     sed -e 's/`[^`]*`//g' "$f" | grep -nE '^[^ #].*[A-Za-z0-9]\*[A-Za-z0-9]' \
         | sed "s|^|$(basename "$f"):|"
 done)
@@ -6506,7 +6568,7 @@ fi
 # Skipped: indented lines (verbatim code blocks) and fenced blocks, whose ```
 # would itself count three -- there are no fences in these dirs today, but a
 # future one must not be reported as a wrapped span.
-md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md; do
     awk '/^ {4}|^\t/            { next }
          /^[ \t]*```/           { fence = !fence; next }
          fence                  { next }
@@ -6622,7 +6684,7 @@ fi
 
 # The shipped Arrays lesson: starts, has its 14 steps, and its examples run.
 arrays_out=$(printf 'tutorial Arrays\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$arrays_out" == *"no built-in array type"* && "$arrays_out" == *"step 1/14"* ]]; then
     printf "  ${GREEN}PASS${NC}  Arrays lesson opens with 14 steps\n"; ((passed++))
 else
@@ -6638,7 +6700,7 @@ assert_result "Arrays lesson table example"  \
 
 # The shipped Strings lesson: opens with 11 steps, and its examples run.
 strings_out=$(printf 'tutorial Strings\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$strings_out" == *"Text on the Stack"* && "$strings_out" == *"step 1/11"* ]]; then
     printf "  ${GREEN}PASS${NC}  Strings lesson opens with 11 steps\n"; ((passed++))
 else
@@ -6661,7 +6723,7 @@ assert_contains "Strings lesson keep-a-string example" \
 # drawing examples need SDL, but the art table and the frame-picking idiom are
 # pure Forth over an off-screen surface, so they run everywhere (incl. QEMU).
 sprites_out=$(printf 'tutorial Sprites\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$sprites_out" == *"Pixel Art That Moves"* && "$sprites_out" == *"step 1/14"* ]]; then
     printf "  ${GREEN}PASS${NC}  Sprites lesson opens with 14 steps\n"; ((passed++))
 else
@@ -6686,7 +6748,7 @@ assert_contains "Sprites lesson frame-picking idiom" \
 # art and the colour-per-call payoff are pure Forth over an off-screen
 # surface, so they run everywhere (incl. QEMU) without SDL.
 bitmaps_out=$(printf 'tutorial Bitmaps\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/19"* ]]; then
     printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 19 steps\n"; ((passed++))
 else
@@ -6707,15 +6769,23 @@ create palette  red , green , blue , yellow , cyan , magenta ,
 
 # The real-docs listing shows each tutorial's "# Name — description" title
 real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
-if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
-   && "$real_tuts" == *"Strings — Text on the Stack"* \
-   && "$real_tuts" == *"Sprites — Pixel Art That Moves"* \
-   && "$real_tuts" == *"Bitmaps — Sprites You Type in Binary"* \
-   && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
-    printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
+if [[ "$real_tuts" == *"Arrays              Your First Data Structure"* \
+   && "$real_tuts" == *"Strings             Text on the Stack"* \
+   && "$real_tuts" == *"Sprites             Pixel Art That Moves"* \
+   && "$real_tuts" == *"Machine-Code        What Your Words Compile To"* \
+   && "$real_tuts" == *"Snake               Build Your First Game"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists real names with descriptions\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  tutorials lists real titles with descriptions\n"
+    printf "  ${RED}FAIL${NC}  tutorials lists real names with descriptions\n"
+    printf "    Got:      %s\n" "$(echo "$real_tuts" | head -5)"; ((failed++))
+fi
+# The em dash belongs to the title, not to the row: it separates the name from
+# the description in the FILE and must not reach the listing.
+if [[ "$real_tuts" != *"—"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials strips the title's em dash\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials strips the title's em dash\n"
     printf "    Got:      %s\n" "$(echo "$real_tuts" | head -5)"; ((failed++))
 fi
 
@@ -8511,7 +8581,7 @@ rm -rf "$inst_pfx" "$inst_moved"
 section "PACKAGES (user package directories under ~/.basicforth)"
 # =========================================================================
 # Startup appends $BASICFORTH_PACKAGES/lib to the file search path and
-# .../docs/{Packages,Tutorial} to the help path, so a package installed there is
+# .../docs/{Packages,Tutorials} to the help path, so a package installed there is
 # REQUIRE-able and answers `help` from any directory. What makes this worth
 # testing is the "from any directory" half: the failure it guards against is a
 # package that works only from the directory you installed it in.
@@ -8530,7 +8600,7 @@ pkg_forth="$pkg_pre $pkg_bin"
 
 pkg_home="$(mktemp -d)"
 pkg_cwd="$(mktemp -d)"
-mkdir -p "$pkg_home/lib" "$pkg_home/docs/Packages" "$pkg_home/docs/Tutorial"
+mkdir -p "$pkg_home/lib" "$pkg_home/docs/Packages" "$pkg_home/docs/Tutorials"
 cat > "$pkg_home/lib/pkgfix.fs" <<'PKGEOF'
 \ pkgfix -- integration fixture
 : pkg-hello ." installed package speaking" cr ;
@@ -8541,14 +8611,14 @@ cat > "$pkg_home/docs/Packages/Pkgfix.md" <<'PKGEOF'
 ## pkg-hello ( -- )
 Fixture page shipped beside an installed package.
 PKGEOF
-cat > "$pkg_home/docs/Tutorial/Pkglesson.md" <<'PKGEOF'
+cat > "$pkg_home/docs/Tutorials/Pkglesson.md" <<'PKGEOF'
 # Pkglesson — a fixture lesson
 
 ## Step 1
 Type `pkg-hello`.
 PKGEOF
 # Deliberately collides with a bundled lesson, to pin which one wins.
-cat > "$pkg_home/docs/Tutorial/Arrays.md" <<'PKGEOF'
+cat > "$pkg_home/docs/Tutorials/Arrays.md" <<'PKGEOF'
 # Arrays — an installed lesson that collides with the bundled one
 
 ## Step 1
@@ -8564,7 +8634,7 @@ pkg_assert() {                      # name  cwd  input  expected
     local out
     out=$( cd "$cwd" && printf '%s\n' "$input" \
            | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
-             BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:$REPO_ROOT/docs/Tutorial:$REPO_ROOT/docs/Guides" \
+             BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:$REPO_ROOT/docs/Tutorials:$REPO_ROOT/docs/Guides" \
              timeout 10 $pkg_forth 2>&1 | sed '/^> /d; /^>$/d' )
     if [[ "$out" == *"$expected"* ]]; then
         printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
@@ -8632,6 +8702,61 @@ if [ "$pkg_dup" = "1" ]; then
 else
     printf "  ${RED}FAIL${NC}  missing docs dir duplicated a section (%s headings)\n" "$pkg_dup"; ((failed++))
 fi
+
+# A package is installed as lib/<package> -> its own source directory, and it
+# finds its siblings through that link. Linking the FILES instead does not
+# work: beside-first resolution uses the path the file was reached BY, not the
+# symlink's target, so the sibling is looked for in lib/<package>/ where it is
+# not. Both forms are asserted, because a one-file package survives the wrong
+# one and that is what makes the mistake shippable.
+pkg_src="$(mktemp -d)"
+printf ': pkg-sibling ." sibling here" cr ;\n' > "$pkg_src/pkghelp.fs"
+printf 'require pkghelp.fs\n: pkg-entry ." entry here" cr ;\n' > "$pkg_src/pkgmain.fs"
+ln -s "$pkg_src" "$pkg_home/lib/pkgdir"
+mkdir -p "$pkg_home/lib/pkgfile"
+ln -s "$pkg_src/pkgmain.fs" "$pkg_home/lib/pkgfile/pkgmain.fs"
+
+pkg_dir_out=$( cd "$pkg_cwd" && printf 'require pkgdir/pkgmain.fs\npkg-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_dir_out" == *"sibling here"* && "$pkg_dir_out" != *"cannot open"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a directory-linked package finds its siblings\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a directory-linked package finds its siblings\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_dir_out" | head -4)"; ((failed++))
+fi
+# "cannot open pkghelp.fs" alone would NOT show that symlinks are the reason --
+# a plain copy of the entry file, with the sibling left behind, fails exactly
+# the same way. The two explanations have to predict different output, so put a
+# DECOY sibling next to the link: if resolution read through to $pkg_src the
+# real one would load, and if it uses the path the file was reached BY the
+# decoy does. Which one answers is the whole finding.
+printf ': pkg-sibling ." decoy here" cr ;\n' > "$pkg_home/lib/pkgfile/pkghelp.fs"
+pkg_file_out=$( cd "$pkg_cwd" && printf 'require pkgfile/pkgmain.fs\npkg-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_file_out" == *"decoy here"* && "$pkg_file_out" != *"sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  beside-first uses the link path, not its target\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  beside-first uses the link path, not its target\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_file_out" | head -4)"; ((failed++))
+fi
+# ...and the practical consequence: with no decoy there is nothing to find, so a
+# file-linked multi-file package fails outright. This one is the SYMPTOM; the
+# assertion above is what identifies the cause.
+rm -f "$pkg_home/lib/pkgfile/pkghelp.fs"
+pkg_bare_out=$( cd "$pkg_cwd" && printf 'require pkgfile/pkgmain.fs\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_bare_out" == *"cannot open pkghelp.fs"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file-linked package does not reach its siblings\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a file-linked package does not reach its siblings\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_bare_out" | head -4)"; ((failed++))
+fi
+rm -rf "$pkg_src"
 
 # An over-long root is refused rather than truncated: the include search SKIPS a
 # segment whose "<seg>/<name>" exceeds 511 bytes, so a truncated path would fail

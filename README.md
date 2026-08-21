@@ -337,7 +337,7 @@ BasicForth/
     lines.fs                stdout/stderr split demo
   docs/                     Design documentation
     Guides/                 Task pages, readable at the prompt (help install)
-    Tutorial/               Interactive tutorials (tutorial Snake)
+    Tutorials/              Interactive tutorials (tutorial Snake)
     Language-Reference/     Per-topic reference (help stack, …)
 ```
 

@@ -121,12 +121,14 @@ If you see that, point `BASICFORTH_PATH` at the directory holding `core.fs`
 | `BASICFORTH_EDITOR` | `1` forces the line editor on, `0` forces it off; unset = on when stdin is a terminal |
 | `BASICFORTH_DOCS` | Colon-separated directories of `*.md` topics for the `help` / `tutorials` / `apropos` words |
 
-When `INCLUDE`, `INCLUDED`, or the startup `core.fs` load fails to find
-a file in the current directory, BasicForth searches each directory in
-`$BASICFORTH_PATH` in order and loads the first match
-(`$DIR/filename`). The current directory is always tried first; empty
-segments (e.g. from a leading, trailing, or doubled `:`) are skipped.
-If the variable is not set, only CWD is searched.
+`INCLUDE`, `INCLUDED` and the startup `core.fs` load search three places, in
+order: the directory of the **file doing the requiring**, the **current
+directory**, then each directory in `$BASICFORTH_PATH`, loading the first match
+(`$DIR/filename`). Beside-first is what lets an installed package load its own
+siblings rather than a same-named file where you happen to be standing; at the
+prompt there is no file being loaded, so the current directory comes first.
+Empty segments (e.g. from a leading, trailing, or doubled `:`) are skipped. If
+the variable is not set, only the first two are searched.
 
 Rather than setting these by hand, source the script that ships with the
 source tree:
@@ -813,14 +815,14 @@ BasicForth can browse its own documentation. Point `BASICFORTH_DOCS` at one or
 more directories of `*.md` files (colon-separated, like `BASICFORTH_PATH`):
 
 ```
-$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorials:docs/Guides ./basicforth
 > help                           \ list the topics, three to a row
 Language-Reference
   Arithmetic           Comparison           Compiler
   ...
 Guides
   Install
-Tutorial:  type  tutorials  to list the interactive tutorials.
+Tutorials:  type  tutorials  to list the interactive tutorials.
 
 help <topic>  - that topic's summary       (help stack)
 help <word>   - one word's entry           (help allot)
@@ -834,12 +836,12 @@ Memory:
 Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup                    \ which topics mention "dup"?
 Stack (Language-Reference)
-Snake (Tutorial)
+Snake (Tutorials)
 ```
 
 - Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
   last path component. Bare `help` lists every `*.md` topic under its section
-  header — except the Tutorial section, which `tutorials` lists instead.
+  header — except the Tutorials section, which `tutorials` lists instead.
 - `help <topic>` finds `<topic>.md` case-insensitively, folding `-`/`_`, and
   prints the page's summary: its preamble up to the first `## ` entry.
 - `help <word>` scans the reference pages for the `## ` entries documenting

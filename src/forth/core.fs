@@ -790,7 +790,7 @@ variable (sp-end)                        \ write pointer while building a buffer
 \ docs alike.
 \
 \ TWO docs directories, because the help system reads a directory's ROLE from
-\ its basename: a dir named Tutorial holds lessons and is skipped by help's
+\ its basename: a dir named Tutorials holds lessons and is skipped by help's
 \ topic listing, anything else is a reference section shown under that name.
 \ A single flat docs/ would have appeared in `help` as a section called "docs"
 \ and could never have carried a lesson at all.
@@ -824,6 +824,15 @@ variable (sp-end)                        \ write pointer while building a buffer
 \     end of a second load the peak was 3374 bytes against 3270 available. Here
 \     a second load has barely started and there is over 100 KB spare. The only
 \     non-primitive this needs is (sp-add), defined just above.
+\ The lessons directory, named ONCE. Its basename is behaviour rather than
+\ decoration -- the help system reads a docs directory's ROLE from it (see
+\ above). So the name is both a path appended to BASICFORTH_DOCS below and the
+\ test (lessons?) makes four times further down; deriving the second from the
+\ first is what stops the two drifting apart.
+\ OUTSIDE the marker deliberately: everything below is startup machinery that
+\ is forgotten once it has run, and (lessons?) needs this at runtime.
+: (lessons-sub) ( -- c-addr u )  s" docs/Tutorials" ;
+
 marker (-ud-)
 1024 constant (ud-max)
 160  constant (ud-rootmax)      \ a longer root is REFUSED, not truncated: the
@@ -917,7 +926,7 @@ variable (ud-took)                      \ did either setter take our block?
     false (ud-any) !
     (ud-docs) @ (docs-path) (ud-begin)
     s" docs/Packages" (ud-append)
-    s" docs/Tutorial" (ud-append)
+    (lessons-sub) (ud-append)
     (ud-fit) @ 0= if
         ." basicforth: docs search path too long - user pages not added" cr  then
     (ud-any) @ (ud-fit) @ and if
@@ -2074,17 +2083,23 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
         (hw-hit) @ if  (pg-buf@) swap (pg-line)  else  drop  then
         (pg-quit) @ if  r> close-file drop  (hw-any) @ exit  then
     again ;
+\ A docs directory's ROLE comes from its basename, and these are the only two
+\ that carry one -- everything else is an ordinary reference section.
+: (lessons?) ( dir-a dir-u -- flag )    \ does this dir hold lessons?
+    (basename) (lessons-sub) (basename) (ci=) ;
+: (guides?) ( dir-a dir-u -- flag )     \ ...or single-word Guide headings?
+    (basename) s" Guides" (ci=) ;
 \ Scan every reference page in a dir for the word's entries — all pages are
 \ visited even after a hit, so a word documented in several places shows every
-\ entry. Tutorial dirs are skipped — their "## " headings are lesson steps,
+\ entry. Tutorials dirs are skipped — their "## " headings are lesson steps,
 \ not word entries.
 : (hw-in) ( dir-addr dir-u -- )
-    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    2dup (lessons?) if 2drop exit then
     \ Guides is the deliberate exception: its headings are single tokens with no
     \ stack effect, and every one of them IS a topic -- that is the convention
     \ the suite enforces for that section. Everywhere else a heading must state
     \ an effect to count as a word entry.
-    2dup (basename) s" Guides" (ci=) 0= (hh-eff) !
+    2dup (guides?) 0= (hh-eff) !
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
     >r
@@ -2106,10 +2121,10 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     repeat drop
     r> close-file drop ;
 
-\ Bare help: list each section's topics in three columns; the Tutorial
+\ Bare help: list each section's topics in three columns; the Tutorials
 \ section is left to `tutorials`.
 : (help-in) ( dir-addr dir-u -- )
-    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    2dup (lessons?) if 2drop exit then
     (collect-in)
     (tn-n) @ 0= if exit then               \ no topics here → no header
     (tn-sort)
@@ -2131,15 +2146,69 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     (pg-buf@) c@     [char] # <> if drop false exit then
     (pg-buf@) 1+ c@  bl        <> if drop false exit then
     (pg-buf@) 2 + swap 2 -  true ;
-: (tut-line) ( i -- )                      \ one row: the title line, or the name
+\ A row is "<name>  <description>", and the NAME is the one you type -- the
+\ filename, sans .md. It used to be the title's first word, which is the same
+\ thing only by luck: a package lesson is <pkg>::<page>.md while its title
+\ reads "# Greeting -- ...", so the listing advertised a name `tutorial`
+\ refused. The description is what the title says after its em dash.
+20 constant (tut-fw)                       \ the name column. A longer name pushes
+                                           \ its description right; truncating the
+                                           \ one thing you must type would be worse
+: (emdash?) ( c-addr -- flag )             \ does U+2014 start here? (E2 80 94)
+    dup c@ 226 <> if drop false exit then
+    dup 1+ c@ 128 <> if drop false exit then
+    2 + c@ 148 = ;
+variable (td-at)                           \ offset of the first em dash, or -1
+: (td-find) ( c-addr u -- )
+    -1 (td-at) !
+    dup 3 < if 2drop exit then
+    2 - 0 ?do
+        dup i + (emdash?) if  i (td-at) !  leave  then
+    loop  drop ;
+: (td-blanks) ( a u -- a' u' )             \ drop leading blanks
+    begin dup 0> while
+        over c@ bl > if exit then
+        1 /string
+    repeat ;
+: (td-trim) ( a u -- a' u' )               \ ...and one separator, if it is next
+    (td-blanks)
+    dup 0= if exit then
+    over c@ dup [char] - = swap [char] : = or if  1 /string (td-blanks)  then ;
+variable (td-na)  variable (td-nu)         \ the row's name, for the prefix test
+: (td-sep?) ( ch -- flag )                 \ what may follow the name
+    dup bl <= swap dup [char] - = swap [char] : = or or ;
+\ Only a WHOLE leading word counts. Matching bytes alone truncated mid-word --
+\ `A.md` titled "# Amazing Things" listed as "mazing Things", and `Sound.md`
+\ titled "# Soundtracks ..." as "tracks ...". The name has to be followed by
+\ the end of the title or a separator before any of it is dropped.
+: (td-unname) ( ta tu -- da du )           \ drop a leading copy of the name
+    dup (td-nu) @ < if exit then
+    over (td-nu) @  (td-na) @ (td-nu) @  (ci=) 0= if exit then
+    dup (td-nu) @ = if  (td-nu) @ /string exit  then     \ the title IS the name
+    2dup drop (td-nu) @ + c@ (td-sep?) 0= if exit then   \ mid-word: leave it be
+    (td-nu) @ /string (td-trim) ;
+\ Without the em dash the title is not in our convention, so fall back to the
+\ whole of it -- minus a leading copy of the name, which would otherwise print
+\ twice: "NoDash   NoDash a title with no em dash". A plain "-" or ":" where
+\ the em dash should be is the near miss worth absorbing too.
+: (tut-desc) ( ta tu -- da du )            \ the title past its dash, else all of it
+    2dup (td-find)
+    (td-at) @ 0< if  (td-unname) exit  then
+    (td-at) @ 3 + /string (td-trim) ;
+: (tut-pad) ( u -- )                       \ close the name column
+    (tut-fw) swap - dup 0> if spaces else drop space then ;
+: (tut-line) ( i -- )                      \ one row: the name you type, then why
     space space
     (tn-ptr-at) @ count                    ( name u )
+    2dup (td-nu) ! (td-na) !               \ (tut-desc) needs it, to not repeat it
     2dup (tut-path) dup 0= if 2drop type cr exit then   ( name u pa pu )
     r/o open-file if drop type cr exit then             ( name u fileid )
     (title?) 0= if type cr exit then                    ( name u ta tu )
-    2swap 2drop type cr ;
-: (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorial sections
-    2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+    (tut-desc) dup 0= if 2drop type cr exit then        ( name u da du )
+    2swap 2dup type nip (tut-pad)                       ( da du )
+    type cr ;
+: (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorials sections
+    2dup (lessons?) 0= if 2drop exit then
     2dup (md-dirn) ! (md-dir) !            \ (tut-path) builds against this dir
     (collect-in)
     (tn-n) @ 0= if exit then
@@ -2157,7 +2226,7 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     dup 0= if                               \ bare help: the topic listing
         2drop
         ['] (help-in) (each-dir)
-        ." Tutorial:  type  tutorials  to list the interactive tutorials." cr cr
+        ." Tutorials:  type  tutorials  to list the interactive tutorials." cr cr
         ." help <topic>  - that topic's summary       (help stack)" cr
         ." help <word>   - one word's entry           (help allot)" cr
         exit
@@ -2427,11 +2496,11 @@ variable (ts-any)                          \ printed any line of the wanted step
             (pg-buf@) swap (pg-line) true (ts-any) !
         else  drop  then
     again ;
-variable (tut-strict)                      \ true: this pass looks in Tutorial dirs only
+variable (tut-strict)                      \ true: this pass looks in Tutorials dirs only
 : (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
     (tut-found) @ if 2drop exit then
     (tut-strict) @ if
-        2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+        2dup (lessons?) 0= if 2drop exit then
     then
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
@@ -2458,7 +2527,7 @@ variable (tut-strict)                      \ true: this pass looks in Tutorial d
     false (tut-found) !  false (tut-existed) !
     (tut-step) @ (ts-want) !
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    true (tut-strict) !  ['] (tut-in) (each-dir)   \ Tutorial dirs win a name clash
+    true (tut-strict) !  ['] (tut-in) (each-dir)   \ Tutorials dirs win a name clash
     (tut-found) @ 0= if                            \ (Strings is a lesson AND a help
         false (tut-strict) !  ['] (tut-in) (each-dir)   \ topic) — then any docs page
     then

@@ -8,7 +8,7 @@ environment variable; `help` is the front door.
 
 | Word | Stack effect | Meaning |
 |------|--------------|---------|
-| `help` | ( -- ) | list every topic, three to a row, grouped by section (the Tutorial section is left to `tutorials`) |
+| `help` | ( -- ) | list every topic, three to a row, grouped by section (the Tutorials section is left to `tutorials`) |
 | `help <topic>` | ( "topic" -- ) | print the topic's **summary**: the page's preamble — title, short intro, and "At a glance" table |
 | `help <word>` | ( "word" -- ) | print that word's reference entries — every `## ` block naming it, on whatever pages document it |
 | `tutorials` | ( -- ) | list the interactive tutorials (start one with `tutorial <name>`) |
@@ -30,7 +30,7 @@ environment variable; `help` is the front door.
    `<Topic>:` header naming the page it came from — `help allocate` starts
    with `Memory:`, which is also where the related words live (`help
    memory`). One header per page, so a word documented on two pages shows
-   two labeled groups. Tutorial sections are skipped in this pass; their
+   two labeled groups. Tutorials sections are skipped in this pass; their
    `## ` headings are lesson steps, not word entries.
 
 When neither matches: `no help for <name>  (try:  help  or  apropos <keyword>)`.
@@ -103,13 +103,13 @@ real word — which is why a Guide's headings are single tokens: `## clone`,
 Each directory in `BASICFORTH_DOCS` is a **section**, named by the directory's
 last path component. `help` groups its listing under one header per section,
 and `apropos` tags each hit with the section it came from. A section named
-`Tutorial` is the one exception: bare `help` points at `tutorials` instead of
+`Tutorials` is the one exception: bare `help` points at `tutorials` instead of
 listing it, so lessons don't crowd the reference topics.
 
 A typical setup:
 
 ```
-$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
+$ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorials:docs/Guides ./basicforth
 ```
 
 ## Configuration
@@ -135,7 +135,7 @@ Language-Reference
   ...
 Guides
   Install
-Tutorial:  type  tutorials  to list the interactive tutorials.
+Tutorials:  type  tutorials  to list the interactive tutorials.
 
 help <topic>  - that topic's summary       (help stack)
 help <word>   - one word's entry           (help allot)
@@ -149,7 +149,7 @@ Memory:
 Reserve `n` bytes of dictionary space (advance `here`). ...
 > apropos dup
 Stack (Language-Reference)
-Snake (Tutorial)
+Snake (Tutorials)
 ```
 
 Long output still pages a screenful at a time at a terminal

@@ -63,7 +63,7 @@ export BASICFORTH_PATH="$BASICFORTH_HOME/src/forth:$BASICFORTH_HOME/examples"
 # offer. Guides holds the user-facing pages that are neither word references
 # nor lessons (installing, and whatever joins it) — a library's `needs-lib`
 # hint can then say "see help install" and be telling the truth.
-export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorial:$BASICFORTH_HOME/docs/Guides"
+export BASICFORTH_DOCS="$BASICFORTH_HOME/docs/Language-Reference:$BASICFORTH_HOME/docs/Tutorials:$BASICFORTH_HOME/docs/Guides"
 
 # Skip the X input method (XIM) handshake: a wedged ibus-x11 silently freezes
 # SDL_Init (see docs/Graphics.md "Troubleshooting"). Costs nothing for

@@ -21,12 +21,16 @@ At a glance:
 ## search
 
 **`BASICFORTH_PATH`** — colon-separated directories that `include` and
-`require` search. The current directory is always tried first, and is not part
-of this variable.
+`require` search. Two directories are tried ahead of it and are not part of it:
+the directory of the **file doing the requiring**, then the **current
+directory**. Beside-first is what lets an installed package load its own
+siblings — its `require art.fs` finds *its* `art.fs`, not one that happens to
+sit where you are standing. At the prompt there is no file being loaded, so the
+current directory is the first thing tried.
 
 **`BASICFORTH_DOCS`** — colon-separated directories that `help`, `apropos`,
 `tutorials` and `tutorial` search. A directory's *role* comes from its last
-path component: one named `Tutorial` holds lessons and is left out of `help`'s
+path component: one named `Tutorials` holds lessons and is left out of `help`'s
 topic listing, one named `Guides` may use single-word headings, and anything
 else is a reference section listed under that name.
 
@@ -43,13 +47,14 @@ without `setup.sh` you get built-in primitives and no documentation.
 
 Three directories under it are appended to the searches above, if they exist:
 
-    lib/                a .fs file here is `require`-able from anywhere
+    lib/<package>/      the package's own files; `require <package>/<file>.fs`
     docs/Packages/      a .md page here answers `help`
-    docs/Tutorial/      a lesson here is listed by `tutorials`
+    docs/Tutorials/     a lesson here is listed by `tutorials`
 
 **Appended, never prepended** — nothing you install can shadow a library, help
 topic or lesson that ships with BasicForth, and a copy in the directory you are
-working in still beats both.
+working in still beats both. (A file being loaded searches beside itself before
+any of this; see `BASICFORTH_PATH` above.)
 
 Point it at a directory that does not exist and the whole mechanism sits out.
 That is not a workaround; it is how the test suites stay independent of
@@ -113,7 +118,7 @@ finds the same `objdump` your shell would.
     PATH                PREPENDS the build directory for this machine, so
                         `basicforth` runs from anywhere
     BASICFORTH_PATH     src/forth, then examples
-    BASICFORTH_DOCS     Language-Reference, Tutorial and Guides
+    BASICFORTH_DOCS     Language-Reference, Tutorials and Guides
 
 And these two, which deliberately do *not* come from the checkout:
 

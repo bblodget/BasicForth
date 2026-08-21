@@ -160,7 +160,7 @@ permanent instead, `help installing`.
 Two further suites need `python3`:
 
     make run-pty            # terminal/line-editor behaviour
-    make run-lessons        # replays every docs/Tutorial lesson
+    make run-lessons        # replays every docs/Tutorials lesson
 
 The suites set their own environment, so they pass in a bare shell without
 `setup.sh` having been sourced. Lessons and integration checks that need a
@@ -232,18 +232,38 @@ Files you drop in your own package directory are found from **any** working
 directory, without editing an environment variable:
 
     ~/.basicforth/
-      lib/                a .fs file here is `require`-able anywhere
+      lib/<package>/      the package's own files; `require <package>/<file>.fs`
       docs/Packages/      a .md page here answers `help`
-      docs/Tutorial/      a lesson here is listed by `tutorials`
+      docs/Tutorials/     a lesson here is listed by `tutorials`
 
 Nothing creates this for you — `make install` deliberately does not, since it
 may run as root and this directory is yours. Make it when you want it:
 
-    mkdir -p ~/.basicforth/lib ~/.basicforth/docs/Packages ~/.basicforth/docs/Tutorial
+    mkdir -p ~/.basicforth/lib ~/.basicforth/docs/Packages ~/.basicforth/docs/Tutorials
 
-Then a file `~/.basicforth/lib/greet.fs` loads with `require greet.fs` from
-wherever you happen to be, and a `greet.md` beside it in `docs/Packages/`
-answers `help greet`.
+A single loose file works — `~/.basicforth/lib/greet.fs` loads with
+`require greet.fs` from wherever you happen to be. But **a package gets a
+directory of its own**, named for the package:
+
+    ~/.basicforth/lib/greeting/          -> the package's own src/
+    ~/.basicforth/lib/dark-star/         -> likewise
+
+    require greeting/greeting.fs
+
+The directory is the scope. Two packages can each ship an `art.fs` without
+either shadowing the other, one package can carry as many files as it likes,
+and the name you type says where the code came from — the same job `pkg::page`
+does for documentation pages.
+
+**Link the directory, not the files inside it.** A package finds its own
+siblings by looking beside the file being loaded, and that means beside the
+*path it was reached by*, not beside whatever a symlink points at:
+
+    lib/greeting -> ~/Dev/Greeting/src          require greeting/greeting.fs   works
+    lib/greeting/greeting.fs -> ~/Dev/.../src/greeting.fs   its `require art.fs` fails
+
+A one-file package survives the second form, having no siblings to miss, which
+is exactly what makes the mistake easy to ship.
 
 Three things worth knowing:
 
@@ -261,7 +281,7 @@ Three things worth knowing:
 
 **Name your files for the package, not the topic.** These directories are flat
 and shared — every package's pages sit in one `docs/Packages/`, every package's
-lessons in one `docs/Tutorial/`, and subdirectories are not searched. So a
+lessons in one `docs/Tutorials/`, and subdirectories are not searched. So a
 `Sound.md` of yours sits beside the bundled `Sound` lesson: `tutorials` lists
 both, and `tutorial Sound` opens the bundled one, leaving yours advertised and
 unreachable. Prefix instead — `dark-star.md`, `dark-star-levels.md` — and
@@ -311,8 +331,8 @@ it is, and `setup.sh` is only for working in a checkout. See `help installing`.
     > tutorial
     usage: tutorial <name> [step]   then  next / back / step  to move
     Tutorials (start one with:  tutorial <name>):
-      Arrays — Your First Data Structure
-      Bitmaps — Sprites You Type in Binary
+      Arrays              Your First Data Structure
+      Bitmaps             Sprites You Type in Binary
       ...
 
 `tutorial <name>` starts a lesson; `help <word>` explains a word; `apropos`
@@ -502,14 +522,14 @@ output. That is how 3.2.10 was cleared.
     examples/           runnable programs
     docs/               design documentation
     docs/Guides/        task pages (this one) that `help` reads
-    docs/Tutorial/      the lessons `tutorial` reads
+    docs/Tutorials/     the lessons `tutorial` reads
     docs/Language-Reference/   the pages `help` reads
 
 Your own package directory sits outside the checkout — see `help packages`:
 
     ~/.basicforth/lib/          .fs files, searched after BASICFORTH_PATH
     ~/.basicforth/docs/Packages/    .md pages, listed under "Packages"
-    ~/.basicforth/docs/Tutorial/    lessons, listed by `tutorials`
+    ~/.basicforth/docs/Tutorials/   lessons, listed by `tutorials`
 
 ## next-steps
 

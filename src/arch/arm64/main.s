@@ -835,7 +835,7 @@ tmpl_probe:     .ascii "%/share/basicforth/forth/core.fs"
 .equ tmpl_probe_len, . - tmpl_probe
 tmpl_path:      .ascii "%/share/basicforth/forth:%/share/basicforth/examples"
 .equ tmpl_path_len, . - tmpl_path
-tmpl_docs:      .ascii "%/share/basicforth/docs/Language-Reference:%/share/basicforth/docs/Tutorial:%/share/basicforth/docs/Guides"
+tmpl_docs:      .ascii "%/share/basicforth/docs/Language-Reference:%/share/basicforth/docs/Tutorials:%/share/basicforth/docs/Guides"
 .equ tmpl_docs_len, . - tmpl_docs
 
 .data

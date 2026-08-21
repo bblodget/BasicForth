@@ -111,12 +111,12 @@ ARCH ?= $(NATIVE)
 install: $(ARCH)
 	install -d $(bindir) $(sharedir)/forth $(sharedir)/examples \
 	           $(sharedir)/docs/Language-Reference \
-	           $(sharedir)/docs/Tutorial $(sharedir)/docs/Guides
+	           $(sharedir)/docs/Tutorials $(sharedir)/docs/Guides
 	install -m 755 src/arch/$(ARCH)/basicforth   $(bindir)/basicforth
 	install -m 644 src/forth/*.fs                $(sharedir)/forth/
 	install -m 644 examples/*                    $(sharedir)/examples/
 	install -m 644 docs/Language-Reference/*.md  $(sharedir)/docs/Language-Reference/
-	install -m 644 docs/Tutorial/*.md            $(sharedir)/docs/Tutorial/
+	install -m 644 docs/Tutorials/*.md           $(sharedir)/docs/Tutorials/
 	install -m 644 docs/Guides/*.md              $(sharedir)/docs/Guides/
 	@echo
 	@echo "Installed to $(DESTDIR)$(PREFIX):"
@@ -164,7 +164,7 @@ help:
 	@echo "  make run-test-arm64  Run ARM64 unit test"
 	@echo "  make run-integration Run integration tests for native arch"
 	@echo "  make run-pty         Run line-editor PTY tests (scrolling) for native arch"
-	@echo "  make run-lessons     Replay the docs/Tutorial lessons and examples"
+	@echo "  make run-lessons     Replay the docs/Tutorials lessons and examples"
 	@echo ""
 	@echo "Install:"
 	@echo "  make install         Install to $(PREFIX) (override: PREFIX=~/.local)"
