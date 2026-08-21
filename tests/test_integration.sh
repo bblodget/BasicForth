@@ -6375,6 +6375,95 @@ else
     printf "    Bad:%s\n" "$guide_bad"; ((failed++))
 fi
 
+# A Guides page's PREAMBLE is the whole of what `help <page>` prints, so it is
+# the only place a reader learns the sub-topics exist -- `help x86` has to say
+# that `help x86-regs` is a thing, or nothing does. That list is hand-written
+# and drifts silently: Install.md gained `## packages` and `## next-steps`
+# without either reaching its own index, so both were reachable only by
+# guessing the name. Nothing about a missing entry is visible from the page.
+guide_idx_bad=""
+guide_idx_n=0
+while read -r file; do
+    page=$(basename "$file" .md)
+    preamble=$(awk '/^## /{exit} {print}' "$file")
+    while read -r head; do
+        guide_idx_n=$((guide_idx_n + 1))
+        # Must be an INDEX LINE -- indented, heading first -- not merely the
+        # word occurring somewhere in the prose. A plain word match passed
+        # `setup` and `session` on Environment.md, whose preamble names
+        # neither section but does say "setup.sh" and "interactive session":
+        # the two headings the page documents worst were the two the loose
+        # check called fine.
+        printf '%s' "$preamble" | grep -qE "^ +${head}( |\$)" \
+            || guide_idx_bad="$guide_idx_bad ${page}:${head}"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_idx_n" -gt 0 ] && [ -z "$guide_idx_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every Guides section is listed in its own preamble (%d)\n" "$guide_idx_n"; ((passed++))
+elif [ "$guide_idx_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides preamble index (no pages found)\n"
+else
+    printf "  ${RED}FAIL${NC}  a Guides section is missing from its page's preamble\n"
+    printf "    Bad:%s\n" "$guide_idx_bad"; ((failed++))
+fi
+
+# `help` prints raw Markdown -- no renderer -- so a table is only as readable as
+# its source. A ragged one is genuinely hard to follow in a terminal, which is
+# why the reference pages historically used indented blocks instead and carried
+# almost no tables at all. Aligned, a table is a good compact form; past a
+# certain width it stops being one and the content wants prose.
+#
+# Character counts, NOT bytes. These tables are full of en/em dashes, ellipses
+# and arrows, and awk's length() is bytes under LC_ALL=C -- so a byte-wise
+# check calls a correctly aligned table ragged, and a byte-wise *aligner*
+# produces one that looks right in the source and renders crooked. Counting
+# UTF-8 continuation bytes (0x80-0xBF) and subtracting is locale-independent.
+#
+# TABLE_MAX_COLS is 80 because that is the terminal a reader actually has, and
+# a table that wraps is worse than the ragged one it replaced. The widest today
+# renders at 79. A table that cannot make the budget without mangling its cells
+# wants to be paragraphs instead -- that is the signal, not a reason to raise
+# the number.
+TABLE_MAX_COLS=80
+tbl_out=$(LC_ALL=C awk -v max="$TABLE_MAX_COLS" '
+    # RENDERED width, which is the only one that matters: `help` strips inline
+    # markup on a terminal (and emits ANSI for bold), so a table padded to line
+    # up in the SOURCE comes out ragged on screen -- each backtick pair costs 2
+    # columns and each ** costs 4, and the loss differs cell by cell. Verified
+    # under a PTY: an 85-column header over rows of 73-81. Markdown viewers
+    # reflow tables regardless of source padding, so aligning the rendered text
+    # is free.
+    function clen(s,   t) {
+        t = s; gsub(/`/, "", t); gsub(/\*\*/, "", t)
+        gsub(/[\200-\277]/, "", t)   # drop UTF-8 continuation bytes...
+        return length(t)              # ...so what is left IS the char count
+    }
+    function flush(   i, j, nf, sig, first, bad) {
+        if (nrow < 2) { nrow = 0; return }
+        bad = ""
+        for (i = 1; i <= nrow; i++) {
+            nf = split(row[i], f, "|")
+            sig = ""
+            for (j = 1; j <= nf; j++) sig = sig clen(f[j]) ","
+            if (i == 1) first = sig
+            else if (sig != first) bad = "ragged"
+            if (clen(row[i]) > max) bad = (bad == "" ? "wide" : bad "+wide")
+        }
+        if (bad != "") printf "%s:%d(%s) ", short, start, bad
+        nrow = 0
+    }
+    FNR == 1 { flush(); short = FILENAME; sub(/^.*\//, "", short) }
+    /^[ \t]*\|/ { if (nrow == 0) start = FNR; row[++nrow] = $0; next }
+    { flush() }
+    END { flush() }
+' "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Guides/*.md "$REPO_ROOT"/docs/Tutorial/*.md 2>/dev/null)
+if [ -z "$tbl_out" ]; then
+    printf "  ${GREEN}PASS${NC}  every help-path table is column-aligned and under %s columns\n" "$TABLE_MAX_COLS"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a help-path table is ragged or too wide for a terminal\n"
+    printf "    Bad: %s\n" "$tbl_out"; ((failed++))
+fi
+
 if [ -z "$hint_docs" ]; then
     printf "  ${RED}FAIL${NC}  dep-block help hints: could not read BASICFORTH_DOCS from setup.sh\n"; ((failed++))
 elif [ -n "$hint_seen" ] && [ -z "$hint_bad" ]; then
@@ -8383,7 +8472,9 @@ fi
 # same test is the wrong home for the locals list too. Both clears are now
 # unconditional, above it.
 ld_dir="$(mktemp -d)"
-printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+# DERIVE the overflow rather than hardcoding a size: `300000` was chosen to
+# exceed a 256 KB dictionary and silently stopped overflowing when it grew.
+printf 'create ldblob unused 1000 + allot\n' > "$ld_dir/full.fs"
 ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
 rm -rf "$ld_dir"
@@ -8660,6 +8751,106 @@ else
 fi
 
 rm -rf "$pkg_home" "$pkg_cwd"
+
+# =========================================================================
+section "BESIDE (a package finds its own files)"
+# =========================================================================
+# require/include look beside the file doing the requiring, BEFORE the current
+# directory. The order is the point: a package must get its own art.fs even
+# when you are standing next to a different one, which is the `font.fs in the
+# launch directory' incident core.fs records.
+# These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
+# relative in a normal run and carries a qemu prefix in a cross one.
+bes_bin="${FORTH##* }"; bes_pre="${FORTH% *}"
+[ "$bes_pre" = "$FORTH" ] && bes_pre=""
+bes_bin="$(cd "$(dirname "$bes_bin")" && pwd)/$(basename "$bes_bin")"
+bes_forth="$bes_pre $bes_bin"
+
+bes_pkg="$(mktemp -d)"; bes_cwd="$(mktemp -d)"
+mkdir -p "$bes_pkg/pkg/data"
+echo ': bes-sib ." the package own" cr ;'      > "$bes_pkg/pkg/art.fs"
+echo 'payload'                                  > "$bes_pkg/pkg/data/thing.txt"
+cat > "$bes_pkg/pkg/main.fs" <<'BESEOF'
+require art.fs
+my-dir 2constant bes-home
+: bes-file ( c-addr u -- c-addr' u' )  bes-home 2swap path-join ;
+: bes-open ( -- )
+    s" data/thing.txt" bes-file r/o open-file
+    if  drop ." asset FAILED" cr  else  close-file drop ." asset ok" cr  then ;
+BESEOF
+echo ': bes-sib ." the DECOY" cr ;'             > "$bes_cwd/art.fs"
+
+bes_run() {                       # cwd  input  -> stdout, prompts stripped
+    ( cd "$1" && printf '%s\n' "$2" | BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages" \
+        BASICFORTH_PATH="$FORTH_LIB:$bes_pkg" timeout 20 $bes_forth 2>&1 | sed '/^> /d; /^>$/d' )
+}
+bes_assert() {                    # name  cwd  input  expected
+    local out; out=$(bes_run "$2" "$3")
+    if [[ "$out" == *"$4"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got: %q\n" "$1" "$4" "$out"; ((failed++))
+    fi
+}
+
+bes_assert "a package finds its own sibling from anywhere" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# The ordering assertion, and the only one that can tell the two rules apart:
+# with CWD first this reports the decoy.
+bes_assert "a file of the same name in the working directory does not win" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# A MISS must still fall through: requiring a library from inside a package is a
+# miss, and is the common case. bes-far.fs sits one directory ABOVE the package,
+# on BASICFORTH_PATH and NOT beside the file requiring it -- so the probe misses
+# and the ordinary search has to find it.
+#
+# The needle is what the far file DEFINES, not anything in the input. An earlier
+# version of this check ran `." fell through ok"` at the prompt and matched that
+# text in the echoed input, so it passed with the require failing -- and at the
+# prompt my-dir is empty, so it never exercised the fallback at all.
+echo ': bes-far-word ." reached the far one" cr ;' > "$bes_pkg/bes-far.fs"
+echo 'require bes-far.fs'                          > "$bes_pkg/pkg/usesfar.fs"
+bes_assert "a name that is not beside us still searches BASICFORTH_PATH" "$bes_cwd" \
+    'require pkg/usesfar.fs
+bes-far-word' "reached the far one"
+
+bes_assert "my-dir is empty at the prompt" "$bes_cwd" \
+    'my-dir nip .' "0"
+
+bes_assert "a captured my-dir still answers after the load" "$bes_cwd" \
+    'require pkg/main.fs
+bes-home type' "$bes_pkg/pkg"
+
+bes_assert "an asset opens through a captured my-dir" "$bes_cwd" \
+    'require pkg/main.fs
+bes-open' "asset ok"
+
+# The buffer-corruption regression: a file erroring AFTER a nested require was
+# reported against the nested file, at the outer file's length.
+mkdir -p "$bes_pkg/nest"
+echo 'require nleaf.fs
+nbadword'                                       > "$bes_pkg/nest/nmid.fs"
+echo ': nleaf-word ;'                           > "$bes_pkg/nest/nleaf.fs"
+bes_assert "a nested load reports the file that actually failed" "$bes_cwd" \
+    'require nest/nmid.fs' "nmid.fs:2: ? nbadword"
+
+bes_assert "path-join joins" "$bes_cwd" \
+    's" /a/b" s" c/d.wav" path-join type' "/a/b/c/d.wav"
+
+bes_assert "path-join with no directory returns the name" "$bes_cwd" \
+    's" " s" bare.fs" path-join type' "bare.fs"
+
+bes_assert "2constant returns both cells in order" "$bes_cwd" \
+    '11 22 2constant bes-pair  bes-pair . .' "22 11"
+
+bes_assert "2variable zero-inits, and round-trips" "$bes_cwd" \
+    '2variable bes-v  bes-v 2@ . .  33 44 bes-v 2!  bes-v 2@ . .' "0 0 44 33"
+
+rm -rf "$bes_pkg" "$bes_cwd"
 
 # =========================================================================
 section "BYE"

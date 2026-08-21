@@ -93,14 +93,22 @@ Writing to a W register zeroes the upper 32 bits of the corresponding X register
 ### BasicForth Register Allocation
 
 ```
-X19 = Data stack pointer (DSP)     — callee-saved, points to top item
-X20 = scratch (available)          — callee-saved, no longer used for TOS
-X21 = HERE pointer                 — dictionary free space
-X22 = LATEST pointer               — most recent dictionary entry
-X23-X28 = Available for STATE, BASE, etc.
+X19 = Data stack pointer (DSP)     — reserved, points to top item
+X21 = HERE pointer                 — reserved, dictionary free space
+X22 = LATEST pointer               — reserved, newest dictionary entry
 SP  = Return stack                 — hardware stack
-X30 = Link register                — saved/restored by BL/RET
+X30 = Link register                — written by every BL; a definition that
+                                     calls anything must spill it first
 ```
+
+Those four are the engine state and are held across every call. Everything
+else is scratch — including the registers that look spare. `X20` was freed
+when TOS-in-register was dropped, but it is free only on paper: it carries
+the thread context across calls in the worker trampoline, and the locals
+pointer lives in TLS rather than in X20 for exactly that reason. `X23`-`X28`
+are likewise in heavy scratch use (`X23`/`X24` are pushed as a pair at 32
+sites in `core.s`), not held in reserve for STATE or BASE. All of them are
+callee-saved, so whoever borrows one saves and restores it.
 
 ## Key Differences from x86
 

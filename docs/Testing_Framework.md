@@ -117,7 +117,13 @@ the whole file, which is what the `make` targets do.
 | Layer              | Approach           | Status                          |
 |--------------------|--------------------|---------------------------------|
 | `core.s`           | C harness (unit)   | 123 tests, both arches          |
-| Full binary        | Shell integration  | 1180 tests, both arches         |
+| Full binary        | Shell integration  | 1223 x86 / 1153 ARM64           |
 | Terminal behaviour | PTY harness        | 36 tests, both arches           |
 | Lessons + examples | Replay harness     | 32 tests, both arches           |
 | `core.fs`          | Forth testbench    | Future                          |
+
+The integration counts differ by architecture on purpose. A handful of checks
+that verify a property of the *documentation* — identical on both — cost about
+10 s each under qemu against 0.08 s natively, so they run only on a native
+binary. That includes an ARM64 board, which is native; it is emulation the
+skip is avoiding, not the architecture.

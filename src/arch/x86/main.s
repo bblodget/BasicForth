@@ -8,7 +8,8 @@
 #   R12 = LATEST (most recent dictionary entry)
 #   RSP = Return stack
 #
-# R14 is free (no longer used for TOS).
+# R14 is not reserved — freed when TOS-in-register was dropped, and since
+# taken back into ordinary scratch use. Save it if you borrow it.
 
 .include "version.inc"
 
