@@ -71,12 +71,19 @@ movzbl %al, %eax            # RAX = 0x00000000000000FF (explicit zero-extend)
 ### BasicForth Register Allocation
 
 ```
-%r15 = Data stack pointer (DSP)     — callee-saved, points to top item
-%r14 = scratch (available)          — callee-saved, no longer used for TOS
-%r13 = HERE pointer                 — dictionary free space
-%r12 = LATEST pointer               — most recent dictionary entry
+%r15 = Data stack pointer (DSP)     — reserved, points to top item
+%r13 = HERE pointer                 — reserved, dictionary free space
+%r12 = LATEST pointer               — reserved, newest dictionary entry
 %rsp = Return stack                 — hardware stack
 ```
+
+Those four are the engine state and are held across every call. Everything
+else is scratch — including `%r14`, which is callee-saved but **not**
+reserved. It was freed when TOS-in-register was dropped and has since gone
+back into ordinary scratch use (`forth_interpret_line` and the line scanner
+both borrow it), saved and restored by whoever takes it, exactly like
+`%rbx` and `%rbp`. Seeing `%r14` in a listing says nothing about engine
+state; seeing `%r15` says everything.
 
 ### System V AMD64 ABI Conventions
 

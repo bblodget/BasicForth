@@ -93,6 +93,27 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       second. The PTY suite has the same flaw and is NOT swept — see below.
       Detail: §Future / Hardening.
 
+- [x] **A register reference for reading `dis` output — DONE 2026-08-20**
+      (branch `2-register-guides`). Two pages, `help x86` and `help arm64`,
+      because you are on one architecture when you are reading a listing. Each
+      covers the four reserved registers, the push/pop/TOS idioms, the literal
+      and string shapes, calls and control flow, the C and syscall ABIs, and a
+      worked definition end to end. Scoped as *how to read what `dis` just
+      printed* rather than as an assembler tutorial, which is what decided
+      every inclusion question.
+
+      Three things the sources said that were not true, now fixed in
+      `docs/x86_Quick_Reference.md`, `docs/ARM64_Quick_Reference.md` and the
+      four `.s` header comments: `%r14` and `X20` are described as "scratch
+      (available)" but are both in live scratch use, and `X23-X28` are listed
+      as "available for STATE, BASE" when `X23`/`X24` alone are saved and
+      borrowed at 32 sites. Comment-only in the `.s` files, so not `[ENGINE]`.
+
+      Also settled, since anyone reading `dis drop` asks it: the load that
+      `drop` never uses is not dead. Moving a pointer cannot fault, so without
+      it an empty-stack `drop` would walk DSP into the guard page silently and
+      fault later inside an unrelated word.
+
 - [ ] **`[ENGINE]` ARM64: diagnose `to <local>` at 6.5 ns against x86's 0.54.**
       Done when: the two hypotheses in the entry are separated by re-measuring
       with a `drop` in the loop on the Pi, and the result is either a fix or a

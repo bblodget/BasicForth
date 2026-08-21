@@ -32,6 +32,7 @@ At a glance — each of these is `help <topic>`:
     build           x86-64, ARM64 cross-compile, or both
     verify          the four test suites
     installing      make install, for a permanent copy
+    packages        installing and using add-on packages
     path            setup.sh, and what it exports
     first-run       your first prompt
     libraries       SDL3, flite, piper — the optional half
@@ -39,6 +40,7 @@ At a glance — each of these is `help <topic>`:
     engines         `voice-render`, text to a WAV file
     sdl3-source     building SDL3 yourself, if apt has no package
     layout          where things live in the tree
+    next-steps      where to go once it runs
 
 For one library's own page rather than its install: `help sdl3`, `help sound`,
 `help speech`, `help voice`.
@@ -347,11 +349,11 @@ pages.
 Each of these adds one capability. Skipping one costs exactly that
 capability, and never the build.
 
-| Library | Install | Without it you lose |
-|---|---|---|
-| **SDL3** | `sudo apt install libsdl3-dev` | windows, graphics, all audio, gamepads |
-| **flite** | `sudo apt install libflite1` | `say` — speaking immediately |
-| **TTS engine** (piper) | `help engines` | `voice-render` — text to WAV |
+| Library    | Install                      | Without it you lose        |
+|------------|------------------------------|----------------------------|
+| **SDL3**       | `sudo apt install libsdl3-dev` | graphics, audio, gamepads  |
+| **flite**      | `sudo apt install libflite1`   | `say` — speaking immediately |
+| **TTS engine** | `help engines`                 | `voice-render` — text to WAV |
 
 On a distribution that packages SDL3, the whole optional half is one command:
 

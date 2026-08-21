@@ -6437,6 +6437,95 @@ else
     printf "    Bad:%s\n" "$guide_bad"; ((failed++))
 fi
 
+# A Guides page's PREAMBLE is the whole of what `help <page>` prints, so it is
+# the only place a reader learns the sub-topics exist -- `help x86` has to say
+# that `help x86-regs` is a thing, or nothing does. That list is hand-written
+# and drifts silently: Install.md gained `## packages` and `## next-steps`
+# without either reaching its own index, so both were reachable only by
+# guessing the name. Nothing about a missing entry is visible from the page.
+guide_idx_bad=""
+guide_idx_n=0
+while read -r file; do
+    page=$(basename "$file" .md)
+    preamble=$(awk '/^## /{exit} {print}' "$file")
+    while read -r head; do
+        guide_idx_n=$((guide_idx_n + 1))
+        # Must be an INDEX LINE -- indented, heading first -- not merely the
+        # word occurring somewhere in the prose. A plain word match passed
+        # `setup` and `session` on Environment.md, whose preamble names
+        # neither section but does say "setup.sh" and "interactive session":
+        # the two headings the page documents worst were the two the loose
+        # check called fine.
+        printf '%s' "$preamble" | grep -qE "^ +${head}( |\$)" \
+            || guide_idx_bad="$guide_idx_bad ${page}:${head}"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_idx_n" -gt 0 ] && [ -z "$guide_idx_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every Guides section is listed in its own preamble (%d)\n" "$guide_idx_n"; ((passed++))
+elif [ "$guide_idx_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides preamble index (no pages found)\n"
+else
+    printf "  ${RED}FAIL${NC}  a Guides section is missing from its page's preamble\n"
+    printf "    Bad:%s\n" "$guide_idx_bad"; ((failed++))
+fi
+
+# `help` prints raw Markdown -- no renderer -- so a table is only as readable as
+# its source. A ragged one is genuinely hard to follow in a terminal, which is
+# why the reference pages historically used indented blocks instead and carried
+# almost no tables at all. Aligned, a table is a good compact form; past a
+# certain width it stops being one and the content wants prose.
+#
+# Character counts, NOT bytes. These tables are full of en/em dashes, ellipses
+# and arrows, and awk's length() is bytes under LC_ALL=C -- so a byte-wise
+# check calls a correctly aligned table ragged, and a byte-wise *aligner*
+# produces one that looks right in the source and renders crooked. Counting
+# UTF-8 continuation bytes (0x80-0xBF) and subtracting is locale-independent.
+#
+# TABLE_MAX_COLS is 80 because that is the terminal a reader actually has, and
+# a table that wraps is worse than the ragged one it replaced. The widest today
+# renders at 79. A table that cannot make the budget without mangling its cells
+# wants to be paragraphs instead -- that is the signal, not a reason to raise
+# the number.
+TABLE_MAX_COLS=80
+tbl_out=$(LC_ALL=C awk -v max="$TABLE_MAX_COLS" '
+    # RENDERED width, which is the only one that matters: `help` strips inline
+    # markup on a terminal (and emits ANSI for bold), so a table padded to line
+    # up in the SOURCE comes out ragged on screen -- each backtick pair costs 2
+    # columns and each ** costs 4, and the loss differs cell by cell. Verified
+    # under a PTY: an 85-column header over rows of 73-81. Markdown viewers
+    # reflow tables regardless of source padding, so aligning the rendered text
+    # is free.
+    function clen(s,   t) {
+        t = s; gsub(/`/, "", t); gsub(/\*\*/, "", t)
+        gsub(/[\200-\277]/, "", t)   # drop UTF-8 continuation bytes...
+        return length(t)              # ...so what is left IS the char count
+    }
+    function flush(   i, j, nf, sig, first, bad) {
+        if (nrow < 2) { nrow = 0; return }
+        bad = ""
+        for (i = 1; i <= nrow; i++) {
+            nf = split(row[i], f, "|")
+            sig = ""
+            for (j = 1; j <= nf; j++) sig = sig clen(f[j]) ","
+            if (i == 1) first = sig
+            else if (sig != first) bad = "ragged"
+            if (clen(row[i]) > max) bad = (bad == "" ? "wide" : bad "+wide")
+        }
+        if (bad != "") printf "%s:%d(%s) ", short, start, bad
+        nrow = 0
+    }
+    FNR == 1 { flush(); short = FILENAME; sub(/^.*\//, "", short) }
+    /^[ \t]*\|/ { if (nrow == 0) start = FNR; row[++nrow] = $0; next }
+    { flush() }
+    END { flush() }
+' "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Guides/*.md "$REPO_ROOT"/docs/Tutorial/*.md 2>/dev/null)
+if [ -z "$tbl_out" ]; then
+    printf "  ${GREEN}PASS${NC}  every help-path table is column-aligned and under %s columns\n" "$TABLE_MAX_COLS"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a help-path table is ragged or too wide for a terminal\n"
+    printf "    Bad: %s\n" "$tbl_out"; ((failed++))
+fi
+
 if [ -z "$hint_docs" ]; then
     printf "  ${RED}FAIL${NC}  dep-block help hints: could not read BASICFORTH_DOCS from setup.sh\n"; ((failed++))
 elif [ -n "$hint_seen" ] && [ -z "$hint_bad" ]; then

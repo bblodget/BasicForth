@@ -8,7 +8,8 @@
 //   X22 = LATEST (most recent dictionary entry)
 //   SP  = Return stack
 //
-// X20 is free (no longer used for TOS).
+// X20 is not reserved — freed when TOS-in-register was dropped, and since
+// taken back into ordinary scratch use. Save it if you borrow it.
 
 .include "version.inc"
 
