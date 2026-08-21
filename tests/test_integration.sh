@@ -6487,6 +6487,22 @@ fi
 # wants to be paragraphs instead -- that is the signal, not a reason to raise
 # the number.
 TABLE_MAX_COLS=80
+# The file list is built and CHECKED before the scan. A glob that stops
+# matching -- a section renamed, a directory moved -- would otherwise expand to
+# nothing, `2>/dev/null` would eat the error, and the check would keep passing
+# over less than it claims to cover. Coverage that disappears quietly is the
+# same failure shape as a skip sentinel that stops firing.
+tbl_files=()
+for tbl_dir in Language-Reference Guides Tutorials; do
+    tbl_n=$(ls "$REPO_ROOT/docs/$tbl_dir"/*.md 2>/dev/null | wc -l)
+    if [ "$tbl_n" -eq 0 ]; then
+        printf "  ${RED}FAIL${NC}  table check found no pages in docs/%s (renamed? moved?)\n" "$tbl_dir"
+        ((failed++))
+    else
+        while IFS= read -r tbl_f; do tbl_files+=("$tbl_f"); done \
+            < <(ls "$REPO_ROOT/docs/$tbl_dir"/*.md)
+    fi
+done
 tbl_out=$(LC_ALL=C awk -v max="$TABLE_MAX_COLS" '
     # RENDERED width, which is the only one that matters: `help` strips inline
     # markup on a terminal (and emits ANSI for bold), so a table padded to line
@@ -6518,7 +6534,7 @@ tbl_out=$(LC_ALL=C awk -v max="$TABLE_MAX_COLS" '
     /^[ \t]*\|/ { if (nrow == 0) start = FNR; row[++nrow] = $0; next }
     { flush() }
     END { flush() }
-' "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Guides/*.md "$REPO_ROOT"/docs/Tutorial/*.md 2>/dev/null)
+' "${tbl_files[@]}")
 if [ -z "$tbl_out" ]; then
     printf "  ${GREEN}PASS${NC}  every help-path table is column-aligned and under %s columns\n" "$TABLE_MAX_COLS"; ((passed++))
 else
