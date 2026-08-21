@@ -128,7 +128,7 @@ rather than deferring to the next read.
 
 ## Dictionary Full (Software Check)
 
-Dictionary space (`dict_space`, 64KB) does not have a guard page.
+Dictionary space (`dict_space`, 512 KB — `DICT_SPACE_SIZE`) has no guard page.
 Instead, the `CHECK_DICT n` macro performs an explicit bounds check
 before writing.  It is used by:
 

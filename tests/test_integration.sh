@@ -8383,7 +8383,9 @@ fi
 # same test is the wrong home for the locals list too. Both clears are now
 # unconditional, above it.
 ld_dir="$(mktemp -d)"
-printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+# DERIVE the overflow rather than hardcoding a size: `300000` was chosen to
+# exceed a 256 KB dictionary and silently stopped overflowing when it grew.
+printf 'create ldblob unused 1000 + allot\n' > "$ld_dir/full.fs"
 ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
 rm -rf "$ld_dir"
@@ -8660,6 +8662,106 @@ else
 fi
 
 rm -rf "$pkg_home" "$pkg_cwd"
+
+# =========================================================================
+section "BESIDE (a package finds its own files)"
+# =========================================================================
+# require/include look beside the file doing the requiring, BEFORE the current
+# directory. The order is the point: a package must get its own art.fs even
+# when you are standing next to a different one, which is the `font.fs in the
+# launch directory' incident core.fs records.
+# These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
+# relative in a normal run and carries a qemu prefix in a cross one.
+bes_bin="${FORTH##* }"; bes_pre="${FORTH% *}"
+[ "$bes_pre" = "$FORTH" ] && bes_pre=""
+bes_bin="$(cd "$(dirname "$bes_bin")" && pwd)/$(basename "$bes_bin")"
+bes_forth="$bes_pre $bes_bin"
+
+bes_pkg="$(mktemp -d)"; bes_cwd="$(mktemp -d)"
+mkdir -p "$bes_pkg/pkg/data"
+echo ': bes-sib ." the package own" cr ;'      > "$bes_pkg/pkg/art.fs"
+echo 'payload'                                  > "$bes_pkg/pkg/data/thing.txt"
+cat > "$bes_pkg/pkg/main.fs" <<'BESEOF'
+require art.fs
+my-dir 2constant bes-home
+: bes-file ( c-addr u -- c-addr' u' )  bes-home 2swap path-join ;
+: bes-open ( -- )
+    s" data/thing.txt" bes-file r/o open-file
+    if  drop ." asset FAILED" cr  else  close-file drop ." asset ok" cr  then ;
+BESEOF
+echo ': bes-sib ." the DECOY" cr ;'             > "$bes_cwd/art.fs"
+
+bes_run() {                       # cwd  input  -> stdout, prompts stripped
+    ( cd "$1" && printf '%s\n' "$2" | BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages" \
+        BASICFORTH_PATH="$FORTH_LIB:$bes_pkg" timeout 20 $bes_forth 2>&1 | sed '/^> /d; /^>$/d' )
+}
+bes_assert() {                    # name  cwd  input  expected
+    local out; out=$(bes_run "$2" "$3")
+    if [[ "$out" == *"$4"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got: %q\n" "$1" "$4" "$out"; ((failed++))
+    fi
+}
+
+bes_assert "a package finds its own sibling from anywhere" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# The ordering assertion, and the only one that can tell the two rules apart:
+# with CWD first this reports the decoy.
+bes_assert "a file of the same name in the working directory does not win" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# A MISS must still fall through: requiring a library from inside a package is a
+# miss, and is the common case. bes-far.fs sits one directory ABOVE the package,
+# on BASICFORTH_PATH and NOT beside the file requiring it -- so the probe misses
+# and the ordinary search has to find it.
+#
+# The needle is what the far file DEFINES, not anything in the input. An earlier
+# version of this check ran `." fell through ok"` at the prompt and matched that
+# text in the echoed input, so it passed with the require failing -- and at the
+# prompt my-dir is empty, so it never exercised the fallback at all.
+echo ': bes-far-word ." reached the far one" cr ;' > "$bes_pkg/bes-far.fs"
+echo 'require bes-far.fs'                          > "$bes_pkg/pkg/usesfar.fs"
+bes_assert "a name that is not beside us still searches BASICFORTH_PATH" "$bes_cwd" \
+    'require pkg/usesfar.fs
+bes-far-word' "reached the far one"
+
+bes_assert "my-dir is empty at the prompt" "$bes_cwd" \
+    'my-dir nip .' "0"
+
+bes_assert "a captured my-dir still answers after the load" "$bes_cwd" \
+    'require pkg/main.fs
+bes-home type' "$bes_pkg/pkg"
+
+bes_assert "an asset opens through a captured my-dir" "$bes_cwd" \
+    'require pkg/main.fs
+bes-open' "asset ok"
+
+# The buffer-corruption regression: a file erroring AFTER a nested require was
+# reported against the nested file, at the outer file's length.
+mkdir -p "$bes_pkg/nest"
+echo 'require nleaf.fs
+nbadword'                                       > "$bes_pkg/nest/nmid.fs"
+echo ': nleaf-word ;'                           > "$bes_pkg/nest/nleaf.fs"
+bes_assert "a nested load reports the file that actually failed" "$bes_cwd" \
+    'require nest/nmid.fs' "nmid.fs:2: ? nbadword"
+
+bes_assert "path-join joins" "$bes_cwd" \
+    's" /a/b" s" c/d.wav" path-join type' "/a/b/c/d.wav"
+
+bes_assert "path-join with no directory returns the name" "$bes_cwd" \
+    's" " s" bare.fs" path-join type' "bare.fs"
+
+bes_assert "2constant returns both cells in order" "$bes_cwd" \
+    '11 22 2constant bes-pair  bes-pair . .' "22 11"
+
+bes_assert "2variable zero-inits, and round-trips" "$bes_cwd" \
+    '2variable bes-v  bes-v 2@ . .  33 44 bes-v 2!  bes-v 2@ . .' "0 0 44 33"
+
+rm -rf "$bes_pkg" "$bes_cwd"
 
 # =========================================================================
 section "BYE"

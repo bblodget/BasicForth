@@ -133,9 +133,9 @@ take the address of — read it by name and write it with `to`.
 
 ## unused ( -- u )
 The number of free bytes left in the dictionary — handy for keeping an eye on
-space (the whole dictionary is 256 KB; prefer `allocate` for big buffers).
+space (the whole dictionary is 512 KB; prefer `allocate` for big buffers).
 
-    unused .          \ e.g. 230000-ish
+    unused .          \ e.g. 390000-ish
 
 ## environment? ( c-addr u -- false | i*x true )
 Query a system attribute by name (e.g. `/COUNTED-STRING`, `MAX-N`). Returns
