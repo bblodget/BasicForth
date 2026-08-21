@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Brandon Blodget
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# The lessons in docs/Tutorial/ are executable documentation: every 4-space
+# The lessons in docs/Tutorials/ are executable documentation: every 4-space
 # indented block is something a learner types at the prompt. Nothing else
 # checks them, so a shipped feature can change under a lesson and leave it
 # quietly wrong — this replays each lesson the way a learner walks it (one
@@ -30,7 +30,7 @@ CMD = [os.path.abspath(a) if a.startswith("./") or os.path.exists(a) else a
        for a in sys.argv[1:]]
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-LESSONS = os.path.join(REPO, "docs/Tutorial")
+LESSONS = os.path.join(REPO, "docs/Tutorials")
 LIB = os.path.join(REPO, "src/forth")
 # Emulated runs are minutes, not seconds: a lesson that would hang must still
 # fail rather than wedge the suite, so the limit scales instead of vanishing.
@@ -296,7 +296,7 @@ def example(fs):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-print("--- LESSONS (docs/Tutorial) ---")
+print("--- LESSONS (docs/Tutorials) ---")
 for md in sorted(os.listdir(LESSONS)):
     if md.endswith(".md"):
         lesson(md)

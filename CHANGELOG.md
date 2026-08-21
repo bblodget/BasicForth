@@ -2,6 +2,111 @@
 
 ## Unreleased
 
+### Changed: a package gets a directory under `lib/`
+
+- `~/.basicforth/lib/<package>/` — a symlink to the package's own source
+  directory — rather than a loose entry file. You load it as
+  `require greeting/greeting.fs`, and the directory is the scope: two packages
+  can each ship an `art.fs`, one package can carry as many files as it likes,
+  and the name you type says where the code came from. The same job `pkg::page`
+  does for documentation pages. A single loose `.fs` in `lib/` still works.
+
+- **Link the directory, not the files inside it.** A package finds its siblings
+  beside the path it was *reached by*, not beside whatever a symlink points at.
+  Put a decoy `helper.fs` next to a symlinked entry file and the decoy is what
+  loads — which is how you can tell this apart from the file merely being
+  absent:
+
+      lib/pkg -> src/                     require pkg/entry.fs   sibling found
+      lib/pkg/entry.fs -> src/entry.fs    require pkg/entry.fs   sibling missed
+
+  Resolution could in principle read through the link instead; it does not, and
+  linking directories makes that moot. The trap: a one-file package survives the
+  wrong form, having no siblings to miss, so the mistake ships looking fine.
+
+### Fixed: `tutorials` listed a name you could not type
+
+- The listing printed each lesson's **title line**; `tutorial <name>` matches
+  its **filename**. Nothing kept the two equal, and for every bundled lesson
+  they agree by luck — `Snake.md` happens to be titled `# Snake — …`. An
+  installed package is where they part:
+
+      > tutorials
+        Greeting — Your First Installed Package
+      > tutorial Greeting
+      no tutorial named Greeting (try TUTORIALS)
+
+  The name that worked was `greeting::tutorial`, which the listing never
+  showed. A listing's job is to tell you what to type.
+
+- **The listing now prints the name, then the description** — what the title
+  says after its em dash:
+
+      Arrays              Your First Data Structure
+      Snake               Build Your First Game
+      greeting::tutorial  Your First Installed Package
+
+  The name column is 20 wide. A longer name pushes its own description right
+  rather than being truncated, because the name is the one part you have to
+  type.
+
+- **Titles outside the convention still read sensibly.** The description is
+  what follows the em dash; failing that, the whole title *minus a leading copy
+  of the name* — otherwise `# Nodash a plain title` rendered as
+  `Nodash    Nodash a plain title`, printing the name twice. A plain `-` or `:`
+  where the em dash should be is absorbed the same way. A title that is only
+  the name, or no title line at all, lists the name alone.
+
+  The name is dropped only when it is a **whole leading word**, followed by the
+  end of the title or a separator. A title that merely begins with the same
+  letters keeps them: `Sound.md` titled `# Soundtracks and How They Work` lists
+  in full, rather than as `tracks and How They Work`.
+
+- **This is why a package's files are named `<package>::<page>`.** The prefix
+  is a scope: two packages can each ship a `sound` page, one package can ship
+  several lessons, and the flat directory they share stays unambiguous. `::`
+  rather than a hyphen because a hyphen is a legitimate part of a page name —
+  `Machine-Code.md` is a bundled lesson — so only `::` makes the prefix
+  distinguishable from a name that merely contains one.
+
+### Changed: the lessons directory is `Tutorials`
+
+- The docs sections were `Language-Reference`, `Guides`, `Packages` and
+  `Tutorial` — three plural and one singular, while the *word* that lists them
+  has always been `tutorials`. The directory is now **`Tutorials`**, and the
+  interface carries one spelling for one thing.
+
+- **A clean break, no dual spelling.** A directory still named `Tutorial` stops
+  being a lessons section: `tutorials` no longer lists what is in it, and its
+  pages start appearing in bare `help` as an ordinary reference section called
+  "Tutorial" — their step headings indexed as if they were word entries.
+  `tutorial <Name>` does still find one, because a name that matches nothing in
+  a lessons directory falls back to searching every docs directory. So the
+  failure is quiet rather than loud, which is the reason to rename promptly:
+
+      mv ~/.basicforth/docs/Tutorial ~/.basicforth/docs/Tutorials
+      # and in any package repo of your own: docs/Tutorial -> docs/Tutorials
+
+  Re-source `setup.sh` afterwards. A shell still holding the old
+  `BASICFORTH_DOCS` points at a directory that no longer exists, so lessons
+  vanish until it does — self-correcting, but alarming if you have forgotten
+  this note.
+
+- **Done now because the package format was about to freeze it.** A package
+  ships `docs/Tutorials/` in its own repo, and `Package_Registry.md` marks the
+  format as a v1.0 lock. Renaming after that would have broken every published
+  package.
+
+- **The name now lives in one place.** `core.fs` asked "is this the lessons
+  directory?" in four places and spelled the answer out each time, plus a fifth
+  literal for the path it appends to `BASICFORTH_DOCS`. There is now a single
+  `(lessons-sub)`, with the basename test derived from it rather than agreeing
+  with it by hand. Looking for those five turned up a sixth of the same kind —
+  the `Guides` check that exempts single-word headings — now `(guides?)`.
+  Outside Forth the name still appears in `setup.sh`, the `Makefile` install
+  target and `tmpl_docs` in both `main.s`; those cannot share a constant across
+  four languages, and the install test is what checks them against each other.
+
 ### Added: a package can find its own files
 
 - A package is rarely one file. It has libraries beside its entry point, and
@@ -68,9 +173,9 @@
 - Files in `~/.basicforth/` are now found from **any** working directory, with
   nothing to set up:
 
-      ~/.basicforth/lib/              a .fs file here is `require`-able anywhere
+      ~/.basicforth/lib/<package>/    the package's files, `require pkg/file.fs`
       ~/.basicforth/docs/Packages/    a .md page here answers `help`
-      ~/.basicforth/docs/Tutorial/    a lesson here is listed by `tutorials`
+      ~/.basicforth/docs/Tutorials/   a lesson here is listed by `tutorials`
 
   This is where installed packages will live. Nothing creates the directory for
   you — `make install` deliberately does not, since it may run as root and this

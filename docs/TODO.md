@@ -126,8 +126,14 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       every internal caller, so this is a conformance gap, not a live bug.
       Detail: §Future / Hardening.
 
-- [ ] **`[ENGINE]` Include-relative resolution, and a word for the loading
-      file's directory.** `include` searches CWD then `BASICFORTH_PATH` and
+- [x] **`[ENGINE]` Include-relative resolution, and a word for the loading
+      file's directory — DONE 2026-08-20** (branch `engine/1-include-here`,
+      merged `dd0e801`). `require`/`include` look beside the requiring file
+      first; `my-dir` and `path-join` shipped with it, and Dark Star now loads
+      and runs installed, from any directory, with all 14 speech WAVs. The
+      acceptance case below was met with a decoy present.
+      Original entry follows.
+      `include` searches CWD then `BASICFORTH_PATH` and
       nothing else, so a multi-file package cannot find its own siblings once
       it is installed somewhere other than the directory you are standing in —
       and an asset (`r/o bin open-file` in wavcore.fs) is not searched for at
@@ -146,8 +152,33 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       of the same name.
       Detail: `docs/Package_Registry.md` §Multi-file packages.
 
-- [ ] **`[ENGINE]` Rename `docs/Tutorial` to `docs/Tutorials`.** The section
-      headings are `Language-Reference`, `Guides`, `Packages` and `Tutorial` —
+- [x] **`[ENGINE]` Rename `docs/Tutorial` to `docs/Tutorials` — DONE
+      2026-08-21** (branch `engine/1-tutorials-rename`). Clean break, no dual
+      spelling. All eight suite runs green on both arches.
+
+      **The name now lives in one place.** The plan counted four `s" Tutorial"`
+      basename sites; factoring them turned up a fifth literal (the
+      `docs/Tutorial` path appended to `BASICFORTH_DOCS`) and a sixth check of
+      exactly the same kind — `s" Guides"`, which exempts single-word headings.
+      `core.fs` now has one `(lessons-sub)`, with `(lessons?)` deriving the
+      basename from it rather than agreeing by hand, plus `(guides?)`.
+      `(lessons-sub)` sits deliberately OUTSIDE the `(-ud-)` marker: defined
+      inside it, the startup words are forgotten once they have run and every
+      help lookup then failed with `? (lessons-sub)`.
+
+      Five places outside Forth still spell it out — `setup.sh`, the `Makefile`
+      install target, and `tmpl_docs` in both `main.s`. Four languages, no
+      shared constant; the install test is what checks them against each other.
+
+      **The migration is quieter than expected**, measured rather than assumed:
+      a directory still named `Tutorial` drops out of `tutorials` and its pages
+      appear in bare `help` as an ordinary section, but `tutorial <Name>` still
+      finds a lesson in it — `(tut-go)`'s second pass searches every docs
+      directory when the strict pass misses. So a stale directory half-works
+      instead of failing outright.
+      Original entry follows.
+      The section headings are `Language-Reference`, `Guides`, `Packages`
+      and `Tutorial` —
       three count nouns plural and one singular. Worse, the *word* that lists
       them is `tutorials`, so the interface already carries both spellings for
       one thing. `Language-Reference` stays singular because it is a mass noun.
@@ -180,19 +211,43 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       lessons vanish until it is re-sourced. Self-correcting, but alarming if it
       happens mid-session and you have forgotten this note.
 
-      Worth folding into the same branch, since it is the same feature and the
-      same code: **`tutorials` lists the title's first word, not the name you
-      type.** Measured 2026-08-20 — a lesson file `greeting.md` titled
-      `# greet — ...` is listed as `greet`, and `tutorial greet` answers *no
-      tutorial named greet*. The listing's job is to tell you what to type, and
-      deriving that from prose is what let the two drift. Note it changes output
+- [x] **`tutorials` lists the title's first word, not the name you type —
+      DONE 2026-08-21**, folded back into `engine/1-tutorials-rename` after the
+      rename made it visible in a real listing. The listing prints the filename
+      in a 20-wide column, then the title's text after its em dash; a longer
+      name pushes its description right rather than being cut. `::` confirmed as
+      the package scope separator (a hyphen is a legitimate page-name character,
+      `Machine-Code.md`). Suite: three new cases, and the two existing ones that
+      caught the output change. Note one of the three — that a listed name
+      starts its tutorial — passes against the OLD code too: it pins the other
+      half of the contract rather than detecting this bug.
+      Original entry follows.
+      Measured against the shipped Greeting package, where it is live and not
+      theoretical:
+
+          > tutorials
+            Greeting — Your First Installed Package
+          > tutorial Greeting
+          no tutorial named Greeting (try TUTORIALS)
+
+      The name that works is `greeting::tutorial` — the filename. The listing
+      prints the page TITLE, `tutorial <name>` matches the FILENAME, and nothing
+      keeps the two equal. It stays invisible for bundled lessons only because
+      `Snake.md` happens to be titled `# Snake`. A listing's job is to tell you
+      what to type, and deriving that from prose is what let them drift.
+
+      Decide the output shape first — name and description in two columns keeps
+      the descriptions, which are why anyone reads the list. It changes output
       for every bundled lesson, so it needs the docs sweep that any output
       change needs.
 
-      Done when: `tutorials` and `tutorial <name>` work from a checkout, from an
-      installed binary with no environment at all, and from a package directory;
-      all four `(basename)` sites are converted; and both arches are green
-      including the Pi.
+      It also raises a question it does not own: a package's lesson is
+      `<pkg>::tutorial.md`, so the honest name to print is `greeting::tutorial`.
+      Whether a package should instead name the file for what you type is a
+      `Package_Registry.md` convention, not engine work.
+      Done when: every name `tutorials` prints is a name `tutorial <name>`
+      accepts, for a bundled lesson and an installed package alike, with a suite
+      case that would fail if the listing went back to the title.
 
 - [ ] **`help` should say where the live definition came from.** When two pages
       document the same word, `help` gathers both — correctly — but prints them
@@ -2232,8 +2287,9 @@ docs/Graphics.md for the API.
     package is require-able and answers `help` from any directory.
     `$BASICFORTH_PACKAGES` relocates the root and disables the mechanism when
     it names nothing, which is what keeps the suites independent.
-  - [ ] `[ENGINE]` include-relative resolution + a word for the loading
-    file's directory — a prerequisite for `install`, see the queue above
+  - [x] `[ENGINE]` include-relative resolution + a word for the loading
+    file's directory — DONE 2026-08-20 (`dd0e801`). Beside-first resolution,
+    plus `my-dir` and `path-join`; Dark Star runs installed from any directory
   - [ ] the default source — manifest format, pinned full commit SHAs,
     client-side index generation
   - [ ] REPL package words — `packages` / `install` / `remove` / `run` /

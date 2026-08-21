@@ -62,25 +62,51 @@ file still reads fine under `help` — the headings are ordinary Markdown.
 ```
 
 The name is the file's base name without `.md`, matched case-insensitively —
-`tutorial Snake`, `tutorial snake`. `Tutorial` directories on
+`tutorial Snake`, `tutorial snake`. `Tutorials` directories on
 `BASICFORTH_DOCS` are searched first (the same set this listing shows), so a
 reference page with the same name — `Strings.md` exists in both
-Language-Reference and Tutorial — never shadows a lesson. Other docs
+Language-Reference and Tutorials — never shadows a lesson. Other docs
 directories are searched second: any docs page can still be walked step by
-step (`tutorial Printing`). The `tutorials` listing shows each file's
-**title line** (our convention is `# <Name> — <what you'll learn>`, so the
-title names the tutorial *and* describes it):
+step (`tutorial Printing`). The `tutorials` listing shows each file's **name**
+— the thing you type — and beside it the description from its title line (our
+convention is `# <Name> — <what you'll learn>`, and the listing takes what
+follows the em dash):
 
 ```
 > tutorials
 Tutorials (start one with:  tutorial <name>):
-  Arrays — Your First Data Structure
-  Chase — Design a Game from the Top Down
-  Snake — Build Your First Game
-  Strings — Text on the Stack
+  Arrays              Your First Data Structure
+  Chase               Design a Game from the Top Down
+  Snake               Build Your First Game
+  greeting::tutorial  Your First Installed Package
 ```
 
-A file with no `# ` title line is listed by its file name.
+The name column is 20 wide; a longer name pushes its own description right
+rather than being cut, since the name is the one part you have to type.
+
+**The name is the file name, not the title's first word.** For a bundled
+lesson those coincide — `Snake.md` is titled `# Snake — …` — but an installed
+package's lesson is `<pkg>::<page>.md` with a title of its own, and listing the
+title advertised a name `tutorial` then refused.
+
+Titles outside the convention still read sensibly:
+
+| title | listed as |
+|---|---|
+| `# Snake — Build Your First Game` | `Snake` + `Build Your First Game` |
+| `# Snake - Build Your First Game` | same — a plain `-` or `:` is absorbed |
+| `# Snake a plain title` | `Snake` + `a plain title` |
+| `# Something Else Entirely` | `Snake` + `Something Else Entirely` |
+| `# Snakebite Survival` | `Snake` + `Snakebite Survival` — see below |
+| `# Snake` | `Snake` alone |
+| no `# ` line | `Snake` alone |
+
+The rule is: take what follows the em dash; failing that, the whole title minus
+a leading copy of the name, which would otherwise print twice on the row.
+
+The name is only dropped when it is a **whole leading word** — followed by the
+end of the title, a blank, a `-` or a `:`. Comparing bytes alone truncated
+mid-word: `A.md` titled `# Amazing Things` listed as `mazing Things`.
 
 Each step is shown on a **cleared screen** (interactive sessions only — piped
 input gets plain text with no escape codes). Your experiments between steps
@@ -121,10 +147,10 @@ exist, BasicForth says so rather than failing silently.
   ~10 minutes with extra-short steps — one idea, one thing to type — and end
   by pointing into the reference (`help memory`). Same engine either way.
 - A lesson file lives in a `BASICFORTH_DOCS` section just like a reference page;
-  a common layout is a `Tutorial` section alongside `Language-Reference`:
+  a common layout is a `Tutorials` section alongside `Language-Reference`:
 
   ```
-  $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorial:docs/Guides ./basicforth
+  $ BASICFORTH_DOCS=docs/Language-Reference:docs/Tutorials:docs/Guides ./basicforth
   ```
 
 ## How It Works

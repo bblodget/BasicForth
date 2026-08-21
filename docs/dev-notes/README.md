@@ -5,7 +5,7 @@ we build and test BasicForth on. This is not user documentation: nothing here
 describes the language, and none of it is needed to use BasicForth.
 
 These pages are deliberately outside the help system. `BASICFORTH_DOCS` names
-the sections that reach `help` — `docs/Language-Reference`, `docs/Tutorial` and
+the sections that reach `help` — `docs/Language-Reference`, `docs/Tutorials` and
 `docs/Guides` (see `setup.sh` for the current list) — and `docs/dev-notes` is
 not among them, so files here never appear in `help`, `apropos` or `tutorials`,
 and can be as long and as specific-to-our-hardware as they need to be.

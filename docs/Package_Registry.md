@@ -297,9 +297,9 @@ bites everyone who develops a package they have also installed.
 ## Local Layout
 
         ~/.basicforth/                  $BASICFORTH_PACKAGES overrides this root
-          lib/                          entry .fs files   -> BASICFORTH_PATH
+          lib/<package>/                the package's files -> BASICFORTH_PATH
           docs/Packages/                reference pages   -> BASICFORTH_DOCS
-          docs/Tutorial/                lessons           -> BASICFORTH_DOCS
+          docs/Tutorials/               lessons           -> BASICFORTH_DOCS
           packages/<name>/              the package's cloned repo
           sources                       the source list
           installed                     the install manifest
@@ -316,12 +316,15 @@ failing that the whole mechanism sits out, which is what makes a run under
 **The docs directories are named for the role they play**, and that is not
 cosmetic. The help system decides a directory's *role* from its **basename**:
 
-        : (tuts-in) ( dir-addr dir-u -- )    \ tutorials: only the Tutorial sections
-            2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+        : (lessons-sub) ( -- c-addr u )  s" docs/Tutorials" ;
+        : (lessons?) ( dir-a dir-u -- flag )
+            (basename) (lessons-sub) (basename) (ci=) ;
+        : (tuts-in) ( dir-addr dir-u -- )    \ tutorials: only the lessons sections
+            2dup (lessons?) 0= if 2drop exit then
 
-A directory called `Tutorial` holds lessons and is skipped by `help`'s topic
+A directory called `Tutorials` holds lessons and is skipped by `help`'s topic
 listing; anything else is a reference section displayed under its basename. So a
-package ships its lesson into `docs/Tutorial/` and its page into
+package ships its lesson into `docs/Tutorials/` and its page into
 `docs/Packages/`, and `help`, `tutorials` and `tutorial <Name>` all work with no
 new machinery. A single flat `docs/` would have shown up in `help` as a section
 named "docs" and could never have carried a lesson at all.
@@ -387,6 +390,14 @@ manifest — ask-permission becomes just-do-it, which is the right default for a
 hobby ecosystem.
 
 ### Multi-file packages need a resolution rule we do not have
+
+> **Shipped 2026-08-20.** Beside-first resolution, `my-dir` and `path-join` all
+> landed; Dark Star runs installed, from any directory, with its fourteen WAVs.
+> The section below is the reasoning that produced them, kept because it also
+> explains the ordering. One correction from building it is in item 8: the
+> resolution does **not** read through a symlink, and the install layout is
+> what makes that a non-issue.
+
 
 **This is a prerequisite, not a detail.** Today `include` resolves a name
 against the current directory, then each `BASICFORTH_PATH` segment, and nothing
@@ -755,7 +766,7 @@ is why Guides headings must be a single word, enforced by the suite. A package
 author has no such suite, so `## Getting started with sound` would quietly
 create four topics in every user's `help`.
 
-**Installed lessons are the third, and the worst behaved.** Every `Tutorial`
+**Installed lessons are the third, and the worst behaved.** Every `Tutorials`
 directory is scanned, and the *filename* is the lesson's name — there is no
 section to attribute it to, because the help system recognises a lessons
 directory by that exact basename. Measured 2026-08-19 with a package lesson
@@ -771,6 +782,21 @@ either winning or being hidden, because the listing advertises something the
 user cannot reach. And two *packages* shipping the same filename is worse
 still: the second `install` overwrites the first's file on disk.
 
+**Half of that is fixed as of 2026-08-21**, by the `pkg::page` naming rule
+below plus a change to the listing. `tutorials` used to print each file's
+*title line* while `tutorial <name>` matched its *filename*, so a package
+lesson advertised a name that did not work — `greeting::tutorial.md`, titled
+`# Greeting — …`, listed as `Greeting` and `tutorial Greeting` answered *no
+tutorial named Greeting*. The listing now prints the name you type, with the
+description beside it:
+
+        tutorials
+          Sound               One at a Time, or All at Once     <- bundled
+          mypkg::sound        a package lesson, and it opens
+
+What remains is the genuine case: two packages shipping the *same* filename
+into the same directory, which `install` must refuse rather than resolve.
+
 **The flat layout is forced, so a naming rule has to carry it.** The obvious
 escape — a directory per package under `docs/Packages/` — does not work:
 `(collect-in)` reads one directory with `getdents` and filters for `.md`, with
@@ -782,11 +808,20 @@ under Local Layout.
 So:
 
 - **Every file a package installs is named for the package**, not for its
-  topic — `dark-star.fs`, `dark-star.md`, `dark-star-levels.md`, and the lesson
-  `dark-star.md` in `Tutorial/`. Naming just the *entry* file that way is not
+  topic — `<package>::<page>.md`, as in `greeting::lang-ref.md` and
+  `dark-star::instructions.md`. Naming just the *entry* file that way is not
   enough: the whole point of a package being its own repo is that it may carry
-  several pages, and they share one flat directory with every other package's.
-  The prefix is what makes that survivable.
+  several pages and several lessons, and they share one flat directory with
+  every other package's. The prefix is what makes that survivable, and it
+  doubles as the scope that keeps two packages' `sound` pages apart.
+
+  **`::` rather than a hyphen**, decided 2026-08-21. A hyphen is a legitimate
+  character in a page name — `Machine-Code.md` is a bundled lesson — so a
+  hyphen prefix cannot be told from a name that merely contains one. `::`
+  appears in no ordinary filename, which makes the prefix unambiguous rather
+  than merely conventional. The cost is that the name you type is long and not
+  pretty; the benefit is that it is always *right*, and that a package can
+  carry as many pages and lessons as it likes without inventing new rules.
 - **Two different failures need two different responses**, and it is worth not
   blurring them:
   - **Another package's file of the same name** is a genuine overwrite, in a
@@ -844,17 +879,43 @@ an expensive one to get wrong — see open question 6.
    *previous* section is fixed: `(collect-in)` returned before resetting its
    collection, so the previous directory's topics and heading were printed
    again.
-8. **Copy or symlink? — include-relative resolution decides this.** A package
-   is a whole repo cloned into `packages/<name>/`, but the search path must stay
-   a fixed set of entries rather than growing per package, so its entry `.fs`
-   and its `.md` files are linked or copied into `lib/` and `docs/`.
+8. **Copy or symlink? — ANSWERED 2026-08-21: symlink the package's
+   *directory*.** A package is a whole repo cloned into `packages/<name>/`, but
+   the search path must stay a fixed set of entries rather than growing per
+   package. So `lib/<package>` is a symlink to the package's source directory,
+   and its files are reached as `require <package>/<file>.fs`.
+
    A **copy** is ruled out: the copy would sit in `lib/` with none of its
-   siblings, so include-relative resolution would look in the wrong directory.
-   A **symlink** is right, but only if the resolution reads through it —
-   `lib/dark-star.fs` as a path string still says `lib/`, so the loading file's
-   directory has to come from the resolved target. `platform_self_exe` already
-   wires `readlinkat`, so the syscall is there; the open question is whether
-   the source path is resolved once at include time or on demand.
+   siblings, so beside-first resolution would look in the wrong directory.
+
+   This entry used to ask whether resolution should *read through* a symlink,
+   and assumed it would have to. It does not. Whether it *should* is still
+   open — resolving would make the file-linked layout work too, at the cost of
+   a `readlink` per include, and nothing yet needs it. What is settled is that
+   linking directories works today and makes the question moot.
+
+   (An earlier draft of this entry justified the behaviour by saying that
+   resolving would break "a copy in the directory you are standing in still
+   wins". That is wrong and worth recording as wrong: **beside-first beats
+   CWD**, which is the whole point of the ordering — a package's own `art.fs`
+   is supposed to win over a stray `art.fs` where you happen to be standing.
+   Resolving the link would change *which* directory counts as beside, not
+   whether CWD outranks it.)
+
+   Measured 2026-08-21 with a **decoy**, because the obvious experiment proves
+   nothing: link the entry file alone, leave its sibling behind, and the load
+   fails — but a plain *copy* fails identically, so "cannot open helper.fs"
+   does not implicate symlinks at all. Put a different `helper.fs` beside the
+   link instead, and the two explanations predict different output:
+
+           lib/pkg/entry.fs -> real/entry.fs   +  a DECOY lib/pkg/helper.fs
+           require pkg/entry.fs  ->  the DECOY loads, not real/helper.fs
+
+   So resolution uses the path the file was *reached by*. Linking the directory
+   puts the siblings on that path; linking the files individually does not.
+   **`install` must therefore link directories**, and the trap to know about is
+   that a one-file package survives the wrong form — it has no siblings to
+   miss — so the mistake ships looking fine.
 9. **Rename this file?** It is `Package_Registry.md` and describes no registry.
    `Packages.md` matches the terminology. Cheap with `git mv`, and this doc is
    not on `BASICFORTH_DOCS`, so nothing in `help` depends on the name.
