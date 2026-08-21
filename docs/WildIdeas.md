@@ -35,7 +35,7 @@ buffers for `SAVE`/persistence, help text, and text-processing scratch.
 
 What's still a wild idea is the harder, separate piece: *growing the dictionary
 itself* when it runs out of space (today it's one fixed `DICT_SPACE_SIZE` arena,
-256 KB total / ~226 KB free after core.fs). Unlike the data heap, dictionary
+512 KB total / ~384 KB free after core.fs). Unlike the data heap, dictionary
 space must be
 **executable** (compiled words run from it), so this needs a `PROT_EXEC`
 mapping — or `mprotect` to add exec, see Future/Hardening in TODO.md — plus a

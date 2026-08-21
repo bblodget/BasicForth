@@ -414,7 +414,25 @@ of where it's loaded in memory. On ARM64, you can't load a full 64-bit
 address in a single instruction anyway (instructions are only 32 bits wide).
 `ADR` can reach +/- 1MB from the current instruction, which is plenty for
 string constants and nearby data. For larger ranges, use `ADRP` + `ADD`
-(page-relative, +/- 4GB).
+(page-relative, +/- 4GB):
+
+    ADRP X9, dict_space_end            // the 4 KB page it lives in
+    ADD  X9, X9, :lo12:dict_space_end  // + its offset within that page
+
+`ADRP` spends the same 21 bits counting 4 KB pages instead of bytes, which is
+where the 4096x reach comes from — but it lands on the page *base*, so the
+`ADD` is not optional.
+
+**Use `ADRP` for anything whose distance you do not control.** `ADR` is a trap
+for symbols past a large `.space`: raising `DICT_SPACE_SIZE` from 256 KB to
+512 KB in August 2026 put `dict_space_end` more than 1 MB from the code
+checking against it, and the *linker* refused with `relocation truncated to
+fit: R_AARCH64_ADR_PREL_LO21`. Nothing on x86 noticed — `lea sym(%rip)` has a
+32-bit displacement, so it reaches +/- 2GB in one instruction, and x86 can
+afford that because its instructions are variable-length.
+
+That one fails loudly. The quiet failure is writing `ADRP` and forgetting the
+`ADD`: no error, and an address up to 4095 bytes below the one you wanted.
 
 **Q: Why `as` + `ld` instead of `gcc -nostdlib`?**
 

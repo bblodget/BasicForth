@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+### Added: a package can find its own files
+
+- A package is rarely one file. It has libraries beside its entry point, and
+  artwork or sounds beside those — and until now it could only find them from
+  the directory you happened to be standing in. Installed anywhere else, it
+  failed. Two changes fix that:
+
+- **`require` and `include` look beside the file doing the requiring, first.**
+  A package's own `require art.fs` finds *its* `art.fs`, from any working
+  directory. Nothing in the package changes.
+
+- **`my-dir ( -- c-addr u )`** — the directory of the file currently being
+  loaded, for everything that is not Forth source. Artwork and sounds are
+  opened by name and get no search path at all, so a package records where it
+  lives while it loads:
+
+      my-dir 2constant my-home
+      : my-file ( c-addr u -- c-addr' u' )  my-home 2swap path-join ;
+
+  Capturing it is not optional: once the file has finished loading there is no
+  current file, so `my-dir` inside a word that runs *later* answers nothing.
+
+- **`path-join ( dir-a dir-u name-a name-u -- path-a path-u )`** joins the two,
+  and owns the length check. That check is one line and it is the line every
+  package would forget — a home directory is however long the machine it was
+  installed on makes it, and writing past the buffer corrupts the dictionary on
+  somebody else's machine rather than yours.
+
+### Fixed: a library could load your file instead of its own
+
+- Name a file of your own `font.fs`, and a library requiring `font.fs` found
+  yours — because the search began in the current directory. `core.fs` records
+  this happening, with the library requiring *itself* until the data stack hit
+  its guard page. Looking beside the loading file first means a library gets
+  its own neighbours. Typing `require font.fs` at the prompt still finds yours,
+  which is what you meant.
+
+### Added: `2constant` and `2variable`
+
+- The Forth 2012 double-cell pair, missing until now. `2variable` zero-inits
+  both cells, like `variable` does.
+
+### Changed: the dictionary is 512 KB, was 256 KB
+
+- Free space after `core.fs` goes from about 131 KB to about 384 KB.
+
+- The reason was a tripwire rather than a shortage: `include core.fs` loads a
+  second complete copy into the same dictionary, and `core.fs` had grown to
+  half of it. That test finished with 54 bytes to spare, so **every byte added
+  to `core.fs` cost two** — and the failure would have been a bare
+  `dictionary full` naming neither the cause nor the file.
+
+- It costs address space, not disk: the arena is `.bss`, and the binary is the
+  same size as before.
+
+- **ARM64 needed a code change for it**, which x86 did not. `ADR` reaches only
+  +/- 1 MB, and putting 512 KB of dictionary in front of `dict_space_end` took
+  it out of range — the linker refused with `relocation truncated to fit`. All
+  six sites now use `ADRP` + `ADD :lo12:`, which reaches +/- 4 GB. x86 was
+  unaffected because `lea sym(%rip)` carries a 32-bit displacement.
+
 ### Added: your own package directory
 
 - Files in `~/.basicforth/` are now found from **any** working directory, with

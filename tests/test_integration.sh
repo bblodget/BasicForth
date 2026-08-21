@@ -8383,7 +8383,9 @@ fi
 # same test is the wrong home for the locals list too. Both clears are now
 # unconditional, above it.
 ld_dir="$(mktemp -d)"
-printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+# DERIVE the overflow rather than hardcoding a size: `300000` was chosen to
+# exceed a 256 KB dictionary and silently stopped overflowing when it grew.
+printf 'create ldblob unused 1000 + allot\n' > "$ld_dir/full.fs"
 ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
 rm -rf "$ld_dir"

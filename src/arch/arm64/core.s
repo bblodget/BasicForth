@@ -103,7 +103,8 @@
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
 // Always active — dictionary has no guard page.  Clobbers X9, X10.
 .macro CHECK_DICT n
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     ADD X10, X21, #\n
     CMP X10, X9
     B.HI dict_full
@@ -2382,7 +2383,8 @@ build_header_anon:
 
 .Lbh_build:
     // Check dictionary space
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     ADD X10, X21, #128
     CMP X10, X9
     B.HI .Lbh_dict_full
@@ -5352,10 +5354,12 @@ forth_allot:
     LDR X9, [X19], #CELL           // pop n
     // Bounds check: dict_space <= HERE + n <= dict_space + SIZE
     ADD X10, X21, X9
-    ADR X11, dict_space
+    ADRP X11, dict_space           // ADRP+ADD for the same reason as
+    ADD  X11, X11, :lo12:dict_space //   dict_space_end below
     CMP X10, X11
     B.LO dict_full                  // below dict_space start
-    ADR X11, dict_space_end
+    ADRP X11, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X11, X11, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     CMP X10, X11
     B.HI dict_full                  // above dict_space end
     ADD X21, X21, X9                // HERE += n
@@ -5586,7 +5590,8 @@ forth_hld:
 // UNUSED ( -- u )  Return number of free bytes in dictionary space.
 .global forth_unused
 forth_unused:
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     SUB X9, X9, X21                // end - HERE
     STR X9, [X19, #-CELL]!
     RET
@@ -6746,7 +6751,8 @@ compile_s_quote:
     // Bounds check: need BL(4) + CELL(8) + string bytes + 3 (alignment)
     ADD X9, X21, #4+CELL+3      // HERE + BL + CELL + alignment
     ADD X9, X9, X25             // + string length
-    ADR X10, dict_space_end
+    ADRP X10, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X10, X10, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     CMP X9, X10
     B.HI dict_full
     // Compile BL forth_s_quote_runtime
@@ -7458,7 +7464,7 @@ lguard_page_underflow:
 // ---------- Dictionary Space ----------
 // Page-aligned: made executable at startup with mprotect (STC compiles
 // machine code into it; see platform_init_guard_pages).
-.equ DICT_SPACE_SIZE, 262144    // 256KB (64 whole pages)
+.equ DICT_SPACE_SIZE, 524288    // 512KB (128 whole pages)
 .balign 4096
 .global dict_space
 dict_space:
