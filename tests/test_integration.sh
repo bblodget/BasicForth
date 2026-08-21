@@ -8714,10 +8714,20 @@ bes_assert "a file of the same name in the working directory does not win" "$bes
     'require pkg/main.fs
 bes-sib' "the package own"
 
-# A MISS must still fall through: requiring a bundled library from inside a
-# package is a miss, and is the common case.
+# A MISS must still fall through: requiring a library from inside a package is a
+# miss, and is the common case. bes-far.fs sits one directory ABOVE the package,
+# on BASICFORTH_PATH and NOT beside the file requiring it -- so the probe misses
+# and the ordinary search has to find it.
+#
+# The needle is what the far file DEFINES, not anything in the input. An earlier
+# version of this check ran `." fell through ok"` at the prompt and matched that
+# text in the echoed input, so it passed with the require failing -- and at the
+# prompt my-dir is empty, so it never exercised the fallback at all.
+echo ': bes-far-word ." reached the far one" cr ;' > "$bes_pkg/bes-far.fs"
+echo 'require bes-far.fs'                          > "$bes_pkg/pkg/usesfar.fs"
 bes_assert "a name that is not beside us still searches BASICFORTH_PATH" "$bes_cwd" \
-    's" require ffi.fs" evaluate  ." fell through ok"' "fell through ok"
+    'require pkg/usesfar.fs
+bes-far-word' "reached the far one"
 
 bes_assert "my-dir is empty at the prompt" "$bes_cwd" \
     'my-dir nip .' "0"
