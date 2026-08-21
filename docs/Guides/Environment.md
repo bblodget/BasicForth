@@ -18,6 +18,18 @@ At a glance:
     HOME                  `cd ~`, and the default package directory
     PATH                  searched by `needs-cmd`
 
+The sections — each of these is `help <topic>`:
+
+    search          where include, require, help and apropos look
+    packagedir      your own package directory
+    session         forcing the interactive session on or off
+    editing         which editor `edit` opens, and the line editor
+    speaking        the command `voice` shells out to
+    display         SDL: running with no window, and the ibus hang
+    system          HOME and PATH
+    setup           what `. ./setup.sh` exports, and why
+    precedence      why the environment beats an installed binary
+
 ## search
 
 **`BASICFORTH_PATH`** — colon-separated directories that `include` and

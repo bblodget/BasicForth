@@ -7,7 +7,9 @@
 // Register allocation:
 //   X19 = Data stack pointer (DSP) — points to top item on stack
 //         (equals sp0 when stack is empty)
-//   X20 = scratch (available — no longer used for TOS)
+//   (X20 was freed when TOS-in-register was dropped, but it is NOT reserved:
+//    it carries ctx across the call in the worker trampoline, and X23-X28 are
+//    in heavy scratch use too. Save what you borrow.)
 //   X21 = HERE pointer (dictionary free space)
 //   X22 = LATEST pointer (most recent dictionary entry)
 //   SP  = Return stack

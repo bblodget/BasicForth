@@ -7,7 +7,8 @@
 # Register allocation:
 #   R15 = Data stack pointer (DSP) — points to top item on stack
 #         (equals sp0 when stack is empty)
-#   R14 = scratch (available — no longer used for TOS)
+#   (R14 was freed when TOS-in-register was dropped, but it is NOT reserved:
+#    it is in ordinary scratch use below, saved and restored like RBX/RBP.)
 #   R13 = HERE pointer (dictionary free space)
 #   R12 = LATEST pointer (most recent dictionary entry)
 #   RSP = Return stack
