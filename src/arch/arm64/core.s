@@ -2631,7 +2631,7 @@ forth_semicolon:
     // print bare and RET, so the file went on loading against a word that
     // never got defined: one missing THEN reported with no location at all,
     // then a second, unrelated-looking "? name" wherever it was first used,
-    // dozens of lines away. (Found 2026-08-11 in the Dark Star port: line 167
+    // dozens of lines away. (Found 2026-08-11 in a large program: line 167
     // was the typo, line 213 was the only line number printed.)
     //
     // Name the definition, copied OUT of the partial header -- .Lcf_abort drops
@@ -3567,7 +3567,7 @@ forth_included:
     // component (open → ENOTDIR) or an unreadable directory (EACCES) hid every
     // copy behind it. Harmless while requires were flat names, but a package is
     // loaded as `require <pkg>/<file>.fs`, so the first component is a DIRECTORY
-    // name — and a `bin/dark-star` script next to a `dark-star` package is
+    // name — and a `bin/mygame` script next to a `mygame` package is
     // exactly the collision that creates. The segment loop below already skips
     // a segment on any failure; this makes CWD behave the same way.
     //

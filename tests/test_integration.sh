@@ -646,7 +646,7 @@ assert_error  "if until mismatch"  ": test if until ;"                      "mis
 # arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
 # other's bodies), and closing a non-CASE construct with a CASE word handed
 # patch_forward a tag value as an address and SEGFAULTED the process — fatal
-# during a file load. Found in the Dark Star port.
+# during a file load. Found in a large program under development.
 assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "mismatched control flow: endof"
 assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "mismatched control flow: endcase"
 assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "mismatched control flow: endcase"
@@ -692,7 +692,7 @@ assert_result "define after a stray loop" ": q loop ;
 # off. Until 2026-08-11 `;` printed "unresolved control flow" bare -- no file,
 # no line, no name -- and then RETURNED, so the file kept loading against a word
 # that never got defined. The only line number you got was from the first CALL
-# to the missing word, 46 lines further on in the real case (Dark Star, typo on
+# to the missing word, 46 lines further on in the real case (typo on
 # 167, reported at 213). Assert all three things that were wrong: the location,
 # the name, and that the load stopped before the later definition.
 cfu_dir="$(mktemp -d)"
@@ -1754,7 +1754,7 @@ else
     # the dedicated tone channel, so a run of tones plays in SEQUENCE exactly
     # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
     # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
-    # land on some other channel. Dark Star's siren sweep depends on this.
+    # land on some other channel. A game's siren sweep depends on this.
     ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
@@ -2108,7 +2108,7 @@ else
     # bytes queued on speech's own channel -- and that the channel is NOT
     # channel 0, which belongs to tone.
     sp_check "say queues audio on its own channel" \
-        "$(sp_run ': t snd-open drop speech-open drop s" Dark Star ready" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
+        "$(sp_run ': t snd-open drop speech-open drop s" ready player one" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
         '-1 -1 -1 said'
 
     # The bug this caught during development: `dup >r` left the cst_wave on the
@@ -4041,7 +4041,7 @@ printf 'require shellutil.fs\n'                      > "$dp_dir/dpok.fs"
 printf 'require dpnosuch.fs\n'                       > "$dp_dir/dpgonereq.fs"
 # A chain longer than the queue. Following require is bounded, and a bound that
 # truncates in SILENCE turns deps into the thing it exists to prevent: a report
-# that says everything is fine because it stopped looking. dark-star.fs already
+# that says everything is fine because it stopped looking. A real game already
 # follows 11 files, so this bound is reachable rather than theoretical.
 for dp_i in $(seq 1 80); do
     printf 'require dpc%d.fs\n' $((dp_i + 1)) > "$dp_dir/dpc$dp_i.fs"

@@ -81,8 +81,8 @@
 - **Old code, new exposure.** While libraries were loaded by flat name
   (`require sdl3.fs`), a file of that name in your working directory was a file
   you *meant* to load. A package is loaded as `require <package>/<file>.fs`, so
-  the first component is now a **directory** name — and a `bin/dark-star`
-  launcher script beside a `dark-star` package is exactly that collision. The
+  the first component is now a **directory** name — and a `bin/mygame`
+  launcher script beside a `mygame` package is exactly that collision. The
   script blocked its own package.
 
 - Every place on the search is now tried, and one that cannot be opened is
@@ -690,7 +690,7 @@ The value is now built straight into an instruction. No call, no inline data.
 - A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
   too — all met, will-load-but-degraded, and will-not-load.
 - **The traversal is bounded at 64 files, and says so when it runs out** rather
-  than reporting on the part it managed to read. dark-star.fs already follows
+  than reporting on the part it managed to read. A real game already follows
   11 files, so the bound is reachable, and a quiet truncation would have
   produced the one thing this word exists to prevent — a confident "all
   requirements met" from a check that stopped looking.
@@ -790,7 +790,7 @@ The value is now built straight into an instruction. No call, no inline data.
   disk — the complement to `voice.fs`, which records a phrase properly and is
   what a game should use.
 - **`say` blocks while it synthesizes, and that is the whole reason both exist.**
-  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for "Dark Star, ready.",
+  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for a two-word phrase,
   38 ms for a full sentence. A frame at 60 Hz is 16.7 ms. Instant at a prompt,
   frame-dropping in a loop. The docs say that with the numbers rather than as a
   vague caution.
@@ -947,11 +947,11 @@ The value is now built straight into an instruction. No call, no inline data.
   `unresolved control flow` — no file, no line, no name — and then **returned**,
   so the file went on loading against a word that never got defined. The only
   line number you ever saw came from the first *call* to the missing word.
-  Found in the Dark Star port, where the typo was on line 167 and the sole
-  reported location was 213.
+  Found in a large program under development, where the typo was on line 167
+  and the sole reported location was 213.
 - It now reports like every other compile error, naming the definition read out
   of its own half-built header:
-  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  `mygame.fs:167: unresolved control flow: say`. Being an error return, it
   also stops the load at that line instead of producing a second, unrelated
   looking failure further down. `;` was the last compile error that let a load
   continue.
@@ -2405,8 +2405,8 @@ wording anywhere else.
 - **An extra `ENDOF` emitted wrong code without a word of complaint.** Branch
   targets were mis-resolved, so an arm ran another arm's body and the case
   value was never consumed — a `stack underflow` surfaced later, several steps
-  from the cause. Found during the Dark Star port; pre-existing, not from the
-  recent branches.
+  from the cause. Found while working on a large program; pre-existing, not from
+  the recent branches.
 - **Closing a non-`CASE` construct with a `CASE` word crashed the process** —
   `: bad if 1 endcase ;` and friends segfaulted rather than aborting, so a file
   load took the session with it. Same for an `IF` opened inside an arm and
