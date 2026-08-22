@@ -88,6 +88,48 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Done when: `make run-test run-integration run-lessons run-pty` are green
       on the Pi at the v0.17.0 tag. A failure is a `v0.17.1`, not a retraction.
 
+- [ ] **CI on GitHub Actions, including native ARM64.** There is no CI at all
+      today: nothing checks a push except remembering to run four suites twice.
+      Scoped 2026-08-22, not started.
+
+      **`runs-on: ubuntu-24.04-arm`** is a GitHub-hosted VM on real ARM64
+      silicon (Ampere/Cobalt class), free for public repos. On it `HOST_ARCH`
+      is `aarch64`, so `make` builds ARM64 **natively** — no qemu, no cross
+      toolchain. A two-entry matrix with `ubuntu-24.04` gives both
+      architectures native, which no machine here does. Deps are just
+      `binutils gcc make python3`.
+
+      **It would have caught `5af401e`** — the I-cache flush that was not
+      line-aligned and SIGILL'd at boot on any real ARM64, past every green
+      qemu run.
+
+      Known frictions, so they are not rediscovered:
+
+      - **Ubuntu 24.04 predates SDL3** (released 2025), so `libsdl3-dev` will
+        not install and the graphics/sound/speech sections skip — as do
+        `flite` and `piper`. Roughly the qemu subset, minus the emulation.
+      - **The library gates read `ldconfig` off PATH**, and
+        `tests/test_integration.sh:95` records that going silent once while the
+        run still said 0 failed. CI is exactly where that would go unnoticed
+        for weeks. Assert the gates FIRE, do not trust a green run.
+      - **`run-pty` is timing-sensitive** and shared runners are a noisy
+        regime. May need to be excluded.
+
+      **It does not replace the Pi.** CI would be Neoverse server cores; the Pi
+      is Cortex-A72 and the real target is the Genio 510. Same architectural
+      memory model, different reordering in practice. CI is the fast gate, the
+      Pi stays the pre-release gate — see `docs/Versioning.md` §Before the tag.
+
+      **Cadence is the open question.** Actions only fires on a push, and
+      pushes here are mostly releases plus the occasional `staging` push to
+      move work to the Pi. Left as is, CI is a release gate that reports
+      against a week's worth of commits at once. Pushing `staging` per merge
+      makes a failure name one branch — worth deciding deliberately, since the
+      repo is public and that puts unfinished work on display.
+      Done when: both suites run green on both runners from a clean checkout,
+      a deliberately broken commit is shown to FAIL the run, and the skip lines
+      are checked to still name what they skipped.
+
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
       miscompile and the bare `unresolved control flow` message both came out
