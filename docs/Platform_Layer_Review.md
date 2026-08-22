@@ -236,3 +236,9 @@ Fixes landed on the `platform-boundary` branch, 2026-07-10, in the order
 not-found value `platform_err_not_found`) → #4, #1 (core.s and the platform
 layer made to conform) → #2, #6 (magic numbers named). #5 stays parked
 until a second hosted OS is attempted.
+
+**Since superseded:** `platform_err_not_found` was removed 2026-08-22. The
+distinction it existed for turned out to be wrong — a search path must not
+report one member's error as the whole lookup's — so the include search now
+passes over any failure and a backend does not supply the value. Error
+magnitudes are uniformly opaque; see `Platform_Layer.md` rule 3.

@@ -51,6 +51,34 @@ Work happens on `staging` (feature branch → `--no-ff` merge → delete branch)
 A release is `staging` arriving on `main`, and **the tag is what makes it a
 release**, since the banner comes from `git describe`.
 
+### Before the tag: run the suites on real ARM64
+
+All four suites (`run-test`, `run-integration`, `run-lessons`, `run-pty`) on
+**both** architectures, at the commit being released.
+
+**qemu does not substitute for hardware.** It models neither weak memory
+ordering nor an incoherent I-cache, which is where hand-mirrored assembly
+actually goes wrong. This is not theoretical: the first day the Pi 400 was
+used, it found an I-cache flush that was not line-aligned and killed the binary
+at boot with SIGILL — through every green qemu run before it (fixed in
+`5af401e`). x86's total store ordering hides the same class of bug.
+
+So the release bar is a run on the Pi (`ssh pi400`, or `ssh pi400-eth` —
+try both, and `getent hosts pi400.local` says which is answering). Record the
+commit it ran against; a run on an ancestor of the release covers everything
+merged below it.
+
+**When the hardware is not to hand**, that is a decision to take deliberately,
+not a step to skip quietly:
+
+- Name, in the release entry, exactly which commits have *not* run on hardware.
+  Everything else in the release usually has, via an earlier run on an ancestor.
+- Weigh what changed. A deleted branch or a data symbol is not the shape qemu
+  mispredicts; new instructions, barriers, or anything writing then executing
+  memory very much are.
+- Run it as soon as the hardware is back, and treat a failure as a patch
+  release. `v0.15.1` established that those are cheap.
+
 1. Do the work, commit as usual — feature branches merged into `staging`
 2. Curate `CHANGELOG.md`: date the `## Unreleased` heading as
    `## vX.Y.Z — YYYY-MM-DD`, and update the `## Status` block in `README.md`

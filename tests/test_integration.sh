@@ -8863,6 +8863,56 @@ else
 fi
 rm -rf "$pkg_src"
 
+# The CWD attempt is the FIRST thing tried, and its failure must not end the
+# search. It used to: only "not found" fell through to BASICFORTH_PATH, so a
+# plain FILE named like the first path component (open -> ENOTDIR) or an
+# unreadable directory (EACCES) hid every copy behind it. Flat requires made
+# that near-impossible to hit; `require <pkg>/<file>.fs` made the first
+# component a DIRECTORY name, and a bin/<pkg> launcher script beside a <pkg>
+# package is exactly that collision.
+pkg_block="$(mktemp -d)"
+pkg_bsrc="$(mktemp -d)"                            # a package of our own to find
+printf ': blk-sibling ." blocked sibling here" cr ;\n' > "$pkg_bsrc/blkhelp.fs"
+printf 'require blkhelp.fs\n' > "$pkg_bsrc/blkmain.fs"
+ln -s "$pkg_bsrc" "$pkg_home/lib/pkgblk"
+( cd "$pkg_block" && : > pkgblk )                 # a FILE where a dir would be
+pkg_notdir=$( cd "$pkg_block" && printf 'require pkgblk/blkmain.fs\nblk-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_notdir" == *"blocked sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file in the way does not end the include search\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a file in the way does not end the include search\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_notdir" | head -3)"; ((failed++))
+fi
+rm -f "$pkg_block/pkgblk"
+mkdir -p "$pkg_block/pkgblk" && chmod 000 "$pkg_block/pkgblk"
+pkg_eacces=$( cd "$pkg_block" && printf 'require pkgblk/blkmain.fs\nblk-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+chmod 755 "$pkg_block/pkgblk"
+if [[ "$pkg_eacces" == *"blocked sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an unreadable dir does not end the include search\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  an unreadable dir does not end the include search\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_eacces" | head -3)"; ((failed++))
+fi
+# A genuine miss reports ONCE. The old non-not-found path printed its own
+# "Error: cannot open X" and then the Forth wrapper printed "cannot open X"
+# too -- count the lines rather than matching one, since the doubled output
+# CONTAINS the right one.
+pkg_once=$( cd "$pkg_block" && : > blocker && printf 'require blocker/nope.fs\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 | grep -c 'cannot open blocker/nope.fs' )
+if [ "$pkg_once" = "1" ]; then
+    printf "  ${GREEN}PASS${NC}  a blocked miss is reported once, not twice\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a blocked miss reported %s times\n" "$pkg_once"; ((failed++))
+fi
+rm -rf "$pkg_block" "$pkg_bsrc"
+
 # An over-long root is refused rather than truncated: the include search SKIPS a
 # segment whose "<seg>/<name>" exceeds 511 bytes, so a truncated path would fail
 # later with nothing left to explain it.
