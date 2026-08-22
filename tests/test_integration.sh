@@ -5438,6 +5438,144 @@ else
 fi
 
 # =========================================================================
+section "WHERE (which file a word came from)"
+
+assert_result "where names the file a word came from" \
+              'where see'                                  "/core.fs"
+# An ABSOLUTE path on a line of its own -- not "src/forth/core.fs", which is
+# only where core.fs lives in a checkout: `make run-integration` runs from
+# src/arch/x86 against the build-dir copy, and an installed tree is somewhere
+# else again. Assert the shape, never the location.
+wh_abs=$(printf 'where see\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
+    | grep -c '^/.*core\.fs$')
+if [ "$wh_abs" -ge 1 ]; then
+    printf "  ${GREEN}PASS${NC}  where answers an absolute path, not a bare name\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  where did not answer an absolute path\n"; ((failed++))
+fi
+assert_result "where on a word typed this session" \
+              ': mine 42 ;
+where mine'                                                "was typed at the REPL this session"
+assert_result "where on an assembly primitive" \
+              'where dup'                                  "is a primitive (assembly)"
+assert_result "where on an undefined name" \
+              'where no-such-word-here'                    "not found"
+assert_result "where with no name given" \
+              'where'                                      "needs a word name"
+
+# The source-id table holds 64 files; src_register answers 0 once it is full,
+# which is the SAME id a word typed at the REPL carries. So a word from the
+# 65th file is not merely unnamed -- it is indistinguishable from a REPL word,
+# and the honest answer is "cannot name it", not a confident wrong one.
+# Both halves are asserted: a word from an EARLY file must still resolve after
+# the table fills, or a guard that simply gave up would pass the first check.
+wh_dir="$(mktemp -d)"
+for wh_i in $(seq 1 70); do printf ': wf%d %d ;\n' "$wh_i" "$wh_i" > "$wh_dir/wf$wh_i.fs"; done
+wh_in=""
+for wh_i in $(seq 1 70); do wh_in="${wh_in}require $wh_dir/wf$wh_i.fs
+"; done
+wh_out=$(printf '%swhere wf1\nwhere wf70\nbye\n' "$wh_in" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1)
+rm -rf "$wh_dir"
+if printf '%s' "$wh_out" | grep -q "came from a file this run cannot name"; then
+    printf "  ${GREEN}PASS${NC}  past 64 files, where says it cannot name the origin\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  past 64 files, where should refuse to guess\n    Got: %q\n" \
+        "$(printf '%s' "$wh_out" | tail -3)"; ((failed++))
+fi
+# Anchored: the input echo carries `> require <dir>/wf1.fs`, so a bare
+# "/wf1.fs" needle is satisfied by this test's OWN input and passes with
+# `where` removed entirely. `where` prints the path on a line of its own.
+if printf '%s' "$wh_out" | grep -q '^/.*wf1\.fs$'; then
+    printf "  ${GREEN}PASS${NC}  ...but a word from an early file still names it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a word within the first 64 files lost its origin\n    Got: %q\n" \
+        "$(printf '%s' "$wh_out" | tail -3)"; ((failed++))
+fi
+# `where` answers for the definition IN FORCE, not for wherever a copy of the
+# text sits. `save` writes a file without loading it, so it must NOT change the
+# answer; `reload` re-reads that file, so it must. Both halves asserted -- a
+# `where` that simply never noticed `save` would pass the first alone.
+wh_sdir="$(mktemp -d)"
+wh_save=$(printf ': wsaved 42 . ;\nsave %s/wk.fs\nwhere wsaved\nreload\nwhere wsaved\nbye\n' "$wh_sdir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+wh_still=$(printf '%s' "$wh_save" | grep -c "was typed at the REPL this session")
+wh_now=$(printf '%s' "$wh_save" | grep -c "^${wh_sdir}/wk\.fs$")
+rm -rf "$wh_sdir"
+if [ "$wh_still" -ge 1 ] && [ "$wh_now" -ge 1 ]; then
+    printf "  ${GREEN}PASS${NC}  save does not change where; reload does\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  where/save/reload: repl=%s file=%s\n" "$wh_still" "$wh_now"; ((failed++))
+fi
+
+# where-path RETURNS the path instead of printing it. Only a file-loaded word
+# has one; the other three cases answer false, which is what makes it safe to
+# hand straight to a word that opens files.
+assert_result "where-path returns the path and true" \
+              'require disasm.fs
+s" dis" where-path . type'                                 "-1 /"
+assert_result "where-path answers false for a primitive" \
+              's" dup" where-path .'                       "0"
+assert_result "where-path answers false for an undefined name" \
+              's" no-such-word-here" where-path .'         "0"
+assert_result "where-path answers false for a REPL word" \
+              ': wp1 1 ;
+s" wp1" where-path .'                                      "0"
+# The point of returning it: where-path and deps compose, because deps factors
+# into (dp-run), which takes a string. This is the documented `wdeps`.
+# deps-path is deps over a path you already hold -- and deps itself now ends
+# there, so this also guards the rewiring.
+assert_result "deps-path reports over a path given as a string" \
+              's" disasm.fs" deps-path'                    "requirement"
+assert_result "deps still works through deps-path" \
+              'deps disasm.fs'                             "requirement"
+# word-deps is the join: where-path -> deps-path. Both public, so the example
+# in the docs does not send a reader to a word `help` denies exists.
+assert_result "word-deps reports for the file a word came from" \
+              'require disasm.fs
+word-deps dis'                                             "requirement"
+assert_result "word-deps on a word with no file says so" \
+              'word-deps dup'                              "came from no file you can inspect"
+assert_result "word-deps with no name given" \
+              'word-deps'                                  "usage: word-deps"
+# The composition is only honest if every word it names is documented; the
+# reference audit exempts (paren) names, so it cannot see this for us.
+# A documented example is a promise its parts can be looked up -- the first
+# draft of word-deps was built on (dp-run)/(dp-verdict), whose every step
+# answered `no help for`. The reference audit cannot catch that: it exempts
+# parenthesized names by convention. So assert the lookups directly.
+#
+# NOT under emulation. `help <word>` scans every "## " heading in every doc
+# file: 0.08 s native, 3.0 s under qemu against run_forth's 2 s timeout. The
+# property is a fact about the DOCUMENTATION and identical on both
+# architectures, so native coverage is the whole of it -- and an ARM64 board is
+# native, so this still runs there. Raising the timeout would only make the
+# next doc page push it over again.
+if [[ "$FORTH" != *qemu* ]]; then
+    # Assert what only the real entry carries: "no help for where-path" also
+    # contains "where-path", so the obvious needle passes when help is broken.
+    assert_result "help answers for where-path with its entry" \
+                  'help where-path'                        "( c-addr u -- c-addr u true | false )"
+    assert_result "help answers for deps-path with its entry" \
+                  'help deps-path'                         "( c-addr u -- )"
+    assert_absent "...and neither is a help miss" \
+                  'help where-path
+help deps-path'                                            "no help for"
+else
+    printf "  ${YELLOW}SKIP${NC}  help lookups for where-path/deps-path (help word-scan is ~3 s under qemu; runs natively)\n"
+fi
+
+# The documented workflow: where's answer is what deps takes.
+wh_path=$(printf 'require disasm.fs\nwhere dis\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | grep '^/.*disasm\.fs$' | head -1)
+wh_deps=$(printf 'deps %s\nbye\n' "$wh_path" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+if [ -n "$wh_path" ] && printf '%s' "$wh_deps" | grep -q "requirement"; then
+    printf "  ${GREEN}PASS${NC}  where's answer is accepted by deps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps did not accept where's answer\n    path: %q\n" "$wh_path"; ((failed++))
+fi
+
 section "REDO (recompile a captured word from its source)"
 # =========================================================================
 # Capture is interactive-only, so force it on via BASICFORTH_SESSION=1 (as the
