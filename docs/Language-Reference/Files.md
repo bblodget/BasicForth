@@ -106,7 +106,9 @@ missing file is an error (`cannot open <name>`).
 
 **Where it looks:** the directory of the file *doing the loading* first, then
 the current directory, then each directory in `BASICFORTH_PATH` in order,
-loading the first match. Typed at the prompt there is no loading file, so it
+loading the first match. Every place is tried; one that cannot be opened — a
+file sitting where a directory name is expected, a directory you may not read —
+is passed over rather than ending the search. Typed at the prompt there is no loading file, so it
 starts at the current directory — and a file of your own shadows a library of
 the same name. That path is where the shipped libraries
 (`sdl3.fs`, `graphics.fs`, …) are found, and it's colon-separated, so adding

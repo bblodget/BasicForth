@@ -71,6 +71,23 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 
 ### Queued
 
+- [ ] **Run the ARM64 hardware suites against v0.17.0.** Deliberate exception,
+      taken 2026-08-22: the release is cut Sunday 2026-08-23 and the Pi 400 is
+      not to hand until **Friday 2026-08-28**.
+
+      **Exactly one branch is unverified** — `engine/1-include-search` (the
+      include-search errno fix and the removal of `platform_err_not_found`).
+      Everything else in the release ran on the Pi at `ba8c236` on 2026-08-21,
+      all four suites, which contains all seven of the release's other
+      engine-touching commits.
+
+      Judged low risk because the ARM64 delta is a deleted `CMP`/`B.NE` pair, a
+      deleted dead block and a deleted `.quad` — no new instructions, no
+      barriers, nothing writing memory it then executes. That is not the shape
+      qemu mispredicts; see `docs/Versioning.md` §Before the tag.
+      Done when: `make run-test run-integration run-lessons run-pty` are green
+      on the Pi at the v0.17.0 tag. A failure is a `v0.17.1`, not a retraction.
+
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
       miscompile and the bare `unresolved control flow` message both came out
@@ -317,9 +334,8 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       therefore propagate from the layer that owns the cleanup.
       `interpret_line`'s abort decision was not touched. Design, the three
       rejected alternatives, and the two defects found after the acceptance
-      table was green: `docs/Abort_Routes.md`. **Still wants a Pi run** before
-      it is believed — qemu models neither weak ordering nor the incoherent
-      I-cache.
+      table was green: `docs/Abort_Routes.md`. **Pi run DONE 2026-08-21** —
+      all four suites native ARM64 at `ba8c236`, which contains this commit.
       Original entry follows.
       The engine's worst
       failure class. **Wider than this entry first said** — brackets and

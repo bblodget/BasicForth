@@ -3561,13 +3561,20 @@ forth_included:
     B .Lincl_err_tail
 
 .Lincl_open_err:
-    // Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
-    // the one comparable error value (platform_err_not_found); every other
-    // magnitude is opaque up here — sign/zero tests only (Platform_Layer.md).
-    ADR X9, platform_err_not_found
-    LDR X9, [X9]
-    CMP X0, X9
-    B.NE .Lincl_open_other
+    // The CWD attempt failed — fall through to the BASICFORTH_PATH search, for
+    // ANY reason it failed. This used to run only for "not found", and every
+    // other errno abandoned the search: a plain FILE named like the first path
+    // component (open → ENOTDIR) or an unreadable directory (EACCES) hid every
+    // copy behind it. Harmless while requires were flat names, but a package is
+    // loaded as `require <pkg>/<file>.fs`, so the first component is a DIRECTORY
+    // name — and a `bin/dark-star` script next to a `dark-star` package is
+    // exactly the collision that creates. The segment loop below already skips
+    // a segment on any failure; this makes CWD behave the same way.
+    //
+    // A search path reporting one member's error as the whole lookup's is the
+    // bug; "not found anywhere" is the right answer, and the Forth wrapper
+    // already says so. (Which also ends a doubled message: this path printed
+    // "Error: cannot open X" and the caller then printed "cannot open X".)
 
     // BASICFORTH_PATH is a colon-separated list of directories. Try each in
     // order; load the first match. CWD was already tried above. Empty segments
@@ -3664,19 +3671,6 @@ forth_included:
     ADD X23, X23, #1               // skip ':'
     SUB X24, X24, #1
     B .Lincl_seg_loop
-
-.Lincl_open_other:
-    // Other open error — print message
-    ADR X0, incl_err_open
-    MOV X1, #incl_err_open_len
-    BL platform_write
-    ADR X9, file_name_addr
-    LDR X0, [X9]
-    ADR X9, file_name_len
-    LDR X1, [X9]
-    BL platform_write
-    MOV X0, #'\n'
-    BL platform_emit
 
 .Lincl_open_skip:
     MOV X0, #0                      // return 0 (not an error for ENOENT)

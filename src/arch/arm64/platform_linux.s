@@ -772,14 +772,8 @@ stat_buf:
 
 .text
 
-// The one distinguished error value callers above the boundary may compare
-// against (see Platform_Layer.md "Return-value contract"): the open calls
-// return this when the file does not exist. Every other error magnitude is
-// opaque above the platform layer — sign/zero tests only.
 .section .rodata
 .balign 8
-.global platform_err_not_found
-platform_err_not_found: .quad -2    // -ENOENT
 
 // The one path platform_self_exe reads. Linux-specific by nature, which is why
 // it lives below the platform boundary rather than in main.s: another OS answers
