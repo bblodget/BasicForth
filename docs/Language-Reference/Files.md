@@ -296,6 +296,10 @@ a line of the file.
 directory first and then on `BASICFORTH_PATH` — the same order `require` uses,
 so `deps` answers for the same file the load would pick.
 
+Going the other way — you have a *word* and want the file it came from — is
+`help where`; and `help word-deps` does this whole report for a word's file in
+one step.
+
 It reads only the **dep block**: the file's leading run of blank lines,
 whole-line comments and requirements, stopping at the first line that is none
 of those. Each requirement is then re-run in a reporting mode, by the same word
@@ -311,12 +315,12 @@ itself cannot load. Those nested files print **only if something in them is
 missing**, so a healthy machine sees one short list and a broken one sees
 exactly the section that explains itself:
 
-    dark-star.fs
+    mygame.fs
       require sdl3.fs           found
       require sound.fs          found
       sdl3.fs
         needs-lib libSDL3.so.0    MISSING -- see help install
-    dark-star.fs will not load: 1 requirement missing.
+    mygame.fs will not load: 1 requirement missing.
 
 A file already loaded is not followed: it is in memory, so its own
 requirements were met when it got there.
@@ -326,6 +330,17 @@ so rather than reporting on what it managed to read — a bound that truncated
 quietly would produce exactly the false "all requirements met" this word exists
 to prevent. A requirement that is definitely missing still outranks the notice,
 since that verdict stays true however much went unread.
+
+## deps-path ( c-addr u -- )
+`deps` over a path you already hold: the same report and verdict, without
+parsing a name or searching for it. `deps` itself ends here once it has
+resolved a filename.
+
+It exists so that composing with `deps` does not mean reaching for internals.
+`where-path` returns a path, `deps-path` takes one, and `word-deps` is the two
+joined:
+
+    s" disasm.fs" deps-path
 
 ## open-pipe ( c-addr u fam -- fileid ior )
 Run a shell command with a pipe over its stdout (`r/o`: read what it prints)

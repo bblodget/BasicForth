@@ -1311,6 +1311,60 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file)  (see-post) ;
 
+\ WHERE — which file did this word come from?  Same question `see` answers on
+\ the way to printing source, asked on its own: `see` shows you the text, and
+\ that is a lot to read when all you wanted was the filename to hand to `deps`.
+\ The four cases are `see`'s four, and the answer is the FULL path — `deps`
+\ takes one, and since `make install` a checkout and an installed tree both
+\ hold a `disasm.fs`, so a bare name cannot say which one is in force.
+\
+\ srcid 0 is the subtle case. It normally means "typed at the REPL", but
+\ src_register answers 0 once its 64-entry table is full, so a word from the
+\ 65th file is stamped 0 too and the two are indistinguishable. (source-path)
+\ reports nothing above the table's count, which makes `64 (source-path)` a
+\ full-table probe: if it names a file, the table is full and a 0 is a
+\ question, not an answer. Saying so beats naming the wrong origin.
+: (src-full?) ( -- flag )  64 (source-path) nip 0<> ;
+
+\ (where-src) is the shared lookup: WHERE reports the srcid, WHERE-PATH turns
+\ it into a filename. Splitting them is what lets a caller COMPOSE -- `deps`
+\ already factors into (dp-run), which takes a string, so a word that wires the
+\ two together needs nothing new from either side.
+: (where-src) ( c-addr u -- srcid true | false )
+    (find-meta)                              ( xt off len srcid flag )
+    0= if  2drop 2drop  false exit  then     ( xt off len srcid )
+    >r 2drop drop r>  true ;
+
+\ WHERE-PATH ( c-addr u -- path-addr path-u true | false )
+\ The filename, or nothing. Only a file-loaded word has one: a primitive, a word
+\ typed this session, an undefined name and a word past the 64-file table all
+\ answer false, because none of them names a file you could open. A caller that
+\ needs to tell those apart asks (find-meta) directly, the way WHERE does.
+\ The string points into the source table, so it stays valid for the run and
+\ must not be freed.
+: where-path ( c-addr u -- path-addr path-u true | false )
+    (where-src) 0= if  false exit  then      ( srcid )
+    dup 65535 = if  drop false exit  then    \ primitive
+    dup 0=       if  drop false exit  then   \ REPL word, or table full
+    (source-path) dup 0= if  2drop false exit  then
+    true ;
+
+: where ( "name" -- )
+    s" where" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (where-src) 0= if
+        (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit  then
+    dup 0= if  drop
+        (msg:) (see-a) @ (see-u) @ type
+        (src-full?) if
+            ."  came from a file this run cannot name"
+            cr (msg:) ." the source table is full (64 files)" cr exit  then
+        ."  was typed at the REPL this session" cr exit  then
+    (source-path) type cr ;
+
 \ (el-pre)/(el-pre-len): a one-line preload the interactive line editor can drop
 \ onto the next prompt. EDIT no longer uses it (it opens an external editor now,
 \ defined near EOF), but it stays as line-editor infrastructure — (edit-line)
@@ -4058,7 +4112,7 @@ create (dp-q) (dp-qmax) (dp-nmax) * allot   \ the queue: counted strings
 variable (dp-qn)
 \ A bound that truncates in silence turns this word into the thing it exists to
 \ prevent: a report that says everything is fine because it stopped looking.
-\ dark-star.fs already follows 11 files, so the bound is reachable, not
+\ a real game already follows 11 files, so the bound is reachable, not
 \ theoretical. Anything the queue cannot hold sets this, and the verdict
 \ refuses to promise what it did not read.
 variable (dp-cut)                           \ was any file left unfollowed?
@@ -4087,7 +4141,7 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 
 \ --- resolving a name to a file, the way INCLUDE does it ---
 \ Current directory first, then each non-empty BASICFORTH_PATH element. That
-\ ordering is not a detail: dark-star.fs sits beside its own art.fs, and `deps`
+\ ordering is not a detail: a game file sits beside its own art.fs, and `deps`
 \ has to answer for the same file the game would load. It reads (forth-path),
 \ NOT getenv of that name: an installed binary derives its path, so the
 \ environment is empty while the path is set, and asking the environment made
@@ -4229,6 +4283,13 @@ variable (dp-ta) variable (dp-tu)           \ its first token
         1 (dp-i) +!
     repeat ;
 
+\ DEPS-PATH is DEPS once the filename is settled: the report and its verdict,
+\ over a path you already hold. DEPS parses a name and searches for it, then
+\ ends here. Public because composing with it should not mean reaching for
+\ internals -- `help (dp-run)` answers nothing, so an example built on
+\ (dp-run)/(dp-verdict) sends a reader somewhere the help system denies exists.
+: deps-path ( c-addr u -- )  2dup (dp-run) (dp-verdict) ;
+
 : deps ( "name" -- )
     parse-word dup 0= if
         2drop ." usage: deps <file>" cr exit  then
@@ -4237,7 +4298,21 @@ variable (dp-ta) variable (dp-tu)           \ its first token
     2dup (dp-search) 0= if
         ." deps: cannot find " type ."  (not in . or on BASICFORTH_PATH)" cr
         exit  then
-    2dup (dp-run)  (dp-verdict) ;
+    deps-path ;
+
+\ WORD-DEPS is the other question people actually ask: not "what does this file
+\ need" but "I am using this word -- what does the file it came from need?"
+\ It is DEPS reached through the dictionary instead of through a filename, and
+\ it is deliberately a third word rather than a smarter DEPS: name resolution
+\ does not belong in the layer that handles files. `see word-deps` shows the
+\ whole of it, which is the point -- the pieces compose, and this is the proof.
+: word-deps ( "name" -- )
+    parse-word dup 0= if
+        2drop ." usage: word-deps <word>" cr exit  then
+    2dup where-path if
+        2swap 2drop  deps-path  exit  then
+    ." word-deps: " type ."  came from no file you can inspect" cr
+    ." (a primitive, typed this session, or undefined -- try `where`)" cr ;
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

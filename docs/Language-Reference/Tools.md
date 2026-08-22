@@ -7,6 +7,9 @@ inspecting words, browsing the docs, running tutorials, and shelling out.
 At a glance:
 
     see <name>     ( "name" -- )      show a word's source
+    where <name>   ( "name" -- )      which file a word came from
+    where-path     ( c-addr u -- c-addr u true | false )  ...as a string
+    word-deps <nm> ( "name" -- )      what the word's file requires
     dis <name>     ( "name" -- )      show a word's machine code (require disasm.fs)
     time <name>    ( "name" -- )      run a word, print the wall clock it took
     words          ( -- )             list every word in the dictionary
@@ -40,6 +43,86 @@ Assembly primitives have no source; `see` points you at `help <name>` and
 See docs/See.md.
 
     \ : sq dup * ;   see sq      \ : sq dup * ;
+
+## where ( "name" -- )
+Print the path of the file a word was loaded from — the question `see` answers
+on its way to printing source, asked on its own. Use it when you want the
+filename rather than the text, typically to hand to `deps`:
+
+    require disasm.fs
+    where dis
+    \ /usr/local/share/basicforth/forth/disasm.fs
+    deps /usr/local/share/basicforth/forth/disasm.fs
+
+The answer is the full path, not the bare name, because a checkout and an
+installed tree can both hold a `disasm.fs` and only the path says which one is
+in force. `deps` accepts a path, so the answer is still exactly what the file
+words want.
+
+The same four cases as `see`: a word from a file gives its path, an assembly
+primitive says so, a word typed this session says so, and an undefined name
+reports `not found`.
+
+`where` reports where the definition **in force** came from, not where a copy
+of its text exists. `save` writes a file; it does not make that file the word's
+origin, because nothing has loaded it. `reload` does:
+
+    : hello 42 . ;
+    where hello       \ where: hello was typed at the REPL this session
+    save work.fs
+    where hello       \ where: hello was typed at the REPL this session
+    reload
+    where hello       \ /home/you/work.fs
+
+A word can also come from a file BasicForth can no longer name. Source ids come
+from a 64-entry table, and once it is full every later file is stamped with the
+same id the REPL uses — so the origin is genuinely unknown rather than
+mistakable for something else, and `where` says that instead of guessing:
+
+    where f70
+    \ where: f70 came from a file this run cannot name
+    \ where: the source table is full (64 files)
+
+## where-path ( c-addr u -- c-addr u true | false )
+`where` for programs: takes a word's name as a string and **returns** the path
+rather than printing it, so you can build on it.
+
+Only a file-loaded word has a path. A primitive, a word typed this session, an
+undefined name, and a word from past the 64-file table all answer `false` —
+none of them names a file you could open. A caller that needs to tell those
+apart asks `(find-meta)` directly, as `where` does.
+
+The string points into the source table, so it stays valid for the run and must
+not be freed.
+
+It pairs with `deps-path`, which is `deps` over a path you already hold, so the
+two compose into "what does this word's file require" — which ships as
+`word-deps`. `see word-deps` is the whole of it:
+
+    : word-deps ( "name" -- )
+        parse-word ...
+        2dup where-path if 2swap 2drop deps-path exit then
+        ...
+
+## word-deps ( "name" -- )
+What the file that defines a word requires — `deps` reached through the
+dictionary instead of through a filename. Use it when you are holding a word,
+not a file:
+
+    require disasm.fs
+    word-deps dis
+    \ /usr/local/share/basicforth/forth/disasm.fs
+    \   require shellutil.fs      loaded
+    \   wants-cmd objdump         ok -- /usr/bin/objdump
+    \   ... all 2 requirements met.
+
+A word with no file to inspect — a primitive, one typed this session, an
+undefined name — says so and points at `where`.
+
+This is deliberately a third word rather than a smarter `deps`: resolving a
+*name* to a file does not belong in the layer that handles filenames. It is
+built from `where-path` and `deps-path`, both public, and `see word-deps` shows
+the join.
 
 ## dis ( "name" -- )
 Disassemble a word's machine code — the other side of `see`. Colon words show
@@ -169,6 +252,7 @@ Leave the tutorial: forgets which step `next` would show, nothing else —
 
 - `help modules` — `save` / `load` / `edit` and friends (moved from this page).
 - docs/See.md — how `see` reconstructs source.
+- `help deps` — what a file requires; `where` gives it the filename.
 - docs/Disassembler.md — how `dis` decodes and annotates machine code.
 - docs/Performance.md — measured speed, and the compiled code that explains it.
 - docs/Help_System.md — `help`, `tutorials`, `apropos`, and sections.

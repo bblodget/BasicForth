@@ -248,7 +248,7 @@ A single loose file works — `~/.basicforth/lib/greet.fs` loads with
 directory of its own**, named for the package:
 
     ~/.basicforth/lib/greeting/          -> the package's own src/
-    ~/.basicforth/lib/dark-star/         -> likewise
+    ~/.basicforth/lib/mygame/            -> likewise
 
     require greeting/greeting.fs
 
@@ -286,7 +286,7 @@ and shared — every package's pages sit in one `docs/Packages/`, every package'
 lessons in one `docs/Tutorials/`, and subdirectories are not searched. So a
 `Sound.md` of yours sits beside the bundled `Sound` lesson: `tutorials` lists
 both, and `tutorial Sound` opens the bundled one, leaving yours advertised and
-unreachable. Prefix instead — `dark-star.md`, `dark-star-levels.md` — and
+unreachable. Prefix instead — `mygame.md`, `mygame-levels.md` — and
 nothing collides.
 
 ## path

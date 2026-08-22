@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### Added: `where <word>` — which file did this word come from?
+
+- `see` already knows: it finds a word's source metadata on the way to printing
+  the text. `where` asks the same question and stops at the answer, for when you
+  want the filename rather than a screenful of source — typically to hand to
+  `deps`:
+
+      > require disasm.fs
+      > where dis
+      /usr/local/share/basicforth/forth/disasm.fs
+      > deps /usr/local/share/basicforth/forth/disasm.fs
+
+- **The answer is a full path, not a bare name.** `deps` accepts a path, so it
+  is still exactly the argument the file words want — and since `make install`,
+  a checkout and an installed tree can both hold a `disasm.fs`. Which copy is in
+  force is the question `where` exists to settle, and only the path answers it.
+
+- The same four cases `see` handles: a file gives its path, an assembly
+  primitive says so, a word typed this session says so, an undefined name
+  reports `not found`.
+
+- **A word can come from a file BasicForth cannot name, and it says so.** Source
+  ids come from a 64-entry table; once it is full, every later file is stamped
+  with the same id a REPL-typed word carries, so the two become genuinely
+  indistinguishable. Rather than report the wrong origin confidently, `where`
+  reports that it cannot tell:
+
+      > where f70
+      where: f70 came from a file this run cannot name
+      where: the source table is full (64 files)
+
+  Named `where`, not `which`: `which` is the shell's word for executables on
+  `$PATH`, and BasicForth already has a shell vocabulary.
+
+- **`where-path ( c-addr u -- c-addr u true | false )` returns the path instead
+  of printing it**, so you can build on it. Only a file-loaded word has a path;
+  a primitive, a word typed this session, an undefined name and a word past the
+  64-file table all answer `false` — none of them names a file you could open.
+
+### Added: `word-deps` and `deps-path`
+
+- **`word-deps <name>`** — what the file that defines a word requires. `deps`
+  reached through the dictionary rather than through a filename, for when you
+  are holding a word and not a file:
+
+      > require disasm.fs
+      > word-deps dis
+      /usr/local/share/basicforth/forth/disasm.fs
+        require shellutil.fs      loaded
+        wants-cmd objdump         ok -- /usr/bin/objdump
+
+- **`deps-path ( c-addr u -- )`** — `deps` over a path you already hold, with no
+  name to parse and no search. `deps` itself now ends there.
+
+- It is a third word rather than a smarter `deps`, because resolving a *name* to
+  a file does not belong in the layer that handles filenames. `word-deps` is
+  just `where-path` feeding `deps-path`, and `see word-deps` shows the join.
+
+- **`deps-path` is public so that composing does not mean reaching for
+  internals.** The first draft of this documented the composition using
+  `(dp-run)` and `(dp-verdict)` — real words, but parenthesized, which by
+  convention means internal and which the reference audit therefore skips. The
+  result was an example whose every step answered `no help for`. A documented
+  example is a promise that its parts can be looked up.
+
 ### Changed: a package gets a directory under `lib/`
 
 - `~/.basicforth/lib/<package>/` — a symlink to the package's own source

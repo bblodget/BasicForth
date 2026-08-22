@@ -89,7 +89,7 @@ background, and `talking?` says whether it still is.
     s" go" say                  \ queues behind the first, never over it
 
 **`say` blocks while it synthesizes**, and that is the one thing to know about
-it. Measured with `cmu_us_slt`: "Go!" 7 ms, "Dark Star, ready." 16 ms, a full
+it. Measured with `cmu_us_slt`: "Go!" 7 ms, a two-word phrase 16 ms, a full
 sentence 38 ms. A frame at 60 Hz is 16.7 ms. So `say` belongs at the prompt, in
 a menu, or in the pause between levels — in a frame loop it drops frames, and
 what a game wants there is `help voice`, whose phrases are rendered ahead of

@@ -302,11 +302,6 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       time, `core.fs` and a module reload stay silent, and the load-time cost is
       measured rather than assumed.
 
-- [ ] **A `Files` lesson.**
-      Done when: `tutorial Files` replays green under `make run-lessons` on both
-      arches and no step pages.
-      Detail: §Module System / Forth-as-Shell, use-testing queue.
-
 - [x] **`[ENGINE]` Propagate errors out of `EVALUATE`.** DONE 2026-08-16,
       both arches, all eight suite runs green. Mechanism: a `THROW` of `-260`,
       joining the silent set, raised by `forth_evaluate` in assembly and by the
@@ -421,7 +416,8 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       hardcoded 300000 bytes, sized to overflow 256 KB, and silently stopped
       overflowing. It derives the size from `unused` now.
 
-- [ ] **`where <word>` — which file did this come from?** Reshaped 2026-08-18;
+- [x] **`where <word>` — which file did this come from? DONE 2026-08-22**
+      (branch `2-where-word`). Reshaped 2026-08-18;
       the original entry asked for `deps <word>` to fall back to a dictionary
       lookup, and that is the wrong place for it. The need is real — *"I have
       `dis`, where did it come from?"* — but it is a source-metadata question,
@@ -446,6 +442,38 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Done when: `where dis` answers `disasm.fs`, the four `see` cases each
       report sensibly, and the 65th-file case says why it cannot answer.
 
+      **Shipped as the full path, not the bare name.** `deps` accepts a path —
+      so the answer is still exactly what the file words want — and since
+      `make install` a checkout and an installed tree both hold a `disasm.fs`,
+      which is the case a bare name cannot answer. Nine suite assertions, all
+      of which fail with `where` stubbed out.
+
+      The 65th-file case needed no engine change: `(source-path)` reports
+      nothing above the table's count, so `64 (source-path)` is a full-table
+      probe in pure Forth. Without it `where` answers "was typed at the REPL
+      this session" for a word that came from a file — verified by removing
+      the guard, not by reasoning about it.
+
+      **Grew to four public words, from the one this entry scoped.** Interactive
+      use asked for the rest, in this order:
+
+      - `where-path ( c-addr u -- c-addr u true | false )` returns the path
+        instead of printing it, so it can be built on.
+      - `deps-path ( c-addr u -- )` is `deps` over a path already held; `deps`
+        now ends there.
+      - `word-deps <name>` joins the two: what the file defining a word needs.
+
+      `deps-path` is public because of a defect found by *using* the docs, not
+      by testing them: the first `word-deps` example was built on `(dp-run)` and
+      `(dp-verdict)`, so every word in a shipped example answered `no help for`.
+      The reference audit cannot see this — it exempts parenthesized names by
+      convention — so nothing but a reader would have caught it.
+
+      Also fixed here, and unrelated to the feature: inserting the `deps-path`
+      entry mid-page split the `## deps` entry, and `help deps` silently lost
+      everything after the insertion point. A `## ` heading placed inside
+      another entry truncates it with no error.
+
       Related but NOT settled, and deliberately not queued: whether the file
       words should be strict about extensions. Today `deps sdl3` works and
       `require sdl3` does not, which is an inconsistency — but the fix removes
@@ -467,6 +495,26 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       the Makefile by the install test).
 
 ### Bigger than a week
+
+- [ ] **View a word's source file, not just its definition.** Raised
+      2026-08-22. `see <word>` shows the definition; sometimes you want the
+      whole file it lives in. `where-path` (shipped 2026-08-22) is the
+      substrate — it hands back a filename a file-opening word can take — so
+      this is now a question of the *viewer*, not of finding the file.
+      Open: read-only or the real editor? `edit` already opens `$VISUAL`, but
+      pointing it at `core.fs` invites editing a file you did not mean to
+      change, and the module system has opinions about which file a session
+      owns. A pager (`more` exists) is the cautious first move.
+      Done when: from a word name you can read its whole file, and it is
+      obvious whether what you are looking at can be modified.
+
+- [ ] **A `Files` lesson.** Moved out of the v0.17.0 bucket 2026-08-22 — a
+      lesson is a fresh-context job (step sizing, replay behaviour and prose
+      voice held at once) and deferring it beat starting it the day before a
+      release. First item for the next one.
+      Done when: `tutorial Files` replays green under `make run-lessons` on both
+      arches and no step pages.
+      Detail: §Module System / Forth-as-Shell, use-testing queue.
 
 Real features that need a design conversation before they are task-sized —
 parked here so they stay visible without pretending to be queue items.
@@ -550,6 +598,29 @@ parked here so they stay visible without pretending to be queue items.
 ---
 
 ## Known Bugs
+
+- [ ] **`]` at the prompt compiles into nowhere, silently.** Found 2026-08-22
+      while probing whether `[ where dis ]` was a substitution syntax (it is
+      not — `]` is Forth's state bracket). `]` outside a definition sets
+      `STATE` to compile with no header open, so what follows is compiled into
+      dictionary space nothing will ever reach:
+
+          here .            \ 4504834
+          ] 1 2 + drop [
+          here .            \ 4504866   -- 32 bytes gone, unreachable
+
+      Not corruption, and `;` afterwards does not fault. The costs are a silent
+      leak (unreclaimable short of a `marker`) and a confusing state: the only
+      symptom is the `...` continuation prompt, and the escape — type `[` — is
+      not something the prompt tells you.
+
+      This is the same family as the seven `STATE`-vs-definition-open bugs
+      already fixed: the system can already tell the difference (`(def-open?)`
+      exists and other paths gate on it), so a warning when `]` opens compile
+      state with no definition would cost little. Deliberately NOT auto-fixed:
+      `]` is a standard word and someone may rely on the current behaviour.
+      Done when: a decision is recorded — warn, refuse, or document as intended
+      — and whichever it is, the `...` prompt's escape is discoverable.
 
 - [x] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
   `IF`/`DO`/`BEGIN` segfaults.** FIXED 2026-07-29 (branch staging-debug).
