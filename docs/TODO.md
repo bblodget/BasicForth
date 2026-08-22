@@ -487,6 +487,52 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 Real features that need a design conversation before they are task-sized —
 parked here so they stay visible without pretending to be queue items.
 
+- **Package scopes: system-wide, and per-project.** Decided 2026-08-22 to ship
+  **per-user only** for now, and to make the layering a deliberate design
+  conversation rather than something that accretes. Nothing built today is
+  thrown away by it — the *layout* (`lib/<package>/`,
+  `docs/Packages/pkg::page.md`, `docs/Tutorials/pkg::lesson.md`) describes a
+  package tree at any scope, so a system root at
+  `/usr/local/share/basicforth/packages` would have exactly that shape.
+
+  **What already works, and is already promised.** `BASICFORTH_PACKAGES`
+  relocates the root and is documented in `help environment`, so pointing it at
+  a project's own `.basicforth/` gives project-local packages today — measured
+  2026-08-22: `require vendored/tool.fs` resolves with the variable set and is
+  invisible without it. That is the *isolating* venv semantic, which is the one
+  Python actually gives you. It is a promise whether or not we call it a venv.
+
+  **The one real gap is that the variable holds ONE root, not a list.** Layering
+  is what system-wide needs (system packages *and* yours), and what a friendlier
+  venv would want (project *plus* user, rather than an all-or-nothing swap).
+  Cheap for a structural reason: `BASICFORTH_PATH` and `BASICFORTH_DOCS` are
+  already colon-separated, and the user root works by *appending* onto them, so
+  nothing downstream of `(user-dirs)` cares how many roots there were. Only
+  `(ud-root?)` is single-valued.
+
+  **Two things to settle before building it:**
+
+  - **Precedence, and the tension in it.** Today's rule is *appended, never
+    prepended* — nothing installed shadows a bundled library. Most-specific-first
+    would give beside-first -> CWD -> bundled -> project -> user -> system. But
+    "installed never shadows bundled" and "a project pins its own version" pull
+    against each other, and a venv that cannot override a bundled library is a
+    weak venv. **That tension is the actual design question**, not the plumbing.
+  - **The path budget.** `(ud-rootmax)` refuses a root over 160 bytes and the
+    include search silently SKIPS a segment whose `<seg>/<name>` exceeds 511.
+    Several roots multiply both. Per-package path entries were already rejected
+    as unbounded growth; a small fixed number of roots is a different thing, but
+    the limits want re-measuring rather than inheriting.
+
+  Executables generalise cleanly and need no new rule: per-scope bin — system
+  to `/usr/local/bin`, user to `~/.local/bin`, project to a `bin/` the project
+  puts on PATH. Note the per-user choice does **not** follow BasicForth's own
+  install prefix, and must not: a `/usr/local` install is shared by every user
+  on the machine, so writing a personal package into `/usr/local/bin` would need
+  root and would push it into everyone else's PATH.
+  Done when: a design conversation has settled the precedence question above,
+  with the venv-overrides-bundled case answered either way and written down.
+
 - **Namespaces.** The flat dictionary is the deepest unsolved problem in the
   package design, and the case for fixing it is **composition**, not tidiness: a
   package author can test against core and their declared dependencies, but
