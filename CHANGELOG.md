@@ -66,6 +66,30 @@
   convention means internal and which the reference audit therefore skips. The
   result was an example whose every step answered `no help for`. A documented
   example is a promise that its parts can be looked up.
+### Fixed: a file in your working directory could hide an installed package
+
+- The search tries the current directory first, and used to give up entirely
+  unless that attempt failed with exactly "not found". Anything else — a plain
+  **file** sitting where a directory name was expected, or a directory you may
+  not read — abandoned the rest of the search, so nothing on `BASICFORTH_PATH`
+  or in your package directory was ever reached:
+
+      require greeting/greeting.fs      ok
+      touch greeting                    a file, not a directory
+      require greeting/greeting.fs      cannot open greeting/greeting.fs
+
+- **Old code, new exposure.** While libraries were loaded by flat name
+  (`require sdl3.fs`), a file of that name in your working directory was a file
+  you *meant* to load. A package is loaded as `require <package>/<file>.fs`, so
+  the first component is now a **directory** name — and a `bin/dark-star`
+  launcher script beside a `dark-star` package is exactly that collision. The
+  script blocked its own package.
+
+- Every place on the search is now tried, and one that cannot be opened is
+  passed over. That is what the `BASICFORTH_PATH` segments already did; the
+  current-directory attempt now behaves the same way. A file that genuinely is
+  not anywhere still reports `cannot open <name>` — **once**. It used to be
+  reported twice in the blocked case, once by the loader and once by its caller.
 
 ### Changed: a package gets a directory under `lib/`
 
