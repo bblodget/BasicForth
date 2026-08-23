@@ -499,7 +499,50 @@ nobody opens.
 already says what a package needs from the machine; capabilities are the same
 idea one step on — what it *touches*:
 
-        \ uses: shell-out (git), file-write (~/.basicforth)
+        Uses:      file-write (~/.basicforth)
+        Unbounded: shell-out (git)
+
+**Two tiers, and which tier a thing goes in is the whole point.** Revised
+2026-08-23. An earlier version was one flat list with `ffi` in it beside
+`file-read`, as though they described the same kind of thing.
+
+A **bounded** capability is an effect the language mediates, so the declaration
+can be close to complete: `file-read`, `file-write`, `network`. A qualifier
+carries most of the information — `file-write (~/.basicforth)` is a very
+different claim from `file-write` unqualified.
+
+An **unbounded** capability escapes the language entirely. Anything reachable
+this way can do everything on the bounded list without touching a single word
+that would show up in it:
+
+- **`ffi`** — `dlopen` plus a call to an arbitrary symbol. Opens sockets and
+  writes files without using a network or file word.
+- **`shell-out`** — `system` or `open-pipe`. Runs any program, which can do
+  anything the user can. No symbol lookup required; it is the *easier* escape
+  of the two.
+- **`evaluate` over text the package did not write** — computed source, so a
+  scanner cannot see what will run.
+
+        Uses:      file-read
+        Unbounded: ffi (libSDL3.so.0, libflite.so.1), shell-out (piper)
+
+**The tier is promoted out of `Uses` because it bounds what `Uses` is worth.**
+A package with an empty `Unbounded:` line has made claims the language can
+mostly keep; one with anything on it has made claims that are a courtesy. That
+distinction is the single most useful thing a reader can be told, and a flat
+list hides it — every entry then carries the same unstated caveat, so the
+caveat stops meaning anything.
+
+**A qualifier there is intent, not a limit.** `shell-out (git)` says what the
+author meant to run; it does not stop the package running something else, and
+`ffi (libSDL3.so.0)` does not stop it dlopening anything else. The
+parenthetical is useful — it tells a reader what to expect and what to check —
+but it must not be read as a bound, which is exactly the mistake an earlier
+draft of this section made by leaving `shell-out` in the bounded tier because
+it *looked* qualified.
+
+Naming the specifics costs nothing extra: the libraries are already in the dep
+block as `needs-lib`, and the commands as `needs-cmd`.
 
 **The declaration covers effective behaviour, not one file's text.** If a
 package `require`s something that shells out, the package shells out and must
@@ -514,10 +557,32 @@ and `disasm.fs` shell out, `sdl3.fs` and `sound.fs` open native code — since a
 package's declaration is only as good as what it can inherit and restate.
 
 The obvious operations are a short list — shelling out (`shellutil.fs`,
-`open-pipe`), native code (FFI, `dlopen`), file writes and removals, and
-`evaluate` over text the package did not write — though it is a list of what
-we have thought of, not a closed set. Scanning for those names is cheap, so it
-is worth doing.
+`open-pipe`), native code (FFI, `dlopen`), file writes and removals, network
+access, and `evaluate` over text the package did not write — though it is a
+list of what we have thought of, not a closed set. Keep it short: Android's
+permissions became noise because there were too many and each was vague, and
+this design's advantage is that the list is small and the source is readable.
+
+**Prefer deriving it to trusting it, and be honest about the limit.** A
+declaration is forgettable — the `dark-star` entry declared `-`, meaning plain
+Forth, while requiring SDL3 and shipping a shell-out — so the useful check is
+mechanical: scan a package's files, transitively, for those names and compare
+the result with what it declared. Cheap, and it catches the honest mistake,
+which is the common one.
+
+It cannot be a guarantee. Forth resolves words at run time and can `evaluate`
+text it computed, so a determined author can put anything beyond the reach of a
+scanner; and once anything on the unbounded tier is in play, the language is
+not the boundary at all.
+Three levels, and it is worth not confusing them:
+
+- **the declaration** — cheap, and only as good as the author's care
+- **a static scan** — catches forgetfulness, not evasion; the right tool for
+  curation, and the one that would have caught the `dark-star` entry
+- **runtime enforcement** — would need a real sandbox, and FFI defeats it
+
+So the scan is a curator's aid and a cross-check, not a proof. What makes the
+model work is still that the code is small and someone reads it.
 
 **It is triage, not a test.** It says where to look first. It does not decide
 anything, and both directions are weak:
