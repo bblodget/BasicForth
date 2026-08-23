@@ -174,9 +174,19 @@ second `rollback` returns to it. One step of history, held as a pair — an
 Two consequences worth stating, because both are easy to design out and then
 rediscover as bugs:
 
-- **The manifest records every clone**, not just the live one, so `remove`
-  can authorise deleting both trees. `remove` takes the whole
-  `packages/<name>` directory, so the permitted shape stays a single entry.
+- **`packages/<name>/` is owned wholly by that package**, and that is what
+  makes cleanup recoverable. The manifest authorises the *directory*; anything
+  inside it is ours by construction, so individual clones need no separate
+  authorisation. A leftover `<sha>/` from an interrupted cleanup is collectable
+  garbage, and a `<sha>/` the manifest names but which is missing is simply
+  gone. Both are reconciled in passing, not treated as corruption.
+
+  Without that, dropping the older clone has no safe ordering: manifest-first
+  and an interruption orphans a clone `remove` may not delete; delete-first and
+  an interruption leaves the manifest naming a missing tree, which — under a
+  rule that aborts on any mismatch — makes the package unremovable. The
+  strictness belongs to the entries *outside* `packages/<name>/`: the links and
+  the command, where something that is not ours could be standing.
 - **The manifest records each link's target**, not just its path. A package may
   relocate its files between versions, so the link for one commit is not
   necessarily the link for another.
@@ -205,7 +215,10 @@ A path must satisfy **both** checks:
 
 Neither is sufficient alone: the manifest is a text file anything can edit, and
 a shape rule on its own is a path heuristic that would claim hand-made links.
-Anything failing either check aborts the whole operation, naming the entry.
+Anything failing either check aborts the whole operation, naming the entry —
+for the links and the command, where a path could belong to something else.
+Inside `packages/<name>/`, which the manifest authorises as a whole, a
+disagreement between manifest and disk is reconciled rather than fatal.
 
 A package name is a **validated identifier** — lowercase, digits, internal `-`,
 bounded, no `/` `.` `..` `::` or whitespace — checked when read from a manifest
