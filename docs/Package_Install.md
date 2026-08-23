@@ -134,38 +134,52 @@ curation — but it should never happen by accident.
 **`upgrade` keeps the old clone, and that is what makes `rollback` work.**
 Recording the previous SHA is not enough: a force-push, a rewritten branch or a
 deleted repo and that commit names nothing, so rollback would fail exactly when
-it is needed — right after an upgrade that broke you. So `upgrade` moves
-`packages/<name>` aside to `packages/<name>.prev` and clones the new pin fresh.
+it is needed — right after an upgrade that broke you.
 
-**Rollback swaps the two; it does not overwrite one with the other.**
-`packages/<name>` is occupied by the new clone, so a plain rename cannot work,
-and deleting the new clone first would be two destructive steps with nothing
-holding them together — interrupted halfway, neither version is present, and
-because `remove` refuses when the manifest and the disk disagree, the package
-could not even be cleaned up. Instead the two directories change places:
+**Clones are stored by commit and never move:**
 
-    <name> -> <name>.tmp,  <name>.prev -> <name>,  <name>.tmp -> <name>.prev
+    <root>/packages/<name>/<sha>/          the tree, as cloned
+    <root>/lib/<name>          -> packages/<name>/<sha>/src
 
-Nothing is destroyed at any point, so an interruption leaves both trees on disk
-and the operation can simply be retried. The manifest is rewritten **after** the
-swap, and it is what decides which is live.
+`upgrade` clones the new pin beside the old one and repoints the links. The two
+trees coexist under stable paths, so nothing has to be renamed to change which
+is live.
+
+**The manifest is the only thing that says which commit is live**, and it is
+written atomically — to a temporary file, then renamed over the old one. A
+rename either happens or does not, so the manifest is always one whole version
+or the other, never half of each.
 
     > rollback dark-star
     dark-star   9e21b70c -> 4f1c9a2b   (from the kept clone)
 
-Instant, offline, and immune to anything happening upstream. It is also
-reversible — the version you rolled back from is now the kept one, so a second
-`rollback` returns to it. One step of history, held as a pair.
+That makes rollback a manifest rewrite followed by repointing links. **Links
+are derived state**: whatever the manifest says is live, the links can be
+rebuilt from it at any time, and replacing a symlink is itself a rename and so
+atomic. An interruption therefore leaves the manifest definitely old or
+definitely new, with links possibly stale — and stale links are reconciled by
+recomputing them, not by guessing what step was in flight.
+
+This is why the earlier design was wrong, and it is worth recording. It renamed
+`<name>` and `<name>.prev` around a `<name>.tmp`, so liveness was a property of
+directory *names* — and a set of names cannot be changed atomically. Interrupted
+between two of the three renames, a retry from the top would rename the live
+tree onto an existing `.tmp` and destroy the version being rolled back from.
+Storing by commit removes the class of problem rather than sequencing around it.
+
+Rollback is reversible: the version rolled back from is still on disk, so a
+second `rollback` returns to it. One step of history, held as a pair — an
+`upgrade` past that point drops the older clone.
 
 Two consequences worth stating, because both are easy to design out and then
 rediscover as bugs:
 
-- **`upgrade` must record `.prev` in the manifest**, with its SHA. `remove`
-  requires manifest authorisation *and* a permitted shape, so an unrecorded
-  `.prev` would be refused and left behind for ever.
-- **The manifest records each link's target, not just its path.** A package may
-  relocate its files between versions, so restoring the old tree means
-  restoring the old link targets too.
+- **The manifest records every clone**, not just the live one, so `remove`
+  can authorise deleting both trees. `remove` takes the whole
+  `packages/<name>` directory, so the permitted shape stays a single entry.
+- **The manifest records each link's target**, not just its path. A package may
+  relocate its files between versions, so the link for one commit is not
+  necessarily the link for another.
 
 Further back than one step is `install <name>@<sha>`, with the warning above.
 
@@ -184,7 +198,6 @@ A path must satisfy **both** checks:
 2. **Its shape permits it** — one of the five forms `install` can produce:
 
         <root>/packages/<name>
-        <root>/packages/<name>.prev
         <root>/lib/<name>
         <root>/docs/Packages/<name>::*.md
         <root>/docs/Tutorials/<name>::*.md
