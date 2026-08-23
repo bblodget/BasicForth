@@ -367,13 +367,13 @@ of which advertises what it carries.
 
         ~/.basicforth/sources
         default   https://github.com/basicforth/packages
-        brandon   https://github.com/brandonblodget/basicforth-packages
+        brandon   https://github.com/bblodget/basicforth-packages
 
 The manifest inside a source lists packages, and **each entry points at the
 package's own git repo**:
 
         \ name      repo                                        commit (full SHA)  run
-        dark-star   https://github.com/brandonblodget/dark-star  4f1c9a2be7d0518c3a6b8e94d217f0c5a83be612  dark-star
+        dark-star   https://github.com/bblodget/basicforth-dark-star  4f1c9a2be7d0518c3a6b8e94d217f0c5a83be612  dark-star
         hexutils    https://github.com/carol/hexutils            b83d17e6a05c9f24178be3d0c916a4f7e25b8d31  -
 
 ### Why packages live in their own repos

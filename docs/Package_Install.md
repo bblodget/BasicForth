@@ -8,7 +8,7 @@ side, start to finish.
 
 ## The story
 
-    > add-source brandon https://github.com/brandonblodget/basicforth-packages
+    > add-source brandon https://github.com/bblodget/basicforth-packages
     Adding a source is a decision to trust it. Packages from here run with
     your permissions, and a source can change what it offers at any time.
     Add brandon? (y/n) y
@@ -26,7 +26,7 @@ side, start to finish.
     dark-star           brandon
       A puzzle game, ported from TurboForth
       version 1.2
-      repo    https://github.com/bblodget/dark-star
+      repo    https://github.com/bblodget/basicforth-dark-star
       commit  4f1c9a2be7d0518c3a6b8e94d217f0c5a83be612
       needs   libSDL3.so.0
       wants   flite
@@ -59,7 +59,7 @@ source's pin moves past yours:
 
 The same verbs from a shell, via `chip`:
 
-    $ chip add-source brandon https://github.com/brandonblodget/basicforth-packages
+    $ chip add-source brandon https://github.com/bblodget/basicforth-packages
     $ chip install dark-star --yes
     $ chip packages
 
