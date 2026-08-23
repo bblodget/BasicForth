@@ -177,9 +177,17 @@ rediscover as bugs:
 - **`packages/<name>/` is owned wholly by that package**, and that is what
   makes cleanup recoverable. The manifest authorises the *directory*; anything
   inside it is ours by construction, so individual clones need no separate
-  authorisation. A leftover `<sha>/` from an interrupted cleanup is collectable
-  garbage, and a `<sha>/` the manifest names but which is missing is simply
-  gone. Both are reconciled in passing, not treated as corruption.
+  authorisation. Three cases, and they are not the same:
+
+  - a `<sha>/` the manifest does not name — garbage from an interrupted
+    cleanup; collect it in passing
+  - the **kept** `<sha>/` missing — only rollback is lost. Drop the record and
+    say so, so `rollback` reports honestly instead of failing later
+  - the **live** `<sha>/` missing — the installation is **broken**, not
+    reconcilable. Reconciling it away would leave a package that reports as
+    installed with dangling links and no tree. Say so, and offer the two real
+    answers: re-clone it (the manifest still holds the repo and the commit) or
+    `remove` it, which works regardless
 
   Without that, dropping the older clone has no safe ordering: manifest-first
   and an interruption orphans a clone `remove` may not delete; delete-first and
