@@ -7,7 +7,9 @@
 // Register allocation:
 //   X19 = Data stack pointer (DSP) — points to top item on stack
 //         (equals sp0 when stack is empty)
-//   X20 = scratch (available — no longer used for TOS)
+//   (X20 was freed when TOS-in-register was dropped, but it is NOT reserved:
+//    it carries ctx across the call in the worker trampoline, and X23-X28 are
+//    in heavy scratch use too. Save what you borrow.)
 //   X21 = HERE pointer (dictionary free space)
 //   X22 = LATEST pointer (most recent dictionary entry)
 //   SP  = Return stack
@@ -45,6 +47,15 @@
 .equ T_DEFER,       1
 .equ T_VALUE,       2
 .equ T_NONAME,      3
+// THROW code for an interpreter error that has ALREADY been reported by the
+// word raising it -- EVALUATE prints "? token", INCLUDED prints "file:line: ?
+// token". It joins -1 and -2 in THROW's silent set, or the uncaught handler
+// would print "uncaught exception: N" underneath a message the user already
+// has. Distinct from -2 rather than reusing it, because a program that catches
+// has a fair claim to tell a user's ABORT" from broken text it evaluated.
+// Forth 2012 leaves -256..-4095 to the implementation. The magnitude stays
+// inside CMN's 12-bit immediate, so the uncaught test needs no scratch load.
+.equ THROW_INTERP,  -260
 
 // DROP_PARTIAL_HEADER — after an abort, LATEST can be a HALF-BUILT definition:
 // `:` built the header on an earlier input line, so the per-line recovery
@@ -94,7 +105,8 @@
 // CHECK_DICT n: verify HERE + n bytes fits in dict_space.
 // Always active — dictionary has no guard page.  Clobbers X9, X10.
 .macro CHECK_DICT n
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     ADD X10, X21, #\n
     CMP X10, X9
     B.HI dict_full
@@ -2373,7 +2385,8 @@ build_header_anon:
 
 .Lbh_build:
     // Check dictionary space
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     ADD X10, X21, #128
     CMP X10, X9
     B.HI .Lbh_dict_full
@@ -2618,7 +2631,7 @@ forth_semicolon:
     // print bare and RET, so the file went on loading against a word that
     // never got defined: one missing THEN reported with no location at all,
     // then a second, unrelated-looking "? name" wherever it was first used,
-    // dozens of lines away. (Found 2026-08-11 in the Dark Star port: line 167
+    // dozens of lines away. (Found 2026-08-11 in a large program: line 167
     // was the typo, line 213 was the only line number printed.)
     //
     // Name the definition, copied OUT of the partial header -- .Lcf_abort drops
@@ -3060,6 +3073,16 @@ forth_evaluate:
     BL forth_interpret_line
     MOV X26, X0                     // save result
 
+    // Report HERE, before the restore below puts the outer token's wording back.
+    // The error being reported is the INNER one, so it must be printed while the
+    // inner wording is still live: `s" 999 if" evaluate` says "compile only: if",
+    // not "? if". Printing after the restore got exactly that wrong on x86 and
+    // would have got it wrong identically here.
+    // X26 is callee-saved, so the status survives the call with no extra guard.
+    CBZ X26, .Leval_no_report
+    BL print_line_error
+.Leval_no_report:
+
     // Restore source context
     ADR X9, source_addr
     STR X23, [X9]
@@ -3080,7 +3103,25 @@ forth_evaluate:
     LDP X25, X26, [SP], #16
     LDP X23, X24, [SP], #16
     LDP X29, X30, [SP], #16
+    CBNZ X0, .Leval_failed
     RET
+
+.Leval_failed:
+    // Propagate. Returning the status was correct and useless: the only site
+    // that could read it (.Lil_found_execute) never did, and when EVALUATE is
+    // COMPILED into a definition there is no such site at all -- the body just
+    // carries on. A throw is the one channel that unwinds a caller's body and
+    // that CATCH can intercept.
+    //
+    // AFTER the restores above, deliberately, and after the report. The throw
+    // skips this routine's epilogue, and CATCH's frame -- which does save the
+    // source context and il_sp -- does NOT save err_pfx; EVALUATE brackets that
+    // pair itself. Throw before restoring it and an error raised later in the
+    // same OUTER token inherits this string's wording, which is the leak the
+    // bracketing was added to close.
+    MOV X9, #THROW_INTERP           // silent code: .Leval_no_report printed
+    STR X9, [X19, #-CELL]!
+    B forth_throw
 
 // ---------- INCLUDED ----------
 // ( c-addr u -- )
@@ -3520,13 +3561,20 @@ forth_included:
     B .Lincl_err_tail
 
 .Lincl_open_err:
-    // Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
-    // the one comparable error value (platform_err_not_found); every other
-    // magnitude is opaque up here — sign/zero tests only (Platform_Layer.md).
-    ADR X9, platform_err_not_found
-    LDR X9, [X9]
-    CMP X0, X9
-    B.NE .Lincl_open_other
+    // The CWD attempt failed — fall through to the BASICFORTH_PATH search, for
+    // ANY reason it failed. This used to run only for "not found", and every
+    // other errno abandoned the search: a plain FILE named like the first path
+    // component (open → ENOTDIR) or an unreadable directory (EACCES) hid every
+    // copy behind it. Harmless while requires were flat names, but a package is
+    // loaded as `require <pkg>/<file>.fs`, so the first component is a DIRECTORY
+    // name — and a `bin/mygame` script next to a `mygame` package is
+    // exactly the collision that creates. The segment loop below already skips
+    // a segment on any failure; this makes CWD behave the same way.
+    //
+    // A search path reporting one member's error as the whole lookup's is the
+    // bug; "not found anywhere" is the right answer, and the Forth wrapper
+    // already says so. (Which also ends a doubled message: this path printed
+    // "Error: cannot open X" and the caller then printed "cannot open X".)
 
     // BASICFORTH_PATH is a colon-separated list of directories. Try each in
     // order; load the first match. CWD was already tried above. Empty segments
@@ -3623,19 +3671,6 @@ forth_included:
     ADD X23, X23, #1               // skip ':'
     SUB X24, X24, #1
     B .Lincl_seg_loop
-
-.Lincl_open_other:
-    // Other open error — print message
-    ADR X0, incl_err_open
-    MOV X1, #incl_err_open_len
-    BL platform_write
-    ADR X9, file_name_addr
-    LDR X0, [X9]
-    ADR X9, file_name_len
-    LDR X1, [X9]
-    BL platform_write
-    MOV X0, #'\n'
-    BL platform_emit
 
 .Lincl_open_skip:
     MOV X0, #0                      // return 0 (not an error for ENOENT)
@@ -4943,6 +4978,46 @@ forth_docs_path:
     STR X0, [X19, #-CELL]!          // u
     RET
 
+// (forth-path) ( -- c-addr u )  the BASICFORTH_PATH value and length (0 0 unset).
+// The interpreter's own search path, which is NOT the same as getenv of that
+// name: an installed binary derives it, so the environment can be empty while
+// the path is set. Anything resolving a file must ask here, not the environment.
+.global forth_forth_path
+forth_forth_path:
+    ADR X9, basicforth_path
+    LDR X0, [X9]
+    STR X0, [X19, #-CELL]!          // c-addr
+    ADR X9, basicforth_path_len
+    LDR X0, [X9]
+    STR X0, [X19, #-CELL]!          // u
+    RET
+
+// (forth-path!) ( c-addr u -- )  replace the search path for the rest of the
+// session. The string is NOT copied: the caller owns storage that must outlive
+// the session (the dictionary does; PAD does not).
+.global forth_forth_path_store
+forth_forth_path_store:
+    LDR X0, [X19]                   // u
+    ADR X9, basicforth_path_len
+    STR X0, [X9]
+    LDR X0, [X19, #CELL]            // c-addr
+    ADR X9, basicforth_path
+    STR X0, [X9]
+    ADD X19, X19, #(2*CELL)
+    RET
+
+// (docs-path!) ( c-addr u -- )  as above, for the help/tutorial search path.
+.global forth_docs_path_store
+forth_docs_path_store:
+    LDR X0, [X19]                   // u
+    ADR X9, basicforth_docs_len
+    STR X0, [X9]
+    LDR X0, [X19, #CELL]            // c-addr
+    ADR X9, basicforth_docs
+    STR X0, [X9]
+    ADD X19, X19, #(2*CELL)
+    RET
+
 // FILE-SIZE ( fileid -- ud ior )  file size as a double cell, via fstat
 .global forth_file_size
 forth_file_size:
@@ -5275,10 +5350,12 @@ forth_allot:
     LDR X9, [X19], #CELL           // pop n
     // Bounds check: dict_space <= HERE + n <= dict_space + SIZE
     ADD X10, X21, X9
-    ADR X11, dict_space
+    ADRP X11, dict_space           // ADRP+ADD for the same reason as
+    ADD  X11, X11, :lo12:dict_space //   dict_space_end below
     CMP X10, X11
     B.LO dict_full                  // below dict_space start
-    ADR X11, dict_space_end
+    ADRP X11, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X11, X11, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     CMP X10, X11
     B.HI dict_full                  // above dict_space end
     ADD X21, X21, X9                // HERE += n
@@ -5509,7 +5586,8 @@ forth_hld:
 // UNUSED ( -- u )  Return number of free bytes in dictionary space.
 .global forth_unused
 forth_unused:
-    ADR X9, dict_space_end
+    ADRP X9, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X9, X9, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     SUB X9, X9, X21                // end - HERE
     STR X9, [X19, #-CELL]!
     RET
@@ -6296,10 +6374,35 @@ forth_catch:
     STR XZR, [X19, #-CELL]!         // report success
     RET
 
+// print_line_error ( -- )  Print a pending line error: the wording chosen by the
+// site that raised it, then the offending token, then a newline. repl_error has
+// printed this shape since the beginning and EVALUATE now needs an identical
+// one, so it lives here rather than being written twice -- two copies that must
+// agree on an output format is exactly how one of them goes stale.
+// Uses platform_write, which pays any owed newline; a raw syscall would not.
+.global print_line_error
+print_line_error:
+    STP X29, X30, [SP, #-16]!
+    ADR X9, err_pfx_addr
+    LDR X0, [X9]
+    ADR X9, err_pfx_len
+    LDR X1, [X9]
+    BL platform_write
+    ADR X9, err_token_len
+    LDR X1, [X9]
+    ADR X9, err_token_addr
+    LDR X0, [X9]
+    BL platform_write
+    MOV X0, #'\n'
+    BL platform_emit
+    LDP X29, X30, [SP], #16
+    RET
+
 // THROW ( n -- | never returns locally )  0 throw is a no-op. Otherwise
 // unwind to the innermost CATCH frame; with no handler, do what ABORT always
 // did (clear both stacks, reset to the REPL), reporting n first unless it is
-// -1 (ABORT: silent) or -2 (ABORT": the thrower already printed its message).
+// -1 (ABORT: silent), -2 (ABORT": the thrower already printed its message) or
+// THROW_INTERP (an interpreter error, likewise already printed).
 .global forth_throw
 forth_throw:
     LDR X9, [X19], #CELL            // n
@@ -6354,6 +6457,8 @@ forth_throw:
     CMN X9, #1                      // n = -1 (ABORT)?
     B.EQ .Lthrow_reset
     CMN X9, #2                      // n = -2 (ABORT")?
+    B.EQ .Lthrow_reset
+    CMN X9, #-THROW_INTERP          // EVALUATE/INCLUDED already reported it
     B.EQ .Lthrow_reset
     MOV X20, X9                     // n survives platform_write in X20
     ADR X0, msg_uncaught
@@ -6642,7 +6747,8 @@ compile_s_quote:
     // Bounds check: need BL(4) + CELL(8) + string bytes + 3 (alignment)
     ADD X9, X21, #4+CELL+3      // HERE + BL + CELL + alignment
     ADD X9, X9, X25             // + string length
-    ADR X10, dict_space_end
+    ADRP X10, dict_space_end        // ADRP+ADD, not ADR: the dictionary is
+    ADD  X10, X10, :lo12:dict_space_end  //   512 KB, past ADR's +/-1 MB reach
     CMP X9, X10
     B.HI dict_full
     // Compile BL forth_s_quote_runtime
@@ -7169,7 +7275,10 @@ DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
-DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
+DEFWORD dict_forth_path,  "(forth-path)", forth_forth_path,  dict_docs_path
+DEFWORD dict_forth_path_st, "(forth-path!)", forth_forth_path_store, dict_forth_path
+DEFWORD dict_docs_path_st, "(docs-path!)", forth_docs_path_store, dict_forth_path_st
+DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path_st
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
 DEFWORD dict_entropy,     "entropy",      forth_entropy,     dict_getenv
@@ -7351,7 +7460,7 @@ lguard_page_underflow:
 // ---------- Dictionary Space ----------
 // Page-aligned: made executable at startup with mprotect (STC compiles
 // machine code into it; see platform_init_guard_pages).
-.equ DICT_SPACE_SIZE, 262144    // 256KB (64 whole pages)
+.equ DICT_SPACE_SIZE, 524288    // 512KB (128 whole pages)
 .balign 4096
 .global dict_space
 dict_space:

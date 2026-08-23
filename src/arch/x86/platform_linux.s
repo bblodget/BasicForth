@@ -679,6 +679,7 @@ stat_buf:
 .equ SYS_chdir,   80
 .equ SYS_openat,  257
 .equ SYS_renameat, 264
+.equ SYS_readlinkat, 267
 .equ SYS_faccessat, 269
 .equ SYS_newfstatat, 262
 
@@ -704,14 +705,13 @@ stat_buf:
 
 .text
 
-# The one distinguished error value callers above the boundary may compare
-# against (see Platform_Layer.md "Return-value contract"): the open calls
-# return this when the file does not exist. Every other error magnitude is
-# opaque above the platform layer — sign/zero tests only.
 .section .rodata
 .balign 8
-.global platform_err_not_found
-platform_err_not_found: .quad -2    # -ENOENT
+
+# The one path platform_self_exe reads. Linux-specific by nature, which is why
+# it lives below the platform boundary rather than in main.s: another OS answers
+# the same question a different way, and only this file should know how.
+proc_self_exe: .asciz "/proc/self/exe"
 
 # fam → native open(2) flags. fam is the backend-neutral file-access enum
 # (0=read 1=write 2=read/write — see Platform_Layer.md); only the platform
@@ -1157,6 +1157,33 @@ platform_fstat:
 .global platform_getcwd
 platform_getcwd:
     mov $SYS_getcwd, %rax
+    syscall
+    ret
+
+# platform_self_exe ( RDI=buf RSI=cap -- RAX=len or -errno )
+# The absolute path of the running binary, read from /proc/self/exe. The
+# result is NOT NUL-terminated -- readlink never terminates -- so the caller
+# keeps the length. A truncated answer is indistinguishable from an exact fit,
+# which is why the caller passes a buffer far larger than any real path.
+#
+# This is what lets an INSTALLED binary find core.fs and the docs without any
+# environment: the install prefix is two directories above this path. Deriving
+# it beats recording it at build time -- the tree stays relocatable, and the
+# binary the suites test is byte-for-byte the one that gets installed.
+#
+# readlinkat, not readlink: ARM64 has no plain readlink syscall, so the `at`
+# form is the one spelling that exists on both architectures.
+#
+# qemu-user answers with the GUEST binary's path rather than qemu's own
+# (verified 2026-08-17), so the ARM64 suites exercise the same derivation the
+# board does instead of silently taking a different branch.
+.global platform_self_exe
+platform_self_exe:
+    mov %rsi, %r10              # bufsiz
+    mov %rdi, %rdx              # buf
+    lea proc_self_exe(%rip), %rsi
+    mov $AT_FDCWD, %rdi
+    mov $SYS_readlinkat, %rax
     syscall
     ret
 

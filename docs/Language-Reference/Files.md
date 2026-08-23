@@ -104,9 +104,13 @@ to load a program. Always loads, even if the file was loaded before — that's
 the edit-and-reload workflow (`require` is the load-only-once variant). A
 missing file is an error (`cannot open <name>`).
 
-**Where it looks:** the current directory first, then each directory in
-`BASICFORTH_PATH` in order, loading the first match — so a file of your own
-shadows a library of the same name. That path is where the shipped libraries
+**Where it looks:** the directory of the file *doing the loading* first, then
+the current directory, then each directory in `BASICFORTH_PATH` in order,
+loading the first match. Every place is tried; one that cannot be opened — a
+file sitting where a directory name is expected, a directory you may not read —
+is passed over rather than ending the search. Typed at the prompt there is no loading file, so it
+starts at the current directory — and a file of your own shadows a library of
+the same name. That path is where the shipped libraries
 (`sdl3.fs`, `graphics.fs`, …) are found, and it's colon-separated, so adding
 the examples directory makes the demos loadable by bare name:
 
@@ -133,15 +137,76 @@ a library, `require` will happily load it again.
 
 A file that is already part-way through loading is skipped as well, so a ring
 of libraries that require each other settles instead of looping forever. The
-same guard stops a file that requires *itself* — which is easier to do than it
-sounds, since the search starts in the current directory: name your own module
-`font.fs` and `require font.fs` finds your file, not the library's. The skip
-prints a line, because the library's words are then missing and you would
-otherwise meet that as an unexplained `? name` further down:
+same guard stops a file that requires *itself*, which used to be easy to do by
+accident: name your own module `font.fs`, and a library requiring `font.fs`
+found yours instead of its own. Looking beside the loading file first prevents
+that now — a library gets its own neighbours — but the guard still matters for
+`require font.fs` typed at the prompt, where there is no loading file and the
+current directory really is first. The skip prints a line, because the
+library's words are then missing and you would otherwise meet that as an
+unexplained `? name` further down:
 
     require: font.fs is already loading — skipped
 
     \ require sdl3.fs
+
+## my-dir ( -- c-addr u )
+The directory of the file currently being loaded, without a trailing slash —
+so a package can find its own parts wherever it was installed. Empty (`0 0`)
+when nothing is loading, which includes everything you type at the prompt.
+
+    \ inside mypackage.fs
+    \ my-dir type cr        \ /home/you/.basicforth/lib/mypackage
+
+`require` already looks beside the loading file, so a package's own `.fs`
+files need nothing special. `my-dir` is for everything else a package carries —
+artwork, sounds, data — which is opened by name and gets no search path.
+
+**Capture it while the file loads.** Once loading finishes there is no current
+file, so `my-dir` inside a word that runs *later* answers nothing. A package
+that opens its own files at run time records the directory as it loads:
+
+    my-dir 2constant my-home
+    : my-file ( c-addr u -- c-addr' u' )  my-home 2swap path-join ;
+
+    : load-art  s" art/tiles.wav" my-file wav-load ... ;
+
+`path-join` does the length check for you — see below.
+
+## path-join ( dir-a dir-u name-a name-u -- path-a path-u )
+Join a directory and a name into `dir/name`. An empty directory returns the
+name unchanged, so a path built from `my-dir` at the prompt is still usable.
+
+    s" /a/b" s" c/d.wav" path-join type      \ /a/b/c/d.wav
+
+**The result is valid until the next call** — it lives in one reusable buffer,
+shared by every caller. Use it straight away; that is what it is for.
+
+**`2constant` will not keep it.** A `2constant` records the address and the
+length, not the text, and the address is that shared buffer — so the name goes
+on answering with whatever the *next* join wrote, at the *old* length:
+
+    s" a/one.wav" my-file 2constant bad
+    bad type                              \ /tmp/a/one.wav
+    s" c/three.wav" my-file 2drop
+    bad type                              \ /tmp/c/three.w   <- wrong, and cut short
+
+That is safe for `my-dir`, whose string lives in the source table and does not
+move, and unsafe here. To keep a joined path, copy the bytes somewhere you own:
+
+    : keep-path ( c-addr u -- c-addr' u )     \ an allotted copy that survives
+        here >r  dup allot
+        2dup r@ swap cmove
+        nip r> swap ;
+
+    s" a/one.wav" my-file keep-path 2constant good
+
+**A path too long to build aborts**, naming the problem, rather than
+truncating: a silently shortened path opens the wrong file, or none, on a
+machine you never see. That check is the whole reason this word exists in core
+rather than in each package — it is one line, and it is the line everybody
+forgets.
+the session down with no message at all.
 
 ## required ( c-addr u -- )
 Like `require`, with the filename as a string on the stack.
@@ -233,6 +298,10 @@ a line of the file.
 directory first and then on `BASICFORTH_PATH` — the same order `require` uses,
 so `deps` answers for the same file the load would pick.
 
+Going the other way — you have a *word* and want the file it came from — is
+`help where`; and `help word-deps` does this whole report for a word's file in
+one step.
+
 It reads only the **dep block**: the file's leading run of blank lines,
 whole-line comments and requirements, stopping at the first line that is none
 of those. Each requirement is then re-run in a reporting mode, by the same word
@@ -248,12 +317,12 @@ itself cannot load. Those nested files print **only if something in them is
 missing**, so a healthy machine sees one short list and a broken one sees
 exactly the section that explains itself:
 
-    dark-star.fs
+    mygame.fs
       require sdl3.fs           found
       require sound.fs          found
       sdl3.fs
         needs-lib libSDL3.so.0    MISSING -- see help install
-    dark-star.fs will not load: 1 requirement missing.
+    mygame.fs will not load: 1 requirement missing.
 
 A file already loaded is not followed: it is in memory, so its own
 requirements were met when it got there.
@@ -263,6 +332,17 @@ so rather than reporting on what it managed to read — a bound that truncated
 quietly would produce exactly the false "all requirements met" this word exists
 to prevent. A requirement that is definitely missing still outranks the notice,
 since that verdict stays true however much went unread.
+
+## deps-path ( c-addr u -- )
+`deps` over a path you already hold: the same report and verdict, without
+parsing a name or searching for it. `deps` itself ends here once it has
+resolved a filename.
+
+It exists so that composing with `deps` does not mean reaching for internals.
+`where-path` returns a path, `deps-path` takes one, and `word-deps` is the two
+joined:
+
+    s" disasm.fs" deps-path
 
 ## open-pipe ( c-addr u fam -- fileid ior )
 Run a shell command with a pipe over its stdout (`r/o`: read what it prints)

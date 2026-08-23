@@ -211,6 +211,20 @@
 \ reader coming from BASIC expects.
 : VARIABLE  create 0 , ;
 
+\ Forth 2012 Double-Number pair. 2CONSTANT is the shape MARKER uses further
+\ down -- body is [x1][x2], read back in that order. Both zero-init like
+\ VARIABLE does, so a 2VARIABLE that is read before it is written answers 0 0
+\ rather than whatever the dictionary last held.
+\ 2CONSTANT is what lets a package capture where it lives, which it has to do
+\ at LOAD time: (cur-src) is 0 once the file has finished loading, so `my-dir`
+\ answers nothing at run time. A package that opens its own files later --
+\ artwork, sounds -- writes `my-dir 2constant my-home` while it loads, and
+\ joins onto that afterwards.
+: 2CONSTANT ( x1 x2 "name" -- )
+    create swap , ,
+  does> ( body -- x1 x2 )  dup @ swap cell+ @ ;
+: 2VARIABLE ( "name" -- )  create 0 , 0 , ;
+
 \ Standard alias for PARSE-WORD
 : PARSE-NAME  parse-word ;
 
@@ -763,6 +777,175 @@ variable (sp-end)                        \ write pointer while building a buffer
     dup >r  (sp-end) @  swap  cmove       \ cmove( src dest u )
     r> (sp-end) +! ;
 
+\ ===== User package directories =====
+\ ~/.basicforth/lib joins the file search path, and two docs directories join
+\ the help path, so a package installed there is REQUIRE-able and answers `help`
+\ from any directory. The root is $BASICFORTH_PACKAGES, else $HOME/.basicforth; with
+\ neither set the mechanism sits out entirely, which is what leaves a run under
+\ `env -i` -- and every test suite -- unaffected.
+\
+\ APPENDED, never prepended. A bundled library, help topic or lesson is found
+\ first, so an installed package cannot shadow one; CWD is still searched ahead
+\ of both, so a deliberate local override still works. One rule for code and
+\ docs alike.
+\
+\ TWO docs directories, because the help system reads a directory's ROLE from
+\ its basename: a dir named Tutorials holds lessons and is skipped by help's
+\ topic listing, anything else is a reference section shown under that name.
+\ A single flat docs/ would have appeared in `help` as a section called "docs"
+\ and could never have carried a lesson at all.
+\
+\ The reference dir is "Packages" rather than a mirror of our own three section
+\ names. Mirroring was tried and the output settled it: bare `help` iterates
+\ DIRECTORIES, so a second dir named Language-Reference printed that heading a
+\ second time and read as a bug. A section of its own also attributes what it
+\ lists, which matters because a topic collision APPENDS rather than shadows --
+\ `help sound` can print a bundled page and an installed one, and you want to
+\ see which is which. Package pages therefore take the Language-Reference
+\ shape, `## word ( stack )`, not the single-word Guides shape.
+\
+\ ----- why this is HERE, and shaped like this -----
+\ `include core.fs` re-runs this entire file into the same dictionary, so
+\ anything permanent here is paid for TWICE. That used to leave about 3200
+\ bytes out of a 256 KB dictionary -- a 1.2% margin. The dictionary is 512 KB
+\ since 2026-08-20 and the margin is comfortable again, but the DOUBLING has
+\ not gone away. Three consequences, each learned by breaking that test:
+\
+\   * The buffers are ALLOCATEd, not ALLOTted. 2816 bytes of ALLOT broke it
+\     outright. They must outlive this file anyway, since (forth-path!) and
+\     (docs-path!) are handed them UNCOPIED -- PAD would not do.
+\   * The ~14 words below are startup machinery with no runtime role, so they
+\     live inside a MARKER and are forgotten once they have run. That leaves
+\     HERE where it was but NOT the bytes above it, so the reclaimed span is
+\     erased too: a fresh session had always found that space clean, and the
+\     suite asserts it (`here 16 dump`).
+\   * They are defined HERE, mid-file, rather than at the end where they belong
+\     topically. The marker fixes the FINAL cost but not the PEAK, and at the
+\     end of a second load the peak was 3374 bytes against 3270 available. Here
+\     a second load has barely started and there is over 100 KB spare. The only
+\     non-primitive this needs is (sp-add), defined just above.
+\ The lessons directory, named ONCE. Its basename is behaviour rather than
+\ decoration -- the help system reads a docs directory's ROLE from it (see
+\ above). So the name is both a path appended to BASICFORTH_DOCS below and the
+\ test (lessons?) makes four times further down; deriving the second from the
+\ first is what stops the two drifting apart.
+\ OUTSIDE the marker deliberately: everything below is startup machinery that
+\ is forgotten once it has run, and (lessons?) needs this at runtime.
+: (lessons-sub) ( -- c-addr u )  s" docs/Tutorials" ;
+
+marker (-ud-)
+1024 constant (ud-max)
+160  constant (ud-rootmax)      \ a longer root is REFUSED, not truncated: the
+                                \ include search silently SKIPS a segment whose
+                                \ "<seg>/<name>" exceeds 511 bytes, so an
+                                \ over-long root would fail later with nothing
+                                \ left to explain it
+\ Four buffers carved from one heap block (see above). A session with no package
+\ root never allocates it at all.
+variable (ud-path)  variable (ud-docs)  \ the rebuilt BASICFORTH_PATH / _DOCS
+variable (ud-try)                       \ scratch: one candidate directory
+variable (ud-rbuf)                      \ a derived $HOME/.basicforth
+variable (ud-ra)  variable (ud-ru)      \ the root
+variable (ud-dst) variable (ud-n)       \ buffer being built, and bytes used
+variable (ud-fit)                       \ false once something did not fit
+variable (ud-any)                       \ did we actually append anything?
+variable (ud-took)                      \ did either setter take our block?
+
+: (ud-dir?) ( c-addr u -- flag )        \ does this directory open?
+    r/o open-file if  drop false  else  close-file drop true  then ;
+: (ud-cat) ( c-addr u -- )              \ append to the buffer being built
+    (ud-n) @ over + (ud-max) > if  2drop  false (ud-fit) !  exit  then
+    dup >r  (ud-dst) @ (ud-n) @ +  swap cmove  r> (ud-n) +! ;
+\ One heap block, carved into the four buffers.
+: (ud-alloc) ( -- flag )
+    (ud-max) 2* 512 + 256 + allocate if  drop false exit  then   ( a )
+    dup                     (ud-path) !
+    dup (ud-max) +          (ud-docs) !
+    dup (ud-max) 2* +       (ud-try)  !
+        (ud-max) 2* 512 + + (ud-rbuf) !
+    true ;
+\ Is there any root to go looking for? Asked before allocating, so a session
+\ with neither variable set never touches the heap.
+: (ud-wanted?) ( -- flag )
+    s" BASICFORTH_PACKAGES" getenv nip if  true exit  then
+    (home-dir) nip 0<> ;
+: (ud-begin) ( buf old-a old-u -- )     \ start from the current value
+    rot (ud-dst) !  0 (ud-n) !  true (ud-fit) !  (ud-cat) ;
+: (ud-try$) ( -- c-addr u )  (ud-try) @ (sp-end) @ over - ;
+\ Is this directory already in the value being built? `include core.fs` runs
+\ (user-dirs) a SECOND time, and without this it appends the same directories
+\ again and orphans the heap block the old value pointed into. A plain scan:
+\ the candidate is an absolute path carrying the root, so a coincidental match
+\ is not a thing that happens.
+: (ud-has?) ( c-addr u -- flag )
+    dup (ud-n) @ > if  2drop  false exit  then
+    (ud-n) @ over - 1+                  ( c-addr u limit )
+    0 ?do
+        2dup (ud-dst) @ i + over compare 0= if
+            2drop true unloop exit  then
+    loop
+    2drop false ;
+: (ud-append) ( sub-a sub-u -- )        \ add "<root>/<sub>" if it is really there
+    \ (sp-add) does not bound-check, so (ud-try)'s 512 bytes are guaranteed by
+    \ (ud-rootmax) instead: (user-dirs) refuses a root over 160 BEFORE calling
+    \ this, and the longest sub below is 22. Move that check and this overflows.
+    (ud-try) @ (sp-end) !
+    (ud-ra) @ (ud-ru) @ (sp-add)  s" /" (sp-add)  (sp-add)
+    (ud-try$) (ud-dir?) 0= if  exit  then
+    (ud-try$) (ud-has?) if  exit  then
+    (ud-n) @ if  s" :" (ud-cat)  then
+    (ud-try$) (ud-cat)  true (ud-any) ! ;
+
+\ $BASICFORTH_PACKAGES wins; otherwise $HOME/.basicforth, built into our own buffer
+\ because (home-dir) points into the environment and the tail is ours.
+: (ud-root?) ( -- flag )
+    s" BASICFORTH_PACKAGES" getenv  dup if  (ud-ru) !  (ud-ra) !  true exit  then
+    2drop
+    (home-dir) dup 0= if  2drop false exit  then        ( h-a h-u )
+    dup 12 + 256 > if  2drop false exit  then           \ + "/.basicforth"
+    (ud-rbuf) @ (sp-end) !
+    (sp-add)  s" /.basicforth" (sp-add)
+    (ud-rbuf) @ (ud-ra) !  (sp-end) @ (ud-rbuf) @ - (ud-ru) !  true ;
+
+: (user-dirs) ( -- )
+    (ud-wanted?) 0= if  exit  then
+    (ud-alloc) 0= if  exit  then
+    (ud-root?) 0= if  (ud-path) @ free drop  exit  then
+    (ud-ru) @ (ud-rootmax) > if
+        ." basicforth: package directory path too long - skipping "
+        (ud-ra) @ (ud-ru) @ type cr  (ud-path) @ free drop  exit  then
+    \ Only hand a buffer over if something actually went into it. Otherwise the
+    \ new block would replace a perfectly good value -- and orphan the block that
+    \ value points into, which is what a second core.fs load used to do.
+    false (ud-took) !
+    false (ud-any) !
+    (ud-path) @ (forth-path) (ud-begin)
+    s" lib" (ud-append)
+    (ud-any) @ (ud-fit) @ and if
+        (ud-path) @ (ud-n) @ (forth-path!)  true (ud-took) !  then
+    false (ud-any) !
+    (ud-docs) @ (docs-path) (ud-begin)
+    s" docs/Packages" (ud-append)
+    (lessons-sub) (ud-append)
+    (ud-fit) @ 0= if
+        ." basicforth: docs search path too long - user pages not added" cr  then
+    (ud-any) @ (ud-fit) @ and if
+        (ud-docs) @ (ud-n) @ (docs-path!)  true (ud-took) !  then
+    (ud-took) @ 0= if  (ud-path) @ free drop  then ;      \ nobody took it
+\ Reclaim the machinery -- and ZERO what it leaves behind. A rollback only moves
+\ HERE; the bytes above it keep whatever the forgotten definitions wrote, and a
+\ fresh session had always found that space clean (`here 16 dump` in the suite
+\ asserts exactly that). Restoring the invariant costs one line and is cheaper
+\ than auditing everything that ALLOTs without initialising.
+(user-dirs)
+here (-ud-)  here tuck -  erase         \ ( H1 ) ... ( H0 H1-H0 ) -- the heap stays
+\ Not idempotent: `include core.fs` in a running session runs the above a second
+\ time and appends the same directories again. Left alone deliberately -- the
+\ duplicate segment is only searched twice, nothing else loads core.fs (main.s
+\ does it once; reload replays the MODULE file, not this one), and the guard
+\ would need a substring scan written out longhand, since there is no SEARCH.
+
+
 : (store-name) ( c-addr u -- )           \ copy <name> verbatim into (cur-file)
     (cf-max) min  dup (cur-file-len) !  (cur-file) swap cmove ;
 \ Remember <name> as the current file, resolved to an ABSOLUTE path so a later
@@ -1127,6 +1310,60 @@ variable (sf-off)  variable (sf-len)  variable (sf-need)  variable (sf-got)
     then
     >r  rot drop  r>                         ( off len srcid )   \ srcid ≥ 1 → from file
     (see-file)  (see-post) ;
+
+\ WHERE — which file did this word come from?  Same question `see` answers on
+\ the way to printing source, asked on its own: `see` shows you the text, and
+\ that is a lot to read when all you wanted was the filename to hand to `deps`.
+\ The four cases are `see`'s four, and the answer is the FULL path — `deps`
+\ takes one, and since `make install` a checkout and an installed tree both
+\ hold a `disasm.fs`, so a bare name cannot say which one is in force.
+\
+\ srcid 0 is the subtle case. It normally means "typed at the REPL", but
+\ src_register answers 0 once its 64-entry table is full, so a word from the
+\ 65th file is stamped 0 too and the two are indistinguishable. (source-path)
+\ reports nothing above the table's count, which makes `64 (source-path)` a
+\ full-table probe: if it names a file, the table is full and a 0 is a
+\ question, not an answer. Saying so beats naming the wrong origin.
+: (src-full?) ( -- flag )  64 (source-path) nip 0<> ;
+
+\ (where-src) is the shared lookup: WHERE reports the srcid, WHERE-PATH turns
+\ it into a filename. Splitting them is what lets a caller COMPOSE -- `deps`
+\ already factors into (dp-run), which takes a string, so a word that wires the
+\ two together needs nothing new from either side.
+: (where-src) ( c-addr u -- srcid true | false )
+    (find-meta)                              ( xt off len srcid flag )
+    0= if  2drop 2drop  false exit  then     ( xt off len srcid )
+    >r 2drop drop r>  true ;
+
+\ WHERE-PATH ( c-addr u -- path-addr path-u true | false )
+\ The filename, or nothing. Only a file-loaded word has one: a primitive, a word
+\ typed this session, an undefined name and a word past the 64-file table all
+\ answer false, because none of them names a file you could open. A caller that
+\ needs to tell those apart asks (find-meta) directly, the way WHERE does.
+\ The string points into the source table, so it stays valid for the run and
+\ must not be freed.
+: where-path ( c-addr u -- path-addr path-u true | false )
+    (where-src) 0= if  false exit  then      ( srcid )
+    dup 65535 = if  drop false exit  then    \ primitive
+    dup 0=       if  drop false exit  then   \ REPL word, or table full
+    (source-path) dup 0= if  2drop false exit  then
+    true ;
+
+: where ( "name" -- )
+    s" where" (msg-u) ! (msg-a) !
+    parse-word dup 0= if  2drop (msg:) ." needs a word name" cr exit  then
+    (see-u) !  (see-a) !
+    (see-a) @ (see-u) @ (where-src) 0= if
+        (msg:) (see-a) @ (see-u) @ type ."  not found" cr exit  then
+    dup 65535 = if  drop
+        (msg:) (see-a) @ (see-u) @ type ."  is a primitive (assembly)" cr exit  then
+    dup 0= if  drop
+        (msg:) (see-a) @ (see-u) @ type
+        (src-full?) if
+            ."  came from a file this run cannot name"
+            cr (msg:) ." the source table is full (64 files)" cr exit  then
+        ."  was typed at the REPL this session" cr exit  then
+    (source-path) type cr ;
 
 \ (el-pre)/(el-pre-len): a one-line preload the interactive line editor can drop
 \ onto the next prompt. EDIT no longer uses it (it opens an external editor now,
@@ -1505,10 +1742,11 @@ variable (tn-w)  variable (tn-n)  variable (tn-d)
         1+ (tn-ptr-at) !                   \ ptr[j+1] = key
     loop ;
 : (collect-in) ( dir-addr dir-u -- )       \ fill (tn-*) with one dir's .md names
-    2dup r/o open-file if drop 2drop exit then   ( dir-addr dir-u fileid )
-    >r                                            ( dir-addr dir-u )   \ R: fileid
-    (basename) (sec-u) ! (sec-a) !
-    0 (tn-n) !  0 (tn-w) !
+    0 (tn-n) !  0 (tn-w) !                       \ reset BEFORE the open can fail:
+    2dup (basename) (sec-u) ! (sec-a) !          \ a dir that will not open must not
+    2dup r/o open-file if drop 2drop exit then   \ leave the PREVIOUS dir collected,
+    >r  2drop                                    \ or help reprints that whole section
+                                                 \   R: fileid
     begin
         r@ (gd@) (gd-size) (getdents)     ( n )
         dup 0> while                       ( n )
@@ -1899,17 +2137,23 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
         (hw-hit) @ if  (pg-buf@) swap (pg-line)  else  drop  then
         (pg-quit) @ if  r> close-file drop  (hw-any) @ exit  then
     again ;
+\ A docs directory's ROLE comes from its basename, and these are the only two
+\ that carry one -- everything else is an ordinary reference section.
+: (lessons?) ( dir-a dir-u -- flag )    \ does this dir hold lessons?
+    (basename) (lessons-sub) (basename) (ci=) ;
+: (guides?) ( dir-a dir-u -- flag )     \ ...or single-word Guide headings?
+    (basename) s" Guides" (ci=) ;
 \ Scan every reference page in a dir for the word's entries — all pages are
 \ visited even after a hit, so a word documented in several places shows every
-\ entry. Tutorial dirs are skipped — their "## " headings are lesson steps,
+\ entry. Tutorials dirs are skipped — their "## " headings are lesson steps,
 \ not word entries.
 : (hw-in) ( dir-addr dir-u -- )
-    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    2dup (lessons?) if 2drop exit then
     \ Guides is the deliberate exception: its headings are single tokens with no
     \ stack effect, and every one of them IS a topic -- that is the convention
     \ the suite enforces for that section. Everywhere else a heading must state
     \ an effect to count as a word entry.
-    2dup (basename) s" Guides" (ci=) 0= (hh-eff) !
+    2dup (guides?) 0= (hh-eff) !
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
     >r
@@ -1931,10 +2175,10 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     repeat drop
     r> close-file drop ;
 
-\ Bare help: list each section's topics in three columns; the Tutorial
+\ Bare help: list each section's topics in three columns; the Tutorials
 \ section is left to `tutorials`.
 : (help-in) ( dir-addr dir-u -- )
-    2dup (basename) s" Tutorial" (ci=) if 2drop exit then
+    2dup (lessons?) if 2drop exit then
     (collect-in)
     (tn-n) @ 0= if exit then               \ no topics here → no header
     (tn-sort)
@@ -1956,15 +2200,69 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     (pg-buf@) c@     [char] # <> if drop false exit then
     (pg-buf@) 1+ c@  bl        <> if drop false exit then
     (pg-buf@) 2 + swap 2 -  true ;
-: (tut-line) ( i -- )                      \ one row: the title line, or the name
+\ A row is "<name>  <description>", and the NAME is the one you type -- the
+\ filename, sans .md. It used to be the title's first word, which is the same
+\ thing only by luck: a package lesson is <pkg>::<page>.md while its title
+\ reads "# Greeting -- ...", so the listing advertised a name `tutorial`
+\ refused. The description is what the title says after its em dash.
+20 constant (tut-fw)                       \ the name column. A longer name pushes
+                                           \ its description right; truncating the
+                                           \ one thing you must type would be worse
+: (emdash?) ( c-addr -- flag )             \ does U+2014 start here? (E2 80 94)
+    dup c@ 226 <> if drop false exit then
+    dup 1+ c@ 128 <> if drop false exit then
+    2 + c@ 148 = ;
+variable (td-at)                           \ offset of the first em dash, or -1
+: (td-find) ( c-addr u -- )
+    -1 (td-at) !
+    dup 3 < if 2drop exit then
+    2 - 0 ?do
+        dup i + (emdash?) if  i (td-at) !  leave  then
+    loop  drop ;
+: (td-blanks) ( a u -- a' u' )             \ drop leading blanks
+    begin dup 0> while
+        over c@ bl > if exit then
+        1 /string
+    repeat ;
+: (td-trim) ( a u -- a' u' )               \ ...and one separator, if it is next
+    (td-blanks)
+    dup 0= if exit then
+    over c@ dup [char] - = swap [char] : = or if  1 /string (td-blanks)  then ;
+variable (td-na)  variable (td-nu)         \ the row's name, for the prefix test
+: (td-sep?) ( ch -- flag )                 \ what may follow the name
+    dup bl <= swap dup [char] - = swap [char] : = or or ;
+\ Only a WHOLE leading word counts. Matching bytes alone truncated mid-word --
+\ `A.md` titled "# Amazing Things" listed as "mazing Things", and `Sound.md`
+\ titled "# Soundtracks ..." as "tracks ...". The name has to be followed by
+\ the end of the title or a separator before any of it is dropped.
+: (td-unname) ( ta tu -- da du )           \ drop a leading copy of the name
+    dup (td-nu) @ < if exit then
+    over (td-nu) @  (td-na) @ (td-nu) @  (ci=) 0= if exit then
+    dup (td-nu) @ = if  (td-nu) @ /string exit  then     \ the title IS the name
+    2dup drop (td-nu) @ + c@ (td-sep?) 0= if exit then   \ mid-word: leave it be
+    (td-nu) @ /string (td-trim) ;
+\ Without the em dash the title is not in our convention, so fall back to the
+\ whole of it -- minus a leading copy of the name, which would otherwise print
+\ twice: "NoDash   NoDash a title with no em dash". A plain "-" or ":" where
+\ the em dash should be is the near miss worth absorbing too.
+: (tut-desc) ( ta tu -- da du )            \ the title past its dash, else all of it
+    2dup (td-find)
+    (td-at) @ 0< if  (td-unname) exit  then
+    (td-at) @ 3 + /string (td-trim) ;
+: (tut-pad) ( u -- )                       \ close the name column
+    (tut-fw) swap - dup 0> if spaces else drop space then ;
+: (tut-line) ( i -- )                      \ one row: the name you type, then why
     space space
     (tn-ptr-at) @ count                    ( name u )
+    2dup (td-nu) ! (td-na) !               \ (tut-desc) needs it, to not repeat it
     2dup (tut-path) dup 0= if 2drop type cr exit then   ( name u pa pu )
     r/o open-file if drop type cr exit then             ( name u fileid )
     (title?) 0= if type cr exit then                    ( name u ta tu )
-    2swap 2drop type cr ;
-: (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorial sections
-    2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+    (tut-desc) dup 0= if 2drop type cr exit then        ( name u da du )
+    2swap 2dup type nip (tut-pad)                       ( da du )
+    type cr ;
+: (tuts-in) ( dir-addr dir-u -- )          \ tutorials: only the Tutorials sections
+    2dup (lessons?) 0= if 2drop exit then
     2dup (md-dirn) ! (md-dir) !            \ (tut-path) builds against this dir
     (collect-in)
     (tn-n) @ 0= if exit then
@@ -1982,7 +2280,7 @@ variable (hw-t)  variable (hw-tn)          \ this file's topic name, sans .md
     dup 0= if                               \ bare help: the topic listing
         2drop
         ['] (help-in) (each-dir)
-        ." Tutorial:  type  tutorials  to list the interactive tutorials." cr cr
+        ." Tutorials:  type  tutorials  to list the interactive tutorials." cr cr
         ." help <topic>  - that topic's summary       (help stack)" cr
         ." help <word>   - one word's entry           (help allot)" cr
         exit
@@ -2252,11 +2550,11 @@ variable (ts-any)                          \ printed any line of the wanted step
             (pg-buf@) swap (pg-line) true (ts-any) !
         else  drop  then
     again ;
-variable (tut-strict)                      \ true: this pass looks in Tutorial dirs only
+variable (tut-strict)                      \ true: this pass looks in Tutorials dirs only
 : (tut-in) ( dir-addr dir-u -- )           \ scan one docs dir for <name>.md
     (tut-found) @ if 2drop exit then
     (tut-strict) @ if
-        2dup (basename) s" Tutorial" (ci=) 0= if 2drop exit then
+        2dup (lessons?) 0= if 2drop exit then
     then
     (md-dirn) ! (md-dir) !
     (md-dir) @ (md-dirn) @ r/o open-file if drop exit then   ( fileid )
@@ -2283,7 +2581,7 @@ variable (tut-strict)                      \ true: this pass looks in Tutorial d
     false (tut-found) !  false (tut-existed) !
     (tut-step) @ (ts-want) !
     (docs-path) nip 0= if  ." (BASICFORTH_DOCS not set)" cr exit  then
-    true (tut-strict) !  ['] (tut-in) (each-dir)   \ Tutorial dirs win a name clash
+    true (tut-strict) !  ['] (tut-in) (each-dir)   \ Tutorials dirs win a name clash
     (tut-found) @ 0= if                            \ (Strings is a lesson AND a help
         false (tut-strict) !  ['] (tut-in) (each-dir)   \ topic) — then any docs page
     then
@@ -3197,6 +3495,101 @@ variable (bn-cut)
     dup 128 > abort" require: filename too long"
     s" (inc:" (inc+)  (inc+)  s" )" (inc+) ;
 
+\ ===== "beside the file doing the requiring" =====
+\ A file being loaded already knows where it is: (cur-src) is its source id and
+\ (source-path) hands back the absolutised path INCLUDED resolved it to. So a
+\ package can find its own parts with no engine support at all.
+\
+\ (here-path) is tried FIRST, ahead of the current directory. That order is not
+\ a preference: core.fs records a user module named font.fs in the launch
+\ directory shadowing the library of the same name and requiring itself, until
+\ the data stack hit its guard page. With this first, nothing you happen to be
+\ standing next to can hijack a library's own internals.
+\
+\ Resolution changes where the file is FOUND, not what is recorded. The name as
+\ typed still keys the cycle guard, the loading stack and the load-once
+\ sentinel, so `deps` -- which asks (inc-recorded?) about the bare name in a
+\ dep block -- keeps working.
+
+: my-dir ( -- c-addr u )                    \ directory of the file being loaded
+    (cur-src) dup 0= if  drop 0 0 exit  then    \ typed at the prompt: none
+    (source-path) dup 0= if  exit  then
+    begin  dup  while
+        2dup 1- + c@ [char] / = if  1- exit  then
+        1-
+    repeat ;
+
+\ PATH-JOIN is the public half of all this. A package knows where it lives --
+\ `my-dir 2constant my-home` while it loads -- and then has to build a path for
+\ every asset it opens. Every package writing that join for itself means every
+\ package writing the length check for itself, which is one line and is the one
+\ everybody forgets: (sp-add) does not bounds-check, and a home directory is
+\ however long the machine it was installed on happens to make it. Done once
+\ here, it is done once.
+4096 constant (pj-max)                      \ heap, so generous costs nothing
+variable (pj-scratch)
+: (pj-buf) ( -- a | 0 )
+    (pj-scratch) @ ?dup if  exit  then
+    (pj-max) allocate if  drop 0 exit  then  dup (pj-scratch) ! ;
+
+\ Its own buffer, not the one (here-path) probes with: a file can call this
+\ while it loads and then `require` something, and a shared buffer would have
+\ the require quietly overwrite the path it just built.
+: path-join ( dir-a dir-u name-a name-u -- path-a path-u )
+    2over nip 0= if  2swap 2drop exit  then     \ no directory: the name is the path
+    2over nip 1+ over + (pj-max) >
+    abort" path-join: joined path too long"
+    (pj-buf) dup 0= abort" path-join: cannot allocate a path buffer"
+    (sp-end) !
+    2swap (sp-add)  s" /" (sp-add)  (sp-add)
+    (pj-scratch) @ dup (sp-end) @ swap - ;
+
+\ Refusing is the only safe answer when we cannot look. The fallback is the
+\ CURRENT DIRECTORY, so falling through would let a package load a stranger's
+\ file of the same name in place of its own -- silently, and only on the machine
+\ where the path happened to be long or memory happened to be short. A MISS is
+\ different and falls through normally: requiring a bundled library from inside
+\ a package is a miss, and is the common case.
+: (hd-refuse) ( c-addr u -- )               \ never returns
+    ." require: cannot look beside the current file for " type cr
+    true abort" refusing to search elsewhere for a file that may be beside us" ;
+
+4096 constant (hp-size)                     \ heap, so generous costs nothing
+variable (hp-scratch)
+: (hp-buf) ( -- a | 0 )
+    (hp-scratch) @ ?dup if  exit  then
+    (hp-size) allocate if  drop 0 exit  then  dup (hp-scratch) ! ;
+
+: (here-join) ( c-addr u -- c-addr' u' | 0 0 )  \ candidate, in heap scratch
+    \ Heap, not the dictionary: the probe misses far more often than it hits,
+    \ and a miss must cost nothing. Safe to reuse, unlike the copy INCLUDED
+    \ keeps, because open-file consumes it immediately and nothing nests between.
+    my-dir nip 0= if  2drop 0 0 exit  then      \ not loading a file: normal
+    my-dir nip 1+ over + (hp-size) > if  (hd-refuse)  then
+    (hp-buf) dup 0= if  drop (hd-refuse)  then  ( c-addr u buf )
+    >r  r@ (sp-end) !
+    my-dir (sp-add)  s" /" (sp-add)  (sp-add)
+    r> (sp-end) @ over - ;
+
+: (hd-open?) ( c-addr u -- flag )
+    r/o open-file if  drop false  else  close-file drop true  then ;
+
+: (here-keep) ( c-addr u -- a u )           \ stable copy: INCLUDED holds it all load
+    dup 64 + unused > if  (hd-refuse)  then
+    here >r  dup allot
+    2dup r@ swap cmove
+    nip r> swap ;
+
+: (here-path) ( c-addr u -- c-addr' u' )    \ beside us, if that is a real file
+    \ A MISS falls through to the ordinary search -- requiring a bundled library
+    \ from inside a package is a miss, and the common case. NOT being able to
+    \ look is different, and must not fall through: the fallback is the current
+    \ directory, so a package would load a stranger's file of the same name
+    \ instead of its own. (here-keep) aborts rather than let that happen.
+    2dup (here-join) dup 0= if  2drop exit  then       ( c u p-c p-u )
+    2dup (hd-open?) if  (here-keep) 2swap 2drop exit  then
+    2drop ;
+
 : (inc-recorded?) ( c-addr u -- flag )      \ was this file loaded already?
     0 (inc-n) !  (inc-sentinel+)
     (inc-buf) (inc-n) @ find
@@ -3278,6 +3671,12 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
 \ exactly how an include gets attempted mid-definition in the first place.
 : (def-open?) ( -- flag )  (latest@) 8 + c@ 64 and 0<> ;
 
+\ An interpreter error that the word raising it has ALREADY reported. Matches
+\ THROW_INTERP in core.s, where THROW's silent set is defined -- a catcher sees
+\ this rather than a bare -1, so it can tell a user's ABORT from text that would
+\ not compile.
+-260 constant (throw-interp)
+
 : included ( c-addr u -- )                  \ load + record; error if missing
     \ A definition's code compiles straight into the dictionary at HERE, so a
     \ file loaded now would interleave its headers with that code. Refuse the
@@ -3300,14 +3699,28 @@ variable (ldg-a)  variable (ldg-u)          \ the name being looked for
     \ session. The return stack nests, so a file that includes another file
     \ is safe; two variables would not be.
     2dup >r >r
-    included                                \ the assembly INCLUDED does the work
-    r> r>
+    (here-path)                              \ beside the requiring file first
+    (included?)                             \ the assembly INCLUDED does the work
+    r> r>                                   \ ( ior c-addr u )
     (inc-opened?) 0= if
         r> (ldg-n) !                        \ pop before leaving through the ABORT,
-        ." cannot open " type cr abort      \ else a missing file stays "loading"
+        ." cannot open " type cr drop abort \ else a missing file stays "loading"
     then
-    (inc-mark)
-    r> (ldg-n) ! ;
+    rot                                     ( c-addr u ior )
+    \ Pop the loading stack FIRST, before anything below can leave through a
+    \ throw -- (inc-mark) evaluates a sentinel definition, so it can. A file
+    \ left on that stack answers "is already loading — skipped" to every later
+    \ attempt, for the rest of the session, so a typo cannot be fixed and
+    \ reloaded. The ABORT arm above already carried this exact warning.
+    r> (ldg-n) !
+    \ Record the load ONLY if it was clean. Marking a file that failed halfway
+    \ makes `require` skip it forever after, and the dependent code then
+    \ compiles against words the file never reached the point of defining --
+    \ one reported error becoming a cascade of unreported ones.
+    dup 0= if  drop (inc-mark) 0  else  >r 2drop r>  then
+    \ Propagate, last of all: the assembly used to throw this itself, which
+    \ skipped every line above.
+    if  (throw-interp) throw  then ;
 
 \ --- Local variables: {: a b c :} ------------------------------------------
 \ Forth 2012 section 13. Names the top n stack items, innermost first, for the
@@ -3699,7 +4112,7 @@ create (dp-q) (dp-qmax) (dp-nmax) * allot   \ the queue: counted strings
 variable (dp-qn)
 \ A bound that truncates in silence turns this word into the thing it exists to
 \ prevent: a report that says everything is fine because it stopped looking.
-\ dark-star.fs already follows 11 files, so the bound is reachable, not
+\ a real game already follows 11 files, so the bound is reachable, not
 \ theoretical. Anything the queue cannot hold sets this, and the verdict
 \ refuses to promise what it did not read.
 variable (dp-cut)                           \ was any file left unfollowed?
@@ -3728,8 +4141,11 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 
 \ --- resolving a name to a file, the way INCLUDE does it ---
 \ Current directory first, then each non-empty BASICFORTH_PATH element. That
-\ ordering is not a detail: dark-star.fs sits beside its own art.fs, and `deps`
-\ has to answer for the same file the game would load.
+\ ordering is not a detail: a game file sits beside its own art.fs, and `deps`
+\ has to answer for the same file the game would load. It reads (forth-path),
+\ NOT getenv of that name: an installed binary derives its path, so the
+\ environment is empty while the path is set, and asking the environment made
+\ `deps sound.fs` answer "cannot find" for a file `require sound.fs` loads.
 : (dp-path$) ( -- c-addr u )  (dp-path) (dp-pu) @ ;
 : (dp-p0)    ( -- )  0 (dp-pu) ! ;
 : (dp-p+)    ( c-addr u -- )
@@ -3742,7 +4158,7 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 
 : (dp-search) ( c-addr u -- flag )          \ resolve into (dp-path)
     2dup (dp-p0) (dp-p+)  (dp-path$) (dp-try) if  2drop true exit  then
-    s" BASICFORTH_PATH" getenv              ( n-a n-u p-a p-u )
+    (forth-path)                            ( n-a n-u p-a p-u )
     dup 0= if  2drop 2drop false exit  then
     (nb-path-u) !  (nb-path-a) !  true (nb-more) !
     begin (nb-next) while                   ( n-a n-u seg-a seg-u )
@@ -3784,10 +4200,15 @@ variable (dp-ta) variable (dp-tu)           \ its first token
 \ A dep word gets its whole line handed to EVALUATE, so the hint is parsed by
 \ the same (nh-rest) that parses it at load time. Nothing else on the line can
 \ run: the dep word consumes the rest of it either way.
+\ CATCH, not a bare evaluate: since an error inside EVALUATE propagates, a bad
+\ dep line would otherwise leave (dp-mode) set for the rest of the session and
+\ every later dep word would read as a scan rather than running. Clear the mode,
+\ then re-raise -- `0 throw` is a no-op, so the clean path is unchanged.
 : (dp-dep-line) ( -- )
     1 (dp-mode) !
-    (dp-la) @ (dp-lu) @ evaluate
-    0 (dp-mode) ! ;
+    (dp-la) @ (dp-lu) @ ['] evaluate catch
+    0 (dp-mode) !
+    throw ;
 
 : (dp-do-line) ( -- more? )                 \ false ends the dep block
     (dp-tu) @ 0= if  true exit  then                    \ blank
@@ -3862,6 +4283,13 @@ variable (dp-ta) variable (dp-tu)           \ its first token
         1 (dp-i) +!
     repeat ;
 
+\ DEPS-PATH is DEPS once the filename is settled: the report and its verdict,
+\ over a path you already hold. DEPS parses a name and searches for it, then
+\ ends here. Public because composing with it should not mean reaching for
+\ internals -- `help (dp-run)` answers nothing, so an example built on
+\ (dp-run)/(dp-verdict) sends a reader somewhere the help system denies exists.
+: deps-path ( c-addr u -- )  2dup (dp-run) (dp-verdict) ;
+
 : deps ( "name" -- )
     parse-word dup 0= if
         2drop ." usage: deps <file>" cr exit  then
@@ -3870,7 +4298,21 @@ variable (dp-ta) variable (dp-tu)           \ its first token
     2dup (dp-search) 0= if
         ." deps: cannot find " type ."  (not in . or on BASICFORTH_PATH)" cr
         exit  then
-    2dup (dp-run)  (dp-verdict) ;
+    deps-path ;
+
+\ WORD-DEPS is the other question people actually ask: not "what does this file
+\ need" but "I am using this word -- what does the file it came from need?"
+\ It is DEPS reached through the dictionary instead of through a filename, and
+\ it is deliberately a third word rather than a smarter DEPS: name resolution
+\ does not belong in the layer that handles files. `see word-deps` shows the
+\ whole of it, which is the point -- the pieces compose, and this is the proof.
+: word-deps ( "name" -- )
+    parse-word dup 0= if
+        2drop ." usage: word-deps <word>" cr exit  then
+    2dup where-path if
+        2swap 2drop  deps-path  exit  then
+    ." word-deps: " type ."  came from no file you can inspect" cr
+    ." (a primitive, typed this session, or undefined -- try `where`)" cr ;
 
 (latest@) (sw-mark) !                       \ .MODULE boundary: LATEST at end of core.fs
 (session-mark!)                             \ -session/new/load restore point: HERE+LATEST

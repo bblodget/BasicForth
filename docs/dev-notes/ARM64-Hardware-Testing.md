@@ -91,7 +91,7 @@ that claim gets tested.
 ## Getting the source onto the board
 
 **Do not rsync a git worktree.** We develop in several worktrees at once
-(`BasicForth-movefix`, `BasicForth-docs`, …), and a worktree's `.git` is a
+(`BasicForth-2`, `BasicForth-3`, …), and a worktree's `.git` is a
 *file* pointing into the main repo's `.git/worktrees/`, not a directory. A
 copy therefore lands on the board as a broken repository. That also breaks
 `git describe --tags`, which is where `VERSION` comes from — the binary then
@@ -149,7 +149,7 @@ outright:
 
 So bundle a *name*, and run the command with `-C <the worktree you mean>`:
 
-    git -C ~/Dev/BasicForth-movefix bundle create /tmp/delta.bundle origin/main..HEAD
+    git -C ~/Dev/BasicForth-2 bundle create /tmp/delta.bundle origin/main..HEAD
     scp /tmp/delta.bundle <board>:~/
 
 **The ref name inside the bundle depends on what you named**, which is the
@@ -184,7 +184,7 @@ on the board, then re-verify.
 Then confirm the board agrees with the laptop about what it is holding:
 
     ssh <board> 'cd BasicForth && git describe --tags'   # e.g. v0.15.1-17-g856b333
-    git -C ~/Dev/BasicForth-movefix describe --tags      # must be identical
+    git -C ~/Dev/BasicForth-2 describe --tags            # must be identical
 
 If the board's `describe` says *"No names found"*, it has the commits but not
 the tags — fetch them explicitly, which a fresh `git clone` would have done

@@ -15,10 +15,10 @@ as the single source of truth.
 
 Every release is a git tag: `v0.1.0`, `v0.2.0`, etc.
 
-Create a tag:
-
-    git tag v0.1.0
-    git push origin v0.1.0
+Tags are annotated, and a release tags the `staging`-into-`main` merge — see
+**Workflow** below for the whole sequence. Do not follow a `git tag` / `git
+push origin <tag>` pair from memory: pushing the tag without its branches
+publishes a release naming a commit the remote's `main` does not contain.
 
 ## Startup Banner
 
@@ -51,6 +51,34 @@ Work happens on `staging` (feature branch → `--no-ff` merge → delete branch)
 A release is `staging` arriving on `main`, and **the tag is what makes it a
 release**, since the banner comes from `git describe`.
 
+### Before the tag: run the suites on real ARM64
+
+All four suites (`run-test`, `run-integration`, `run-lessons`, `run-pty`) on
+**both** architectures, at the commit being released.
+
+**qemu does not substitute for hardware.** It models neither weak memory
+ordering nor an incoherent I-cache, which is where hand-mirrored assembly
+actually goes wrong. This is not theoretical: the first day the Pi 400 was
+used, it found an I-cache flush that was not line-aligned and killed the binary
+at boot with SIGILL — through every green qemu run before it (fixed in
+`5af401e`). x86's total store ordering hides the same class of bug.
+
+So the release bar is a run on the Pi (`ssh pi400`, or `ssh pi400-eth` —
+try both, and `getent hosts pi400.local` says which is answering). Record the
+commit it ran against; a run on an ancestor of the release covers everything
+merged below it.
+
+**When the hardware is not to hand**, that is a decision to take deliberately,
+not a step to skip quietly:
+
+- Name, in the release entry, exactly which commits have *not* run on hardware.
+  Everything else in the release usually has, via an earlier run on an ancestor.
+- Weigh what changed. A deleted branch or a data symbol is not the shape qemu
+  mispredicts; new instructions, barriers, or anything writing then executing
+  memory very much are.
+- Run it as soon as the hardware is back, and treat a failure as a patch
+  release. `v0.15.1` established that those are cheap.
+
 1. Do the work, commit as usual — feature branches merged into `staging`
 2. Curate `CHANGELOG.md`: date the `## Unreleased` heading as
    `## vX.Y.Z — YYYY-MM-DD`, and update the `## Status` block in `README.md`
@@ -68,7 +96,74 @@ release**, since the banner comes from `git describe`.
 
        git checkout staging && git merge --ff-only main
 
-7. Push: `git push && git push origin vX.Y.Z`
+7. Push **both branches and the tag, named explicitly, in one atomic push**:
+
+       git push --atomic origin main staging vX.Y.Z
+
+   Not `git push`. Step 6 leaves you on `staging`, which has no upstream, so a
+   bare push fails outright — and if it were configured, `push.default=simple`
+   would publish only the current branch, leaving `main` on the remote at the
+   *previous* release. The tag needs naming too: tags are not pushed by
+   default.
+
+   `--atomic` because the three refs are one release. Without it the push is
+   three independent updates, so a rejection on any one of them — someone
+   else's commit landing on `staging` between your last fetch and the push is
+   enough — leaves the other two published: a tag on the remote naming a commit
+   that remote's `main` does not contain. All-or-nothing turns that into a
+   clean failure you retry.
+
+   **Why not `git push origin main --tags`?** It is the obvious shorter form,
+   and it publishes `main` plus every local tag — `staging` is not in its
+   refspec at all, so the branch the Pi and the other worktrees pull stays a
+   release behind. Adding `staging` back fixes that much. Two problems remain,
+   and they are worth separating, because one of them has a cure and the other
+   does not:
+
+   - **Every `--tags` spelling** publishes all local tags rather than this
+     release's, so a scratch tag escapes alongside it. Adding the version back
+     does not help: `git push --atomic origin main staging vX.Y.Z --tags` still
+     pushes the lot.
+   - **Spellings that put `--tags` in place of the version** also lose the
+     check. Naming the version makes the push **self-checking**: arrive here
+     having skipped step 5, or mistype the number, and git refuses —
+
+         error: src refspec v0.17.0 does not match any
+
+     so with `--atomic` nothing goes out and you fix it. A `--tags` that has
+     replaced the version has nothing in it to be wrong, so it reports success
+     and publishes whichever branches you did name, carrying no release tag.
+     `git describe` in a fresh clone then reports the *previous* version — the
+     failure this whole procedure exists to prevent, reached through the
+     convenient spelling.
+
+   So `vX.Y.Z --tags` keeps the check and loses only tag hygiene, while
+   `--tags` alone loses both. Step 7 names the version and omits `--tags`,
+   which costs nothing: the release's tag is the one you want published, and
+   it is already named.
+
+8. Verify against the remote, **including the tag**, naming each ref exactly:
+
+       git ls-remote origin refs/heads/main refs/heads/staging \
+                            'refs/tags/vX.Y.Z' 'refs/tags/vX.Y.Z^{}'
+
+   Expect four lines, and expect three of them to carry the same sha:
+   `main`, `staging`, and `refs/tags/vX.Y.Z^{}`.
+
+   Check the remote, not the local `origin/*` refs — those only report what the
+   last fetch saw.
+
+   An annotated tag has **two** refs, and the difference matters:
+   `refs/tags/vX.Y.Z` is the sha of the tag *object* and matches nothing else,
+   while `refs/tags/vX.Y.Z^{}` is the commit it names. For v0.16.0 the tag
+   object was `62c5097` and the commit `15eed45` — compare the wrong line and a
+   correct release looks broken.
+
+   Name both refs rather than reaching for `refs/tags/vX.Y.Z*`. The wildcard
+   exists only to pick up that `^{}` line, and it also matches any sibling that
+   happens to share the prefix — a `vX.Y.Z-rc1`, say — so the check can print
+   extra refs while still looking like it passed. A verification is worth
+   nothing if it cannot be read at a glance.
 
 Step 4 is the part that is easy to get wrong. Tagging on `staging` would put
 the release on a commit `main` does not contain, so `git describe` on `main`

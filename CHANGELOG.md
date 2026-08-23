@@ -1,5 +1,405 @@
 # Changelog
 
+## v0.17.0 — 2026-08-23
+
+**The package system is still being built.** What lands here is the groundwork
+under it: somewhere for packages to live, a naming scheme that lets two of them
+coexist, and resolution rules that let a package find its own files from any
+working directory. All of that is usable today by hand — you can put a directory
+in `~/.basicforth/lib/` and `require` it. The layer above, which would fetch and
+manage packages for you, is still a design sketch
+(`docs/Package_Registry.md`). The plumbing ships first because anything wrong in
+it is far cheaper to fix before a package format is published.
+
+### Added: `make install`
+
+- There was no install target at all: BasicForth ran from its checkout, with
+  `setup.sh` sourced to point it at its own files. Now:
+
+      sudo make install                 # to /usr/local
+      make install PREFIX=~/.local      # or somewhere needing no root
+
+  `make uninstall` removes it, `DESTDIR` is honoured for packagers.
+
+- **An installed binary needs no environment at all.** It derives where its
+  files are from the path of the running binary — `<prefix>/bin/basicforth`
+  implies `<prefix>/share/basicforth/{forth,examples,docs}` — so `help`,
+  `tutorial`, `include` and `require` all work under `env -i`.
+
+- **Derived, not compiled in.** No prefix is baked at build time, which keeps
+  two properties worth having: the installed tree is **relocatable** (move it,
+  no rebuild, nothing to edit), and the binary the test suites exercise is
+  byte-for-byte the one that gets installed rather than a differently-built
+  object.
+
+- **The environment still wins.** `BASICFORTH_PATH` and `BASICFORTH_DOCS`
+  override the derived defaults, so a checkout with `setup.sh` sourced keeps
+  using the checkout even with a copy installed system-wide — and every test
+  suite is unaffected, since they set those variables themselves.
+
+- `make install` prints the `PATH` line to add when the install's `bin`
+  directory is not on `PATH` — the usual outcome of `PREFIX=~/.local`, and
+  otherwise a correct install that reports `command not found`.
+
+### Added: your own package directory
+
+- Files in `~/.basicforth/` are now found from **any** working directory, with
+  nothing to set up:
+
+      ~/.basicforth/lib/<package>/    the package's files, `require pkg/file.fs`
+      ~/.basicforth/docs/Packages/    a .md page here answers `help`
+      ~/.basicforth/docs/Tutorials/   a lesson here is listed by `tutorials`
+
+  This is where installed packages will live. Nothing creates the directory for
+  you — `make install` deliberately does not, since it may run as root and this
+  one is yours. `help packages` has the details.
+
+- **Searched last, always.** The current directory first, then
+  `BASICFORTH_PATH`, then your package directory. An installed file can never
+  shadow a bundled library, help topic or lesson, and a copy in the directory
+  you are working in still beats both. One rule for code and for docs.
+
+- **Your pages get their own `help` section**, listed as `Packages`, so you can
+  see which topics came from something you installed. Mirroring our own section
+  names was tried first and printed `Language-Reference` twice — `help` iterates
+  directories, not names.
+
+- `BASICFORTH_PACKAGES` relocates the whole thing. Pointed at a directory that does
+  not exist, the mechanism sits out entirely — which is how the test suites keep
+  a developer's own installed packages out of a test run.
+
+  It was called `BASICFORTH_HOME` for a day and a half, which collided with
+  `setup.sh`'s variable of that name — the checkout root — so in any shell that
+  had sourced `setup.sh` the feature silently looked in the wrong place and
+  found nothing. Every suite sets these variables itself, so twelve green suite
+  runs never saw it; five minutes of interactive use did.
+
+### Changed: a package gets a directory under `lib/`
+
+- `~/.basicforth/lib/<package>/` — a symlink to the package's own source
+  directory — rather than a loose entry file. You load it as
+  `require greeting/greeting.fs`, and the directory is the scope: two packages
+  can each ship an `art.fs`, one package can carry as many files as it likes,
+  and the name you type says where the code came from. The same job `pkg::page`
+  does for documentation pages. A single loose `.fs` in `lib/` still works.
+
+- **Link the directory, not the files inside it.** A package finds its siblings
+  beside the path it was *reached by*, not beside whatever a symlink points at.
+  Put a decoy `helper.fs` next to a symlinked entry file and the decoy is what
+  loads — which is how you can tell this apart from the file merely being
+  absent:
+
+      lib/pkg -> src/                     require pkg/entry.fs   sibling found
+      lib/pkg/entry.fs -> src/entry.fs    require pkg/entry.fs   sibling missed
+
+  Resolution could in principle read through the link instead; it does not, and
+  linking directories makes that moot. The trap: a one-file package survives the
+  wrong form, having no siblings to miss, so the mistake ships looking fine.
+
+### Added: a package can find its own files
+
+- A package is rarely one file. It has libraries beside its entry point, and
+  artwork or sounds beside those — and until now it could only find them from
+  the directory you happened to be standing in. Installed anywhere else, it
+  failed. Two changes fix that:
+
+- **`require` and `include` look beside the file doing the requiring, first.**
+  A package's own `require art.fs` finds *its* `art.fs`, from any working
+  directory. Nothing in the package changes.
+
+- **`my-dir ( -- c-addr u )`** — the directory of the file currently being
+  loaded, for everything that is not Forth source. Artwork and sounds are
+  opened by name and get no search path at all, so a package records where it
+  lives while it loads:
+
+      my-dir 2constant my-home
+      : my-file ( c-addr u -- c-addr' u' )  my-home 2swap path-join ;
+
+  Capturing it is not optional: once the file has finished loading there is no
+  current file, so `my-dir` inside a word that runs *later* answers nothing.
+
+- **`path-join ( dir-a dir-u name-a name-u -- path-a path-u )`** joins the two,
+  and owns the length check. That check is one line and it is the line every
+  package would forget — a home directory is however long the machine it was
+  installed on makes it, and writing past the buffer corrupts the dictionary on
+  somebody else's machine rather than yours.
+
+### Fixed: a library could load your file instead of its own
+
+- Name a file of your own `font.fs`, and a library requiring `font.fs` found
+  yours — because the search began in the current directory. `core.fs` records
+  this happening, with the library requiring *itself* until the data stack hit
+  its guard page. Looking beside the loading file first means a library gets
+  its own neighbours. Typing `require font.fs` at the prompt still finds yours,
+  which is what you meant.
+
+### Fixed: a file in your working directory could hide an installed package
+
+- The search tries the current directory first, and used to give up entirely
+  unless that attempt failed with exactly "not found". Anything else — a plain
+  **file** sitting where a directory name was expected, or a directory you may
+  not read — abandoned the rest of the search, so nothing on `BASICFORTH_PATH`
+  or in your package directory was ever reached:
+
+      require greeting/greeting.fs      ok
+      touch greeting                    a file, not a directory
+      require greeting/greeting.fs      cannot open greeting/greeting.fs
+
+- **Old code, new exposure.** While libraries were loaded by flat name
+  (`require sdl3.fs`), a file of that name in your working directory was a file
+  you *meant* to load. A package is loaded as `require <package>/<file>.fs`, so
+  the first component is now a **directory** name — and a `bin/mygame`
+  launcher script beside a `mygame` package is exactly that collision. The
+  script blocked its own package.
+
+- Every place on the search is now tried, and one that cannot be opened is
+  passed over. That is what the `BASICFORTH_PATH` segments already did; the
+  current-directory attempt now behaves the same way. A file that genuinely is
+  not anywhere still reports `cannot open <name>` — **once**. It used to be
+  reported twice in the blocked case, once by the loader and once by its caller.
+
+### Fixed: `deps` could not see the interpreter's own search path
+
+- It asked the environment for `BASICFORTH_PATH` instead of asking the
+  interpreter. On an installed binary, which *derives* its path rather than
+  reading one, that meant `require sound.fs` loaded the file while
+  `deps sound.fs` answered `cannot find` for the same name.
+
+### Changed: the lessons directory is `Tutorials`
+
+- The docs sections were `Language-Reference`, `Guides`, `Packages` and
+  `Tutorial` — three plural and one singular, while the *word* that lists them
+  has always been `tutorials`. The directory is now **`Tutorials`**, and the
+  interface carries one spelling for one thing.
+
+- **A clean break, no dual spelling.** A directory still named `Tutorial` stops
+  being a lessons section: `tutorials` no longer lists what is in it, and its
+  pages start appearing in bare `help` as an ordinary reference section called
+  "Tutorial" — their step headings indexed as if they were word entries.
+  `tutorial <Name>` does still find one, because a name that matches nothing in
+  a lessons directory falls back to searching every docs directory. So the
+  failure is quiet rather than loud, which is the reason to rename promptly:
+
+      mv ~/.basicforth/docs/Tutorial ~/.basicforth/docs/Tutorials
+      # and in any package repo of your own: docs/Tutorial -> docs/Tutorials
+
+  Re-source `setup.sh` afterwards. A shell still holding the old
+  `BASICFORTH_DOCS` points at a directory that no longer exists, so lessons
+  vanish until it does — self-correcting, but alarming if you have forgotten
+  this note.
+
+- **Done now because the package format was about to freeze it.** A package
+  ships `docs/Tutorials/` in its own repo, and `Package_Registry.md` marks the
+  format as a v1.0 lock. Renaming after that would have broken every published
+  package.
+
+- **The name now lives in one place.** `core.fs` asked "is this the lessons
+  directory?" in four places and spelled the answer out each time, plus a fifth
+  literal for the path it appends to `BASICFORTH_DOCS`. There is now a single
+  `(lessons-sub)`, with the basename test derived from it rather than agreeing
+  with it by hand. Looking for those five turned up a sixth of the same kind —
+  the `Guides` check that exempts single-word headings — now `(guides?)`.
+  Outside Forth the name still appears in `setup.sh`, the `Makefile` install
+  target and `tmpl_docs` in both `main.s`; those cannot share a constant across
+  four languages, and the install test is what checks them against each other.
+
+### Fixed: `tutorials` listed a name you could not type
+
+- The listing printed each lesson's **title line**; `tutorial <name>` matches
+  its **filename**. Nothing kept the two equal, and for every bundled lesson
+  they agree by luck — `Snake.md` happens to be titled `# Snake — …`. An
+  installed package is where they part:
+
+      > tutorials
+        Greeting — Your First Installed Package
+      > tutorial Greeting
+      no tutorial named Greeting (try TUTORIALS)
+
+  The name that worked was `greeting::tutorial`, which the listing never
+  showed. A listing's job is to tell you what to type.
+
+- **The listing now prints the name, then the description** — what the title
+  says after its em dash:
+
+      Arrays              Your First Data Structure
+      Snake               Build Your First Game
+      greeting::tutorial  Your First Installed Package
+
+  The name column is 20 wide. A longer name pushes its own description right
+  rather than being truncated, because the name is the one part you have to
+  type.
+
+- **Titles outside the convention still read sensibly.** The description is
+  what follows the em dash; failing that, the whole title *minus a leading copy
+  of the name* — otherwise `# Nodash a plain title` rendered as
+  `Nodash    Nodash a plain title`, printing the name twice. A plain `-` or `:`
+  where the em dash should be is absorbed the same way. A title that is only
+  the name, or no title line at all, lists the name alone.
+
+  The name is dropped only when it is a **whole leading word**, followed by the
+  end of the title or a separator. A title that merely begins with the same
+  letters keeps them: `Sound.md` titled `# Soundtracks and How They Work` lists
+  in full, rather than as `tracks and How They Work`.
+
+- **This is why a package's files are named `<package>::<page>`.** The prefix
+  is a scope: two packages can each ship a `sound` page, one package can ship
+  several lessons, and the flat directory they share stays unambiguous. `::`
+  rather than a hyphen because a hyphen is a legitimate part of a page name —
+  `Machine-Code.md` is a bundled lesson — so only `::` makes the prefix
+  distinguishable from a name that merely contains one.
+
+### Added: `where <word>` — which file did this word come from?
+
+- `see` already knows: it finds a word's source metadata on the way to printing
+  the text. `where` asks the same question and stops at the answer, for when you
+  want the filename rather than a screenful of source — typically to hand to
+  `deps`:
+
+      > require disasm.fs
+      > where dis
+      /usr/local/share/basicforth/forth/disasm.fs
+      > deps /usr/local/share/basicforth/forth/disasm.fs
+
+- **The answer is a full path, not a bare name.** `deps` accepts a path, so it
+  is still exactly the argument the file words want — and since `make install`,
+  a checkout and an installed tree can both hold a `disasm.fs`. Which copy is in
+  force is the question `where` exists to settle, and only the path answers it.
+
+- The same four cases `see` handles: a file gives its path, an assembly
+  primitive says so, a word typed this session says so, an undefined name
+  reports `not found`.
+
+- **A word can come from a file BasicForth cannot name, and it says so.** Source
+  ids come from a 64-entry table; once it is full, every later file is stamped
+  with the same id a REPL-typed word carries, so the two become genuinely
+  indistinguishable. Rather than report the wrong origin confidently, `where`
+  reports that it cannot tell:
+
+      > where f70
+      where: f70 came from a file this run cannot name
+      where: the source table is full (64 files)
+
+  Named `where`, not `which`: `which` is the shell's word for executables on
+  `$PATH`, and BasicForth already has a shell vocabulary.
+
+- **`where-path ( c-addr u -- c-addr u true | false )` returns the path instead
+  of printing it**, so you can build on it. Only a file-loaded word has a path;
+  a primitive, a word typed this session, an undefined name and a word past the
+  64-file table all answer `false` — none of them names a file you could open.
+
+### Added: `word-deps` and `deps-path`
+
+- **`word-deps <name>`** — what the file that defines a word requires. `deps`
+  reached through the dictionary rather than through a filename, for when you
+  are holding a word and not a file:
+
+      > require disasm.fs
+      > word-deps dis
+      /usr/local/share/basicforth/forth/disasm.fs
+        require shellutil.fs      loaded
+        wants-cmd objdump         ok -- /usr/bin/objdump
+
+- **`deps-path ( c-addr u -- )`** — `deps` over a path you already hold, with no
+  name to parse and no search. `deps` itself now ends there.
+
+- It is a third word rather than a smarter `deps`, because resolving a *name* to
+  a file does not belong in the layer that handles filenames. `word-deps` is
+  just `where-path` feeding `deps-path`, and `see word-deps` shows the join.
+
+- **`deps-path` is public so that composing does not mean reaching for
+  internals.** The first draft of this documented the composition using
+  `(dp-run)` and `(dp-verdict)` — real words, but parenthesized, which by
+  convention means internal and which the reference audit therefore skips. The
+  result was an example whose every step answered `no help for`. A documented
+  example is a promise that its parts can be looked up.
+### Added: `help environment`
+
+- One page listing every environment variable BasicForth reads, what each one
+  does, and what happens when it is unset — including the two that are read by
+  SDL rather than by us, and the one `setup.sh` exports that BasicForth never
+  reads at all.
+
+### Changed: the dictionary is 512 KB, was 256 KB
+
+- Free space after `core.fs` goes from about 131 KB to about 384 KB.
+
+- The reason was a tripwire rather than a shortage: `include core.fs` loads a
+  second complete copy into the same dictionary, and `core.fs` had grown to
+  half of it. That test finished with 54 bytes to spare, so **every byte added
+  to `core.fs` cost two** — and the failure would have been a bare
+  `dictionary full` naming neither the cause nor the file.
+
+- It costs address space, not disk: the arena is `.bss`, and the binary is the
+  same size as before.
+
+- **ARM64 needed a code change for it**, which x86 did not. `ADR` reaches only
+  +/- 1 MB, and putting 512 KB of dictionary in front of `dict_space_end` took
+  it out of range — the linker refused with `relocation truncated to fit`. All
+  six sites now use `ADRP` + `ADD :lo12:`, which reaches +/- 4 GB. x86 was
+  unaffected because `lea sym(%rip)` carries a 32-bit displacement.
+
+### Added: `2constant` and `2variable`
+
+- The Forth 2012 double-cell pair, missing until now. `2variable` zero-inits
+  both cells, like `variable` does.
+
+### Fixed: an error inside `evaluate` is no longer swallowed
+
+- `s" nosuchword" evaluate` printed ` ok` and carried on. No message, no
+  failure — the interpreter's worst failure class, since the line kept running
+  as though the evaluation had succeeded. It now reports and aborts the line,
+  and a `catch` around it sees the error instead of being told all is well.
+
+- **The bug was wider than the report.** It was filed against `[ ]` inside a
+  definition, but brackets had nothing to do with it. All four of these were
+  silent, and all four now report:
+
+      s" nosuchword" evaluate                     \ at a bare prompt
+      s" nosuchword" evaluate 7 .                 \ ...and `7` used to print
+      : q s" nosuchword" evaluate 42 . ;  q       \ ...and `42`
+      : z 1 [ s" nosuchword" evaluate ] 2 + . ;   \ the form as filed
+
+  The compiled case is why the fix is a `throw` rather than a better return
+  value: nothing survives to be inspected after the body moves on.
+
+- **Nothing upstream was broken.** `EVALUATE` and `INCLUDED` both computed the
+  right status all along — `INCLUDED` even printed `file:line: ? token` and
+  returned 1. The status was dropped at a single site, the one place in the
+  interpreter that could have read it. So the repair is a channel, not a
+  correction.
+
+- **`include` propagates too**: a file whose dependency fails to load now stops
+  rather than compiling on against words that were never defined, turning one
+  reported error into a cascade of unreported ones. `(included?)` still hands
+  back a status as a value, and a failing startup script still exits non-zero
+  or drops to a fixable REPL by exactly the rule it always used.
+
+- **A failed load stays retryable.** Fix the typo and load it again — `include`
+  reports afresh, and `require` no longer treats a file that failed halfway as
+  loaded. Both were briefly broken while this change was being written: the
+  file stayed on the loading stack and every later attempt answered *"is
+  already loading — skipped"*, which would have made the edit-fix-reload cycle
+  fail silently.
+
+- An uncaught interpreter error is `-260`, which joins `-1` and `-2` as a code
+  that prints nothing further because the thrower already spoke.
+
+- Every abort route in the engine is now written down, with the design
+  reasoning and the three rejected alternatives: `docs/Abort_Routes.md`.
+
+### Fixed: a script that failed one way exited, another way dropped to the REPL
+
+- `repl_loop` exited non-zero for any script failure that reached it, while the
+  command-line loader dropped you to a fixable REPL when the session was
+  interactive. Whether a broken module was fixable therefore depended on which
+  route its failure took. They now use the same rule.
+### Fixed: a missing docs directory made `help` repeat a section
+
+- A directory on `BASICFORTH_DOCS` that could not be opened left the *previous*
+  directory's topics collected, so `help` printed that whole section a second
+  time. It looked like a duplicate listing rather than a missing one.
+
+
 ## v0.16.0 — 2026-08-16
 
 Three headline changes: **local variables** (`{: a b c :}`), a compiler change
@@ -299,7 +699,7 @@ The value is now built straight into an instruction. No call, no inline data.
 - A `require` reads `loaded`, `found` or `MISSING`; the verdict has three forms
   too — all met, will-load-but-degraded, and will-not-load.
 - **The traversal is bounded at 64 files, and says so when it runs out** rather
-  than reporting on the part it managed to read. dark-star.fs already follows
+  than reporting on the part it managed to read. A real game already follows
   11 files, so the bound is reachable, and a quiet truncation would have
   produced the one thing this word exists to prevent — a confident "all
   requirements met" from a check that stopped looking.
@@ -399,7 +799,7 @@ The value is now built straight into an instruction. No call, no inline data.
   disk — the complement to `voice.fs`, which records a phrase properly and is
   what a game should use.
 - **`say` blocks while it synthesizes, and that is the whole reason both exist.**
-  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for "Dark Star, ready.",
+  Measured with `cmu_us_slt`: 7 ms for "Go!", 16 ms for a two-word phrase,
   38 ms for a full sentence. A frame at 60 Hz is 16.7 ms. Instant at a prompt,
   frame-dropping in a loop. The docs say that with the numbers rather than as a
   vague caution.
@@ -556,11 +956,11 @@ The value is now built straight into an instruction. No call, no inline data.
   `unresolved control flow` — no file, no line, no name — and then **returned**,
   so the file went on loading against a word that never got defined. The only
   line number you ever saw came from the first *call* to the missing word.
-  Found in the Dark Star port, where the typo was on line 167 and the sole
-  reported location was 213.
+  Found in a large program under development, where the typo was on line 167
+  and the sole reported location was 213.
 - It now reports like every other compile error, naming the definition read out
   of its own half-built header:
-  `dark-star.fs:167: unresolved control flow: say`. Being an error return, it
+  `mygame.fs:167: unresolved control flow: say`. Being an error return, it
   also stops the load at that line instead of producing a second, unrelated
   looking failure further down. `;` was the last compile error that let a load
   continue.
@@ -2014,8 +2414,8 @@ wording anywhere else.
 - **An extra `ENDOF` emitted wrong code without a word of complaint.** Branch
   targets were mis-resolved, so an arm ran another arm's body and the case
   value was never consumed — a `stack underflow` surfaced later, several steps
-  from the cause. Found during the Dark Star port; pre-existing, not from the
-  recent branches.
+  from the cause. Found while working on a large program; pre-existing, not from
+  the recent branches.
 - **Closing a non-`CASE` construct with a `CASE` word crashed the process** —
   `: bad if 1 endcase ;` and friends segfaulted rather than aborting, so a file
   load took the session with it. Same for an `IF` opened inside an arm and

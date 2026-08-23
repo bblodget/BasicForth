@@ -105,6 +105,6 @@ help:
 	@echo "  make run-test        Run unit test (C harness)"
 	@echo "  make run-integration Run integration tests"
 	@echo "  make run-pty         Run line-editor PTY tests (scrolling)"
-	@echo "  make run-lessons     Replay the docs/Tutorial lessons and examples"
+	@echo "  make run-lessons     Replay the docs/Tutorials lessons and examples"
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make help            Show this help"

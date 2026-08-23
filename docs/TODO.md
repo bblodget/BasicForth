@@ -5,7 +5,753 @@ completed. See Planning.md for high-level vision and design decisions.
 
 ---
 
+## Up next
+
+The bucket. Add to it during the week as things come up; on release day, take
+what's done and leave the rest here.
+
+Releases are cut on Sunday by convention — a week's work, whatever that turned
+out to be. **This is a guideline, not a rule:** a good set of items early in the
+week is a reason to release early, and a quiet week is a reason to skip. Nothing
+here blocks a release; an unfinished item just stays in the bucket. See
+`docs/Versioning.md` for how a release is actually cut, and `CHANGELOG.md`'s
+`## Unreleased` for what has already landed.
+
+Each item carries a **Done when** line, because release day's only real question
+is *in or out* and that needs an observable answer rather than a judgment call.
+
+**Before taking an item, check who already has it:**
+
+```
+git branch --format='%(refname:short)  %(worktreepath)'
+```
+
+Branches and worktree paths are shared between all worktrees of the repo, so
+that command sees work in progress *now*. This file cannot: a claim written
+here lives on a branch, and no other worktree sees it until that branch merges
+— by which point the work is done. So name a branch after the item you're
+taking, and let the branch list be the claim.
+
+**Put your worktree number in the branch name: `<n>-<item>`** —
+`2-files-lesson`, `3-make-install`. Worktrees are numbered by their directory
+(`BasicForth` is 1, the main checkout and the one holding every worktree's
+objects; `BasicForth-2`, `BasicForth-3` after that), so the number is read off
+`git worktree list` rather than recorded anywhere that can go stale.
+
+The number is not for ownership — it is so the branch list answers *which
+session* at a glance, without matching long paths by eye. Marking the same thing
+in this file was tried and dropped: a `[2 working]` beside an item is invisible
+to the other worktrees until it merges, needs a second merge to say `done`, and
+costs a conflict on the one file all three edit.
+
+### `[ENGINE]` — one at a time
+
+An item tagged **`[ENGINE]`** touches `src/arch/*/*.s` or `src/arch/*/core.fs`
+— the hand-mirrored pair. That is the same criterion that already decides
+whether a branch needs a full suite run before merge, so it is one rule under
+one name, not a new judgment call.
+
+**Take at most one `[ENGINE]` item at a time.** Not because the files
+necessarily collide — two emitters can sit far apart — but because two
+unreviewed engine changes landing in the same Sunday sweep cannot be told
+apart when something breaks, and each costs a five-suite two-arch run. Sequence
+them instead; there is always non-engine work to run alongside.
+
+**Name the branch `engine/<n>-<item>`** — `engine/2-evaluate-propagation`. The
+tag in this file is documentation and arrives only at merge time; the branch
+prefix is the part that enforces anything, because refs are shared the moment
+they exist:
+
+```
+git branch --list 'engine/*'
+```
+
+Anything listed means an engine item is live — take a different one. Docs,
+lessons, tests and tooling carry no such limit and run in parallel freely.
+
+### Queued
+
+- [ ] **Run the ARM64 hardware suites against v0.17.0.** Deliberate exception,
+      taken 2026-08-22: the release is cut Sunday 2026-08-23 and the Pi 400 is
+      not to hand until **Friday 2026-08-28**.
+
+      Everything up to `ba8c236` ran on the Pi on 2026-08-21, all four suites.
+      Recomputed at release time, the commits merged after it are:
+
+      - `engine/1-include-search` (`9fd02c6`) — **the only unverified assembly.**
+      - `2-where-word` (`8c14743`) — `where` / `where-path` / `deps-path` /
+        `word-deps`: `core.fs`, docs and tests, no assembly.
+      - `6043ded` — the Dark Star sweep: `.s` **comment-only**, verified
+        mechanically (zero non-comment lines in the `src/arch` diff).
+      - `4c68734`, `8d0092a`, `26a5491` — `docs/TODO.md` only.
+
+      Judged low risk because the assembly delta is **entirely deletions** — a
+      `CMP`/`B.NE` pair, a dead block and a `.quad`, checked at release time by
+      diffing `src/arch/*/*.s` from `ba8c236` and finding no added lines. No new
+      instructions, no barriers, nothing writing memory it then executes. That
+      is not the shape qemu mispredicts; see `docs/Versioning.md` §Before the
+      tag.
+      Done when: `make run-test run-integration run-lessons run-pty` are green
+      on the Pi at the v0.17.0 tag. A failure is a `v0.17.1`, not a retraction.
+
+- [ ] **CI on GitHub Actions, including native ARM64.** There is no CI at all
+      today: nothing checks a push except remembering to run four suites twice.
+      Scoped 2026-08-22, not started.
+
+      **`runs-on: ubuntu-24.04-arm`** is a GitHub-hosted VM on real ARM64
+      silicon (Ampere/Cobalt class), free for public repos. On it `HOST_ARCH`
+      is `aarch64`, so `make` builds ARM64 **natively** — no qemu, no cross
+      toolchain. A two-entry matrix with `ubuntu-24.04` gives both
+      architectures native, which no machine here does. Deps are just
+      `binutils gcc make python3`.
+
+      **It would have caught `5af401e`** — the I-cache flush that was not
+      line-aligned and SIGILL'd at boot on any real ARM64, past every green
+      qemu run.
+
+      Known frictions, so they are not rediscovered:
+
+      - **Ubuntu 24.04 predates SDL3** (released 2025), so `libsdl3-dev` will
+        not install and the graphics/sound/speech sections skip — as do
+        `flite` and `piper`. Roughly the qemu subset, minus the emulation.
+      - **The library gates read `ldconfig` off PATH**, and
+        `tests/test_integration.sh:95` records that going silent once while the
+        run still said 0 failed. CI is exactly where that would go unnoticed
+        for weeks. Assert the gates FIRE, do not trust a green run.
+      - **`run-pty` is timing-sensitive** and shared runners are a noisy
+        regime. May need to be excluded.
+
+      **It does not replace the Pi.** CI would be Neoverse server cores; the Pi
+      is Cortex-A72 and the real target is the Genio 510. Same architectural
+      memory model, different reordering in practice. CI is the fast gate, the
+      Pi stays the pre-release gate — see `docs/Versioning.md` §Before the tag.
+
+      **Cadence is the open question.** Actions only fires on a push, and
+      pushes here are mostly releases plus the occasional `staging` push to
+      move work to the Pi. Left as is, CI is a release gate that reports
+      against a week's worth of commits at once. Pushing `staging` per merge
+      makes a failure name one branch — worth deciding deliberately, since the
+      repo is public and that puts unfinished work on display.
+      Done when: both suites run green on both runners from a clean checkout,
+      a deliberately broken commit is shown to FAIL the run, and the skip lines
+      are checked to still name what they skipped.
+
+- [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
+      test of the engine, and historically our best bug-finder: the `CASE`
+      miscompile and the bare `unresolved control flow` message both came out
+      of it. Lives in a private repo outside this tree for now.
+
+- [x] **Word the voice-engine skip so it names its remedy — DONE 2026-08-16**
+      (branch `2-suite-skip-wording`). Both fixes taken: the suite now derives
+      the engine with `command -v piper` the way `setup.sh` does, and every
+      remaining skip names what to do. Verified on both arches: the Pi, where
+      the misreading happened, now runs the test at 1180/1180 with no skips
+      without sourcing `setup.sh` at all.
+      Detail: §Future / Hardening.
+
+- [x] **Audit the integration suite for assertions that cannot fail — DONE
+      2026-08-17** (branch `2-test-harness`). Every candidate converted; a
+      re-measure finds **zero** remaining. Six assertions were rewritten
+      because conversion showed they had been asserting things the system does
+      not do. `assert_contains` now names the unsafe helper, `assert_result` is
+      the documented default, and `--section` runs one section in about a
+      second. The PTY suite has the same flaw and is NOT swept — see below.
+      Detail: §Future / Hardening.
+
+- [x] **A register reference for reading `dis` output — DONE 2026-08-20**
+      (branch `2-register-guides`). Two pages, `help x86` and `help arm64`,
+      because you are on one architecture when you are reading a listing. Each
+      covers the four reserved registers, the push/pop/TOS idioms, the literal
+      and string shapes, calls and control flow, the C and syscall ABIs, and a
+      worked definition end to end. Scoped as *how to read what `dis` just
+      printed* rather than as an assembler tutorial, which is what decided
+      every inclusion question.
+
+      Three things the sources said that were not true, now fixed in
+      `docs/x86_Quick_Reference.md`, `docs/ARM64_Quick_Reference.md` and the
+      four `.s` header comments: `%r14` and `X20` are described as "scratch
+      (available)" but are both in live scratch use, and `X23-X28` are listed
+      as "available for STATE, BASE" when `X23`/`X24` alone are saved and
+      borrowed at 32 sites. Comment-only in the `.s` files, so not `[ENGINE]`.
+
+      Also settled, since anyone reading `dis drop` asks it: the load that
+      `drop` never uses is not dead. Moving a pointer cannot fault, so without
+      it an empty-stack `drop` would walk DSP into the guard page silently and
+      fault later inside an unrelated word.
+
+- [ ] **`[ENGINE]` ARM64: diagnose `to <local>` at 6.5 ns against x86's 0.54.**
+      Done when: the two hypotheses in the entry are separated by re-measuring
+      with a `drop` in the loop on the Pi, and the result is either a fix or a
+      written explanation. Not a bug until that distinction is made.
+      Detail: §Performance / Optimizer.
+
+- [ ] **`[ENGINE]` `SOURCE-ID` conformance.**
+      Done when: `source-id` answers a file id inside an `included` file and -1
+      inside `evaluate`, with a suite case for each. `(loading?)` already covers
+      every internal caller, so this is a conformance gap, not a live bug.
+      Detail: §Future / Hardening.
+
+- [x] **`[ENGINE]` Include-relative resolution, and a word for the loading
+      file's directory — DONE 2026-08-20** (branch `engine/1-include-here`,
+      merged `dd0e801`). `require`/`include` look beside the requiring file
+      first; `my-dir` and `path-join` shipped with it, and Dark Star now loads
+      and runs installed, from any directory, with all 14 speech WAVs. The
+      acceptance case below was met with a decoy present.
+      Original entry follows.
+      `include` searches CWD then `BASICFORTH_PATH` and
+      nothing else, so a multi-file package cannot find its own siblings once
+      it is installed somewhere other than the directory you are standing in —
+      and an asset (`r/o bin open-file` in wavcore.fs) is not searched for at
+      all. Dark Star only works today because you `cd` into it first. This is a
+      **prerequisite for `install`**, discovered while rewriting the package
+      design; it is not needed by the user package dirs, which stand alone.
+      Order matters: the including file's directory goes **first**, ahead of
+      CWD, or a stray `art.fs` in the working directory hijacks the package's
+      own. The two orders agree wherever things work today, so this costs no
+      compatibility — and `core.fs` already records a `font.fs` in the launch
+      directory shadowing the library of that name and recursing to the guard
+      page.
+      Done when: a package in `~/.basicforth/packages/<n>/`, whose entry file is
+      linked into `lib/`, loads its own sibling `.fs` and opens its own asset
+      from an unrelated working directory — including one holding a decoy file
+      of the same name.
+      Detail: `docs/Package_Registry.md` §Multi-file packages.
+
+- [x] **`[ENGINE]` Rename `docs/Tutorial` to `docs/Tutorials` — DONE
+      2026-08-21** (branch `engine/1-tutorials-rename`). Clean break, no dual
+      spelling. All eight suite runs green on both arches.
+
+      **The name now lives in one place.** The plan counted four `s" Tutorial"`
+      basename sites; factoring them turned up a fifth literal (the
+      `docs/Tutorial` path appended to `BASICFORTH_DOCS`) and a sixth check of
+      exactly the same kind — `s" Guides"`, which exempts single-word headings.
+      `core.fs` now has one `(lessons-sub)`, with `(lessons?)` deriving the
+      basename from it rather than agreeing by hand, plus `(guides?)`.
+      `(lessons-sub)` sits deliberately OUTSIDE the `(-ud-)` marker: defined
+      inside it, the startup words are forgotten once they have run and every
+      help lookup then failed with `? (lessons-sub)`.
+
+      Five places outside Forth still spell it out — `setup.sh`, the `Makefile`
+      install target, and `tmpl_docs` in both `main.s`. Four languages, no
+      shared constant; the install test is what checks them against each other.
+
+      **The migration is quieter than expected**, measured rather than assumed:
+      a directory still named `Tutorial` drops out of `tutorials` and its pages
+      appear in bare `help` as an ordinary section, but `tutorial <Name>` still
+      finds a lesson in it — `(tut-go)`'s second pass searches every docs
+      directory when the strict pass misses. So a stale directory half-works
+      instead of failing outright.
+      Original entry follows.
+      The section headings are `Language-Reference`, `Guides`, `Packages`
+      and `Tutorial` —
+      three count nouns plural and one singular. Worse, the *word* that lists
+      them is `tutorials`, so the interface already carries both spellings for
+      one thing. `Language-Reference` stays singular because it is a mass noun.
+
+      **Do it before any package format names the directory.** A package ships
+      `docs/Tutorial/` in its own repo; the moment that is written down,
+      renaming becomes a compatibility break for every published package, and
+      `Package_Registry.md` §6 flags the package format as a v1.0 lock. Cheap
+      now, expensive later. That is the whole argument for the timing.
+
+      Tagged `[ENGINE]` because it is **not** a documentation rename:
+
+          src/forth/core.fs         4x  `s" Tutorial"` basename switches --
+                                        BEHAVIOURAL. A directory is recognised as
+                                        holding lessons by that exact name; miss
+                                        one and lessons silently stop being found
+          src/arch/*/main.s         the tmpl_docs template a derived install path
+                                        is built from -- hand-mirrored asm
+          src/arch/*/Makefile       install file lists
+          Makefile, setup.sh        install target, BASICFORTH_DOCS
+          tests/*                   suite paths (integration, lessons)
+          docs/Tutorial/            the directory itself (git mv)
+          ~10 more                  prose
+
+      **Clean break, no dual spelling.** One name, no exceptions. The cost is
+      that an existing `~/.basicforth/docs/Tutorial` must be renamed by hand,
+      and today that is one machine. Know about the transient first: a shell
+      that sourced the OLD `setup.sh` running the NEW binary has
+      `BASICFORTH_DOCS` pointing at a directory that no longer exists, so
+      lessons vanish until it is re-sourced. Self-correcting, but alarming if it
+      happens mid-session and you have forgotten this note.
+
+- [x] **`tutorials` lists the title's first word, not the name you type —
+      DONE 2026-08-21**, folded back into `engine/1-tutorials-rename` after the
+      rename made it visible in a real listing. The listing prints the filename
+      in a 20-wide column, then the title's text after its em dash; a longer
+      name pushes its description right rather than being cut. `::` confirmed as
+      the package scope separator (a hyphen is a legitimate page-name character,
+      `Machine-Code.md`). Suite: three new cases, and the two existing ones that
+      caught the output change. Note one of the three — that a listed name
+      starts its tutorial — passes against the OLD code too: it pins the other
+      half of the contract rather than detecting this bug.
+      Original entry follows.
+      Measured against the shipped Greeting package, where it is live and not
+      theoretical:
+
+          > tutorials
+            Greeting — Your First Installed Package
+          > tutorial Greeting
+          no tutorial named Greeting (try TUTORIALS)
+
+      The name that works is `greeting::tutorial` — the filename. The listing
+      prints the page TITLE, `tutorial <name>` matches the FILENAME, and nothing
+      keeps the two equal. It stays invisible for bundled lessons only because
+      `Snake.md` happens to be titled `# Snake`. A listing's job is to tell you
+      what to type, and deriving that from prose is what let them drift.
+
+      Decide the output shape first — name and description in two columns keeps
+      the descriptions, which are why anyone reads the list. It changes output
+      for every bundled lesson, so it needs the docs sweep that any output
+      change needs.
+
+      It also raises a question it does not own: a package's lesson is
+      `<pkg>::tutorial.md`, so the honest name to print is `greeting::tutorial`.
+      Whether a package should instead name the file for what you type is a
+      `Package_Registry.md` convention, not engine work.
+      Done when: every name `tutorials` prints is a name `tutorial <name>`
+      accepts, for a bundled lesson and an installed package alike, with a suite
+      case that would fail if the listing went back to the title.
+
+- [~] **`help` should say where the live definition came from — SUPERSEDED by
+      `where`, 2026-08-22.** When two pages
+      document the same word, `help` gathers both — correctly — but prints them
+      in docs-path order, which need not match the dictionary. Measured
+      2026-08-19: after a package redefines `depth`, `depth .` answers the
+      package's while `help depth` prints core's entry **first**. The reader
+      takes the first as the answer and it is the one that no longer runs.
+      Reordering the path cannot fix it: the docs path is static and the
+      dictionary order is dynamic — it depends on what you required this
+      session, and in what order.
+
+      **Do not try to mark which entry is the live one.** That was the first
+      design and it cannot work: `(find-meta)` answers with the defining **`.fs`
+      file**, help entries come from **`.md` pages**, and nothing links the two.
+      No page declares which source file it documents — `Stack.md` opens with
+      `# Stack Manipulation` and never mentions `core.fs` — so there is no
+      mapping to look the answer up in. Adding one would mean a new header field
+      on all thirty-odd existing pages, for a problem this size.
+
+      Report the fact instead of inferring the match. After printing the
+      entries, add one line naming where the live definition actually came
+      from — the same lookup `where` does:
+
+          help depth
+            Stack:          ## depth  ( -- +n )   ...
+            bignum-depth:   ## depth ( -- n )     ...
+            depth is currently defined in bignum.fs
+
+      That needs no mapping, cannot be wrong, and gives the reader exactly the
+      fact they were missing. It handles the cases `see` already distinguishes:
+      a primitive says so, a word typed this session says so.
+
+      **Why it is parked rather than built.** `where <name>` (2026-08-22)
+      answers exactly this on demand, so the ambiguity is no longer silent: you
+      see two entries, you ask, you get the fact. The remaining argument was the
+      *other* case — a page documenting a word that is not loaded, where there
+      is no visual cue at all — and that turned out to be covered already: every
+      library page names its `require` in the preamble, so a reader of
+      `help sdl3` is told what to load before reaching any word. Checked, not
+      assumed; the "silent trap" framing was asserted and was wrong.
+
+      What is left is a line on *every* `help <word>` — usually restating what
+      the entry above it just said — to cover a case one word already covers.
+
+      **Reopen when packages redefining core words is normal rather than
+      hypothetical.** The measurement used a constructed `bignum` redefining
+      `depth`; once the registry exists there will be real collisions to look
+      at, and the cost/benefit changes. Keep the paragraph above about why
+      marking the live entry is impossible — no `.md` page declares which `.fs`
+      file it documents — because anyone revisiting this will propose exactly
+      that first.
+      Small, standalone, not packaging-specific, and it makes shadowing
+      *visible* — the property missing when `dice.fs` redefined `seed`.
+      Done when: `help <word>` names the source of the definition currently in
+      force, a primitive and a REPL-defined word each report sensibly, and a
+      suite case covers a word documented on two pages where the live one is
+      NOT the first entry printed.
+
+- [ ] **Warn when a loaded file redefines a word that came from a different
+      file.** The `redefined` warning is deliberately off during file loads —
+      `core.fs` redefines on purpose, module reloads replay whole files, and
+      skipping the scan keeps loads cheap. But that also makes a library
+      silently shadow a core word, which `dice.fs` did to `seed` for months.
+      Narrower rule: warn only when the *previous* definition came from a
+      **different source file**, which leaves all three of those cases quiet.
+      This is the **probe** for the namespaces question: it measures how often
+      collisions actually happen before anyone designs a mechanism for them.
+      Right now that judgement rests on one anecdote.
+      Watch the cost — the gate currently skips a `find` per definition during
+      loads, and this reinstates it.
+      Done when: a library redefining a word from another file says so at load
+      time, `core.fs` and a module reload stay silent, and the load-time cost is
+      measured rather than assumed.
+
+- [x] **`[ENGINE]` Propagate errors out of `EVALUATE`.** DONE 2026-08-16,
+      both arches, all eight suite runs green. Mechanism: a `THROW` of `-260`,
+      joining the silent set, raised by `forth_evaluate` in assembly and by the
+      *Forth* `included` wrapper for loads. It is deliberately NOT raised by
+      the assembly `forth_included`: a first version added a throwing entry
+      point there, and it skipped the wrapper's bookkeeping, stranding every
+      failed file on the loading stack so no retry could ever run. Loads
+      therefore propagate from the layer that owns the cleanup.
+      `interpret_line`'s abort decision was not touched. Design, the three
+      rejected alternatives, and the two defects found after the acceptance
+      table was green: `docs/Abort_Routes.md`. **Pi run DONE 2026-08-21** —
+      all four suites native ARM64 at `ba8c236`, which contains this commit.
+      Original entry follows.
+      The engine's worst
+      failure class. **Wider than this entry first said** — brackets and
+      definitions have nothing to do with it, and the minimal case is one line
+      at a bare prompt (measured 2026-08-16 against `v0.16.0-14-gbad2f78`):
+
+          > s" nosuchword" evaluate                  \ ` ok`. No error at all.
+          > s" nosuchword" evaluate 7 .              \ `7  ok` — the line runs on
+          > : q s" nosuchword" evaluate 42 . ;  q    \ `42  ok`
+          > : z 1 [ s" nosuchword" evaluate ] 2 + . ;  z   \ `3  ok`
+
+      Root of two filed items — the swallowed error and the compiling arm that
+      takes the enclosing definition — and both dissolve if the status
+      propagates. **Scope is all four forms** (decided 2026-08-16): the third
+      line above is the one that constrains the design, because `evaluate`
+      compiled into a definition and run later has no surviving status
+      register, so the channel cannot be the return value.
+      `INCLUDED` is the near miss to copy from and not break — it *does* report
+      `file:line: ? token`, and it *does* return 1; the outer line prints ` ok`
+      and carries on regardless, because the single site that could consult that
+      status (`.Lil_found_execute`) never looks at it. Nothing upstream is
+      missing — which is why the fix is not "return the error properly".
+      **The abort-route enumeration is committed: `docs/Abort_Routes.md`.**
+      It lists every route, which are gated by nesting depth and which are not,
+      and the six constraints any fix has to satisfy. This is the most bug-dense
+      area in the engine (seven wedges so far, three of them found in error
+      paths during the 2026-08-16 STATE sweep), and `recovery-anchor-is-global`
+      records an obvious-looking fix here that segfaulted. Best done early in a
+      cycle, not late: a mistake here is silent, and a week of other sessions on
+      the tree is the detector.
+      **Only one engine change per week** — this and user package dirs both
+      edit hand-mirrored asm and both need a full suite run; do not run them in
+      parallel worktrees.
+      Done when: the seven-row acceptance table in `docs/Abort_Routes.md` §The
+      pins passes on both arches. **Reporting the error is only half** — an
+      error that prints and then lets the line finish is not propagated, which
+      is precisely what `INCLUDED` does today. Three rows cover that half and no
+      existing test does; one of them (`' bad catch .` returning non-zero) is
+      the strongest single check, being the difference between the error being
+      *announced* and it having *happened*. Two rows are regression guards, for
+      `INCLUDED`'s `file:line:` prefix and for the deliberate rule that a typo
+      leaves the data stack alone.
+      **Not "the pins are inverted"** — of the four assertions in that cluster,
+      one (`a nested error while compiling still takes the outer definition`)
+      expects `MISSING` and still expects `MISSING` after the fix, for the
+      opposite reason, so it would read as confirmation while proving nothing.
+      Detail: §Future / Hardening.
+
+- [x] **`[ENGINE]` User package dirs — DONE 2026-08-19.** `~/.basicforth/lib`
+      joins the file search path and `docs/{Packages,Tutorial}` join the help
+      path, appended so nothing installed can shadow a bundled library, topic or
+      lesson. `$BASICFORTH_PACKAGES` relocates the root and, pointed at a path that
+      does not exist, disables the mechanism — which is how the suites stay
+      independent of what the developer has installed.
+      Three decisions the entry asked for, all settled by measurement rather
+      than argument: the policy lives in `core.fs` behind three tiny primitives
+      (`(forth-path)`, `(forth-path!)`, `(docs-path!)`) so **neither `main.s`
+      changed**; the reference directory is `Packages` and not a mirror of
+      `Language-Reference`, because `help` iterates directories and a mirror
+      printed the heading twice; and append beat prepend for the reason
+      `dice.fs` redefining `seed` records.
+      Two defects fixed on the way, both verified failing first: `deps` asked
+      the *environment* for `BASICFORTH_PATH` instead of the interpreter, so on
+      an installed binary it could not find a file `require` loads; and a docs
+      directory that would not open left the previous one collected, so `help`
+      reprinted that whole section.
+      **The one that was nearly missed:** 2816 bytes of `allot` broke
+      `include core.fs`. That test reloads this file into the same dictionary,
+      which at the time left about **3200 bytes spare out of 256 KB** — a 1.2%
+      margin nobody knew was that thin. Three rounds to get clear of it: heap
+      instead of `allot`; a `marker` around the startup machinery so it is
+      forgotten once it has run (which also meant erasing the reclaimed span,
+      since a fresh session had always found it clean and the suite asserts
+      that); and finally **moving the block to the middle of the file**, because
+      a marker fixes the FINAL cost and not the PEAK — at the end of a second
+      load the peak was 3374 bytes against 3270 available.
+      The dictionary is 512 KB since 2026-08-20 (see below), so those figures
+      are history, not current numbers. The doubling is not: anything permanent
+      in core.fs is still paid for twice by that test.
+
+- [x] **The dictionary headroom for a second `core.fs` load — RESOLVED
+      2026-08-20 by raising the dictionary to 512 KB.** `DICT_SPACE_SIZE`,
+      one `.equ` per arch. Free space went from 131 KB to 384 KB, and the
+      `include core.fs` margin from **54 bytes to 256 KB**.
+      Found 2026-08-19 by walking into it, and nearly walked into again the
+      next day: sibling-path resolution plus `2constant`/`2variable` took the
+      margin from 3219 bytes to 54 in an afternoon of individually small
+      additions.
+      **The number that alarmed was the wrong one, and that is the lesson.**
+      3219 bytes was never a user's budget — a user had 131 KB. It was the
+      margin of one integration test that does `include core.fs`, loading a
+      SECOND full copy, which is why every byte added to core.fs cost two
+      against it. Reporting a test's headroom as though it were the product's
+      constraint made a 1.2% cost look like an emergency for two days.
+      The doubling has not gone away, only the pressure: anything that defines
+      words, uses them and forgets them should still sit EARLY in core.fs,
+      because a `marker` bounds the final cost and not the peak.
+      One test had to change with it — a dictionary-exhaustion case allotted a
+      hardcoded 300000 bytes, sized to overflow 256 KB, and silently stopped
+      overflowing. It derives the size from `unused` now.
+
+- [x] **`where <word>` — which file did this come from? DONE 2026-08-22**
+      (branch `2-where-word`). Reshaped 2026-08-18;
+      the original entry asked for `deps <word>` to fall back to a dictionary
+      lookup, and that is the wrong place for it. The need is real — *"I have
+      `dis`, where did it come from?"* — but it is a source-metadata question,
+      not a dependency question, and answering it inside `deps` puts a
+      name-resolution rule in the layer that handles filenames.
+      Separate them instead:
+
+          > where dis
+          disasm.fs
+          > deps disasm.fs
+
+      `where` answers with exactly the argument the file words want. It is about
+      ten lines of Forth reusing what `see` already does — `(find-meta)` yields
+      `( off len srcid )` and `(source-path)` maps the srcid to a filename — and
+      it handles the same four cases `see` does: not found, primitive, typed
+      this session, from a file.
+      Named `where`, not `which`: `which` is the shell's word for executables on
+      `$PATH`, and BasicForth has a shell vocabulary already.
+      Caveat that survives the reshaping: srcids come from a **64-entry table**
+      and `src_register` answers 0 once it is full, so a word from the 65th file
+      must say it does not know rather than name the wrong file.
+      Done when: `where dis` answers `disasm.fs`, the four `see` cases each
+      report sensibly, and the 65th-file case says why it cannot answer.
+
+      **Shipped as the full path, not the bare name.** `deps` accepts a path —
+      so the answer is still exactly what the file words want — and since
+      `make install` a checkout and an installed tree both hold a `disasm.fs`,
+      which is the case a bare name cannot answer. Nine suite assertions, all
+      of which fail with `where` stubbed out.
+
+      The 65th-file case needed no engine change: `(source-path)` reports
+      nothing above the table's count, so `64 (source-path)` is a full-table
+      probe in pure Forth. Without it `where` answers "was typed at the REPL
+      this session" for a word that came from a file — verified by removing
+      the guard, not by reasoning about it.
+
+      **Grew to four public words, from the one this entry scoped.** Interactive
+      use asked for the rest, in this order:
+
+      - `where-path ( c-addr u -- c-addr u true | false )` returns the path
+        instead of printing it, so it can be built on.
+      - `deps-path ( c-addr u -- )` is `deps` over a path already held; `deps`
+        now ends there.
+      - `word-deps <name>` joins the two: what the file defining a word needs.
+
+      `deps-path` is public because of a defect found by *using* the docs, not
+      by testing them: the first `word-deps` example was built on `(dp-run)` and
+      `(dp-verdict)`, so every word in a shipped example answered `no help for`.
+      The reference audit cannot see this — it exempts parenthesized names by
+      convention — so nothing but a reader would have caught it.
+
+      Also fixed here, and unrelated to the feature: inserting the `deps-path`
+      entry mid-page split the `## deps` entry, and `help deps` silently lost
+      everything after the insertion point. A `## ` heading placed inside
+      another entry truncates it with no error.
+
+      Related but NOT settled, and deliberately not queued: whether the file
+      words should be strict about extensions. Today `deps sdl3` works and
+      `require sdl3` does not, which is an inconsistency — but the fix removes
+      working behaviour, so it wants a deliberate decision rather than a drive-by.
+      The argument for strictness is one rule with no exceptions (`include`,
+      `require`, `required`, `deps` all take a filename; extensions always;
+      paths allowed), with package *names* living one layer up in
+      `install`/`run`. See `Package_Registry.md` §Naming rules.
+
+- [x] **`make install` — DONE 2026-08-17.** `install` / `uninstall`, `PREFIX`
+      and `DESTDIR`, both arches, all eight suite runs green. The binary derives
+      `<prefix>/share/basicforth/...` from `/proc/self/exe` when the environment
+      does not set it, so an installed copy needs no `setup.sh` and the tree
+      stays relocatable; the environment still overrides, which is what keeps
+      checkouts and suites unaffected. `help installing` is the user page.
+      **Note for the package-dirs item below:** the derivation is the hook it
+      wanted — `~/.basicforth/lib` now has somewhere to sit *beside*, and the
+      layout is fixed in one place (the templates in `main.s`, checked against
+      the Makefile by the install test).
+
+### Bigger than a week
+
+- [ ] **View a word's source file, not just its definition.** Raised
+      2026-08-22. `see <word>` shows the definition; sometimes you want the
+      whole file it lives in. `where-path` (shipped 2026-08-22) is the
+      substrate — it hands back a filename a file-opening word can take — so
+      this is now a question of the *viewer*, not of finding the file.
+      Open: read-only or the real editor? `edit` already opens `$VISUAL`, but
+      pointing it at `core.fs` invites editing a file you did not mean to
+      change, and the module system has opinions about which file a session
+      owns. A pager (`more` exists) is the cautious first move.
+      Done when: from a word name you can read its whole file, and it is
+      obvious whether what you are looking at can be modified.
+
+- [ ] **A `Files` lesson.** Moved out of the v0.17.0 bucket 2026-08-22 — a
+      lesson is a fresh-context job (step sizing, replay behaviour and prose
+      voice held at once) and deferring it beat starting it the day before a
+      release. First item for the next one.
+      Done when: `tutorial Files` replays green under `make run-lessons` on both
+      arches and no step pages.
+      Detail: §Module System / Forth-as-Shell, use-testing queue.
+
+Real features that need a design conversation before they are task-sized —
+parked here so they stay visible without pretending to be queue items.
+
+- **Package scopes: system-wide, and per-project.** Decided 2026-08-22 to ship
+  **per-user only** for now, and to make the layering a deliberate design
+  conversation rather than something that accretes. Nothing built today is
+  thrown away by it — the *layout* (`lib/<package>/`,
+  `docs/Packages/pkg::page.md`, `docs/Tutorials/pkg::lesson.md`) describes a
+  package tree at any scope, so a system root at
+  `/usr/local/share/basicforth/packages` would have exactly that shape.
+
+  **What already works, and is already promised.** `BASICFORTH_PACKAGES`
+  relocates the root and is documented in `help environment`, so pointing it at
+  a project's own `.basicforth/` gives project-local packages today — measured
+  2026-08-22: `require vendored/tool.fs` resolves with the variable set and is
+  invisible without it. That is the *isolating* venv semantic, which is the one
+  Python actually gives you. It is a promise whether or not we call it a venv.
+
+  **The one real gap is that the variable holds ONE root, not a list.** Layering
+  is what system-wide needs (system packages *and* yours), and what a friendlier
+  venv would want (project *plus* user, rather than an all-or-nothing swap).
+  Cheap for a structural reason: `BASICFORTH_PATH` and `BASICFORTH_DOCS` are
+  already colon-separated, and the user root works by *appending* onto them, so
+  nothing downstream of `(user-dirs)` cares how many roots there were. Only
+  `(ud-root?)` is single-valued.
+
+  **Two things to settle before building it:**
+
+  - **Precedence, and the tension in it.** Today's rule is *appended, never
+    prepended* — nothing installed shadows a bundled library. Most-specific-first
+    would give beside-first -> CWD -> bundled -> project -> user -> system. But
+    "installed never shadows bundled" and "a project pins its own version" pull
+    against each other, and a venv that cannot override a bundled library is a
+    weak venv. **That tension is the actual design question**, not the plumbing.
+  - **The path budget.** `(ud-rootmax)` refuses a root over 160 bytes and the
+    include search silently SKIPS a segment whose `<seg>/<name>` exceeds 511.
+    Several roots multiply both. Per-package path entries were already rejected
+    as unbounded growth; a small fixed number of roots is a different thing, but
+    the limits want re-measuring rather than inheriting.
+
+  Executables generalise cleanly and need no new rule: per-scope bin — system
+  to `/usr/local/bin`, user to `~/.local/bin`, project to a `bin/` the project
+  puts on PATH. Note the per-user choice does **not** follow BasicForth's own
+  install prefix, and must not: a `/usr/local` install is shared by every user
+  on the machine, so writing a personal package into `/usr/local/bin` would need
+  root and would push it into everyone else's PATH.
+  Done when: a design conversation has settled the precedence question above,
+  with the venv-overrides-bundled case answered either way and written down.
+
+- **Namespaces.** The flat dictionary is the deepest unsolved problem in the
+  package design, and the case for fixing it is **composition**, not tidiness: a
+  package author can test against core and their declared dependencies, but
+  cannot foresee what *else* is installed on a user's machine. N packages each
+  individually correct, combined into something nobody tested. `dice.fs`
+  redefining `seed` for months is the small version of it.
+
+  **Hyper-static binding is not a substitute**, and it is easy to believe it is.
+  Measured 2026-08-19:
+
+      > : a 1 ;   : b a . ;   : a 2 ;
+      redefined a
+      > b     1        \ b still calls the OLD a
+      > a .   2
+
+  It protects code *already compiled* and does nothing for code compiled after,
+  so a shadow is invisible going forward — and the `redefined` warning is gated
+  off during file loads (`in_load` in `build_header`), so a library's shadow is
+  silent by construction.
+
+  **The mechanism is already specified: Forth 2012's Search-Order word set** —
+  `WORDLIST`, `GET-ORDER`/`SET-ORDER`, `GET-CURRENT`/`SET-CURRENT`,
+  `DEFINITIONS`, `SEARCH-WORDLIST`, with `ONLY`/`ALSO`/`PREVIOUS`/`FORTH` as the
+  ergonomic layer. It is a *list* rather than a tree, but a list of
+  `[package, root]` gives exactly the upward walk with siblings invisible. What
+  is unsettled is the interface, not the machinery. Cost to watch: dictionary
+  search is hand-mirrored assembly and the compiler's hottest path — though
+  hyper-static binding means it is a compile-time cost, not run-time.
+
+  **Two interfaces considered and parked, both 2026-08-19:**
+
+  - **HP 48/28-style directories** — enter a package by name, path shown in the
+    prompt, lookup walks up to the root, siblings invisible. Fits the project's
+    lineage, and it is where the idea came from. Parked because BasicForth
+    already has a real `cd` for the OS filesystem, and the observation that
+    prompted the idea was that `cd`/`ls`/`cat` are *already* disorienting — a
+    second navigation concept, with a second current location and one prompt,
+    makes that worse rather than better.
+  - **Scoped help** (`package <name>` as a scope selector). Much cheaper, but it
+    scopes *documentation* without scoping *words*, so the directory is a lie
+    the first time someone types a scoped word from the root.
+
+  **What is already measured and waiting.** Four namespaces are shared with no
+  mechanism keeping them apart: the dictionary, the help index, the
+  `on-start`/`on-stop` lifecycle hooks (found by plain `find`, so a package
+  defining either takes over the user's), and lesson filenames. And help
+  currently **disagrees with the dictionary** about which definition is live:
+
+      > depth .              0
+      > require bignum.fs
+      > depth .              99      \ the package won -- the dictionary is last-wins
+      > help depth                   \ prints CORE's entry first, then the package's
+
+  The reader takes the first entry as the answer and it is the one that no
+  longer runs. Note what that rules out: making help prefer the bundled entry
+  does not prevent shadowing, it only makes help contradict execution.
+
+  **Why not now.** There are zero third-party packages, so there is no evidence
+  to design against, and `Package_Registry.md` §6 flags the package format as
+  one of the things a v1.0 would lock — a wrong answer here is maintained
+  forever. Revisit when a second package exists and something actually collides.
+  The two cheap partials queued above — naming the source of the live
+  definition in `help`, and warning on a cross-file redefinition — would inform
+  that decision without committing to any of this.
+
+- **Sockets.**
+- **The GPU backend.** The stated ceiling of the project; SDL is the chosen
+  path to it.
+
+### Parked
+
+- **The optimizer.** Closed deliberately on 2026-07-25 because the base under it
+  was still moving; that reasoning has not changed. §Performance / Optimizer.
+- **A `defer`/`is` lesson.** After `Files` — the two would overlap on file
+  loading, and shipping them together doubles the review.
+
+---
+
 ## Known Bugs
+
+- [ ] **`]` at the prompt compiles into nowhere, silently.** Found 2026-08-22
+      while probing whether `[ where dis ]` was a substitution syntax (it is
+      not — `]` is Forth's state bracket). `]` outside a definition sets
+      `STATE` to compile with no header open, so what follows is compiled into
+      dictionary space nothing will ever reach:
+
+          here .            \ 4504834
+          ] 1 2 + drop [
+          here .            \ 4504866   -- 32 bytes gone, unreachable
+
+      Not corruption, and `;` afterwards does not fault. The costs are a silent
+      leak (unreclaimable short of a `marker`) and a confusing state: the only
+      symptom is the `...` continuation prompt, and the escape — type `[` — is
+      not something the prompt tells you.
+
+      This is the same family as the seven `STATE`-vs-definition-open bugs
+      already fixed: the system can already tell the difference (`(def-open?)`
+      exists and other paths gate on it), so a warning when `]` opens compile
+      state with no definition would cost little. Deliberately NOT auto-fixed:
+      `]` is a standard word and someone may rely on the current behaviour.
+      Done when: a decision is recorded — warn, refuse, or document as intended
+      — and whichever it is, the `...` prompt's escape is discoverable.
 
 - [x] **Unbalanced `CASE` arms compile silently; mixing `CASE` parts with
   `IF`/`DO`/`BEGIN` segfaults.** FIXED 2026-07-29 (branch staging-debug).
@@ -1686,25 +2432,27 @@ docs/Graphics.md for the API.
   ~150-line client, real people on day one); REPL experience escalates
   pull (`msgs`) → prompt-peek (deferred hook before ` ok`) → live
   (needs threading). Destination: a BBS written in BasicForth itself,
-  merged with the package registry — boards + packages + door games.
+  merged with the package sources — boards + packages + door games.
   Network games ride the same sockets (lockstep: send inputs, not state;
   ladder = high-score server → turn-based → LAN tron → BBS lobbies).
-  Sequencing: sockets.fs → chat v1 (no threads) → registry stages →
+  Sequencing: sockets.fs → chat v1 (no threads) → package stages →
   threading → BBS.
 
-- [ ] **Package registry — sharing user-generated libraries and programs.**
-  Design captured in **docs/Package_Registry.md** (2026-07-22, nothing
-  implemented). One-file packages with a comment header + leading "dep
-  block" (`require` / new `needs-cmd` / new `needs-lib`); saved modules are
-  the distribution format (`save` → `publish` → `install`); a registry is
-  any git repo in a standard layout, main registry curated via PRs, flat
-  one-level federation (`add-registry` = explicit trust, `install
-  brandon/snake` disambiguates); git is the only network layer, so the sole
-  new primitive is run-an-external-command — the same one `dis` needs for
-  objdump. Both prerequisites have since landed: shellutil.fs (2026-07-22,
-  disasm branch) is the exec/capture plumbing, and the
-  `save`-drops-`create`-data bug is FIXED (create-data-capture branch) —
-  saved modules round-trip data now, so `publish` is unblocked.
+- [ ] **Packages — sharing user-generated libraries and programs.**
+  Design in **docs/Package_Registry.md**, rewritten 2026-08-19 and marked as
+  a sketch to be corrected by building it. A package has a comment header +
+  leading "dep block" (`require` / `needs-cmd` / `needs-lib`); a saved
+  module is its entry file (`save` → `publish` → `install`); a **source**
+  is a git repo holding a manifest, and each manifest entry points at the
+  package's **own** git repo at a pinned full commit SHA. No phone book —
+  people advertise their own sources — but one default source ships
+  preconfigured. Git is the only network layer, over shellutil.fs.
+  **Dark Star is the intended first package**, and the doc says to update
+  itself from what that teaches. Prerequisites landed: shellutil.fs is the
+  exec/capture plumbing, `save` round-trips `create` data, and the user
+  package directories shipped 2026-08-19. Still outstanding:
+  include-relative resolution, without which a multi-file package cannot
+  find its own siblings once installed.
   Implementation stages (each independently useful, in order):
   - [x] exec primitive — landed as shellutil.fs ((cmd-run)/(cmd-open)/
     (cmd-line1) over `open-pipe`, quoted interpolation via (cmd+q))
@@ -1736,16 +2484,22 @@ docs/Graphics.md for the API.
     considered and deferred: it can only answer for words you already
     have, and the main question ("what will this need *before* I load
     it?") can only go through the file.
-  - [ ] user package dirs — `~/.basicforth/lib` + `docs` appended to
-    BASICFORTH_PATH / BASICFORTH_DOCS at startup (makes `help` work for
-    third-party packages)
-  - [ ] main registry repo — layout, INDEX generation, CI convention checks
-  - [ ] REPL registry words — `packages` / `install` / `remove` / `run` /
-    `update` (git clone/pull via the exec primitive)
-  - [ ] federation — `add-registry` / `registries` / `name/pkg`
-    disambiguation / REGISTRIES phone book
-  - [ ] `publish` — saved module → your registry clone → commit/push
-    (was blocked on the `save`-drops-`create`-data bug; fixed 2026-07-22)
+  - [x] user package dirs — DONE 2026-08-19. `~/.basicforth/lib` +
+    `docs/{Packages,Tutorial}` appended at startup, so a third-party
+    package is require-able and answers `help` from any directory.
+    `$BASICFORTH_PACKAGES` relocates the root and disables the mechanism when
+    it names nothing, which is what keeps the suites independent.
+  - [x] `[ENGINE]` include-relative resolution + a word for the loading
+    file's directory — DONE 2026-08-20 (`dd0e801`). Beside-first resolution,
+    plus `my-dir` and `path-join`; Dark Star runs installed from any directory
+  - [ ] the default source — manifest format, pinned full commit SHAs,
+    client-side index generation
+  - [ ] REPL package words — `packages` / `install` / `remove` / `run` /
+    `update` (git clone/pull via shellutil.fs)
+  - [ ] federation — `add-source` / `sources` / `name/pkg` disambiguation.
+    No phone book: sources are advertised by their own authors
+  - [ ] `publish` — saved module → your own source clone → commit, then
+    STOP and print the `git push` for the human to run
 
 - [x] **`:` should say when it redefines an existing word.** Done 2026-07-22
   (branch redefined-warning), gforth's exact text: `redefined foo`. One
@@ -1867,7 +2621,7 @@ docs/Graphics.md for the API.
     TI's 16x16-from-four-8x8-characters column-major quirk, that's a VDP
     artifact. Since `stamp` takes `w h`, any size works.
   - **Memory:** a 16x16 sprite is 32 bytes mono vs 1024 full-colour, 32x
-    smaller — a real win against the 256 KB dictionary, and it means art can
+    smaller — a real win against a fixed dictionary, and it means art can
     live in the dictionary instead of needing `allocate`.
   - **Decided: no per-sprite scale initially.** TI's `CALL MAGNIFY` was a
     single global 1-4 (8x8/16x16 x 1x/2x, pixel-doubling — size but not
@@ -2844,7 +3598,12 @@ spread, so nothing below needs revisiting.
   abort, or suppress, and check each against `: t [ … ] ;`.
 
 - [ ] **An error inside a nested `EVALUATE` is swallowed.** Found 2026-08-16
-  during the STATE sweep, pre-existing and unrelated to it:
+  during the STATE sweep, pre-existing and unrelated to it.
+  **Nesting turned out not to be the condition** — see the Up next entry: a
+  bare `s" nosuchword" evaluate` at the prompt is silent too, and so is an
+  `evaluate` compiled into a definition. The example below is one symptom of a
+  wider fault, not the boundary of it. Every abort route is enumerated in
+  `docs/Abort_Routes.md`, which is the precondition artifact for the fix.
 
       : foo 1 [ s" nosuchword" evaluate ] 2 + . ;   \ prints ` ok`
 
@@ -2876,6 +3635,24 @@ spread, so nothing below needs revisiting.
   global by design — see the recovery-anchor note — so the real repair is the
   same one: propagate the error out of `EVALUATE` so the outer line aborts too,
   rather than trying to unwind one level from the inside.
+
+- [ ] **Is the `incl_entry_latest` guard before `drop_partial_header` dead
+  code?** Found 2026-08-16 while making the propagation tests non-vacuous.
+  `forth_included`'s unclosed-definition path compares LATEST against
+  `incl_entry_latest` before dropping a partial header, so it never unlinks a
+  definition inherited from the caller — a case that once segfaulted. Deleting
+  that comparison changes no observable behaviour, because the equality test at
+  the top of `.Lincl_err_tail` short-circuits first, and it always can: since
+  `build_header` refuses the included file's own `:` while a definition is
+  open, the file cannot create a header of its own, so LATEST cannot diverge by
+  that route. Either the guard is now unreachable and should be deleted with a
+  note, or there is a path to it nobody has found — and the second is the one
+  worth ruling out first, given the history.
+  **The test that was supposed to cover this had been vacuous for months** for
+  a related reason: it drove the load with `include`, and the *Forth* `included`
+  wrapper refuses outright when a definition is open, so the assembly was never
+  reached. It now uses `(included?)`, which bypasses that guard, and says in
+  its comment exactly how far its coverage goes.
 
 - [ ] **`SOURCE-ID` answers 0 inside an INCLUDED file.** Found 2026-08-12 while
   gating the locals shadow warning: it returns 0 at the prompt *and* during a
@@ -2932,8 +3709,9 @@ spread, so nothing below needs revisiting.
     the more forgiving one. Fixing it means returning the file id from the
   loader, and checking `EVALUATE` reports -1 while it is at it.
 
-- [ ] **A skip whose reason depends on how the suite was invoked reads as a
-  fact about the machine.** The integration suite is deliberately
+- [x] **A skip whose reason depends on how the suite was invoked reads as a
+  fact about the machine — FIXED 2026-08-16** (branch `2-suite-skip-wording`).
+  The integration suite is deliberately
   environment-independent — it never sources `setup.sh` — so the real-engine
   render test skips with `(VOICE_ENGINE_CMD not set)` on a machine that has
   piper installed and working. During the v0.16.0 verification that was read as
@@ -2946,6 +3724,26 @@ spread, so nothing below needs revisiting.
   the caller's shell, decides. Found 2026-08-16. The general point is the one
   in `derive-dont-record`: a skip is a claim about the world, and this one was
   really a claim about the command line.
+
+  **Both fixes landed.** The suite derives the engine itself when
+  `VOICE_ENGINE_CMD` is unset — `command -v piper`, the same source `setup.sh`
+  reads, so the two are independent derivations rather than a copied value and
+  cannot drift into pointing at different installs. Three skip reasons replace
+  the one: no engine (says to install piper or export the variable), piper but
+  no voices directory (names the directory), and the pre-existing double-quote
+  case. The voices check is there so a half-finished install skips with the
+  missing half named instead of failing a render for what is not a code fault.
+
+  Verified on x86 across all four paths, including the one that matters most:
+  with the fix removed the same run SKIPs at 1179 and with it PASSes at 1180,
+  so the change is not vacuous.
+
+  **Confirmed on the Pi**, the machine the wrong conclusion was drawn on, with
+  the same before/after pair and no `setup.sh` sourced: 1179 and a
+  `(VOICE_ENGINE_CMD not set)` skip before, 1180 passed with **zero skips in
+  the whole run** after. `~/.local/bin` is on the Pi's non-interactive PATH,
+  which is what lets the derivation find piper where the bare variable could
+  not.
 
 - [ ] **Audit the integration suite for assertions that cannot fail.**
   `assert_output` matches by substring, and `run_forth` captures the **echoed
@@ -2963,9 +3761,87 @@ spread, so nothing below needs revisiting.
   of `$input`, and convert the hits. Worth doing as one pass, because a green
   test that cannot fail is worse than a missing one — it is a standing claim
   that something is covered.
-  A stricter follow-up worth considering: make `assert_result` compare the
-  result line **exactly** rather than by substring, so a test cannot pass on a
-  coincidental match either.
+  **The stricter follow-up was MEASURED 2026-08-18 and rejected.** Making
+  `assert_result` compare exactly rather than by substring sounds obviously
+  right and is not. Counting how many of the 216 passing call sites each rule
+  would break:
+
+  | rule | breaks | verdict |
+  |------|--------|---------|
+  | expected must equal a whole line | **205** | dead — every test would have to carry `"  ok"` |
+  | expected must start a line | 12 | churn: the 12 are legitimately mid-line (`parse delim` keeps a leading space, `cursor-on` trails ANSI) |
+  | output contains an error marker | 14 | noise: 12 of 14 provoke errors deliberately and assert on `-260`, the stack, or abandonment |
+
+  **Do not re-derive this.** Substring matching stays.
+
+  **What IS worth keeping is the fourth rule, as a DETECTOR rather than a
+  gate**: flag an assertion whose expected text occurs *only* inside an error
+  line. That is the precise shape of the trap. It flags 4; three legitimately
+  assert about an error, and the fourth was real — `parse space` asserted
+  `hello` and was matching `? hello`, the error saying `hello` is undefined. It
+  had never tested `PARSE`. Fixed the same day.
+
+  **The two detectors see different things and neither subsumes the other.**
+  The echo detector looks for the needle in the *input*; this one looks for it
+  in the *failure*. `hex input` and `parse space` were both invisible to the
+  first. Re-run both after a batch of new tests; the recipe for each is above.
+
+  **Sized 2026-08-17** by instrumenting the helper to log whenever
+  `$expected` occurred in `$input`, rather than parsing the file: **112 of 525**
+  are candidates. Candidates, not verdicts — some still bite for other reasons,
+  and each conversion needs the broken-build check before it counts.
+
+  **The PTY suite had the same flaw — SWEPT 2026-08-18** (branch
+  `2-pty-sweep`). Of 35 checks, exactly **one** was vacuous: "long line
+  submitted whole" asserted the very string it typed, so the echo satisfied it
+  and it would have held even if the line were never submitted — the one thing
+  it exists to prove. It now types a long line ending in `111111 222222 + .`
+  and asserts **333333**, an answer that appears nowhere in the input and that
+  only a line delivered *whole* can produce.
+
+  Five more looked suspect to the detector and are sound on inspection, which
+  is the useful half of the result: one asserts the redraw after a history
+  recall (the editor RE-PRINTING the line is program output, not echo), and
+  four read the saved **file**, where the typed text arriving is the point.
+  **A needle that was typed is a candidate, never a verdict** — the question is
+  always whether the program had to do something to produce it.
+
+  Proven the same way as the shell sweep: type the line but never press Enter,
+  and the old needle PASSES while the new one FAILS. `report()` now carries a
+  note saying to assert on something the program computes, since a PTY has no
+  prompt prefix to strip and so no `assert_result` to hide behind.
+
+  **Not a language problem.** The PTY suite is Python and reproduced the defect
+  independently, so rewriting the shell suite in something else would not have
+  prevented a single one of these. The fix is echo-stripping helpers and a
+  default that is safe.
+
+  **SWEPT 2026-08-17.** All 111 candidates converted; a re-measure reports
+  zero. 102 kept passing — they had been matching real output and are now
+  safe. **Six were asserting things BasicForth does not do**, and each is worth
+  recording, because none is a typo:
+
+  - `define after a stray then` / `... stray loop` expected a definition later
+    on the SAME line to run. An abort ends the line, so it never did. Split
+    across two lines they test what their names claim — that the session
+    survives — and pass.
+  - `stray ; inside evaluate` expected `42`, i.e. the calling word running on.
+    That was TRUE before the propagation fix merged the same day and false
+    after. The test could not notice, so the change went unremarked by the one
+    assertion aimed at it. Now split: the error is reported, and the caller
+    stops.
+  - `hex input` and `hex $ prefix` both wrote `: hex 16 base ! ;`, redefining
+    `hex` instead of calling it, so the base never changed. One matched its own
+    echo; the other matched the `? FF` error. Now `hex FF . decimal` and
+    `$FF .` → `255`, whose answer differs from its input text.
+  - `parse no delim` ran `41 parse hello type`, where PARSE with no delimiter
+    swallows the rest of the line — including the `type` meant to print it.
+    Nothing was ever printed. Split across two lines it types `hello`.
+
+  **Proven non-vacuous, not assumed.** `.(` was broken to print nothing: the
+  two `dot-paren` assertions FAIL under `assert_result` and PASS under
+  `assert_contains`, same break, same run. That is the whole bug in one
+  experiment.
 
 - [ ] **The EVALUATE error-wording bracketing has no probe that still bites.**
   `assert_output "a nested evaluate does not leak its error wording"` worked by

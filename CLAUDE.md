@@ -27,7 +27,7 @@ as the code evolves:
 Three subdirectories are on BASICFORTH_DOCS, and so reachable from `help`:
 
 - docs/Language-Reference/ — one page per topic, `## word ( stack )` entries
-- docs/Tutorial/ — the interactive lessons `tutorial` replays
+- docs/Tutorials/ — the interactive lessons `tutorial` replays
 - docs/Guides/ — user-facing task pages (installing, and whatever joins it).
   Same page shape, but a Guide's `## ` headings must each be a SINGLE word:
   with no stack effect to stop the token scan, every word of a heading becomes

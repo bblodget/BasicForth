@@ -79,9 +79,15 @@ Both are callee-saved registers, preserved across C function calls.
 
 ## Dictionary Space
 
-A 64KB block of zeroed memory (`dict_space`) is allocated in `.bss` for
+A **512 KB** block of zeroed memory (`dict_space`) is allocated in `.bss` for
 user-defined words. HERE starts at the beginning of this space and advances
-as new definitions are compiled.
+as new definitions are compiled. The size is `DICT_SPACE_SIZE`, one `.equ` per
+architecture; being in `.bss` it costs address space rather than binary size.
+
+`core.fs` itself takes about 128 KB of that, leaving roughly 384 KB for your
+own definitions — `unused` reports it. It was 64 KB originally, 256 KB from
+June 2026, and 512 KB from 2026-08-20, when `include core.fs` — which loads a
+second complete copy into the same arena — came within 54 bytes of failing.
 
 Static (built-in) primitives live in `.data` and are not in the dictionary
 space — they are assembled at build time and linked into the binary.

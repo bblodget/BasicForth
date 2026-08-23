@@ -7,7 +7,8 @@
 # Register allocation:
 #   R15 = Data stack pointer (DSP) — points to top item on stack
 #         (equals sp0 when stack is empty)
-#   R14 = scratch (available — no longer used for TOS)
+#   (R14 was freed when TOS-in-register was dropped, but it is NOT reserved:
+#    it is in ordinary scratch use below, saved and restored like RBX/RBP.)
 #   R13 = HERE pointer (dictionary free space)
 #   R12 = LATEST pointer (most recent dictionary entry)
 #   RSP = Return stack
@@ -45,6 +46,14 @@
 .equ T_DEFER,       1
 .equ T_VALUE,       2
 .equ T_NONAME,      3
+# THROW code for an interpreter error that has ALREADY been reported by the
+# word raising it -- EVALUATE prints "? token", INCLUDED prints "file:line: ?
+# token". It joins -1 and -2 in THROW's silent set, or the uncaught handler
+# would print "uncaught exception: N" underneath a message the user already
+# has. Distinct from -2 rather than reusing it, because a program that catches
+# has a fair claim to tell a user's ABORT" from broken text it evaluated.
+# Forth 2012 leaves -256..-4095 to the implementation.
+.equ THROW_INTERP,  -260
 
 # Source-metadata: byte count of the trailing (SrcId,Len,Off) block, and the
 # SrcId sentinel for assembly primitives.
@@ -2410,7 +2419,7 @@ forth_semicolon:
     # print bare and `ret`, so the file went on loading against a word that
     # never got defined: one missing THEN reported with no location at all,
     # then a second, unrelated-looking "? name" wherever it was first used,
-    # dozens of lines away. (Found 2026-08-11 in the Dark Star port: line 167
+    # dozens of lines away. (Found 2026-08-11 in a large program: line 167
     # was the typo, line 213 was the only line number printed.)
     #
     # Name the definition, copied OUT of the partial header -- .Lcf_abort drops
@@ -2801,6 +2810,20 @@ forth_evaluate:
     call forth_interpret_line
     push %rax                       # save result
 
+    # Report HERE, before the restore below puts the outer token's wording back.
+    # The error being reported is the INNER one, so it must be printed while the
+    # inner wording is still live: `s" 999 if" evaluate` says "compile only: if",
+    # not "? if". Printing after the restore got exactly that wrong.
+    # %r8 holds the saved source_id across this call and is caller-saved under
+    # SysV, so it is protected explicitly. The push/pop is balanced, leaving the
+    # RSP-relative offsets in the restore below unchanged.
+    test %rax, %rax
+    jz .Leval_no_report
+    push %r8
+    call print_line_error
+    pop %r8
+.Leval_no_report:
+
     # Restore source context
     mov 8(%rsp), %rcx               # err_pfx_len  (result is at 0(%rsp))
     mov %rcx, err_pfx_len(%rip)
@@ -2817,7 +2840,26 @@ forth_evaluate:
     pop %r14
     pop %rbp
     pop %rbx
+    test %rax, %rax
+    jnz .Leval_failed
     ret
+
+.Leval_failed:
+    # Propagate. Returning the status was correct and useless: the only site
+    # that could read it (.Lil_found_execute) never did, and when EVALUATE is
+    # COMPILED into a definition there is no such site at all -- the body just
+    # carries on. A throw is the one channel that unwinds a caller's body and
+    # that CATCH can intercept.
+    #
+    # AFTER the restores above, deliberately, and after the report. The throw
+    # skips this routine's epilogue, and CATCH's frame -- which does save the
+    # source context and il_rsp -- does NOT save err_pfx; EVALUATE brackets that
+    # pair itself. Throw before restoring it and an error raised later in the
+    # same OUTER token inherits this string's wording, which is the leak the
+    # bracketing was added to close.
+    sub $CELL, %r15
+    movq $THROW_INTERP, (%r15)      # silent code: .Leval_no_report printed
+    jmp forth_throw
 
 # ---------- INCLUDED ----------
 # ( c-addr u -- )
@@ -3174,11 +3216,20 @@ forth_included:
     jmp .Lincl_err_tail
 
 .Lincl_open_err:
-    # Not-found? → try BASICFORTH_PATH fallback. The platform layer exports
-    # the one comparable error value (platform_err_not_found); every other
-    # magnitude is opaque up here — sign/zero tests only (Platform_Layer.md).
-    cmp platform_err_not_found(%rip), %rax
-    jne .Lincl_open_other
+    # The CWD attempt failed — fall through to the BASICFORTH_PATH search, for
+    # ANY reason it failed. This used to run only for "not found", and every
+    # other errno abandoned the search: a plain FILE named like the first path
+    # component (open → ENOTDIR) or an unreadable directory (EACCES) hid every
+    # copy behind it. Harmless while requires were flat names, but a package is
+    # loaded as `require <pkg>/<file>.fs`, so the first component is a DIRECTORY
+    # name — and a `bin/mygame` script next to a `mygame` package is
+    # exactly the collision that creates. The segment loop below already skips
+    # a segment on any failure; this makes CWD behave the same way.
+    #
+    # A search path reporting one member's error as the whole lookup's is the
+    # bug; "not found anywhere" is the right answer, and the Forth wrapper
+    # already says so. (Which also ends a doubled message: this path printed
+    # "Error: cannot open X" and the caller then printed "cannot open X".)
 
     # BASICFORTH_PATH is a colon-separated list of directories. Try each in
     # order; load the first match. CWD was already tried above. Empty segments
@@ -3254,17 +3305,6 @@ forth_included:
     inc %rbp                        # skip ':'
     dec %r14
     jmp .Lincl_seg_loop
-
-.Lincl_open_other:
-    # Other open error — print message
-    lea incl_err_open(%rip), %rsi
-    mov $incl_err_open_len, %rdx
-    call platform_write
-    mov file_name_addr(%rip), %rsi
-    mov file_name_len(%rip), %rdx
-    call platform_write
-    mov $'\n', %rdi
-    call platform_emit
 
 .Lincl_open_skip:
     xor %eax, %eax                  # return 0 (not an error for ENOENT)
@@ -4457,6 +4497,42 @@ forth_docs_path:
     mov basicforth_docs_len(%rip), %rax
     sub $CELL, %r15
     mov %rax, (%r15)               # u
+    ret
+
+# (forth-path) ( -- c-addr u )  the BASICFORTH_PATH value and length (0 0 unset).
+# The interpreter's own search path, which is NOT the same as getenv of that
+# name: an installed binary derives it, so the environment can be empty while
+# the path is set. Anything resolving a file must ask here, not the environment.
+.global forth_forth_path
+forth_forth_path:
+    mov basicforth_path(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # c-addr
+    mov basicforth_path_len(%rip), %rax
+    sub $CELL, %r15
+    mov %rax, (%r15)               # u
+    ret
+
+# (forth-path!) ( c-addr u -- )  replace the search path for the rest of the
+# session. The string is NOT copied: the caller owns storage that must outlive
+# the session (the dictionary does; PAD does not).
+.global forth_forth_path_store
+forth_forth_path_store:
+    mov (%r15), %rax                # u
+    mov %rax, basicforth_path_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, basicforth_path(%rip)
+    add $2*CELL, %r15
+    ret
+
+# (docs-path!) ( c-addr u -- )  as above, for the help/tutorial search path.
+.global forth_docs_path_store
+forth_docs_path_store:
+    mov (%r15), %rax                # u
+    mov %rax, basicforth_docs_len(%rip)
+    mov CELL(%r15), %rax            # c-addr
+    mov %rax, basicforth_docs(%rip)
+    add $2*CELL, %r15
     ret
 
 # FILE-SIZE ( fileid -- ud ior )  file size as a double cell, via fstat
@@ -5712,10 +5788,29 @@ forth_catch:
     movq $0, (%r15)                 # report success
     ret
 
+# print_line_error ( -- )  Print a pending line error: the wording chosen by the
+# site that raised it, then the offending token, then a newline. repl_error has
+# printed this shape since the beginning and EVALUATE now needs an identical
+# one, so it lives here rather than being written twice -- two copies that must
+# agree on an output format is exactly how one of them goes stale.
+# Uses platform_write, which pays any owed newline; a raw syscall would not.
+.global print_line_error
+print_line_error:
+    mov err_pfx_addr(%rip), %rsi
+    mov err_pfx_len(%rip), %rdx
+    call platform_write
+    mov err_token_len(%rip), %rdx
+    mov err_token_addr(%rip), %rsi
+    call platform_write
+    mov $'\n', %rdi
+    call platform_emit
+    ret
+
 # THROW ( n -- | never returns locally )  0 throw is a no-op. Otherwise
 # unwind to the innermost CATCH frame; with no handler, do what ABORT always
 # did (clear both stacks, reset to the REPL), reporting n first unless it is
-# -1 (ABORT: silent) or -2 (ABORT": the thrower already printed its message).
+# -1 (ABORT: silent), -2 (ABORT": the thrower already printed its message) or
+# THROW_INTERP (an interpreter error, likewise already printed).
 .global forth_throw
 forth_throw:
     mov (%r15), %rax                # n
@@ -5754,6 +5849,8 @@ forth_throw:
     cmp $-1, %rax
     je .Lthrow_reset
     cmp $-2, %rax
+    je .Lthrow_reset
+    cmp $THROW_INTERP, %rax         # EVALUATE/INCLUDED already reported it
     je .Lthrow_reset
     mov %rax, %rbx                  # n survives platform_write (callee-saved)
     lea msg_uncaught(%rip), %rsi
@@ -6521,7 +6618,10 @@ DEFWORD dict_close_file,  "close-file",   forth_close_file,  dict_create_file
 DEFWORD dict_read_file,   "read-file",    forth_read_file,   dict_close_file
 DEFWORD dict_getdents,    "(getdents)",   forth_getdents,    dict_read_file
 DEFWORD dict_docs_path,   "(docs-path)",  forth_docs_path,   dict_getdents
-DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path
+DEFWORD dict_forth_path,  "(forth-path)", forth_forth_path,  dict_docs_path
+DEFWORD dict_forth_path_st, "(forth-path!)", forth_forth_path_store, dict_forth_path
+DEFWORD dict_docs_path_st, "(docs-path!)", forth_docs_path_store, dict_forth_path_st
+DEFWORD dict_file_size,   "file-size",    forth_file_size,   dict_docs_path_st
 DEFWORD dict_rename_file, "rename-file",  forth_rename_file, dict_file_size
 DEFWORD dict_getenv,      "getenv",       forth_getenv,      dict_rename_file
 DEFWORD dict_entropy,     "entropy",      forth_entropy,     dict_getenv
@@ -6706,7 +6806,7 @@ lguard_page_underflow:
 # ---------- Dictionary Space ----------
 # Page-aligned: made executable at startup with mprotect (STC compiles
 # machine code into it; see platform_init_guard_pages).
-.equ DICT_SPACE_SIZE, 262144    # 256KB (64 whole pages)
+.equ DICT_SPACE_SIZE, 524288    # 512KB (128 whole pages)
 .balign 4096
 .global dict_space
 dict_space:

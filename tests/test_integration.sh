@@ -3,12 +3,31 @@
 # Copyright (C) 2026 Brandon Blodget
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Usage: ./test_integration.sh <path-to-basicforth>
+# Usage: ./test_integration.sh [--section PATTERN | --list] <path-to-basicforth>
+
+SECTION_FILTER=""
+LIST_SECTIONS=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --section|-s)  SECTION_FILTER="$2"; shift 2 ;;
+        --section=*)   SECTION_FILTER="${1#*=}"; shift ;;
+        --list|-l)     LIST_SECTIONS=1; shift ;;
+        --)            shift; break ;;
+        *)             break ;;
+    esac
+done
+
+if [ -n "$LIST_SECTIONS" ]; then
+    sed -n 's/^section "\(.*\)"$/\1/p' "${BASH_SOURCE[0]}"
+    exit 0
+fi
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 <path-to-basicforth> [args...]"
+    echo "Usage: $0 [--section PATTERN | --list] <path-to-basicforth> [args...]"
     exit 1
 fi
+# Everything left is the command that runs BasicForth -- one word natively, or
+# several under emulation ("qemu-aarch64 -L /usr/aarch64-linux-gnu ./bin").
 FORTH="$*"
 
 # Resolve the repo root from this script's own location (it lives in tests/),
@@ -16,8 +35,55 @@ FORTH="$*"
 # i.e. the documented "./test_integration.sh <path-to-basicforth>" invocation
 # from any directory, not only from the build dir the Makefile cd's into.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# A --section run re-execs a trimmed copy of this file out of a temp directory,
+# where deriving the root from BASH_SOURCE would land in /tmp. The parent hands
+# its answer down instead; nothing else sets this.
+REPO_ROOT="${BF_TEST_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FORTH_LIB="$REPO_ROOT/src/forth"   # holds core.fs, found via BASICFORTH_PATH
+
+# Startup appends $BASICFORTH_PACKAGES/lib (default ~/.basicforth/lib) to the search
+# path, so without this a developer's own installed packages would join every
+# test run and the suite would pass or fail by what happens to be installed.
+# Pointing at a path that does not exist is deliberate: the root is "set", so
+# the HOME default never applies, and every probe below it simply finds nothing.
+# The section that tests the feature sets its own root over the top of this.
+export BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages"
+
+# --- section filter -------------------------------------------------------
+# Gating the assert helpers is not enough: most assertions here are inline
+# printf/((passed++)) blocks that never call one, so a helper-level filter
+# still runs them -- measured at 488 assertions and 32s of a 46s run, four of
+# them failing on setup their own section never did. So build a real subset
+# instead: this file's header, the matching sections, and its summary footer,
+# then re-exec that. Inline blocks and per-section setup come along, because
+# they are simply the lines in between.
+#
+# A section that leans on state an earlier one built will fail here and pass in
+# a full run. That makes this a development aid -- release verification runs
+# the whole file, which is what the Makefile targets do.
+if [ -n "$SECTION_FILTER" ]; then
+    _bf_sub="$(mktemp -t bf-section-XXXXXX)" || exit 1
+    trap 'rm -f "$_bf_sub"' EXIT
+    awk -v pat="$(printf '%s' "$SECTION_FILTER" | tr '[:upper:]' '[:lower:]')" '
+        /^total=\$\(\(passed \+ failed\)\)$/ { mode = "footer" }
+        /^section "/ {
+            name = $0
+            sub(/^section "/, "", name); sub(/"$/, "", name)
+            if (index(tolower(name), pat) > 0) { mode = "keep"; kept++ }
+            else                                 mode = "drop"
+        }
+        mode != "drop" { print }
+        END { if (kept == 0) exit 3 }
+    ' "${BASH_SOURCE[0]}" > "$_bf_sub"
+    if [ $? -eq 3 ]; then
+        echo "No section matches '$SECTION_FILTER'. Available:" >&2
+        sed -n 's/^section "\(.*\)"$/  \1/p' "${BASH_SOURCE[0]}" >&2
+        exit 1
+    fi
+    # Not exec: that would replace this shell and lose the cleanup trap.
+    BF_TEST_ROOT="$REPO_ROOT" bash "$_bf_sub" "$@"
+    exit $?
+fi
 
 # core.fs runs the editor as ${VISUAL:-${EDITOR:-vi}}, so VISUAL OUTRANKS the
 # EDITOR each edit/define test sets for itself. Inherited from the developer's
@@ -119,8 +185,17 @@ update_slowest() {
     fi
 }
 
-# assert_output: check that output contains a fixed substring
-assert_output() {
+# assert_contains: check that output contains a fixed substring
+# Matches a substring of the RAW capture -- which includes the echoed input,
+# because run_forth pipes into a REPL that echoes what it reads. So an expected
+# string that also appears in the input passes no matter what the code did:
+#
+#     assert_contains "x" '-1 1 <= .' "-1"    # green against a broken <=
+#
+# Prefer assert_result, which strips the echo first. This one is for the cases
+# that genuinely want a fragment of the whole transcript. 112 of these currently
+# have their expected text inside their own input -- see docs/TODO.md.
+assert_contains() {
     local name="$1"
     local input="$2"
     local expected="$3"
@@ -149,9 +224,9 @@ assert_output() {
     fi
 }
 
-# assert_result: like assert_output, but matches only what the interpreter
+# assert_result: like assert_contains, but matches only what the interpreter
 # PRINTED.  run_forth captures the echoed input too ("> 5 5 <= ."), and
-# assert_output matches by substring, so an expectation that also occurs in the
+# assert_contains matches by substring, so an expectation that also occurs in the
 # input passes no matter what the word does -- '-1 1 <= .' expecting "-1" is
 # green even for a completely broken <=.  Dropping the echo first closes that
 # hole.  Both forms of echo have to go: the "> " line and the "... " lines a
@@ -159,6 +234,8 @@ assert_output() {
 # below first passed against a deliberately broken <= (its echo contains "0=",
 # which matched an expected "0").  Use this whenever the expected text could
 # appear in the input.
+# The default. Strips the prompt and continuation echoes, then matches the
+# remaining output -- so a test cannot pass on the strength of its own input.
 assert_result() {
     local name="$1"
     local input="$2"
@@ -253,91 +330,99 @@ section() {
 echo "BasicForth Integration Tests"
 echo "============================="
 echo "Binary: $FORTH"
+if [ -n "$BF_TEST_ROOT" ]; then
+    # Only a --section child sets this. Say so loudly at both ends of the run:
+    # a filtered green is not a green suite, and 11 of the 70 sections lean on
+    # state an earlier section builds, so a failure here can be an artifact of
+    # running alone rather than a real one.
+    printf "${YELLOW}FILTERED RUN${NC} — a subset, for development. "
+    printf "Confirm with a full run before believing either result.\n"
+fi
 
 # =========================================================================
 section "Basic Arithmetic"
 # =========================================================================
 
 # Output format: "N  ok" where N is the printed number
-assert_output "addition"           "3 4 + ."             "7  ok"
-assert_output "subtraction"        "10 3 - ."            "7  ok"
-assert_output "multiplication"     "6 7 * ."             "42  ok"
-assert_output "compound expr"      "2 3 + 4 * ."         "20  ok"
-assert_output "multiple ops"       "1 2 3 4 + + + ."     "10  ok"
-assert_output "/mod quotient"      "17 5 /mod . ."       "3 2  ok"
-assert_output "/mod exact"         "20 4 /mod . ."       "5 0  ok"
-assert_output "negate positive"    "42 negate ."         "-42  ok"
-assert_output "negate negative"    "-7 negate ."         "7  ok"
-assert_output "abs positive"       "42 abs ."            "42  ok"
-assert_output "abs negative"       "-42 abs ."           "42  ok"
-assert_output "min"                "3 7 min ."           "3  ok"
-assert_output "max"                "3 7 max ."           "7  ok"
-assert_output "1+"                 "41 1+ ."             "42  ok"
-assert_output "1-"                 "43 1- ."             "42  ok"
+assert_contains "addition"           "3 4 + ."             "7  ok"
+assert_contains "subtraction"        "10 3 - ."            "7  ok"
+assert_contains "multiplication"     "6 7 * ."             "42  ok"
+assert_contains "compound expr"      "2 3 + 4 * ."         "20  ok"
+assert_contains "multiple ops"       "1 2 3 4 + + + ."     "10  ok"
+assert_contains "/mod quotient"      "17 5 /mod . ."       "3 2  ok"
+assert_contains "/mod exact"         "20 4 /mod . ."       "5 0  ok"
+assert_contains "negate positive"    "42 negate ."         "-42  ok"
+assert_contains "negate negative"    "-7 negate ."         "7  ok"
+assert_contains "abs positive"       "42 abs ."            "42  ok"
+assert_contains "abs negative"       "-42 abs ."           "42  ok"
+assert_contains "min"                "3 7 min ."           "3  ok"
+assert_contains "max"                "3 7 max ."           "7  ok"
+assert_contains "1+"                 "41 1+ ."             "42  ok"
+assert_contains "1-"                 "43 1- ."             "42  ok"
 
 # =========================================================================
 section "Stack Operations"
 # =========================================================================
 
-assert_output "dup"                "5 dup + ."           "10  ok"
-assert_output "drop"               "1 2 3 drop . ."      "2 1  ok"
-assert_output "swap"               "1 2 swap . ."        "1 2  ok"
-assert_output "over"               "1 2 over . . ."      "1 2 1  ok"
-assert_output "rot"                "1 2 3 rot . . ."     "1 3 2  ok"
-assert_output "nip"                "1 2 3 nip . ."       "3 1  ok"
-assert_output "tuck"               "1 2 tuck . . ."      "2 1 2  ok"
-assert_output "2dup"               "1 2 2dup . . . ."    "2 1 2 1  ok"
-assert_output "2drop"              "1 2 3 4 2drop . ."   "2 1  ok"
-assert_output "depth empty"        "depth ."             "0  ok"
-assert_output "depth with items"   "1 2 3 depth ."       "3  ok"
-assert_output "?dup non-zero"      "5 ?dup . ."          "5 5  ok"
-assert_output "?dup zero"          "0 ?dup ."            "0  ok"
-assert_output "clearstack"         "1 2 3 clearstack depth ."  "0  ok"
-assert_output "clearstack empty"   "clearstack depth ."  "0  ok"
+assert_contains "dup"                "5 dup + ."           "10  ok"
+assert_contains "drop"               "1 2 3 drop . ."      "2 1  ok"
+assert_contains "swap"               "1 2 swap . ."        "1 2  ok"
+assert_contains "over"               "1 2 over . . ."      "1 2 1  ok"
+assert_contains "rot"                "1 2 3 rot . . ."     "1 3 2  ok"
+assert_contains "nip"                "1 2 3 nip . ."       "3 1  ok"
+assert_contains "tuck"               "1 2 tuck . . ."      "2 1 2  ok"
+assert_contains "2dup"               "1 2 2dup . . . ."    "2 1 2 1  ok"
+assert_contains "2drop"              "1 2 3 4 2drop . ."   "2 1  ok"
+assert_contains "depth empty"        "depth ."             "0  ok"
+assert_contains "depth with items"   "1 2 3 depth ."       "3  ok"
+assert_contains "?dup non-zero"      "5 ?dup . ."          "5 5  ok"
+assert_contains "?dup zero"          "0 ?dup ."            "0  ok"
+assert_contains "clearstack"         "1 2 3 clearstack depth ."  "0  ok"
+assert_contains "clearstack empty"   "clearstack depth ."  "0  ok"
 
 # =========================================================================
 section "Stack Display"
 # =========================================================================
 
-assert_output ".s empty"           ".s"                  "<0>"
-assert_output ".s with items"      "1 2 3 .s"            "1 2 3"
+assert_contains ".s empty"           ".s"                  "<0>"
+assert_result ".s with items"      "1 2 3 .s"            "1 2 3"
 
 # =========================================================================
 section "Comparison Words"
 # =========================================================================
 
-assert_output "= equal"            "42 42 = ."           "-1  ok"
-assert_output "= unequal"          "42 7 = ."            "0  ok"
-assert_output "< true"             "3 10 < ."            "-1  ok"
-assert_output "< false"            "10 3 < ."            "0  ok"
-assert_output "< equal"            "5 5 < ."             "0  ok"
-assert_output "> true"             "10 3 > ."            "-1  ok"
-assert_output "> false"            "3 10 > ."            "0  ok"
-assert_output "0= zero"            "0 0= ."              "-1  ok"
-assert_output "0= non-zero"        "42 0= ."             "0  ok"
-assert_output "0< negative"        "-7 0< ."             "-1  ok"
-assert_output "0< positive"        "7 0< ."              "0  ok"
-assert_output "0< zero"            "0 0< ."              "0  ok"
+assert_contains "= equal"            "42 42 = ."           "-1  ok"
+assert_contains "= unequal"          "42 7 = ."            "0  ok"
+assert_contains "< true"             "3 10 < ."            "-1  ok"
+assert_contains "< false"            "10 3 < ."            "0  ok"
+assert_contains "< equal"            "5 5 < ."             "0  ok"
+assert_contains "> true"             "10 3 > ."            "-1  ok"
+assert_contains "> false"            "3 10 > ."            "0  ok"
+assert_contains "0= zero"            "0 0= ."              "-1  ok"
+assert_contains "0= non-zero"        "42 0= ."             "0  ok"
+assert_contains "0< negative"        "-7 0< ."             "-1  ok"
+assert_contains "0< positive"        "7 0< ."              "0  ok"
+assert_contains "0< zero"            "0 0< ."              "0  ok"
 
 # =========================================================================
 section "Boolean Logic"
 # =========================================================================
 
-assert_output "and"         ': test $FF00 $0FF0 and . ; test'   "3840  ok"
-assert_output "or"          ': test $FF00 $0FF0 or . ; test'    "65520  ok"
-assert_output "xor"         ': test $FF00 $0FF0 xor . ; test'   "61680  ok"
-assert_output "invert 0"           "0 invert ."          "-1  ok"
-assert_output "invert -1"          "-1 invert ."         "0  ok"
+assert_contains "and"         ': test $FF00 $0FF0 and . ; test'   "3840  ok"
+assert_contains "or"          ': test $FF00 $0FF0 or . ; test'    "65520  ok"
+assert_contains "xor"         ': test $FF00 $0FF0 xor . ; test'   "61680  ok"
+assert_contains "invert 0"           "0 invert ."          "-1  ok"
+assert_contains "invert -1"          "-1 invert ."         "0  ok"
 
-assert_output "popcount 0"         "0 popcount ."        "0  ok"
-assert_output "popcount 7"         "7 popcount ."        "3  ok"
-assert_output "popcount 255"       "255 popcount ."      "8  ok"
-assert_output "popcount -1"        "-1 popcount ."       "64  ok"
-assert_output "popcount top bit"   "1 63 lshift popcount ."   "1  ok"
-assert_output "popcount alternating" ': test $5555555555555555 popcount . ; test' "32  ok"
+assert_contains "popcount 0"         "0 popcount ."        "0  ok"
+assert_contains "popcount 7"         "7 popcount ."        "3  ok"
+assert_contains "popcount 255"       "255 popcount ."      "8  ok"
+assert_contains "popcount -1"        "-1 popcount ."       "64  ok"
+assert_contains "popcount top bit"   "1 63 lshift popcount ."   "1  ok"
+assert_contains "popcount alternating" ': test $5555555555555555 popcount . ; test' "32  ok"
 # the mask idiom documented on this word must not disturb the caller's BASE:
 # `[ hex ] .. [ decimal ]` would leave BASE decimal for whoever loaded it
-assert_output "\$-prefix literal leaves BASE alone" \
+assert_contains "\$-prefix literal leaves BASE alone" \
     'hex : m $5555555555555555 ; base @ decimal .'  "16  ok"
 
 # ...and run the `zero-fields` definition EXACTLY as the reference page writes
@@ -349,12 +434,12 @@ doc_zf=$(sed -n '/^## popcount/,/^## There is no/p' \
 if [[ -z "$doc_zf" ]]; then
     printf "  ${RED}FAIL${NC}  documented zero-fields: snippet not found in Comparison.md\n"; ((failed++))
 else
-    assert_output "documented zero-fields works and leaves BASE alone" \
+    assert_contains "documented zero-fields works and leaves BASE alone" \
         "hex $doc_zf base @ decimal . -1 zero-fields . 0 zero-fields ." "16 0 32  ok"
 fi
 # every bit position, checked against a counting loop — catches a shift or
 # mask that is right for small values and wrong at the top of the cell
-assert_output "popcount vs loop, all 64 bit positions" \
+assert_contains "popcount vs loop, all 64 bit positions" \
     ': ref ( x -- n ) 0 swap 64 0 do dup 1 and rot + swap 1 rshift loop drop ;
      : chk 0 64 0 do 1 i lshift dup popcount swap ref <> if 1+ then loop . ;
      chk' "0  ok"
@@ -366,22 +451,22 @@ section "Memory Access"
 # Note: HERE is not yet exposed as a Forth word
 
 # 16/32-bit memory access (w@/w! l@/l!) — used by graphics pixels and C structs
-assert_output "l! / l@"            'pad $11223344 over l! l@ .'         "287454020"
-assert_output "w! / w@"            'pad $ABCD over w! w@ .'             "43981"
-assert_output "l! writes 4 bytes"  'pad -1 over ! 0 over l! @ u.'      "18446744069414584320"
-assert_output "w! writes 2 bytes"  'pad -1 over ! 0 over w! @ u.'      "18446744073709486080"
+assert_contains "l! / l@"            'pad $11223344 over l! l@ .'         "287454020"
+assert_contains "w! / w@"            'pad $ABCD over w! w@ .'             "43981"
+assert_contains "l! writes 4 bytes"  'pad -1 over ! 0 over l! @ u.'      "18446744069414584320"
+assert_contains "w! writes 2 bytes"  'pad -1 over ! 0 over w! @ u.'      "18446744073709486080"
 
 # =========================================================================
 section "User-defined Words"
 # =========================================================================
 
-assert_output "define and use"     ": double dup + ; 5 double ."       "10  ok"
-assert_output "word calling word"  ": double dup + ; : quad double double ; 3 quad ." "12  ok"
-assert_output "empty definition"   ": noop ; 1 noop ."                 "1  ok"
-assert_output "redefine word"      ": foo 1 ; : foo 2 ; foo ."        "2  ok"
-assert_output "square"             ": square dup * ; 7 square ."       "49  ok"
-assert_output "cube"               ": cube dup dup * * ; 3 cube ."    "27  ok"
-assert_output "multi-line def" "$(printf ': double dup + ;\n5 double .')" "10  ok"
+assert_contains "define and use"     ": double dup + ; 5 double ."       "10  ok"
+assert_contains "word calling word"  ": double dup + ; : quad double double ; 3 quad ." "12  ok"
+assert_contains "empty definition"   ": noop ; 1 noop ."                 "1  ok"
+assert_contains "redefine word"      ": foo 1 ; : foo 2 ; foo ."        "2  ok"
+assert_contains "square"             ": square dup * ; 7 square ."       "49  ok"
+assert_contains "cube"               ": cube dup dup * * ; 3 cube ."    "27  ok"
+assert_contains "multi-line def" "$(printf ': double dup + ;\n5 double .')" "10  ok"
 
 # =========================================================================
 section "Redefinition warning"
@@ -390,14 +475,14 @@ section "Redefinition warning"
 # checks find before building, gated on cur_source_id == 0 so file loads —
 # startup core.fs, include/require, module reloads — stay silent and free).
 
-assert_output "colon redefine warns"    ": rw1 1 ; : rw1 2 ;"          "redefined rw1"
-assert_output "variable redefine warns" "variable rw2 variable rw2"    "redefined rw2"
-assert_output "create redefine warns"   "create rw3 create rw3"        "redefined rw3"
-assert_output "constant redefine warns" "1 constant rw4 2 constant rw4" "redefined rw4"
-assert_output "defer redefine warns"    "defer rw5 defer rw5"          "redefined rw5"
-assert_output "cross-definer warns"     "variable rw6 : rw6 1 ;"       "redefined rw6"
-assert_output "warns with name as typed" ": rw7 1 ; : RW7 2 ;"         "redefined RW7"
-assert_output "evaluate redefine warns" $': rw8 1 ;\ns" : rw8 2 ;" evaluate' "redefined rw8"
+assert_contains "colon redefine warns"    ": rw1 1 ; : rw1 2 ;"          "redefined rw1"
+assert_contains "variable redefine warns" "variable rw2 variable rw2"    "redefined rw2"
+assert_contains "create redefine warns"   "create rw3 create rw3"        "redefined rw3"
+assert_contains "constant redefine warns" "1 constant rw4 2 constant rw4" "redefined rw4"
+assert_contains "defer redefine warns"    "defer rw5 defer rw5"          "redefined rw5"
+assert_contains "cross-definer warns"     "variable rw6 : rw6 1 ;"       "redefined rw6"
+assert_contains "warns with name as typed" ": rw7 1 ; : RW7 2 ;"         "redefined RW7"
+assert_contains "evaluate redefine warns" $': rw8 1 ;\ns" : rw8 2 ;" evaluate' "redefined rw8"
 
 # First definitions must stay silent (and so must startup: any "redefined"
 # during core.fs would show up in every test above this line)
@@ -443,39 +528,39 @@ rm -rf "$rdw_dir"
 section "Return Stack"
 # =========================================================================
 
-assert_output ">r r> round-trip"   ": test 5 >r r> ; test ."          "5  ok"
-assert_output "r@ copies"          ": test 7 >r r@ r> + ; test ."     "14  ok"
-assert_output "nested calls" "$(printf ': my-inc 1+ ;\n: stash >r my-inc r> ;\n10 20 stash . .')" "20 11  ok"
+assert_contains ">r r> round-trip"   ": test 5 >r r> ; test ."          "5  ok"
+assert_contains "r@ copies"          ": test 7 >r r@ r> + ; test ."     "14  ok"
+assert_contains "nested calls" "$(printf ': my-inc 1+ ;\n: stash >r my-inc r> ;\n10 20 stash . .')" "20 11  ok"
 
 # =========================================================================
 section "Case Insensitivity"
 # =========================================================================
 
-assert_output "uppercase DUP"      "5 DUP + ."           "10  ok"
-assert_output "mixed case Dup"     "5 Dup + ."           "10  ok"
-assert_output "define upper use lower" ": DOUBLE dup + ; 5 double ." "10  ok"
+assert_contains "uppercase DUP"      "5 DUP + ."           "10  ok"
+assert_contains "mixed case Dup"     "5 Dup + ."           "10  ok"
+assert_contains "define upper use lower" ": DOUBLE dup + ; 5 double ." "10  ok"
 
 # =========================================================================
 section "Number Parsing"
 # =========================================================================
 
-assert_output "decimal"            "42 ."                "42  ok"
-assert_output "negative"           "-7 ."                "-7  ok"
-assert_output "hex"                ': test $FF . ; test' "255  ok"
-assert_output "hex lowercase"      ': test $ff . ; test' "255  ok"
-assert_output "binary"             "%1010 ."             "10  ok"
-assert_output "forced decimal"     "#99 ."               "99  ok"
-assert_output "negative hex"       ': test -$10 . ; test'  "-16  ok"
-assert_output "negative binary"    "-%1010 ."            "-10  ok"
-assert_output "zero"               "0 ."                 "0  ok"
+assert_result   "decimal"            "42 ."                "42  ok"
+assert_contains "negative"           "-7 ."                "-7  ok"
+assert_contains "hex"                ': test $FF . ; test' "255  ok"
+assert_contains "hex lowercase"      ': test $ff . ; test' "255  ok"
+assert_contains "binary"             "%1010 ."             "10  ok"
+assert_contains "forced decimal"     "#99 ."               "99  ok"
+assert_contains "negative hex"       ': test -$10 . ; test'  "-16  ok"
+assert_contains "negative binary"    "-%1010 ."            "-10  ok"
+assert_contains "zero"               "0 ."                 "0  ok"
 
 # =========================================================================
 section "Compile Mode Error Recovery"
 # =========================================================================
 
 assert_error  "unknown in def"     ": test badword ;"    "? badword"
-assert_output "recover after error" "$(printf ': test badword ;\n1 2 + .')" "3  ok"
-assert_output "redefine after fail" "$(printf ': foo badword ;\n: foo 42 . ;\nfoo')" "42"
+assert_contains "recover after error" "$(printf ': test badword ;\n1 2 + .')" "3  ok"
+assert_result "redefine after fail" "$(printf ': foo badword ;\n: foo 42 . ;\nfoo')" "42"
 
 # =========================================================================
 section "Error Handling"
@@ -489,32 +574,32 @@ assert_error  "compile-only >r"    ">r"                  "compile only"
 # Exceptions lesson). Interpret mode keeps the stack; compile mode abandons
 # the definition cleanly (no bogus "unresolved control flow" at ;).
 assert_error  "tick of undefined word"  "' nosuchword execute"  "? nosuchword"
-assert_output "tick error keeps the stack" \
+assert_contains "tick error keeps the stack" \
     "$(printf "1 2 3 ' nosuchword catch\ndepth . . . .")"  "3 3 2 1"
-assert_output "tick error aborts definition cleanly" \
+assert_result "tick error aborts definition cleanly" \
     "$(printf ": t ' missingword ;\n: t2 42 . ;\nt2")"  "42"
 
 # =========================================================================
 section "CATCH / THROW"
 # =========================================================================
 
-assert_output "catch clean xt returns 0"  ": good 1 2 + ; ' good catch . ."  "0 3"
-assert_output "catch returns thrown code" \
+assert_contains "catch clean xt returns 0"  ": good 1 2 + ; ' good catch . ."  "0 3"
+assert_contains "catch returns thrown code" \
     ": boom 111 222 5 throw 333 ; ' boom catch . depth ."  "5 0"
-assert_output "0 throw is a no-op"        "1 2 0 throw + ."  "3"
+assert_contains "0 throw is a no-op"        "1 2 0 throw + ."  "3"
 assert_error  "uncaught throw reports"    "77 throw"  "uncaught exception: 77"
-assert_output "session survives uncaught throw" \
+assert_contains "session survives uncaught throw" \
     "$(printf '77 throw\n1 2 + .')"  "3  ok"
-assert_output "uncaught abort stays silent" \
+assert_contains "uncaught abort stays silent" \
     "$(printf '1 2 3 abort\n5 5 + . depth .')"  "10 0"
 # The message ends its own line, so the throw code lands on the next one.
 assert_result "catch intercepts abort\" as -2" \
     ": risky true abort\" boom\" ; ' risky catch ."  "$(printf 'boom\n-2')"
-assert_output "nested catch rethrows outward" \
+assert_contains "nested catch rethrows outward" \
     ": inner 7 throw ; : outer ['] inner catch 100 + throw ; ' outer catch ."  "107"
-assert_output "throw across evaluate restores source" \
+assert_contains "throw across evaluate restores source" \
     ": t s\" 5 throw\" evaluate 999 ; ' t catch . 123 ."  "5 123"
-assert_output "outer catch survives error inside evaluate" \
+assert_result "outer catch survives error inside evaluate" \
     ": bad s\" nosuchword\" evaluate ; : run ['] bad catch drop 42 throw ; ' run catch ."  "42"
 
 # throw out of an INCLUDED file: the load stops, the code reaches the catch,
@@ -523,7 +608,7 @@ assert_output "outer catch survives error inside evaluate" \
 # still counted — CATCH restores the stack POINTER, not the contents.
 ct_dir="$(mktemp -d)"
 printf '111 9 throw 222\n' > "$ct_dir/thrower.fs"
-assert_output "throw across included restores context" \
+assert_contains "throw across included restores context" \
     "s\" $ct_dir/thrower.fs\" ' included catch . 5 . depth ."  "9 5 2"
 rm -rf "$ct_dir"
 
@@ -531,24 +616,24 @@ rm -rf "$ct_dir"
 section "Comments"
 # =========================================================================
 
-assert_output "paren comment"        "1 ( this is a comment ) 2 + ."  "3"
-assert_output "paren in definition"  ': double ( n -- n*2 ) dup + ; 5 double .'  "10"
-assert_output "paren no close"       "1 2 + ( no closing paren"       "ok"
-assert_output "backslash comment"    '1 2 + . \ this is ignored'      "3"
-assert_output "backslash in def"     ': inc 1+ ; \ simple increment
+assert_contains "paren comment"        "1 ( this is a comment ) 2 + ."  "3"
+assert_contains "paren in definition"  ': double ( n -- n*2 ) dup + ; 5 double .'  "10"
+assert_contains "paren no close"       "1 2 + ( no closing paren"       "ok"
+assert_contains "backslash comment"    '1 2 + . \ this is ignored'      "3"
+assert_contains "backslash in def"     ': inc 1+ ; \ simple increment
 5 inc .'                                                               "6"
 
 # =========================================================================
 section "IF / ELSE / THEN"
 # =========================================================================
 
-assert_output "if true exec"       ": test 1 if 42 . then ; test"             "42"
-assert_output "if false skip"      ": test 0 if 42 . then ; test"             "ok"
-assert_output "if else true"       ": test 1 if 42 else 99 then ; test ."     "42"
-assert_output "if else false"      ": test 0 if 42 else 99 then ; test ."     "99"
-assert_output "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
-assert_output "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
-assert_output "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
+assert_result "if true exec"       ": test 1 if 42 . then ; test"             "42"
+assert_contains "if false skip"      ": test 0 if 42 . then ; test"             "ok"
+assert_result "if else true"       ": test 1 if 42 else 99 then ; test ."     "42"
+assert_result "if else false"      ": test 0 if 42 else 99 then ; test ."     "99"
+assert_result "nested if"          ": test 1 if 1 if 42 . then then ; test"   "42"
+assert_result "if with compare"    ": test 5 3 > if 42 else 0 then ; test ."  "42"
+assert_result "if 0= true"        ": test 0 0= if 42 then ; test ."          "42"
 assert_error  "if without then"  ": test if ;"                               "unresolved control flow: test"
 assert_error  "begin without until" ": test begin ;"                         "unresolved control flow: test"
 # :NONAME builds a hidden header with an EMPTY name, so there is nothing to
@@ -561,7 +646,7 @@ assert_error  "if until mismatch"  ": test if until ;"                      "mis
 # arm's exit branch: an extra ENDOF silently emitted WRONG CODE (arms ran each
 # other's bodies), and closing a non-CASE construct with a CASE word handed
 # patch_forward a tag value as an address and SEGFAULTED the process — fatal
-# during a file load. Found in the Dark Star port.
+# during a file load. Found in a large program under development.
 assert_error  "extra endof"      ": bad case 0 of 11 endof 1 of 22 endof endof endcase ;" "mismatched control flow: endof"
 assert_error  "of without endof" ": bad case 0 of 11 endof of endcase ;"    "mismatched control flow: endcase"
 assert_error  "case missing endof" ": bad case 0 of 11 endcase ;"          "mismatched control flow: endcase"
@@ -592,8 +677,13 @@ assert_error  "endcase with nothing open" ": q endcase ;"    "mismatched control
 # and none of them leaves the session wedged. Not implied by the message above:
 # the definition-open guard printed correctly while stranding the half-built
 # header as LATEST, which then refused every later definition.
-assert_output "define after a stray then" ": q then ; : ok2 42 . ; ok2"     "42"
-assert_output "define after a stray loop" ": q loop ; : ok3 43 . ; ok3"     "43"
+# On its OWN line: a stray closer aborts the rest of the line it appears on,
+# so a same-line definition never runs. This asks the question the name asks --
+# is the SESSION still usable afterwards -- rather than whether one line is.
+assert_result "define after a stray then" ": q then ;
+: ok2 42 . ; ok2"                                            "42"
+assert_result "define after a stray loop" ": q loop ;
+: ok3 43 . ; ok3"                                            "43"
 # Mid-FILE is where a wrong diagnosis costs the most, and it is a different
 # report path: the loader prefixes file:line. Assert the LINE too -- the error
 # is on line 2, and a report that always said line 1 would still contain the
@@ -602,7 +692,7 @@ assert_output "define after a stray loop" ": q loop ; : ok3 43 . ; ok3"     "43"
 # off. Until 2026-08-11 `;` printed "unresolved control flow" bare -- no file,
 # no line, no name -- and then RETURNED, so the file kept loading against a word
 # that never got defined. The only line number you got was from the first CALL
-# to the missing word, 46 lines further on in the real case (Dark Star, typo on
+# to the missing word, 46 lines further on in the real case (typo on
 # 167, reported at 213). Assert all three things that were wrong: the location,
 # the name, and that the load stopped before the later definition.
 cfu_dir="$(mktemp -d)"
@@ -631,10 +721,10 @@ else
     printf "    Expected: 'stray.fs:2: mismatched control flow: then' and '44'\n    Got: %q\n" "$cfl_out"; ((failed++))
 fi
 # and the well-formed cases still compile and run, including nested both ways
-assert_output "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
-assert_output "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
-assert_output "while loop still runs" ": t begin dup while 1- repeat ; 3 t ." "0"
-assert_output "leave still runs"      ": t 10 0 do i . i 3 = if leave then loop ; t" "0 1 2 3"
+assert_result "case nested in if" ": t if case 1 of 11 endof 99 endcase else 0 then ; 1 1 t ." "11"
+assert_result "if nested in arm"  ": t case 1 of 5 3 > if 42 else 0 then endof 99 endcase ; 1 t ." "42"
+assert_contains "while loop still runs" ": t begin dup while 1- repeat ; 3 t ." "0"
+assert_contains "leave still runs"      ": t 10 0 do i . i 3 = if leave then loop ; t" "0 1 2 3"
 
 assert_error  "if outside def"   "if"                                       "compile only"
 assert_error  "then outside def" "then"                                     "compile only"
@@ -646,18 +736,22 @@ assert_error  "semicolon outside def" ";"                                   "com
 # It used to report and keep parsing, so the rest of the line ran anyway --
 # `['] dup 999 .` then executed `dup` on an empty stack and the underflow, not
 # the real mistake, was what you saw. The stack is left as it was.
-assert_output "stray ; names the word"       "1 2 ; + ."         "compile only: ;"
-assert_output "stray ; aborts the line, stack untouched" "1 2 ; + .
+assert_contains "stray ; names the word"       "1 2 ; + ."         "compile only: ;"
+assert_contains "stray ; aborts the line, stack untouched" "1 2 ; + .
 .s"                                                         "<2> 1 2"
 # and it is still perfectly good at the end of a definition
-assert_output "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
-assert_output "; still ends a :noname"       ":noname 9 ; execute ."        "9"
+assert_contains "; still ends a definition"    ": sq dup * ; 5 sq ."          "25"
+assert_result "; still ends a :noname"       ":noname 9 ; execute ."        "9"
 # The same rejection inside EVALUATE, which runs the same outer interpreter.
-# EVALUATE swallows the report (it returns the status to its caller and nothing
-# prints it -- true of an undefined word there too, not special to this), so
-# what is observable is that the line inside EVALUATE stopped: the definition
-# resumes afterwards and the stray `;` did not end it.
-assert_output "stray ; inside evaluate stops that line" \
+# UPDATED 2026-08-17 with the propagation fix: EVALUATE no longer swallows the
+# report, so the error prints AND stops the caller. This assertion used to
+# expect "42" -- the rest of the word running on -- which was true before the
+# fix and false after it. It never noticed the change, because "42" is in its
+# own input and the old substring match was satisfied by the echo alone. It is
+# the reason the sweep that found it exists.
+assert_result "a stray ; inside evaluate reports" \
+              ": t s\" ; 999 .\" evaluate 42 . ; t"          "compile only: ;"
+assert_absent "...and stops the word that asked" \
               ": t s\" ; 999 .\" evaluate 42 . ; t"                        "42"
 # The wording is per-token state, and a nested EVALUATE runs a whole interpret
 # loop inside ONE outer token -- so EVALUATE brackets it, like the source
@@ -671,18 +765,84 @@ assert_output "stray ; inside evaluate stops that line" \
 # the wording is right, not that bracketing works. A probe that still bites
 # needs a site that inherits (`.Lsq_no_close` is one); see docs/TODO.md.
 #
-# The TOKEN here is the enclosing word, not `then`: cf_check_tag names whatever
-# the OUTER interpreter last parsed, which is the closer for ordinary source but
-# the caller when a closer is reached at run time through `execute`.
-assert_output "a nested evaluate does not leak its error wording" \
-              ": leaky s\" ;\" evaluate  0 99 ' then execute ;
-leaky"                                                      "mismatched control flow"
+# NOTE (2026-08-16): the old probe here ran a second, wording-less error AFTER a
+# failed nested evaluate in the same word. Propagation removed its premise --
+# the failed evaluate now throws, so the word never reaches the second error.
+# Replaced by the check below, which bites for a different reason: EVALUATE now
+# REPORTS the inner error itself, so the wording it prints is directly
+# observable. Printing after restoring the outer wording said "? if"; the
+# correct answer is the one the top level gives for the identical mistake.
+assert_contains "an error inside evaluate reports with its OWN wording" \
+              "s\" 999 if\" evaluate"                       "compile only: if"
+assert_contains "...the same wording the top level gives" \
+              "999 if"                                      "compile only: if"
+
+# --- EVALUATE propagates (2026-08-16) -----------------------------------
+# An error inside EVALUATE used to be swallowed whole: no message, and the line
+# carried on as though it had succeeded. The status was computed correctly all
+# along -- it was dropped at .Lil_found_execute, the one site that could have
+# read it -- so the fix is a THROW rather than a better return value.
+# Each of these is a form the old bug took; the compiled one is the reason a
+# status register could not have been the channel.
+assert_contains "an error inside evaluate is reported at all" \
+              's" nosuchword" evaluate'                     "? nosuchword"
+assert_absent "...and the rest of the line does not run" \
+              's" nosuchword" evaluate 7 .'                 "7"
+assert_absent "...nor the rest of a COMPILED word's body" \
+              ': q s" nosuchword" evaluate 42 . ;
+q'                                                          "42"
+assert_result "...and CATCH sees it, rather than being told all is well" \
+              ': bad s" nosuchword" evaluate ;
+'"'"' bad catch .'                                          "-260"
+assert_result "a successful evaluate is untouched" \
+              's" 2 3 +" evaluate .'                        "5"
+
+# --- a failed load must stay RETRYABLE ------------------------------------
+# Propagation's first version threw from the assembly, which skipped the Forth
+# wrapper's bookkeeping: the file stayed on the loading stack, and every later
+# attempt answered "is already loading — skipped". A typo could not be fixed
+# and reloaded for the rest of the session — the edit-fix-reload cycle, broken
+# silently. The wrapper now pops that stack, declines to record a failed load,
+# and throws last of all.
+# Counted, not substring-matched: the wrong behaviour reports the error ONCE
+# and then goes quiet, which a "does the message appear" test cannot see.
+rtr_dir="$(mktemp -d)"
+printf 'nosuchword\n'  > "$rtr_dir/broken.fs"
+printf ': rtrok 1 ;\n'  > "$rtr_dir/clean.fs"
+rtr_n=$(printf 'include %s/broken.fs\ninclude %s/broken.fs\ninclude %s/broken.fs\n' \
+        "$rtr_dir" "$rtr_dir" "$rtr_dir" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | grep -c "? nosuchword")
+if [ "$rtr_n" = "3" ]; then
+    printf "  ${GREEN}PASS${NC}  a failed include can be retried (3 attempts, 3 reports)\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  failed include is not retryable\n    Expected 3 reports, got %s\n" "$rtr_n"; ((failed++))
+fi
+rtr_req=$(printf 'include %s/broken.fs\nrequire %s/broken.fs\n' "$rtr_dir" "$rtr_dir" \
+        | BASICFORTH_PATH="$FORTH_LIB" timeout 5 $FORTH 2>&1 | grep -c "? nosuchword")
+if [ "$rtr_req" = "2" ]; then
+    printf "  ${GREEN}PASS${NC}  require retries a file whose load failed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  require skipped a file that never loaded\n    Expected 2 reports, got %s\n" "$rtr_req"; ((failed++))
+fi
+# ...but a CLEAN require is still load-once, which is the whole point of it.
+assert_result "a clean require is still load-once" \
+              "require $rtr_dir/clean.fs
+require $rtr_dir/clean.fs
+rtrok ."                                                    "1"
+# The throw code -260 is written in THREE places: THROW_INTERP in each core.s,
+# and (throw-interp) in core.fs. A failed EVALUATE raises the assembly one and a
+# failed load raises the Forth one, so asserting both is what would catch the
+# two drifting apart -- nothing else compares them.
+assert_result "a failed load raises the same code a failed evaluate does" \
+              ": bi s\" $rtr_dir/broken.fs\" included ;
+' bi catch ."                                               "-260"
+rm -rf "$rtr_dir"
 # the same error with no evaluate in front, as the control
-assert_output "control-flow mismatch reports plainly" \
+assert_contains "control-flow mismatch reports plainly" \
               ": plain 0 99 ' then execute ;
 plain"                                                      "mismatched control flow: plain"
 # and nesting still returns values correctly through two levels
-assert_output "evaluate nests two deep" \
+assert_contains "evaluate nests two deep" \
               ": inner s\" 2 3 +\" evaluate ;
 : outer s\" inner\" evaluate ;
 outer ."                                                    "5"
@@ -692,85 +852,85 @@ outer ."                                                    "5"
 section "BEGIN / UNTIL / AGAIN / WHILE / REPEAT"
 # =========================================================================
 
-assert_output "begin until"   ": test 5 begin 1- dup 0= until ; test ."      "0"
-assert_output "begin while repeat" \
+assert_result "begin until"   ": test 5 begin 1- dup 0= until ; test ."      "0"
+assert_contains "begin while repeat" \
     ": test 3 begin dup while 1- repeat ; test ."                             "0"
-assert_output "countdown" \
+assert_contains "countdown" \
     ': countdown 3 begin dup 0 > while dup . 1- repeat drop ; countdown'      "3 2 1"
-assert_output "begin again (via while)" \
+assert_contains "begin again (via while)" \
     ": test 5 begin dup while dup . 1- repeat drop ; test"                    "5 4 3 2 1"
 
 # =========================================================================
 section "RECURSE"
 # =========================================================================
 
-assert_output "factorial"    ": fact dup 1 > if dup 1- recurse * then ; 5 fact ."  "120"
-assert_output "factorial 6"  ": fact dup 1 > if dup 1- recurse * then ; 6 fact ."  "720"
+assert_contains "factorial"    ": fact dup 1 > if dup 1- recurse * then ; 5 fact ."  "120"
+assert_contains "factorial 6"  ": fact dup 1 > if dup 1- recurse * then ; 6 fact ."  "720"
 
 # =========================================================================
 section "DO / LOOP"
 # =========================================================================
 
-assert_output "do loop i"         ": test 5 0 do i . loop ; test"                "0 1 2 3 4"
-assert_output "+loop"             ": test 10 0 do i . 2 +loop ; test"            "0 2 4 6 8"
-assert_output "+loop non-exact"  ": test 10 0 do i . 3 +loop ; test"            "0 3 6 9"
-assert_output "do skip equal"     ": test 0 0 do 42 . loop ; test"               "ok"
-assert_output "nested do j"       ": test 2 0 do 2 0 do j . i . 32 emit loop loop ; test"  "0 0"
-assert_output "do loop sum"       ": sum 0 5 0 do i + loop ; sum ."              "10"
+assert_contains "do loop i"         ": test 5 0 do i . loop ; test"                "0 1 2 3 4"
+assert_contains "+loop"             ": test 10 0 do i . 2 +loop ; test"            "0 2 4 6 8"
+assert_contains "+loop non-exact"  ": test 10 0 do i . 3 +loop ; test"            "0 3 6 9"
+assert_contains "do skip equal"     ": test 0 0 do 42 . loop ; test"               "ok"
+assert_contains "nested do j"       ": test 2 0 do 2 0 do j . i . 32 emit loop loop ; test"  "0 0"
+assert_contains "do loop sum"       ": sum 0 5 0 do i + loop ; sum ."              "10"
 
 # =========================================================================
 section "LEAVE"
 # =========================================================================
 
-assert_output "leave basic"        ": test 10 0 do i 5 = if leave then i . loop ; test"   "0 1 2 3 4"
-assert_output "leave first iter"   ": test 10 0 do leave loop 99 . ; test"                "99"
-assert_output "leave nested inner" \
+assert_contains "leave basic"        ": test 10 0 do i 5 = if leave then i . loop ; test"   "0 1 2 3 4"
+assert_result "leave first iter"   ": test 10 0 do leave loop 99 . ; test"                "99"
+assert_contains "leave nested inner" \
     ": test 3 0 do 5 0 do i 2 = if leave then i . loop 32 emit loop ; test"  "0 1  0 1  0 1"
-assert_output "leave nested outer" \
+assert_contains "leave nested outer" \
     ": test 3 0 do i 1 = if leave then 3 0 do i . loop 32 emit loop ; test"  "0 1 2"
-assert_output "leave +loop"        ": test 20 0 do i 10 > if leave then i . 3 +loop ; test"  "0 3 6 9"
+assert_contains "leave +loop"        ": test 20 0 do i 10 > if leave then i . 3 +loop ; test"  "0 3 6 9"
 assert_error  "leave outside do"  ": test leave ;"                                         "mismatched control flow: leave"
 
 # =========================================================================
 section "Defining Words"
 # =========================================================================
 
-assert_output "constant"           "42 constant answer answer ."              "42"
-assert_output "constant arith"     "42 constant x x x + ."                   "84"
-assert_output "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
-assert_output "here"               "here 0 <> ."                             "-1"
-assert_output "comma"              "here 42 , here swap - ."                 "8"
-assert_output "variable"           "variable x 99 x ! x @ ."                "99"
-assert_output "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
-assert_output "variable starts 0"  "variable z0 z0 @ ."                      "0"
+assert_result "constant"           "42 constant answer answer ."              "42"
+assert_contains "constant arith"     "42 constant x x x + ."                   "84"
+assert_result "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
+assert_contains "here"               "here 0 <> ."                             "-1"
+assert_contains "comma"              "here 42 , here swap - ."                 "8"
+assert_result "variable"           "variable x 99 x ! x @ ."                "99"
+assert_contains "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
+assert_result "variable starts 0"  "variable z0 z0 @ ."                      "0"
 # A fresh dictionary is zeros anyway, so the case that bites is a rollback:
 # marker/reload replay the definition over space something else has since
 # used. `create 1 cells allot` handed back those stale bytes.
-assert_output "variable 0 after rollback" \
+assert_contains "variable 0 after rollback" \
     "marker -m variable zr 7 zr ! : pad7 here 64 allot 64 7 fill ; pad7 -m variable zr zr @ ." "0"
 
 # =========================================================================
 section "DOES>"
 # =========================================================================
 
-assert_output "does> constant"    ": myconst create , does> @ ; 42 myconst answer answer ."  "42"
-assert_output "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 myconst y x y + ."  "30"
-assert_output "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
+assert_result "does> constant"    ": myconst create , does> @ ; 42 myconst answer answer ."  "42"
+assert_contains "does> two uses"    ": myconst create , does> @ ; 10 myconst x 20 myconst y x y + ."  "30"
+assert_result "does> array"       ": arr create cells allot does> swap cells + ; 3 arr a 99 0 a ! 0 a @ ."  "99"
 
 # =========================================================================
 section "MARKER"
 # =========================================================================
 # Define a marker, define words after it, use them, then run the marker.
-assert_output "MARKER define+use+forget" \
+assert_contains "MARKER define+use+forget" \
     "marker -w  : mfoo 111 ;  : mbar 222 ;  mfoo . mbar .  -w"  "111 222"
 # Running the marker rewinds HERE to exactly its pre-marker value (space reclaimed).
-assert_output "MARKER reclaims HERE" \
+assert_contains "MARKER reclaims HERE" \
     "here marker -w  : mfoo 1 ;  : mbar 2 ;  -w  here = ."  "-1"
 # After the marker runs, the words it covered are gone (referencing one errors).
 assert_error "MARKER forgets its words" \
     "marker -w  : mzap 7 ;  -w  mzap"  "mzap"
 # The reclaimed space is reusable: a fresh definition after the marker works.
-assert_output "MARKER space is reusable" \
+assert_result "MARKER space is reusable" \
     "marker -w  : mfoo 1 ;  -w  : mfoo 999 ;  mfoo ."  "999"
 # Nested markers: the outer marker forgets the inner one too.
 assert_error "MARKER nested (outer forgets inner)" \
@@ -780,21 +940,21 @@ assert_error "MARKER nested (outer forgets inner)" \
 section ".module (list your module's words)"
 # =========================================================================
 # A fresh module has defined nothing on top of core.fs.
-assert_output ".module reports an empty module" \
+assert_contains ".module reports an empty module" \
     ".module"  "empty module"
 # Defining one word: the count is 1 (proves the ~330 core words are excluded —
 # if they leaked in the count would be hundreds), and the name is listed.
-assert_output ".module counts only your words" \
+assert_contains ".module counts only your words" \
     ": zonk ;  .module"  "1 word in this module"
-assert_output ".module lists your word's name" \
+assert_result ".module lists your word's name" \
     ": zonk ;  .module"  "zonk"
 # Words of every kind count, newest-first (matching WORDS' chain order).
-assert_output ".module lists newest-first" \
+assert_contains ".module lists newest-first" \
     ": a1 ;  : b2 ;  : c3 ;  .module"  "c3 b2 a1"
-assert_output ".module counts a mix of word kinds" \
+assert_contains ".module counts a mix of word kinds" \
     "7 constant k  variable v  defer d  : w ;  .module"  "4 words in this module"
 # NEW clears the module back to a clean slate.
-assert_output "new clears the module" \
+assert_contains "new clears the module" \
     ": gone 1 ;  new  .module"  "empty module"
 
 # =========================================================================
@@ -809,8 +969,8 @@ if [[ "$char_safe" == *"4242"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  char with no word crashed the REPL\n    Expected 4242\n    Got: %q\n" "$char_safe"; ((failed++))
 fi
-assert_output "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
-assert_output "char still works at interpret level"  'char * .'                      "42"
+assert_result "[char] still compiles a char literal" ': star [char] * emit ; star'  "*"
+assert_contains "char still works at interpret level"  'char * .'                      "42"
 # [char] with no word at the very end of a page-sized included file: the byte
 # after the mmap is an unmapped page, so dereferencing parse-word's (now NULL)
 # c-addr would fault. [char] must check the length and not dereference.
@@ -830,56 +990,56 @@ fi
 section "String Words"
 # =========================================================================
 
-assert_output "type"              ': test s" Hello" type ; test'                "Hello"
-assert_output "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
-assert_output "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
-assert_output "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
-assert_output "dot-paren"         '.( Hello World!)'                           "Hello World!"
+assert_result "type"              ': test s" Hello" type ; test'                "Hello"
+assert_contains "s-quote"           ': test s" AB" s" CD" type type ; test'       "CDAB"
+assert_result "dot-quote"         ': test ." Hello World!" ; test'              "Hello World!"
+assert_contains "dot-quote multi"   ': test ." A" ." B" ; test'                   "AB"
+assert_result   "dot-paren"         '.( Hello World!)'                           "Hello World!"
 # .( must not leak the parsed text onto the stack (regression: it used to push
 # one cell per character). depth 0 = . prints -1 only when the stack is clean.
-assert_output "dot-paren clean stack" '.( hi) depth 0 = .'                     "-1"
+assert_contains "dot-paren clean stack" '.( hi) depth 0 = .'                     "-1"
 assert_error  "s-quote no close" ': test s" no closing quote ;'                "unterminated string"
 assert_error  "dot-quote no close" ': test ." no closing quote ;'              "unterminated string"
 
 # Interpreted (STATE-smart) S" and ." — outside a definition S" returns the
 # string in one of two alternating transient buffers; ." types immediately.
 # Expected strings are chosen so they can't match the echoed input line.
-assert_output "s-quote interpreted"     's" hel" s" lo" type type'              "lohel"
-assert_output "s-quote buffer cycle"    's" one" s" two" s" three" type type'   "threetwo"
-assert_output "dot-quote interpreted"   '." AB" ." CD"'                         "ABCD"
-assert_output "s-quote interp leading space" 's"  pad" type ." |"'              " pad|"
-assert_output "s-quote empty interp"    's" " swap drop . ." <>"'               "0 <>"
+assert_contains "s-quote interpreted"     's" hel" s" lo" type type'              "lohel"
+assert_contains "s-quote buffer cycle"    's" one" s" two" s" three" type type'   "threetwo"
+assert_contains "dot-quote interpreted"   '." AB" ." CD"'                         "ABCD"
+assert_contains "s-quote interp leading space" 's"  pad" type ." |"'              " pad|"
+assert_contains "s-quote empty interp"    's" " swap drop . ." <>"'               "0 <>"
 assert_error  "s-quote interp too long" 'create ebuf 320 allot ebuf 320 char x fill char s ebuf c! char " ebuf 1+ c! 32 ebuf 2 + c! char " ebuf 310 + c! ebuf 311 evaluate' "interpreted string too long"
 
 # =========================================================================
 section "PICK"
 # =========================================================================
 
-assert_output "0 pick"            "1 2 3 0 pick ."                              "3"
-assert_output "2 pick"            "1 2 3 2 pick ."                              "1"
+assert_result "0 pick"            "1 2 3 0 pick ."                              "3"
+assert_result "2 pick"            "1 2 3 2 pick ."                              "1"
 
 # =========================================================================
 section "core.fs Words"
 # =========================================================================
 
-assert_output "CR defined"           "1 2 + ."                        "3"
-assert_output "SPACE defined"        ": test space 42 . ; test"       "42"
-assert_output "BL defined"           "bl ."                           "32"
-assert_output "TRUE"                 "true ."                         "-1"
-assert_output "FALSE"                "false ."                        "0"
-assert_output "MOD"                  "17 5 mod ."                     "2"
-assert_output "/"                    "20 4 / ."                       "5"
-assert_output "CELL+"               "0 cell+ ."                      "8"
-assert_output "CELLS"               "3 cells ."                      "24"
-assert_output "<>"                   "3 4 <> ."                       "-1"
-assert_output "<> false"             "5 5 <> ."                       "0"
-assert_output "0<>"                  "42 0<> ."                       "-1"
-assert_output "0<> false"            "0 0<> ."                        "0"
-assert_output "2OVER"                "1 2 3 4 2over . . . . . ."     "2 1 4 3 2 1"
-assert_output "2SWAP"                "1 2 3 4 2swap . . . ."         "2 1 4 3"
-assert_output "*/"                   "3 7 2 */ ."                     "10"
-assert_output "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
-assert_output "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
+assert_contains "CR defined"           "1 2 + ."                        "3"
+assert_result "SPACE defined"        ": test space 42 . ; test"       "42"
+assert_contains "BL defined"           "bl ."                           "32"
+assert_contains "TRUE"                 "true ."                         "-1"
+assert_contains "FALSE"                "false ."                        "0"
+assert_contains "MOD"                  "17 5 mod ."                     "2"
+assert_contains "/"                    "20 4 / ."                       "5"
+assert_contains "CELL+"               "0 cell+ ."                      "8"
+assert_contains "CELLS"               "3 cells ."                      "24"
+assert_contains "<>"                   "3 4 <> ."                       "-1"
+assert_contains "<> false"             "5 5 <> ."                       "0"
+assert_contains "0<>"                  "42 0<> ."                       "-1"
+assert_result "0<> false"            "0 0<> ."                        "0"
+assert_contains "2OVER"                "1 2 3 4 2over . . . . . ."     "2 1 4 3 2 1"
+assert_contains "2SWAP"                "1 2 3 4 2swap . . . ."         "2 1 4 3"
+assert_contains "*/"                   "3 7 2 */ ."                     "10"
+assert_contains "SPACES"               ": test 3 spaces 42 . ; test"   "   42"
+assert_contains "COUNT"                "create s 5 c, 72 c, 101 c, 108 c, 108 c, 111 c, s count type"  "Hello"
 
 # =========================================================================
 section "Graphics (software 2D surface)"
@@ -888,10 +1048,10 @@ section "Graphics (software 2D surface)"
 # path. Drawing is verified by reading the pixel buffer back — no display needed.
 # A 4x3 surface, stride 16 bytes; pixel (1,2) is at offset 2*16+1*4 = 36.
 GR="$FORTH_LIB/graphics.fs"
-assert_output "gr pixel plots 32bpp"  "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear red 1 2 pixel gb 36 + l@ . ; g"  "16711680"
-assert_output "gr fill-rect"          "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear green 0 0 2 1 fill-rect gb 4 + l@ . ; g"  "65280"
-assert_output "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
-assert_output "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
+assert_contains "gr pixel plots 32bpp"  "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear red 1 2 pixel gb 36 + l@ . ; g"  "16711680"
+assert_contains "gr fill-rect"          "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface 0 clear green 0 0 2 1 fill-rect gb 4 + l@ . ; g"  "65280"
+assert_contains "gr clear fills"        "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface blue clear gb 20 + l@ . ; g"  "255"
+assert_contains "gr out-of-bounds noop" "include $GR  48 allocate drop value gb  : g gb 4 3 16 set-surface white 99 99 pixel depth . ; g"  "0"
 
 # Shapes and sprites on an 8x6 surface (stride 32). Helper p prints the pixel
 # at (x,y). Sprite sp is a 2x2 packed 32bpp block holding 1 2 / 3 4. The setup
@@ -903,54 +1063,54 @@ GRP="include $GR
 SPR="16 allocate drop value sp  1 sp l!  2 sp 4 + l!  3 sp 8 + l!  4 sp 12 + l!"
 GRP="$GRP
 $SPR"
-assert_output "gr line horizontal"     "$GRP
+assert_contains "gr line horizontal"     "$GRP
 : g s red 1 1 5 1 line 3 1 p 6 1 p ; g"            "16711680 0"
-assert_output "gr line vertical"       "$GRP
+assert_contains "gr line vertical"       "$GRP
 : g s red 2 0 2 4 line 2 3 p 2 5 p ; g"            "16711680 0"
-assert_output "gr line diagonal"       "$GRP
+assert_contains "gr line diagonal"       "$GRP
 : g s red 0 0 5 5 line 3 3 p 3 2 p ; g"            "16711680 0"
-assert_output "gr line clips quietly"  "$GRP
+assert_contains "gr line clips quietly"  "$GRP
 : g s red -5 -5 20 20 line 2 2 p depth . ; g"      "16711680 0"
-assert_output "gr rect outline hollow" "$GRP
+assert_contains "gr rect outline hollow" "$GRP
 : g s green 1 1 4 3 rect 1 1 p 4 3 p 2 2 p ; g"    "65280 65280 0"
-assert_output "gr circle rim, hollow"  "$GRP
+assert_contains "gr circle rim, hollow"  "$GRP
 : g s blue 4 3 2 circle 6 3 p 4 1 p 4 3 p ; g"     "255 255 0"
-assert_output "gr fill-circle"         "$GRP
+assert_contains "gr fill-circle"         "$GRP
 : g s blue 4 3 2 fill-circle 4 3 p 0 0 p ; g"      "255 0"
-assert_output "gr blit"                "$GRP
+assert_contains "gr blit"                "$GRP
 : g s sp 1 1 2 2 blit 1 1 p 2 2 p 0 0 p ; g"       "1 4 0"
-assert_output "gr blit clip: src shifts" "$GRP
+assert_contains "gr blit clip: src shifts" "$GRP
 : g s sp -1 0 2 2 blit 0 0 p 0 1 p 1 0 p ; g"      "2 4 0"
-assert_output "gr blit-key transparent" "$GRP
+assert_contains "gr blit-key transparent" "$GRP
 : g 7 sp l! 9 sp 4 + l! gb 8 6 32 set-surface 5 clear 7 sp 0 0 2 2 blit-key 0 0 p 1 0 p ; g" "5 9"
-assert_output "gr grab/blit round-trip" "$GRP
+assert_contains "gr grab/blit round-trip" "$GRP
 : g s red 2 2 pixel sp 2 2 2 2 grab 0 clear sp 2 2 2 2 blit 2 2 p 3 3 p depth . ; g" "16711680 0 0"
 
 # l, — packs 32-bit pixels, unlike , which would leave a 4-byte gap between
 # them. A create-table built with l, must blit as a sprite (the Sprites
 # lesson types art in this way), and the dictionary must survive being left
 # 4-byte rather than cell aligned: the colon definition after it has to run.
-assert_output "gr l, packs 32-bit pixels" "$GRP
+assert_contains "gr l, packs 32-bit pixels" "$GRP
 create art 11 l, 22 l, 33 l, 44 l,
 : g art l@ . art 4 + l@ . art 12 + l@ . ; g"        "11 22 44"
-assert_output "gr l, table blits as a sprite" "$GRP
+assert_contains "gr l, table blits as a sprite" "$GRP
 create art2 11 l, 22 l, 33 l, 44 l,
 : g s art2 1 1 2 2 blit 1 1 p 2 1 p 2 2 p ; g"      "11 22 44"
-assert_output "gr l, blit-key on a typed table" "$GRP
+assert_contains "gr l, blit-key on a typed table" "$GRP
 create art3 11 l, 22 l, 33 l, 44 l,
 : g s 22 art3 0 0 2 2 blit-key 0 0 p 1 0 p 1 1 p ; g"  "11 0 44"
 # stamp — 1-bit sprites drawn in a colour supplied at draw time. The bit
 # order is the thing most likely to be wrong, so the asymmetric pattern
 # %10000000 pins that column 0 is the HIGH bit (a mirrored implementation
 # would light column 7 instead). 0-bits must leave the background alone.
-assert_output "gr stamp bit order is MSB-first" "$GRP
+assert_contains "gr stamp bit order is MSB-first" "$GRP
 create bs %10000000 c, %00000001 c,
 : g s red bs 0 0 8 2 stamp  0 0 p 7 0 p 7 1 p 0 1 p ; g"   "16711680 0 16711680 0"
-assert_output "gr stamp 0-bits are transparent" "$GRP
+assert_contains "gr stamp 0-bits are transparent" "$GRP
 create bs2 %10100000 c,
 : g s blue 0 0 8 1 fill-rect  red bs2 0 0 8 1 stamp
   0 0 p 1 0 p 2 0 p ; g"                                   "16711680 255 16711680"
-assert_output "gr stamp colour is per-call" "$GRP
+assert_contains "gr stamp colour is per-call" "$GRP
 create bs3 %11000000 c,
 : g s red bs3 0 0 2 1 stamp  green bs3 0 1 2 1 stamp  0 0 p 0 1 p ; g" \
     "16711680 65280"
@@ -959,59 +1119,59 @@ create bs3 %11000000 c,
 # wide, so shift the sprite left by 8 to bring its SECOND byte on-screen:
 # sprite columns 8..11 land at x=0..3, and if the loop overran w they would
 # also paint x=4..7.
-assert_output "gr stamp stride ceil(w/8), spare bits ignored" "$GRP
+assert_contains "gr stamp stride ceil(w/8), spare bits ignored" "$GRP
 create bs4 %00000000 c, %11111111 c,
 : g s red bs4 -8 0 12 1 stamp  0 0 p 3 0 p 4 0 p ; g"      "16711680 16711680 0"
-assert_output "gr stamp clips off every edge" "$GRP
+assert_contains "gr stamp clips off every edge" "$GRP
 create bs5 %11111111 c,
 : g s red bs5 -4 0 8 1 stamp  0 0 p
   red bs5 99 99 8 1 stamp  red bs5 0 0 0 1 stamp  depth . ; g"  "16711680 0"
 # row, — bitmap art from strings. The point is that it is not a second
 # format: it must compile byte-for-byte what the % binary rows would.
-assert_output "gr row, matches the binary form byte for byte" "$GRP
+assert_contains "gr row, matches the binary form byte for byte" "$GRP
 : b-art %00111100 c, %01111110 c, ;
 create bart b-art
 : s-art s\" ..####..\" row,  s\" .######.\" row, ;
 create sart s-art
 : g bart c@ sart c@ =  bart 1+ c@ sart 1+ c@ =  and . ; g"      "-1"
 # '.', space and '0' are clear; '#', '*', '1', 'X' all draw.
-assert_output "gr row, off chars are . space 0" "$GRP
+assert_contains "gr row, off chars are . space 0" "$GRP
 : m-art s\" .#  0*1X\" row, ;
 create mart m-art
 : g mart c@ . ; g"                                              "71"
 # A row of u chars compiles ceil(u/8) bytes, partial byte left-aligned.
-assert_output "gr row, pads a partial byte left" "$GRP
+assert_contains "gr row, pads a partial byte left" "$GRP
 : p-art s\" ###\" row, ;
 create part p-art
 : g part c@ . ; g"                                              "224"
-assert_output "gr row, 12 wide is two bytes" "$GRP
+assert_contains "gr row, 12 wide is two bytes" "$GRP
 : t-art s\" ############\" row, ;
 create tart t-art
 : g tart c@ . tart 1+ c@ . ; g"                                 "255 240"
 # row,-built art must stamp identically to the same art in binary.
-assert_output "gr row, art stamps correctly" "$GRP
+assert_contains "gr row, art stamps correctly" "$GRP
 : a-art s\" #.#\" row, ;
 create aart a-art
 : g s red aart 0 0 3 1 stamp  0 0 p 1 0 p 2 0 p ; g"   "16711680 0 16711680"
-assert_output "gr odd l, count leaves dict usable" "$GRP
+assert_contains "gr odd l, count leaves dict usable" "$GRP
 create odd 1 l, 2 l, 3 l,
 : after 4242 ;
 : g odd 8 + l@ . after . ; g"                       "3 4242"
 # stamp-scale — each set bit becomes a scale x scale block. The diagonal
 # sprite (col0,row0 and col1,row1 set) at 2x lights the two 2x2 blocks on the
 # main diagonal (0,0)/(3,3) and leaves the off-diagonal cells transparent.
-assert_output "gr stamp-scale magnifies each set bit" "$GRP
+assert_contains "gr stamp-scale magnifies each set bit" "$GRP
 create ds %10000000 c, %01000000 c,
 : g s red ds 0 0 2 2 2 stamp-scale
   0 0 p 1 1 p 2 2 p 3 3 p  2 0 p 0 2 p ; g" \
     "16711680 16711680 16711680 16711680 0 0"
 # scale 1 is exactly stamp (the fast pixel path): a 1-wide sprite lights only
 # column 0, never a magnified column 1.
-assert_output "gr stamp-scale at 1x does not magnify" "$GRP
+assert_contains "gr stamp-scale at 1x does not magnify" "$GRP
 create d1 %10000000 c,
 : g s red d1 0 0 1 1 1 stamp-scale  0 0 p 1 0 p ; g"   "16711680 0"
 # a big magnification hanging off any edge clips like stamp -- no crash, clean
-assert_output "gr stamp-scale clips off-screen" "$GRP
+assert_result "gr stamp-scale clips off-screen" "$GRP
 create d2 %10000000 c,
 : g s red d2 99 99 1 1 3 stamp-scale
   red d2 -2 -2 1 1 3 stamp-scale  depth . ; g"         "0"
@@ -1033,73 +1193,73 @@ FNT="include $FORTH_LIB/font-terminus-8x16.fs
 : s fb 32 32  32 4 *  set-surface  0 clear ;"
 
 # geometry constants
-assert_output "font cell is 8x16"     "$FNT
+assert_contains "font cell is 8x16"     "$FNT
 : g font-w . font-h . ; g"                             "8 16"
 # glyph draws in the given colour: the full block fills its cell top-left..bottom-right
-assert_output "font glyph fills cell in colour" "$FNT
+assert_contains "font glyph fills cell in colour" "$FNT
 : g s red \$DB 0 0 glyph  0 0 p  7 15 p ; g"           "16711680 16711680"
 # 0-bits are transparent: a space leaves the background untouched
-assert_output "font space is transparent" "$FNT
+assert_contains "font space is transparent" "$FNT
 : g s blue clear  red 32 0 0 glyph  0 0 p ; g"         "255"
 # text advances font-w per glyph: a two-block string lights x=0 and x=8, not x=16
-assert_output "font text advances font-w" "$FNT
+assert_contains "font text advances font-w" "$FNT
 create two \$DB c, \$DB c,
 : g s red two 2 0 0 text  0 0 p  8 0 p  16 0 p ; g"    "16711680 16711680 0"
 # newline (10) returns to the start column and drops font-h
-assert_output "font text newline wraps down" "$FNT
+assert_contains "font text newline wraps down" "$FNT
 create nl \$DB c, 10 c, \$DB c,
 : g s red nl 3 0 0 text  0 0 p  0 16 p  8 0 p ; g"     "16711680 16711680 0"
 # carriage return (13) is ignored -- second block still lands at x=8
-assert_output "font text ignores CR" "$FNT
+assert_contains "font text ignores CR" "$FNT
 create cr1 \$DB c, 13 c, \$DB c,
 : g s red cr1 3 0 0 text  8 0 p ; g"                   "16711680"
 # glyphs clip off every edge, like stamp -- no crash, stack clean
-assert_output "font glyph clips off-screen" "$FNT
+assert_contains "font glyph clips off-screen" "$FNT
 : g s red \$DB -4 0 glyph  red \$DB 99 99 glyph  0 0 p depth . ; g"  "16711680 0"
 # >glyph: consecutive characters are font-h bytes apart in the table
-assert_output "font >glyph stride is font-h" "$FNT
+assert_result "font >glyph stride is font-h" "$FNT
 : g [char] B >glyph  [char] A >glyph  - . ; g"         "16"
 # text with colour chosen per call: same bytes, two colours
-assert_output "font colour is per call" "$FNT
+assert_contains "font colour is per call" "$FNT
 create one \$DB c,
 : g s red one 1 0 0 text  green one 1 0 16 text  0 0 p  0 16 p ; g"  "16711680 65280"
 # font-scale (sticky, default 1): at 2x a full-block glyph fills a 16x32 cell,
 # so (8,0) -- background at 1x -- is now lit, and (16,0) past the cell is not.
-assert_output "font-scale magnifies a glyph" "$FNT
+assert_contains "font-scale magnifies a glyph" "$FNT
 : g s 2 to font-scale  red \$DB 0 0 glyph
   0 0 p  15 31 p  8 0 p  16 0 p ; g"                   "16711680 16711680 16711680 0"
 # the pen advance scales too: two 2x blocks span x=0..31, so the second glyph's
 # far edge (31,0) is lit only if text advanced by font-w*2, not font-w.
-assert_output "font-scale scales the pen advance" "$FNT
+assert_contains "font-scale scales the pen advance" "$FNT
 create two2 \$DB c, \$DB c,
 : g s 2 to font-scale  red two2 2 0 0 text
   0 0 p  16 0 p  31 0 p ; g"                           "16711680 16711680 16711680"
 # sticky but resettable: back to 1 and the glyph is native 8x16 again
-assert_output "font-scale resets to native" "$FNT
+assert_contains "font-scale resets to native" "$FNT
 : g s 2 to font-scale  1 to font-scale  red \$DB 0 0 glyph
   7 0 p  8 0 p ; g"                                    "16711680 0"
 # The engine (fontcore.fs) loads on its own -- text/glyph/font-scale live there,
 # not in the font data file. With no font selected yet, the metrics are 0 and
 # font-scale defaults to 1.
-assert_output "fontcore loads standalone" "include $FORTH_LIB/fontcore.fs
+assert_contains "fontcore loads standalone" "include $FORTH_LIB/fontcore.fs
 : g font-w . font-h . font-scale . ; g"                "0 0 1"
 # font! registers a font's table + cell size and derives the row stride
 # (ceil(w/8)); a data file's selector word calls it. A 12-wide font strides 2
 # bytes/row; re-calling terminus-8x16 switches the current font back to 8x16.
-assert_output "font! sets metrics, selector switches" "$FNT
+assert_contains "font! sets metrics, selector switches" "$FNT
 create wide 64 allot
 : g wide 12 16 font!  font-w . font-h . font-stride .
   terminus-8x16  font-w . font-h . font-stride . ; g"  "12 16 2 8 16 1"
 
 # >xy converts a character cell to its pixel corner, using the same advance
 # `text` does -- so it tracks font-scale, not just the cell size.
-assert_output "font >xy is col*font-w, row*font-h" "$FNT
+assert_contains "font >xy is col*font-w, row*font-h" "$FNT
 : g 3 2 >xy . . ; g"                                   "32 24"
-assert_output "font >xy follows font-scale" "$FNT
+assert_contains "font >xy follows font-scale" "$FNT
 : g 2 to font-scale  3 2 >xy . . ; g"                  "64 48"
 # and it agrees with where text actually lands: a block at row 1 column 1 is
 # lit at its own corner and dark one pixel above-left of it
-assert_output "font >xy matches where text draws" "$FNT
+assert_contains "font >xy matches where text draws" "$FNT
 create one1 \$DB c,
 : g s red one1 1  1 1 >xy  text  1 1 >xy p  8 15 p ; g"  "16711680 0"
 
@@ -1110,23 +1270,23 @@ VGA="include $FORTH_LIB/font-vga-8x8.fs
 : p pixel-addr l@ . ;
 : s fb 32 32  32 4 *  set-surface  0 clear ;"
 
-assert_output "vga font cell is 8x8"  "$VGA
+assert_contains "vga font cell is 8x8"  "$VGA
 : g font-w . font-h . font-stride . ; g"               "8 8 1"
 # the full block fills all 8 rows and stops -- row 8 belongs to the next line
-assert_output "vga glyph fills an 8x8 cell" "$VGA
+assert_contains "vga glyph fills an 8x8 cell" "$VGA
 : g s red \$DB 0 0 glyph  0 0 p  7 7 p  0 8 p ; g"     "16711680 16711680 0"
 # glyphs are font-h bytes apart, so 8 here where terminus is 16
-assert_output "vga >glyph stride is 8" "$VGA
+assert_result "vga >glyph stride is 8" "$VGA
 : g [char] B >glyph  [char] A >glyph  - . ; g"         "8"
 # newline drops font-h, which is now 8
-assert_output "vga text newline drops 8" "$VGA
+assert_contains "vga text newline drops 8" "$VGA
 create nl8 \$DB c, 10 c, \$DB c,
 : g s red nl8 3 0 0 text  0 8 p  0 16 p ; g"           "16711680 0"
 # Both fonts loaded at once: a selector switches the metrics AND the glyph
 # data. The probe is row 8 of a full block -- inside terminus's 16-row cell,
 # past the end of vga's 8-row one. The file selects itself, so vga is current
 # straight after the include.
-assert_output "two fonts coexist, selectors switch" "$FNT
+assert_contains "two fonts coexist, selectors switch" "$FNT
 include $FORTH_LIB/font-vga-8x8.fs
 : g s font-h .  terminus-8x16 font-h .
   red \$DB 0 0 glyph  0 8 p
@@ -1138,11 +1298,11 @@ section "FFI (dlopen / dlsym / ccall)"
 # Calls into libc through the same path SDL bindings use. Works under QEMU
 # too (the emulated ld.so resolves libc.so.6 inside the -L sysroot).
 FFI="$FORTH_LIB/ffi.fs"
-assert_output "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlopen s\" getpid\" dlsym >r 0 r> (ccall) 0> . ; t"  "-1"
-assert_output "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
-assert_output "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
-assert_output "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
-assert_output "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "cannot load libnosuch.so.99"
+assert_contains "ccall 0 args (getpid>0)"  "include $FFI  : t s\" libc.so.6\" dlopen s\" getpid\" dlsym >r 0 r> (ccall) 0> . ; t"  "-1"
+assert_result "ccall 1 arg (labs -42)"   "include $FFI  : t s\" libc.so.6\" dlopen s\" labs\" dlsym >r -42 1 r> (ccall) . ; t"  "42"
+assert_contains "ccall 4 args (snprintf)"  "include $FFI  create fmt 37 c, 108 c, 100 c, 0 c,  : t s\" libc.so.6\" dlopen s\" snprintf\" dlsym >r pad 68 fmt 9876 4 r> (ccall) . pad 4 type ; t"  "4 9876"
+assert_contains "(dlopen) bad lib -> 0"    "include $FFI  : t s\" libnosuch.so.99\" >z (dlopen) 0= . ; t"  "-1"
+assert_contains "dlopen bad lib aborts"    "include $FFI  : t s\" libnosuch.so.99\" dlopen ; t"  "cannot load libnosuch.so.99"
 
 # --- float arguments ---
 # libm is the oracle: exact, well-defined functions, so a wrong register or a
@@ -1594,7 +1754,7 @@ else
     # the dedicated tone channel, so a run of tones plays in SEQUENCE exactly
     # as it did before channels existed. Two 100 ms tones at 44100 Hz mono
     # 16-bit = 2*8820 bytes, so the second must ADD to the first rather than
-    # land on some other channel. Dark Star's siren sweep depends on this.
+    # land on some other channel. A game's siren sweep depends on this.
     ch_seq=$(printf 'include %s/ffi.fs\ninclude %s/sound.fs\n: t snd-open drop 440 100 tone tone-ch ch-queued 440 100 tone tone-ch ch-queued swap - . tone-ch ch-queued 17000 > . .\" seq-ok\" snd-close ; t\nbye\n' "$FORTH_LIB" "$FORTH_LIB" \
         | SDL_AUDIO_DRIVER=dummy BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
     if printf '%s' "$ch_seq" | grep -q '8820 -1 seq-ok'; then
@@ -1948,7 +2108,7 @@ else
     # bytes queued on speech's own channel -- and that the channel is NOT
     # channel 0, which belongs to tone.
     sp_check "say queues audio on its own channel" \
-        "$(sp_run ': t snd-open drop speech-open drop s" Dark Star ready" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
+        "$(sp_run ': t snd-open drop speech-open drop s" ready player one" say speech-ch ch-queued 0> . speech-ch 0> . talking? . ." said" speech-ch ch-wait ; t')" \
         '-1 -1 -1 said'
 
     # The bug this caught during development: `dup >r` left the cst_wave on the
@@ -2280,33 +2440,33 @@ rm -rf "$wav_dir"
 section "Dynamic Memory (heap)"
 # =========================================================================
 # ALLOCATE/FREE round-trip: store and read a cell, ior 0 throughout.
-assert_output "ALLOCATE/FREE round-trip" \
+assert_contains "ALLOCATE/FREE round-trip" \
     ": t 64 allocate .\" ior=\" . dup 4242 swap ! dup @ .\" val=\" . free .\" f=\" . ; t" \
     "ior=0 val=4242 f=0"
 # Zero-size request is rejected with a non-zero ior (no allocation).
-assert_output "ALLOCATE 0 → non-zero ior" \
+assert_contains "ALLOCATE 0 → non-zero ior" \
     ": t 0 allocate .\" z=\" . drop ; t" \
     "z=22"
 # RESIZE grows the block and preserves existing contents.
-assert_output "RESIZE preserves contents" \
+assert_contains "RESIZE preserves contents" \
     ": t 16 allocate drop dup 7 swap ! 256 resize .\" r=\" . dup @ .\" p=\" . free drop ; t" \
     "r=0 p=7"
 # An impossibly large request fails cleanly: a-addr 0 and a non-zero ior.
-assert_output "ALLOCATE failure → a-addr 0" \
+assert_contains "ALLOCATE failure → a-addr 0" \
     ": t 1000000000000000 allocate swap .\" a=\" . 0<> .\" bad=\" . ; t" \
     "a=0 bad=-1"
 # FREE / RESIZE of a null pointer (e.g. a failed ALLOCATE's result) must not
 # dereference it. FREE reports success (C's free(NULL); lets "free then zero"
 # run twice); RESIZE still reports a non-zero ior.
-assert_output "FREE null → success, no fault" \
+assert_contains "FREE null → success, no fault" \
     ": t 0 free .\" fz=\" . ; t" \
     "fz=0"
 # The idiom the above exists for: a cleanup path that runs twice must not fault
 # or report an error the second time round.
-assert_output "FREE twice with zeroing → both succeed" \
+assert_contains "FREE twice with zeroing → both succeed" \
     "variable p 64 allocate drop p ! : t p @ free .\" a=\" . 0 p ! p @ free .\" b=\" . ; t" \
     "a=0 b=0"
-assert_output "RESIZE null → a-addr 0, non-zero ior" \
+assert_contains "RESIZE null → a-addr 0, non-zero ior" \
     ": t 0 64 resize .\" rz=\" . .\" ra=\" . ; t" \
     "rz=22 ra=0"
 
@@ -2314,72 +2474,74 @@ assert_output "RESIZE null → a-addr 0, non-zero ior" \
 section "Double-Cell Arithmetic"
 # =========================================================================
 
-assert_output "s>d positive"       "10 s>d . ."                       "0 10"
-assert_output "s>d negative"       ": test -1 s>d . . ; test"         "-1 -1"
-assert_output "um*"                "3 4 um* . ."                      "0 12"
-assert_output "m*"                 ": test -3 4 m* . . ; test"        "-1 -12"
-assert_output "um/mod"             "42 0 10 um/mod . ."               "4 2"
-assert_output "fm/mod positive"    "7 s>d 2 fm/mod . ."               "3 1"
-assert_output "fm/mod negative"    ": test 7 s>d -2 fm/mod . . ; test"  "-4 -1"
-assert_output "sm/rem"             ": test 7 s>d -2 sm/rem . . ; test"  "-3 1"
+assert_contains "s>d positive"       "10 s>d . ."                       "0 10"
+assert_contains "s>d negative"       ": test -1 s>d . . ; test"         "-1 -1"
+assert_contains "um*"                "3 4 um* . ."                      "0 12"
+assert_contains "m*"                 ": test -3 4 m* . . ; test"        "-1 -12"
+assert_contains "um/mod"             "42 0 10 um/mod . ."               "4 2"
+assert_contains "fm/mod positive"    "7 s>d 2 fm/mod . ."               "3 1"
+assert_contains "fm/mod negative"    ": test 7 s>d -2 fm/mod . . ; test"  "-4 -1"
+assert_contains "sm/rem"             ": test 7 s>d -2 sm/rem . . ; test"  "-3 1"
 
 # =========================================================================
 section "Pictured Numeric Output"
 # =========================================================================
 
-assert_output "u. zero"            "0 u."                             "0"
-assert_output "u. simple"          "42 u."                            "42"
-assert_output "u. large"           "999999 u."                        "999999"
-assert_output ".r right-just"      "42 5 .r"                          "   42"
-assert_output ".r narrow"          "100 2 .r"                         "100"
-assert_output ".r negative"       ': test -42 6 .r ; test'           "   -42"
-assert_output ". INT64_MIN"       ': test -9223372036854775808 . ; test'  "-9223372036854775808  ok"
-assert_output "*/mod"              "3 7 2 */mod . ."                  "10 1"
-assert_output "decimal"            ": test decimal 42 . ; test"       "42"
+assert_result "u. zero"            "0 u."                             "0"
+assert_result "u. simple"          "42 u."                            "42"
+assert_result "u. large"           "999999 u."                        "999999"
+assert_contains ".r right-just"      "42 5 .r"                          "   42"
+assert_result ".r narrow"          "100 2 .r"                         "100"
+assert_contains ".r negative"       ': test -42 6 .r ; test'           "   -42"
+assert_contains ". INT64_MIN"       ': test -9223372036854775808 . ; test'  "-9223372036854775808  ok"
+assert_contains "*/mod"              "3 7 2 */mod . ."                  "10 1"
+assert_result   "decimal"            ": test decimal 42 . ; test"       "42"
 
 # =========================================================================
 section "BASE and Number Formatting"
 # =========================================================================
 
-assert_output "hex output"         'hex #255 . decimal'       "FF"
-assert_output "hex u. output"      'hex #255 u. decimal'      "FF"
-assert_output "hex input"          ': hex 16 base ! ; FF . decimal'              "FF"
-assert_output "hex $ prefix"       ': hex 16 base ! ; $FF . decimal'             "FF"
-assert_output "dec # in hex"       'hex #100 . decimal'                         "64"
-assert_output "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
-assert_output "bin % prefix"       '%1010 .'                                      "10"
-assert_output "binary output"      'binary #10 . decimal'                         "1010"
-assert_output "binary input"       'binary 1011 decimal .'                        "11"
-assert_output ".s follows BASE"    'binary 110 .s decimal'                        "<1> 110"
-assert_output ".s hex"             '30 hex .s decimal'                            "<1> 1E"
-assert_output ".s decimal format"  '1 2 3 .s'                                     "<3> 1 2 3"
-assert_output ".s empty stack"     '.s'                                           "<0>"
-assert_output "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
-assert_output "$ prefix decimal"   '$FF .'                                        "255"
-assert_output "# prefix hex"       'hex #255 . decimal'         "FF"
-assert_output "base restore"       'hex #42 . decimal 42 .'    "2A 42"
+assert_contains "hex output"         'hex #255 . decimal'       "FF"
+assert_contains "hex u. output"      'hex #255 u. decimal'      "FF"
+assert_result "hex input"          'hex FF . decimal'                            "FF"
+# $ parses as hex with the base left DECIMAL, so the answer differs from the
+# input text -- the prefix cannot be confused with the base here.
+assert_result "hex $ prefix"       '$FF .'                                       "255"
+assert_contains "dec # in hex"       'hex #100 . decimal'                         "64"
+assert_contains "bin output"         ': bin 2 base ! ; bin #10 . decimal'           "1010"
+assert_result "bin % prefix"       '%1010 .'                                      "10"
+assert_contains "binary output"      'binary #10 . decimal'                         "1010"
+assert_result "binary input"       'binary 1011 decimal .'                        "11"
+assert_contains ".s follows BASE"    'binary 110 .s decimal'                        "<1> 110"
+assert_contains ".s hex"             '30 hex .s decimal'                            "<1> 1E"
+assert_contains ".s decimal format"  '1 2 3 .s'                                     "<3> 1 2 3"
+assert_contains ".s empty stack"     '.s'                                           "<0>"
+assert_contains "oct output"         ': oct 8 base ! ; oct #255 . decimal'          "377"
+assert_contains "$ prefix decimal"   '$FF .'                                        "255"
+assert_contains "# prefix hex"       'hex #255 . decimal'         "FF"
+assert_contains "base restore"       'hex #42 . decimal 42 .'    "2A 42"
 
 # =========================================================================
 section "Batch 1: Simple Core Words"
 # =========================================================================
 
 # LSHIFT / RSHIFT
-assert_output "lshift"            '1 4 lshift .'                        "16"
-assert_output "lshift zero"       '42 0 lshift .'                       "42"
-assert_output "rshift"            '256 4 rshift .'                      "16"
-assert_output "rshift zero"       '42 0 rshift .'                       "42"
+assert_contains "lshift"            '1 4 lshift .'                        "16"
+assert_result "lshift zero"       '42 0 lshift .'                       "42"
+assert_contains "rshift"            '256 4 rshift .'                      "16"
+assert_result "rshift zero"       '42 0 rshift .'                       "42"
 
 # 2* / 2/
-assert_output "2*"                '21 2* .'                             "42"
-assert_output "2/ positive"       '42 2/ .'                             "21"
-assert_output "2/ negative"       '-7 2/ .'                             "-4"
-assert_output "2/ -1"             '-1 2/ .'                             "-1"
+assert_contains "2*"                '21 2* .'                             "42"
+assert_contains "2/ positive"       '42 2/ .'                             "21"
+assert_contains "2/ negative"       '-7 2/ .'                             "-4"
+assert_result "2/ -1"             '-1 2/ .'                             "-1"
 
 # U<
-assert_output "u< true"           '3 10 u< .'                          "-1"
-assert_output "u< false"          '10 3 u< .'                          "0"
-assert_output "u< equal"          '5 5 u< .'                           "0"
-assert_output "u< unsigned"       '-1 1 u< .'                          "0"
+assert_contains "u< true"           '3 10 u< .'                          "-1"
+assert_result "u< false"          '10 3 u< .'                          "0"
+assert_contains "u< equal"          '5 5 u< .'                           "0"
+assert_contains "u< unsigned"       '-1 1 u< .'                          "0"
 
 # <= / >= / U<= / U>=  (extensions, not Forth 2012 CORE)
 # The interesting cases are the ones a naive `a b - 0<` would get wrong:
@@ -2427,65 +2589,65 @@ assert_result "cmp differential" \
        loop loop ;  sweep CBAD @ . ." mismatched"'          "0 mismatched"
 
 # +!
-assert_output "+!"                'variable x 10 x ! 5 x +! x @ .'    "15"
+assert_contains "+!"                'variable x 10 x ! 5 x +! x @ .'    "15"
 
 # 2! / 2@
-assert_output "2! 2@"             'variable p 8 allot 10 20 p 2! p 2@ . .' "20 10"
+assert_contains "2! 2@"             'variable p 8 allot 10 20 p 2! p 2@ . .' "20 10"
 
 # CHAR+ / CHARS
-assert_output "char+"             '100 char+ .'                         "101"
-assert_output "chars"             '10 chars .'                          "10"
+assert_contains "char+"             '100 char+ .'                         "101"
+assert_result "chars"             '10 chars .'                          "10"
 
 # FILL
-assert_output "fill"              'create buf 5 allot buf 5 65 fill buf 5 type' "AAAAA"
-assert_output "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
+assert_contains "fill"              'create buf 5 allot buf 5 65 fill buf 5 type' "AAAAA"
+assert_result "fill zero len"     'create b2 3 allot b2 0 65 fill 42 .'  "42"
 
 # MOVE
-assert_output "move non-overlap"  'create s 3 allot create d 3 allot s 3 65 fill s d 3 move d 3 type' "AAA"
-assert_output "move zero len"     '1 2 0 move 42 .' "42"
+assert_contains "move non-overlap"  'create s 3 allot create d 3 allot s 3 65 fill s d 3 move d 3 type' "AAA"
+assert_result "move zero len"     '1 2 0 move 42 .' "42"
 # Overlapping MOVE must be memmove-safe (regression: the overlap copy direction
 # was inverted, smearing bytes — see TODO Known Bugs). Buffer holds "ABCDE".
-assert_output "move overlap right" 'create mr 6 allot 65 mr c! 66 mr 1+ c! 67 mr 2 + c! 68 mr 3 + c! 69 mr 4 + c! mr mr 1+ 4 move mr 5 type' "AABCD"
-assert_output "move overlap left"  'create ml 6 allot 65 ml c! 66 ml 1+ c! 67 ml 2 + c! 68 ml 3 + c! 69 ml 4 + c! ml 1+ ml 4 move ml 5 type' "BCDEE"
-assert_output "move zero balance"  'create mz 2 allot mz mz 1+ 0 move depth 0 = .' "-1"
+assert_contains "move overlap right" 'create mr 6 allot 65 mr c! 66 mr 1+ c! 67 mr 2 + c! 68 mr 3 + c! 69 mr 4 + c! mr mr 1+ 4 move mr 5 type' "AABCD"
+assert_contains "move overlap left"  'create ml 6 allot 65 ml c! 66 ml 1+ c! 67 ml 2 + c! 68 ml 3 + c! 69 ml 4 + c! ml 1+ ml 4 move ml 5 type' "BCDEE"
+assert_contains "move zero balance"  'create mz 2 allot mz mz 1+ 0 move depth 0 = .' "-1"
 
 # ALIGN / ALIGNED
-assert_output "aligned"           '1 aligned .'                        "8"
-assert_output "aligned 8"         '8 aligned .'                        "8"
-assert_output "aligned 9"         '9 aligned .'                        "16"
+assert_contains "aligned"           '1 aligned .'                        "8"
+assert_result "aligned 8"         '8 aligned .'                        "8"
+assert_contains "aligned 9"         '9 aligned .'                        "16"
 
 # CHAR
-assert_output "char"              'char A .'                           "65"
-assert_output "char space"        'char X .'                           "88"
+assert_contains "char"              'char A .'                           "65"
+assert_contains "char space"        'char X .'                           "88"
 
 # =========================================================================
 section "Compiler Words"
 # =========================================================================
 
 # STATE
-assert_output "state interpret"   'state @ .'                          "0"
-assert_output "state addr"        ': test state @ ; test .'            "0"
+assert_contains "state interpret"   'state @ .'                          "0"
+assert_contains "state addr"        ': test state @ ; test .'            "0"
 
 # [ and ]
-assert_output "[ ] inline"        ': test [ 42 ] literal ; test .'    "42"
+assert_result "[ ] inline"        ': test [ 42 ] literal ; test .'    "42"
 
 # LITERAL
-assert_output "literal"           ': five [ 5 ] literal ; five .'     "5"
+assert_result "literal"           ': five [ 5 ] literal ; five .'     "5"
 
 # [']
-assert_output "['] execute"       ": test ['] dup execute ; 7 test . ." "7 7"
+assert_contains "['] execute"       ": test ['] dup execute ; 7 test . ." "7 7"
 
 # [CHAR]
-assert_output "[char]"            ': test [char] A ; test .'          "65"
+assert_contains "[char]"            ': test [char] A ; test .'          "65"
 
 # EXIT
-assert_output "exit early"        ': test 1 . exit 2 . ; test'        "1"
+assert_result "exit early"        ': test 1 . exit 2 . ; test'        "1"
 
 # POSTPONE immediate word
-assert_output "postpone if"       ': my-if postpone if ; immediate : test 1 my-if 42 . then ; test' "42"
+assert_result "postpone if"       ': my-if postpone if ; immediate : test 1 my-if 42 . then ; test' "42"
 
 # POSTPONE non-immediate word
-assert_output "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
+assert_contains "postpone dup"      ': my-dup postpone dup ; immediate : test my-dup ; 7 test . .' "7 7"
 
 # =========================================================================
 section "GETENV (process environment)"
@@ -2554,7 +2716,7 @@ section "System Words"
 # and gforth answers differently — it returns a real address for every word,
 # which it can because its bodies sit at a fixed offset from the xt and ours
 # do not.  Pinned here so the divergence is a decision, not a surprise.
-assert_output ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
+assert_contains ">body"              "create myvar 8 allot ' myvar >body myvar = ." "-1"
 assert_result ">body: create follows the pointer" \
     "create cx 5 , ' cx >body @ ."                       "5"
 assert_result ">body: variable is its own data field" \
@@ -2566,17 +2728,17 @@ assert_result ">body: a constant likewise" \
 
 # >IN — reflects the parse offset into the current line. For the fixed input
 # ">in @ .", >in has advanced past ">in @" (to column 5) when @ runs.
-assert_output ">in"                '>in @ .'                          "5"
+assert_contains ">in"                '>in @ .'                          "5"
 
 # SOURCE
-assert_output "source"             ': test source nip ; test .'      ""
+assert_result "source"             ': test source nip ; test .'      ""
 
 # ABORT
-assert_output "abort recovers"     '1 2 abort 3 .'                   "> "
+assert_contains "abort recovers"     '1 2 abort 3 .'                   "> "
 
 # ABORT"
-assert_output 'abort" true'        ': test true abort" oops" ; test' "oops"
-assert_output 'abort" false'       ': test false abort" oops" 42 ; test .' "42"
+assert_result   'abort" true'        ': test true abort" oops" ; test' "oops"
+assert_result   'abort" false'       ': test false abort" oops" 42 ; test .' "42"
 
 # ABORT" OUTSIDE a definition.  It is IMMEDIATE, so with no interpreting
 # branch it used to RUN at the prompt: POSTPONE its code into the dictionary
@@ -2604,128 +2766,141 @@ assert_result 'abort" message ends the line'  \
     "$(printf ': t -1 abort" oops" ;\nt\n." tail" cr')"  "$(printf 'oops\ntail')"
 
 # >NUMBER
-assert_output ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
-assert_output ">number hex"        ': test hex 0 0 s" FF" >number 2drop . . decimal ; test' "0 FF"
-assert_output ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
+assert_contains ">number simple"     ': test 0 0 s" 123" >number 2drop . . ; test'  "0 123"
+assert_contains ">number hex"        ': test hex 0 0 s" FF" >number 2drop . . decimal ; test' "0 FF"
+assert_result ">number partial"    ': test 0 0 s" 12xy" >number nip . 2drop ; test'   "2"
 
 # ENVIRONMENT?
-assert_output "environment?"       ': et s" test" environment? . ; et'  "0"
+assert_contains "environment?"       ': et s" test" environment? . ; et'  "0"
 
 # =========================================================================
 section "Core Extension Words"
 # =========================================================================
 
 # 0>
-assert_output "0> positive"       '5 0> .'                            "-1"
-assert_output "0> zero"           '0 0> .'                            "0"
-assert_output "0> negative"       '-3 0> .'                           "0"
+assert_contains "0> positive"       '5 0> .'                            "-1"
+assert_result "0> zero"           '0 0> .'                            "0"
+assert_result "0> negative"       '-3 0> .'                           "0"
 
 # U>
-assert_output "u> true"           '10 3 u> .'                         "-1"
-assert_output "u> false"          '3 10 u> .'                         "0"
+assert_contains "u> true"           '10 3 u> .'                         "-1"
+assert_result "u> false"          '3 10 u> .'                         "0"
 
 # WITHIN
-assert_output "within true"       '5 3 10 within .'                   "-1"
-assert_output "within false"      '2 3 10 within .'                   "0"
-assert_output "within edge lo"    '3 3 10 within .'                   "-1"
-assert_output "within edge hi"    '10 3 10 within .'                  "0"
+assert_contains "within true"       '5 3 10 within .'                   "-1"
+assert_result "within false"      '2 3 10 within .'                   "0"
+assert_contains "within edge lo"    '3 3 10 within .'                   "-1"
+assert_result "within edge hi"    '10 3 10 within .'                  "0"
 
 # ERASE
-assert_output "erase"             'create buf 3 allot buf 3 65 fill buf 2 erase buf c@ .' "0"
+assert_contains "erase"             'create buf 3 allot buf 3 65 fill buf 2 erase buf c@ .' "0"
 
 # U.R
-assert_output "u.r"               '42 5 u.r'                          "   42"
+assert_contains "u.r"               '42 5 u.r'                          "   42"
 
 # U.0R — same field, zeros for padding
-assert_output "u.0r pads"         '42 6 u.0r'                         "000042"
-assert_output "u.0r zero"         '0 4 u.0r'                          "0000"
-assert_output "u.0r exact fit"    '4242 4 u.0r'                       "4242"
-assert_output "u.0r overflows"    '255 2 u.0r'                        "255"
-assert_output "u.0r width 0"      '7 0 u.0r'                          "7"
-assert_output "u.0r unsigned"     '-1 4 u.0r'         "18446744073709551615"
+assert_contains "u.0r pads"         '42 6 u.0r'                         "000042"
+assert_contains "u.0r zero"         '0 4 u.0r'                          "0000"
+assert_result "u.0r exact fit"    '4242 4 u.0r'                       "4242"
+assert_result "u.0r overflows"    '255 2 u.0r'                        "255"
+assert_result "u.0r width 0"      '7 0 u.0r'                          "7"
+assert_contains "u.0r unsigned"     '-1 4 u.0r'         "18446744073709551615"
 # follows BASE, and leaves it alone (the classic bug in this family)
-assert_output "u.0r hex color"    'hex FF00 6 u.0r decimal'           "00FF00"
-assert_output "u.0r binary row"   'binary #60 #8 u.0r decimal'        "00111100"
-assert_output "u.0r keeps base"   'hex FF 4 u.0r decimal space base @ .' "00FF 10"
-assert_output "u.0r stack clean"  '42 6 u.0r space depth .'           "000042 0"
+assert_contains "u.0r hex color"    'hex FF00 6 u.0r decimal'           "00FF00"
+assert_contains "u.0r binary row"   'binary #60 #8 u.0r decimal'        "00111100"
+assert_contains "u.0r keeps base"   'hex FF 4 u.0r decimal space base @ .' "00FF 10"
+assert_contains "u.0r stack clean"  '42 6 u.0r space depth .'           "000042 0"
 
 # UNUSED
-assert_output "unused"            'unused 0 > .'                      "-1"
+assert_contains "unused"            'unused 0 > .'                      "-1"
 
 # CASE/OF/ENDOF/ENDCASE
-assert_output "case 1"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 1 test .' "10"
-assert_output "case 2"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 2 test .' "20"
-assert_output "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 3 test .' "0"
+assert_result "case 1"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 1 test .' "10"
+assert_result "case 2"            ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 2 test .' "20"
+assert_result "case default"      ': test case 1 of 10 endof 2 of 20 endof 0 swap endcase ; 3 test .' "0"
 
 # .(
-assert_output "dot-paren"         '.( hello)'                         "hello"
+assert_result   "dot-paren"         '.( hello)'                         "hello"
 
 # =========================================================================
 section "Batch 1: Core Extension Words"
 # =========================================================================
 
 # PARSE-NAME
-assert_output "parse-name"           'parse-name hello type'              "hello"
+assert_result "parse-name"           'parse-name hello type'              "hello"
 
 # PARSE
-assert_output "parse delim"          '41 parse hello) type'               "hello"
-assert_output "parse space"          '32 parse hello type'                "hello"
-assert_output "parse no delim"       '41 parse hello type'                "hello"
+assert_result "parse delim"          '41 parse hello) type'               "hello"
+# The contrast with parse-name directly above: parse-name SKIPS leading spaces,
+# PARSE does not. So a space-delimited PARSE stops on the space that separates
+# the calling word from what follows, and takes nothing -- the `42` here is text
+# that IS available and still is not parsed, which is what rules out "length 0
+# because the line had ended". It then executes normally, so the line stays
+# clean and the 0 is the only thing under test.
+#
+# This asserted "hello" until 2026-08-18 and was matching the `? hello` error
+# that proves the opposite -- the leftover word being undefined. It had never
+# tested anything. Found by flagging matches that occur ONLY inside an error
+# line, which is the same trap the `hex input` test fell into.
+assert_result "parse space takes nothing (PARSE keeps leading delimiters)" \
+                                     ': t 32 parse nip . ; t 42 drop'    "0  ok"
+assert_result "parse no delim"       '41 parse hello
+type'                 "hello"
 
 # SOURCE-ID
-assert_output "source-id keyboard"   'source-id .'                        "0"
-assert_output "source-id evaluate"   ': t s" source-id ." evaluate ; t'  "-1"
+assert_contains "source-id keyboard"   'source-id .'                        "0"
+assert_contains "source-id evaluate"   ': t s" source-id ." evaluate ; t'  "-1"
 
 # VALUE / TO
-assert_output "value"                '10 value x x .'                     "10"
-assert_output "to interpret"         '10 value x 20 to x x .'            "20"
-assert_output "to compile"           '10 value x : t 20 to x ; t x .'   "20"
-assert_output "value unchanged"      '10 value x x . x .'                "10 10"
+assert_result "value"                '10 value x x .'                     "10"
+assert_result "to interpret"         '10 value x 20 to x x .'            "20"
+assert_result "to compile"           '10 value x : t 20 to x ; t x .'   "20"
+assert_contains "value unchanged"      '10 value x x . x .'                "10 10"
 
 # +TO: add to a value. It parses the name only to fetch the current contents,
 # rewinds >IN, and lets TO do the store — so it has to work in both states, and
 # every failure has to come out of TO looking exactly like a bare TO's.
-assert_output "+to interpret"        '10 value x 5 +to x x .'                       "15"
-assert_output "+to compile"          '10 value x : t 5 +to x ; t t x .'             "20"
-assert_output "+to in a do loop"     '0 value x : t 4 0 do 10 +to x loop ; t x .'   "40"
-assert_output "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y ; t x . y .'  "1 2"
-assert_output "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
-assert_output "+to negative"         '10 value x -4 +to x x .'                      "6"
-assert_output "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
+assert_contains "+to interpret"        '10 value x 5 +to x x .'                       "15"
+assert_contains "+to compile"          '10 value x : t 5 +to x ; t t x .'             "20"
+assert_contains "+to in a do loop"     '0 value x : t 4 0 do 10 +to x loop ; t x .'   "40"
+assert_contains "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y ; t x . y .'  "1 2"
+assert_contains "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
+assert_contains "+to negative"         '10 value x -4 +to x x .'                      "6"
+assert_result "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
 # The error paths are TO's, verbatim — nothing is caught and re-reported here.
 assert_error  "+to refuses a variable"     'variable v 1 +to v'   "v: not a value or deferred word"
 assert_error  "+to on an unknown name"     '1 +to no-such-value'  "? no-such-value"
 assert_error  "+to with no name at all"    '0 value x 1 +to'      "not a value or deferred word"
 # The value goes on its own line: a line error rolls the dictionary back to
 # where that LINE started, so a same-line `value x` would be forgotten too.
-assert_output "session survives a bad +to" '0 value x
+assert_contains "session survives a bad +to" '0 value x
 1 +to zz
 5 +to x x . depth .'  "5 0"
 
 # :NONAME
-assert_output "noname"               ':noname dup * ; 7 swap execute .'   "49"
-assert_output "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
+assert_contains "noname"               ':noname dup * ; 7 swap execute .'   "49"
+assert_contains "noname in var"        'variable sq :noname dup * ; sq ! 6 sq @ execute .' "36"
 
 # DEFER / IS (vectored execution / late binding). Note: ' and ['] contain an
 # apostrophe, escaped as '\'' to survive the single-quoted shell argument.
-assert_output "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
-assert_output "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
-assert_output "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
-assert_output "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
+assert_result "defer/is interpret"   'defer p : c p ; :noname 42 ; is p c .'                 "42"
+assert_result "is by tick"           'defer p : one 1 ; '\'' one is p p .'                   "1"
+assert_contains "is re-vector"         'defer p : c p . ; :noname 1 ; is p c :noname 2 ; is p c'  "1 2"
+assert_result "is compile-mode"      'defer p : c p . ; : two 2 ; : sw '\'' two is p ; sw c'  "2"
 assert_error  "defer uninitialized names the word"       'defer p p'          "p: uninitialized deferred word"
 assert_error  "defer uninitialized names the right word" 'defer p defer q q'  "q: uninitialized deferred word"
 # Flags2 (header offset 9) carries a word-type code: 1 = defer, 0 = ordinary,
 # 2 = value.
-assert_output "Flags2 tags a defer as type 1"     'defer p (latest@) 9 + c@ .'  "1"
-assert_output "Flags2 leaves a colon word type 0" ': c 1 ; (latest@) 9 + c@ .'  "0"
-assert_output "Flags2 tags a value as type 2"     '5 value v (latest@) 9 + c@ .'  "2"
+assert_contains "Flags2 tags a defer as type 1"     'defer p (latest@) 9 + c@ .'  "1"
+assert_contains "Flags2 leaves a colon word type 0" ': c 1 ; (latest@) 9 + c@ .'  "0"
+assert_contains "Flags2 tags a value as type 2"     '5 value v (latest@) 9 + c@ .'  "2"
 # to/is are type-checked against Flags2: is wants a defer; to takes a value or
 # a defer; anything else is refused (the store used to corrupt compiled code).
 assert_error  "to refuses an ordinary word"   ': w 7 ; 5 to w'      "w: not a value or deferred word"
 assert_error  "to refuses a constant"         '42 constant k 9 to k'  "k: not a value or deferred word"
 assert_error  "is refuses an ordinary word"   ': w 7 ; '\'' w is w'  "w: not a deferred word"
 assert_error  "is refuses a value"            '5 value v 6 is v'     "v: not a deferred word"
-assert_output "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
+assert_result "to on a defer still allowed"   'defer p : one 1 ; '\'' one to p p .'  "1"
 # A refused store must leave the target intact (it used to be corrupted).
 ti_out=$(printf ': w 7 ;\n5 to w\nw .\nbye\n' | timeout 2 $FORTH 2>&1)
 if [[ "$ti_out" == *"w: not a value or deferred word"* && "$ti_out" == *"7  ok"* ]]; then
@@ -2734,8 +2909,8 @@ else
     printf "  ${RED}FAIL${NC}  refused to leaves the word intact\n    Got: %s\n" "$(echo "$ti_out"|head -4)"; ((failed++))
 fi
 # defer@ / action-of (Forth 2012) and SEE's binding report.
-assert_output "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
-assert_output "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
+assert_result "defer@ reads the action"      'defer p : one 1 ; '\'' one is p '\'' p defer@ execute .'  "1"
+assert_result "action-of reads the action"   'defer p : one 1 ; '\'' one is p action-of p execute .'    "1"
 assert_error  "action-of refuses a non-defer" ': w 7 ; action-of w'  "w: not a deferred word"
 sb_out=$(printf 'defer d\nsee d\n: one 1 ;\n'\''  one is d\nsee d\n:noname 42 . ; is d\nsee d\nbye\nn\n' \
     | BASICFORTH_SESSION=1 timeout 2 $FORTH 2>&1)
@@ -2758,109 +2933,109 @@ else
 fi
 
 # ?DO
-assert_output "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
-assert_output "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
-assert_output "?do skip empty"       ': t 0 0 ?do i . loop ; t'          " ok"
+assert_contains "?do normal"           ': t 5 0 ?do i . loop ; t'          "0 1 2 3 4"
+assert_result "?do skip"             ': t 5 5 ?do i . loop 99 . ; t'     "99"
+assert_contains "?do skip empty"       ': t 0 0 ?do i . loop ; t'          " ok"
 
 # WORDS
-assert_output "words"                'words'                              "words"
+assert_result "words"                'words'                              "words"
 
 # =========================================================================
 section "Batch 2: Programming-Tools + String Words"
 # =========================================================================
 
 # ?
-assert_output "question fetch"       'variable v 42 v ! v ?'              "42"
+assert_result "question fetch"       'variable v 42 v ! v ?'              "42"
 
 # DUMP
-assert_output "dump"                 'here 16 dump'                       "|................|"
+assert_contains "dump"                 'here 16 dump'                       "|................|"
 
 # /STRING
-assert_output "/string"              ': t s" hello world" 6 /string type ; t'  "world"
-assert_output "/string zero"         ': t s" hello" 0 /string type ; t'        "hello"
+assert_result "/string"              ': t s" hello world" 6 /string type ; t'  "world"
+assert_result "/string zero"         ': t s" hello" 0 /string type ; t'        "hello"
 
 # COMPARE
-assert_output "compare equal"        ': t s" hello" s" hello" compare . ; t'   "0"
-assert_output "compare less"         ': t s" abc" s" abd" compare . ; t'       "-1"
-assert_output "compare greater"      ': t s" abd" s" abc" compare . ; t'       "1"
-assert_output "compare shorter"      ': t s" abc" s" abcd" compare . ; t'      "-1"
-assert_output "compare longer"       ': t s" abcd" s" abc" compare . ; t'      "1"
+assert_contains "compare equal"        ': t s" hello" s" hello" compare . ; t'   "0"
+assert_contains "compare less"         ': t s" abc" s" abd" compare . ; t'       "-1"
+assert_contains "compare greater"      ': t s" abd" s" abc" compare . ; t'       "1"
+assert_contains "compare shorter"      ': t s" abc" s" abcd" compare . ; t'      "-1"
+assert_contains "compare longer"       ': t s" abcd" s" abc" compare . ; t'      "1"
 
 # CMOVE / CMOVE>
-assert_output "cmove"                'create s 65 c, 66 c, 67 c, create d 3 allot s d 3 cmove d c@ . d 1+ c@ . d 2 + c@ .'  "65 66 67"
-assert_output "cmove>"               'create cs 65 c, 66 c, 67 c, create cd 3 allot cs cd 3 cmove> cd c@ . cd 1+ c@ . cd 2 + c@ .'  "65 66 67"
+assert_contains "cmove"                'create s 65 c, 66 c, 67 c, create d 3 allot s d 3 cmove d c@ . d 1+ c@ . d 2 + c@ .'  "65 66 67"
+assert_contains "cmove>"               'create cs 65 c, 66 c, 67 c, create cd 3 allot cs cd 3 cmove> cd c@ . cd 1+ c@ . cd 2 + c@ .'  "65 66 67"
 # Zero-count copies must leave a clean stack (regression: CMOVE> dropped only 2
 # of its 3 cells when u=0 — see TODO Known Bugs). depth 0 = . prints -1 only if
 # the stack is empty afterwards.
-assert_output "cmove> zero balance"  'create cz 2 allot cz cz 1+ 0 cmove> depth 0 = .' "-1"
-assert_output "cmove zero balance"   'create kz 2 allot kz kz 1+ 0 cmove depth 0 = .' "-1"
+assert_contains "cmove> zero balance"  'create cz 2 allot cz cz 1+ 0 cmove> depth 0 = .' "-1"
+assert_contains "cmove zero balance"   'create kz 2 allot kz kz 1+ 0 cmove depth 0 = .' "-1"
 
 # -TRAILING
-assert_output "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"
-assert_output "-trailing none"       ': t s" hello" -trailing type ; t'        "hello"
+assert_result "-trailing"            ': t s" hello   " -trailing type ; t'     "hello"
+assert_result "-trailing none"       ': t s" hello" -trailing type ; t'        "hello"
 
 # BLANK
-assert_output "blank"                'create b 5 allot b 5 blank b c@ . b 4 + c@ .'  "32 32"
+assert_contains "blank"                'create b 5 allot b 5 blank b c@ . b 4 + c@ .'  "32 32"
 
 # =========================================================================
 section "Batch 3: Facility + Double-Number Words"
 # =========================================================================
 
 # KEY?
-assert_output "key? no input"        'key? .'                              "0"
+assert_contains "key? no input"        'key? .'                              "0"
 
 # MS (just check it doesn't crash — timing is non-deterministic)
-assert_output "ms"                   '1 ms 42 .'                           "42"
+assert_result "ms"                   '1 ms 42 .'                           "42"
 
 # SCREEN-WIDTH / SCREEN-HEIGHT (values depend on terminal)
-assert_output "screen-width"         'screen-width 0 > .'                  "-1"
-assert_output "screen-height"        'screen-height 0 > .'                 "-1"
+assert_contains "screen-width"         'screen-width 0 > .'                  "-1"
+assert_contains "screen-height"        'screen-height 0 > .'                 "-1"
 
 # D+
-assert_output "d+ simple"           ': t 1 0 3 0 d+ . . ; t'              "0 4"
-assert_output "d+ carry"            ': t -1 0 1 0 d+ . . ; t'             "1 0"
+assert_contains "d+ simple"           ': t 1 0 3 0 d+ . . ; t'              "0 4"
+assert_result "d+ carry"            ': t -1 0 1 0 d+ . . ; t'             "1 0"
 
 # D-
-assert_output "d- simple"           ': t 5 0 3 0 d- . . ; t'              "0 2"
+assert_contains "d- simple"           ': t 5 0 3 0 d- . . ; t'              "0 2"
 
 # D0=
-assert_output "d0= true"            ': t 0 0 d0= . ; t'                   "-1"
-assert_output "d0= false"           ': t 1 0 d0= . ; t'                   "0"
+assert_contains "d0= true"            ': t 0 0 d0= . ; t'                   "-1"
+assert_result "d0= false"           ': t 1 0 d0= . ; t'                   "0"
 
 # D0<
-assert_output "d0< true"            ': t 0 -1 d0< . ; t'                  "-1"
-assert_output "d0< false"           ': t 0 1 d0< . ; t'                   "0"
+assert_result "d0< true"            ': t 0 -1 d0< . ; t'                  "-1"
+assert_result "d0< false"           ': t 0 1 d0< . ; t'                   "0"
 
 # D=
-assert_output "d= true"             ': t 5 0 5 0 d= . ; t'               "-1"
-assert_output "d= false"            ': t 5 0 6 0 d= . ; t'               "0"
+assert_contains "d= true"             ': t 5 0 5 0 d= . ; t'               "-1"
+assert_result "d= false"            ': t 5 0 6 0 d= . ; t'               "0"
 
 # D.
-assert_output "d. positive"         ': t 42 0 d. ; t'                     "42"
-assert_output "d. negative"         ': t -42 -1 d. ; t'                   "-42"
+assert_result "d. positive"         ': t 42 0 d. ; t'                     "42"
+assert_result "d. negative"         ': t -42 -1 d. ; t'                   "-42"
 
 # =========================================================================
 section "Snake Game Prerequisites"
 # =========================================================================
 
 # MS@ (millisecond timestamp)
-assert_output "ms@ nonzero"          'ms@ 0 > .'                          "-1"
-assert_output "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
+assert_contains "ms@ nonzero"          'ms@ 0 > .'                          "-1"
+assert_contains "ms@ increases"        'ms@ 1 ms ms@ swap - 0 > .'         "-1"
 
 # CURSOR-OFF / CURSOR-ON (just check they don't crash)
-assert_output "cursor-off"           'cursor-off 42 .'                    "42"
-assert_output "cursor-on"            'cursor-on 42 .'                     "42"
+assert_result "cursor-off"           'cursor-off 42 .'                    "42"
+assert_result "cursor-on"            'cursor-on 42 .'                     "42"
 
 # Key constants
-assert_output "key_up"               'key_up .'                           "129"
-assert_output "key_down"             'key_down .'                         "130"
-assert_output "key_right"            'key_right .'                        "131"
-assert_output "key_left"             'key_left .'                         "132"
-assert_output "key_escape"           'key_escape .'                       "27"
+assert_contains "key_up"               'key_up .'                           "129"
+assert_contains "key_down"             'key_down .'                         "130"
+assert_contains "key_right"            'key_right .'                        "131"
+assert_contains "key_left"             'key_left .'                         "132"
+assert_contains "key_escape"           'key_escape .'                       "27"
 
 # Random number generator
-assert_output "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
-assert_output "rnd zero base"       '1 rnd .'                             "0"
+assert_contains "rnd range"            '100 rnd dup 0 < invert swap 100 < and .'  "-1"
+assert_contains "rnd zero base"       '1 rnd .'                             "0"
 
 # entropy ( -- x ior ): a value straight from the kernel, not the PRNG.
 assert_result "entropy succeeds"     'entropy nip .'                       "0"
@@ -2977,13 +3152,13 @@ else
 fi
 
 # INCLUDE (parse-word + included)
-assert_output "include word"         'include core.fs 42 .'                      "42"
+assert_result "include word"         'include core.fs 42 .'                      "42"
 
 # INCLUDE of a directory must error, not segfault (open succeeds on a
 # directory; the raw mmap then fails with -ENODEV, which the old check —
 # exactly -1 — missed, so -19 was used as the file base address).
 assert_error  "include directory errors"    'include /tmp'                       "cannot open /tmp"
-assert_output "include directory recovers"  $'include /tmp\n." A." ." B." cr'    "A.B."
+assert_contains "include directory recovers"  $'include /tmp\n." A." ." B." cr'    "A.B."
 
 # Tabs are whitespace: a source file indented with real tabs (or with tabs
 # between tokens) must tokenize — parse-word treats every char <= 0x20 as a
@@ -3591,7 +3766,7 @@ fi
 # fam is an abstract enum translated by the platform layer; an out-of-range
 # fam must fail like a failed open with ior EINVAL, not reach the OS as
 # arbitrary flag bits.
-assert_output "open-file bad fam -> EINVAL"  's" nofile.xyz" 7 open-file swap drop einval = .'  "-1"
+assert_contains "open-file bad fam -> EINVAL"  's" nofile.xyz" 7 open-file swap drop einval = .'  "-1"
 if [[ "$fa_disk" == "WROTE" ]]; then
     printf "  ${GREEN}PASS${NC}  create-file + write-file roundtrip\n"; ((passed++))
 else
@@ -3866,7 +4041,7 @@ printf 'require shellutil.fs\n'                      > "$dp_dir/dpok.fs"
 printf 'require dpnosuch.fs\n'                       > "$dp_dir/dpgonereq.fs"
 # A chain longer than the queue. Following require is bounded, and a bound that
 # truncates in SILENCE turns deps into the thing it exists to prevent: a report
-# that says everything is fine because it stopped looking. dark-star.fs already
+# that says everything is fine because it stopped looking. A real game already
 # follows 11 files, so this bound is reachable rather than theoretical.
 for dp_i in $(seq 1 80); do
     printf 'require dpc%d.fs\n' $((dp_i + 1)) > "$dp_dir/dpc$dp_i.fs"
@@ -4700,40 +4875,47 @@ assert_result "a prompt-level error keeps the stack" '1 2 3 nosuchword
 assert_result "a prompt-level compile-only error keeps the stack" '1 2 if
 .s'                                                                       "<2> 1 2"
 assert_result "[ ] at compile time still works" ": c9 [ 6 7 * ] literal ; c9 ."  "42"
-# A NESTED interpret_line must not take that abort. Returning an error ends the
-# line only at the top level -- EVALUATE returns into a caller that carries on
-# with the rest of ITS line, so dropping the header there left the outer line
-# compiling into a definition that no longer existed, and its `;` operating on
-# whatever LATEST had become. The word below is wrong either way (the error
-# inside the evaluation is swallowed, which is its own pre-existing bug, filed
-# in TODO.md) -- what this pins is that it still gets DEFINED rather than
-# vanishing mid-line.
-# The same, by the OTHER abort route: `'` failing to find a name reaches
-# .Lcf_abort rather than the shared error exit, and needed the gate separately.
-# It was missed the first time precisely because a comment there asserted the
-# site "cannot be inside brackets" -- it can.
-# Records CURRENT behaviour, which is wrong and pre-existing: an error inside a
-# nested evaluation while COMPILING rolls back to the global anchor and takes
-# the enclosing definition with it. Both foo and inner vanish. Pinned so that
-# fixing it (TODO: propagate errors out of EVALUATE) is a deliberate act rather
-# than a surprise, and so this arm's exemption from the nesting gate stays
-# visible.
-assert_result "a nested error while compiling still takes the outer definition (known bug)" \
+# These four pinned the pre-propagation behaviour: an error inside a nested
+# EVALUATE was swallowed, the outer line carried on, and `foo` got defined from
+# whatever survived. EVALUATE now throws, so the outer line aborts and `foo`
+# does not exist -- three of them flip from EXISTS to MISSING.
+#
+# The FIRST one does not flip, and that is the trap worth keeping in view: it
+# expected MISSING before the fix (the compiling arm rolled back to the global
+# anchor and took foo with it) and expects MISSING after (the line aborts). Same
+# observation, opposite mechanism. On its own it would have read as confirmation
+# while proving nothing, so it now asserts the REPORT as well -- silence was
+# always the real symptom, and the dictionary probe alone cannot see it.
+# NOTE: the anchor behaviour it used to pin is NOT fixed, only made
+# unobservable. Do not read this passing as evidence that it changed.
+# The reported error is the definition-open guard, not the undefined word: with
+# `foo` open, the evaluated `: inner` cannot build a header and is refused
+# first, so `nosuchword` is never reached. What matters is that SOMETHING is
+# reported where the old behaviour printed ` ok` and moved on.
+assert_result "a nested error while compiling aborts the line (and is reported)" \
+    ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
+: foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
+probe foo'                                                       "definition still open: inner"
+assert_result "...and the outer definition is gone either way" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" : inner nosuchword" evaluate ] 2 + . ;
 probe foo'                                                                "MISSING"
-assert_result "a failed tick inside a nested EVALUATE does not abandon it either" \
+# The OTHER abort route: `'` failing to find a name reaches .Lcf_abort rather
+# than the shared error exit, and needed the nesting gate separately. It was
+# missed the first time precisely because a comment there asserted the site
+# "cannot be inside brackets" -- it can.
+assert_result "a failed tick inside a nested EVALUATE now abandons the outer definition" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" '"'"' nosuchword" evaluate ] 2 + . ;
-probe foo'                                                                "EXISTS"
+probe foo'                                                                "MISSING"
 assert_result "a failed tick inside [ ] DOES abandon at the top level" \
     ": g1 [ ' nosuchword
 : g2 3 ;
 g2 ."                                                                     "3"
-assert_result "an error inside a nested EVALUATE does not abandon the outer definition" \
+assert_result "an error inside a nested EVALUATE abandons the outer definition" \
     ': probe parse-name find if drop ." EXISTS" else 2drop ." MISSING" then cr ;
 : foo 1 [ s" nosuchword" evaluate ] 2 + . ;
-probe foo'                                                                "EXISTS"
+probe foo'                                                                "MISSING"
 
 # cancel; abandons the definition being typed — nothing defined, the rest of
 # the line discarded, a pending :e disarmed (nothing spliced, file untouched);
@@ -5256,6 +5438,144 @@ else
 fi
 
 # =========================================================================
+section "WHERE (which file a word came from)"
+
+assert_result "where names the file a word came from" \
+              'where see'                                  "/core.fs"
+# An ABSOLUTE path on a line of its own -- not "src/forth/core.fs", which is
+# only where core.fs lives in a checkout: `make run-integration` runs from
+# src/arch/x86 against the build-dir copy, and an installed tree is somewhere
+# else again. Assert the shape, never the location.
+wh_abs=$(printf 'where see\nbye\n' | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 \
+    | grep -c '^/.*core\.fs$')
+if [ "$wh_abs" -ge 1 ]; then
+    printf "  ${GREEN}PASS${NC}  where answers an absolute path, not a bare name\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  where did not answer an absolute path\n"; ((failed++))
+fi
+assert_result "where on a word typed this session" \
+              ': mine 42 ;
+where mine'                                                "was typed at the REPL this session"
+assert_result "where on an assembly primitive" \
+              'where dup'                                  "is a primitive (assembly)"
+assert_result "where on an undefined name" \
+              'where no-such-word-here'                    "not found"
+assert_result "where with no name given" \
+              'where'                                      "needs a word name"
+
+# The source-id table holds 64 files; src_register answers 0 once it is full,
+# which is the SAME id a word typed at the REPL carries. So a word from the
+# 65th file is not merely unnamed -- it is indistinguishable from a REPL word,
+# and the honest answer is "cannot name it", not a confident wrong one.
+# Both halves are asserted: a word from an EARLY file must still resolve after
+# the table fills, or a guard that simply gave up would pass the first check.
+wh_dir="$(mktemp -d)"
+for wh_i in $(seq 1 70); do printf ': wf%d %d ;\n' "$wh_i" "$wh_i" > "$wh_dir/wf$wh_i.fs"; done
+wh_in=""
+for wh_i in $(seq 1 70); do wh_in="${wh_in}require $wh_dir/wf$wh_i.fs
+"; done
+wh_out=$(printf '%swhere wf1\nwhere wf70\nbye\n' "$wh_in" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 30 $FORTH 2>&1)
+rm -rf "$wh_dir"
+if printf '%s' "$wh_out" | grep -q "came from a file this run cannot name"; then
+    printf "  ${GREEN}PASS${NC}  past 64 files, where says it cannot name the origin\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  past 64 files, where should refuse to guess\n    Got: %q\n" \
+        "$(printf '%s' "$wh_out" | tail -3)"; ((failed++))
+fi
+# Anchored: the input echo carries `> require <dir>/wf1.fs`, so a bare
+# "/wf1.fs" needle is satisfied by this test's OWN input and passes with
+# `where` removed entirely. `where` prints the path on a line of its own.
+if printf '%s' "$wh_out" | grep -q '^/.*wf1\.fs$'; then
+    printf "  ${GREEN}PASS${NC}  ...but a word from an early file still names it\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a word within the first 64 files lost its origin\n    Got: %q\n" \
+        "$(printf '%s' "$wh_out" | tail -3)"; ((failed++))
+fi
+# `where` answers for the definition IN FORCE, not for wherever a copy of the
+# text sits. `save` writes a file without loading it, so it must NOT change the
+# answer; `reload` re-reads that file, so it must. Both halves asserted -- a
+# `where` that simply never noticed `save` would pass the first alone.
+wh_sdir="$(mktemp -d)"
+wh_save=$(printf ': wsaved 42 . ;\nsave %s/wk.fs\nwhere wsaved\nreload\nwhere wsaved\nbye\n' "$wh_sdir" \
+    | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+wh_still=$(printf '%s' "$wh_save" | grep -c "was typed at the REPL this session")
+wh_now=$(printf '%s' "$wh_save" | grep -c "^${wh_sdir}/wk\.fs$")
+rm -rf "$wh_sdir"
+if [ "$wh_still" -ge 1 ] && [ "$wh_now" -ge 1 ]; then
+    printf "  ${GREEN}PASS${NC}  save does not change where; reload does\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  where/save/reload: repl=%s file=%s\n" "$wh_still" "$wh_now"; ((failed++))
+fi
+
+# where-path RETURNS the path instead of printing it. Only a file-loaded word
+# has one; the other three cases answer false, which is what makes it safe to
+# hand straight to a word that opens files.
+assert_result "where-path returns the path and true" \
+              'require disasm.fs
+s" dis" where-path . type'                                 "-1 /"
+assert_result "where-path answers false for a primitive" \
+              's" dup" where-path .'                       "0"
+assert_result "where-path answers false for an undefined name" \
+              's" no-such-word-here" where-path .'         "0"
+assert_result "where-path answers false for a REPL word" \
+              ': wp1 1 ;
+s" wp1" where-path .'                                      "0"
+# The point of returning it: where-path and deps compose, because deps factors
+# into (dp-run), which takes a string. This is the documented `wdeps`.
+# deps-path is deps over a path you already hold -- and deps itself now ends
+# there, so this also guards the rewiring.
+assert_result "deps-path reports over a path given as a string" \
+              's" disasm.fs" deps-path'                    "requirement"
+assert_result "deps still works through deps-path" \
+              'deps disasm.fs'                             "requirement"
+# word-deps is the join: where-path -> deps-path. Both public, so the example
+# in the docs does not send a reader to a word `help` denies exists.
+assert_result "word-deps reports for the file a word came from" \
+              'require disasm.fs
+word-deps dis'                                             "requirement"
+assert_result "word-deps on a word with no file says so" \
+              'word-deps dup'                              "came from no file you can inspect"
+assert_result "word-deps with no name given" \
+              'word-deps'                                  "usage: word-deps"
+# The composition is only honest if every word it names is documented; the
+# reference audit exempts (paren) names, so it cannot see this for us.
+# A documented example is a promise its parts can be looked up -- the first
+# draft of word-deps was built on (dp-run)/(dp-verdict), whose every step
+# answered `no help for`. The reference audit cannot catch that: it exempts
+# parenthesized names by convention. So assert the lookups directly.
+#
+# NOT under emulation. `help <word>` scans every "## " heading in every doc
+# file: 0.08 s native, 3.0 s under qemu against run_forth's 2 s timeout. The
+# property is a fact about the DOCUMENTATION and identical on both
+# architectures, so native coverage is the whole of it -- and an ARM64 board is
+# native, so this still runs there. Raising the timeout would only make the
+# next doc page push it over again.
+if [[ "$FORTH" != *qemu* ]]; then
+    # Assert what only the real entry carries: "no help for where-path" also
+    # contains "where-path", so the obvious needle passes when help is broken.
+    assert_result "help answers for where-path with its entry" \
+                  'help where-path'                        "( c-addr u -- c-addr u true | false )"
+    assert_result "help answers for deps-path with its entry" \
+                  'help deps-path'                         "( c-addr u -- )"
+    assert_absent "...and neither is a help miss" \
+                  'help where-path
+help deps-path'                                            "no help for"
+else
+    printf "  ${YELLOW}SKIP${NC}  help lookups for where-path/deps-path (help word-scan is ~3 s under qemu; runs natively)\n"
+fi
+
+# The documented workflow: where's answer is what deps takes.
+wh_path=$(printf 'require disasm.fs\nwhere dis\nbye\n' \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1 | grep '^/.*disasm\.fs$' | head -1)
+wh_deps=$(printf 'deps %s\nbye\n' "$wh_path" \
+    | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
+if [ -n "$wh_path" ] && printf '%s' "$wh_deps" | grep -q "requirement"; then
+    printf "  ${GREEN}PASS${NC}  where's answer is accepted by deps\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  deps did not accept where's answer\n    path: %q\n" "$wh_path"; ((failed++))
+fi
+
 section "REDO (recompile a captured word from its source)"
 # =========================================================================
 # Capture is interactive-only, so force it on via BASICFORTH_SESSION=1 (as the
@@ -5576,7 +5896,7 @@ fi
 section "Snake Game Prerequisites (cont.)"
 # =========================================================================
 # Snake game words (test game helpers without loading the full file)
-assert_output "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
+assert_contains "snake screen-pos"     ': screen-pos 80 * + ; 5 3 screen-pos .'   "245"
 
 
 # =========================================================================
@@ -5836,18 +6156,31 @@ else
 fi
 
 # Section grouping: help groups topics under their directory (section) name,
-# and apropos labels each hit with its section. A directory named "Tutorial"
+# and apropos labels each hit with its section. A directory named "Tutorials"
 # is excluded from bare help (it belongs to `tutorials`); an empty section
 # (no .md) prints no header.
 sec_base="$(mktemp -d)"
-mkdir -p "$sec_base/RefSec" "$sec_base/Tutorial" "$sec_base/EmptySec"
+mkdir -p "$sec_base/RefSec" "$sec_base/Tutorials" "$sec_base/EmptySec"
 printf '# Alpha\nwidget gear\n' > "$sec_base/RefSec/Alpha.md"
 printf '# Beta\nmore widget\n'  > "$sec_base/RefSec/Beta.md"
-printf '# Lesson\nnothing\n'    > "$sec_base/Tutorial/Lesson.md"
-printf '# Grok — Learn widgets fast\nintro\n' > "$sec_base/Tutorial/Grok.md"
-printf 'no title here\n'        > "$sec_base/Tutorial/Plain.md"
+printf '# Lesson\nnothing\n'    > "$sec_base/Tutorials/Lesson.md"
+printf '# Grok — Learn widgets fast\nintro\n' > "$sec_base/Tutorials/Grok.md"
+printf 'no title here\n'        > "$sec_base/Tutorials/Plain.md"
+# A file whose NAME and TITLE differ -- the shape every installed package has,
+# since its lesson is <pkg>::<page>.md while the title reads "# Greeting -- ...".
+printf '# Widgetry — Scoped by its package\nbodyword\n' \
+    > "$sec_base/Tutorials/pkg::widget.md"
+# A title NOT in the "# Name — description" convention: the description falls
+# back to the whole title, minus a leading copy of the name, which would
+# otherwise print the name twice on the row.
+printf '# Nodash a plain title\nintro\n' > "$sec_base/Tutorials/Nodash.md"
+printf '# Hyph - written with an ascii hyphen\nintro\n' > "$sec_base/Tutorials/Hyph.md"
+# The name is only dropped when it is a WHOLE leading word. Matching bytes
+# alone truncated mid-word: "Snug.md" titled "# Snuggle ..." lost its first
+# four characters.
+printf '# Snuggle Up With Widgets\nintro\n' > "$sec_base/Tutorials/Snug.md"
 printf 'not a topic\n'          > "$sec_base/EmptySec/readme.txt"
-sec_docs="$sec_base/RefSec:$sec_base/Tutorial:$sec_base/EmptySec"
+sec_docs="$sec_base/RefSec:$sec_base/Tutorials:$sec_base/EmptySec"
 
 sec_out=$(printf 'help\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
@@ -5859,25 +6192,25 @@ else
     printf "    Got:      %s\n" "$(echo "$sec_out" | head -6)"; ((failed++))
 fi
 
-# The Tutorial section is bare help's one exclusion — `tutorials` lists it
+# The Tutorials section is bare help's one exclusion — `tutorials` lists it
 if [[ "$sec_out" != *"Lesson"* ]]; then
-    printf "  ${GREEN}PASS${NC}  help excludes the Tutorial section\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  help excludes the Tutorials section\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  help excludes the Tutorial section\n"; ((failed++))
+    printf "  ${RED}FAIL${NC}  help excludes the Tutorials section\n"; ((failed++))
 fi
 tuts_out=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
     BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
 if [[ "$tuts_out" == *"Lesson"* ]] && [[ "$tuts_out" == *"tutorial <name>"* ]] \
    && [[ "$tuts_out" != *"Alpha"* ]]; then
-    printf "  ${GREEN}PASS${NC}  tutorials lists only the Tutorial section\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  tutorials lists only the Tutorials section\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorial section\n"
+    printf "  ${RED}FAIL${NC}  tutorials lists only the Tutorials section\n"
     printf "    Got:      %s\n" "$(echo "$tuts_out" | head -4)"; ((failed++))
 fi
 
 # The listing shows each tutorial's title line ("# Name — description"
 # convention, hashes stripped); a file with no title falls back to its name.
-if [[ "$tuts_out" == *"Grok — Learn widgets fast"* ]]; then
+if [[ "$tuts_out" == *"Grok                Learn widgets fast"* ]]; then
     printf "  ${GREEN}PASS${NC}  tutorials shows the title-line description\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  tutorials shows the title-line description\n"
@@ -5888,6 +6221,55 @@ if [[ "$tuts_out" == *"Plain"* && "$tuts_out" != *"no title here"* ]]; then
 else
     printf "  ${RED}FAIL${NC}  tutorials falls back to the file name\n"
     printf "    Got:      %s\n" "$(echo "$tuts_out" | head -5)"; ((failed++))
+fi
+
+# The listing must print the name you TYPE, not the title's first word. These
+# two differ only for a file like pkg::widget.md, which is exactly the shape an
+# installed package has -- when the listing showed the title, `tutorials`
+# advertised "Widgetry" and `tutorial Widgetry` answered "no tutorial named".
+if [[ "$tuts_out" == *"pkg::widget"* && "$tuts_out" != *"Widgetry"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists the name, not the title's first word\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials lists the name, not the title's first word\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# A title with no em dash must not repeat the name into its own description.
+if [[ "$tuts_out" == *"Nodash              a plain title"* \
+   && "$tuts_out" != *"Nodash              Nodash"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials does not repeat the name as its description\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials does not repeat the name as its description\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# A title that merely STARTS with the name must survive intact.
+if [[ "$tuts_out" == *"Snug                Snuggle Up With Widgets"* \
+   && "$tuts_out" != *"Snug                gle Up With Widgets"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials strips the name only at a word boundary\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials strips the name only at a word boundary\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -9)"; ((failed++))
+fi
+# A plain "-" where the em dash should be is the near miss worth absorbing.
+if [[ "$tuts_out" == *"Hyph                written with an ascii hyphen"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials absorbs an ascii-hyphen title separator\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials absorbs an ascii-hyphen title separator\n"
+    printf "    Got:      %s\n" "$(echo "$tuts_out" | head -8)"; ((failed++))
+fi
+# ...and that name is one `tutorial` accepts. Asserted on the lesson BODY, not
+# on the name: the name appears in the input we just echoed, so matching it
+# would pass whether or not the lesson was ever found.
+tut_named=$(printf 'tutorial pkg::widget\n' | BASICFORTH_PATH="$FORTH_LIB" \
+    BASICFORTH_DOCS="$sec_docs" timeout 2 $FORTH 2>&1)
+if [[ "$tut_named" == *"bodyword"* && "$tut_named" != *"no tutorial named"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a listed package name starts its tutorial\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a listed package name starts its tutorial\n"
+    printf "    Got:      %s\n" "$(echo "$tut_named" | head -5)"; ((failed++))
 fi
 
 # An empty section (no .md) must not print a header
@@ -5922,8 +6304,8 @@ else
 fi
 rm -rf "$sort_base"
 
-# `tutorial <name>` resolves only in Tutorial sections — a reference page with
-# the same name (e.g. Strings.md in both Language-Reference and Tutorial) must
+# `tutorial <name>` resolves only in Tutorials sections — a reference page with
+# the same name (e.g. Strings.md in both Language-Reference and Tutorials) must
 # not shadow the lesson, even when its directory comes first in the path.
 printf '# Grok reference page\nREFBODY\n' > "$sec_base/RefSec/Grok.md"
 tut_shadow=$(printf 'tutorial Grok\n' | BASICFORTH_PATH="$FORTH_LIB" \
@@ -6136,10 +6518,10 @@ guide_n=0
 #   neither     separators are never dropped definingwords -> no help
 guide_page_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_' '-'; }
 guide_word_fold() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
-ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md \
+ref_pages=$(ls "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md \
                "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null \
             | xargs -n1 basename | sed 's/\.md$//' | tr 'A-Z' 'a-z' | tr '_' '-' | sort -u)
-# Tutorial "## " headings are lesson steps, not word entries, and the indexer
+# Tutorials "## " headings are lesson steps, not word entries, and the indexer
 # skips them -- so they are not names anything answers.
 # This mirrors (head-word?) in core.fs, token for token, because every
 # approximation of it has been wrong in a different way:
@@ -6191,6 +6573,111 @@ elif [ "$guide_n" -eq 0 ]; then
 else
     printf "  ${RED}FAIL${NC}  a Guides heading is not a usable help topic\n"
     printf "    Bad:%s\n" "$guide_bad"; ((failed++))
+fi
+
+# A Guides page's PREAMBLE is the whole of what `help <page>` prints, so it is
+# the only place a reader learns the sub-topics exist -- `help x86` has to say
+# that `help x86-regs` is a thing, or nothing does. That list is hand-written
+# and drifts silently: Install.md gained `## packages` and `## next-steps`
+# without either reaching its own index, so both were reachable only by
+# guessing the name. Nothing about a missing entry is visible from the page.
+guide_idx_bad=""
+guide_idx_n=0
+while read -r file; do
+    page=$(basename "$file" .md)
+    preamble=$(awk '/^## /{exit} {print}' "$file")
+    while read -r head; do
+        guide_idx_n=$((guide_idx_n + 1))
+        # Must be an INDEX LINE -- indented, heading first -- not merely the
+        # word occurring somewhere in the prose. A plain word match passed
+        # `setup` and `session` on Environment.md, whose preamble names
+        # neither section but does say "setup.sh" and "interactive session":
+        # the two headings the page documents worst were the two the loose
+        # check called fine.
+        printf '%s' "$preamble" | grep -qE "^ +${head}( |\$)" \
+            || guide_idx_bad="$guide_idx_bad ${page}:${head}"
+    done < <(grep -h "^## " "$file" | sed 's/^## //')
+done < <(ls "$REPO_ROOT"/docs/Guides/*.md 2>/dev/null)
+if [ "$guide_idx_n" -gt 0 ] && [ -z "$guide_idx_bad" ]; then
+    printf "  ${GREEN}PASS${NC}  every Guides section is listed in its own preamble (%d)\n" "$guide_idx_n"; ((passed++))
+elif [ "$guide_idx_n" -eq 0 ]; then
+    printf "  ${YELLOW}SKIP${NC}  Guides preamble index (no pages found)\n"
+else
+    printf "  ${RED}FAIL${NC}  a Guides section is missing from its page's preamble\n"
+    printf "    Bad:%s\n" "$guide_idx_bad"; ((failed++))
+fi
+
+# `help` prints raw Markdown -- no renderer -- so a table is only as readable as
+# its source. A ragged one is genuinely hard to follow in a terminal, which is
+# why the reference pages historically used indented blocks instead and carried
+# almost no tables at all. Aligned, a table is a good compact form; past a
+# certain width it stops being one and the content wants prose.
+#
+# Character counts, NOT bytes. These tables are full of en/em dashes, ellipses
+# and arrows, and awk's length() is bytes under LC_ALL=C -- so a byte-wise
+# check calls a correctly aligned table ragged, and a byte-wise *aligner*
+# produces one that looks right in the source and renders crooked. Counting
+# UTF-8 continuation bytes (0x80-0xBF) and subtracting is locale-independent.
+#
+# TABLE_MAX_COLS is 80 because that is the terminal a reader actually has, and
+# a table that wraps is worse than the ragged one it replaced. The widest today
+# renders at 79. A table that cannot make the budget without mangling its cells
+# wants to be paragraphs instead -- that is the signal, not a reason to raise
+# the number.
+TABLE_MAX_COLS=80
+# The file list is built and CHECKED before the scan. A glob that stops
+# matching -- a section renamed, a directory moved -- would otherwise expand to
+# nothing, `2>/dev/null` would eat the error, and the check would keep passing
+# over less than it claims to cover. Coverage that disappears quietly is the
+# same failure shape as a skip sentinel that stops firing.
+tbl_files=()
+for tbl_dir in Language-Reference Guides Tutorials; do
+    tbl_n=$(ls "$REPO_ROOT/docs/$tbl_dir"/*.md 2>/dev/null | wc -l)
+    if [ "$tbl_n" -eq 0 ]; then
+        printf "  ${RED}FAIL${NC}  table check found no pages in docs/%s (renamed? moved?)\n" "$tbl_dir"
+        ((failed++))
+    else
+        while IFS= read -r tbl_f; do tbl_files+=("$tbl_f"); done \
+            < <(ls "$REPO_ROOT/docs/$tbl_dir"/*.md)
+    fi
+done
+tbl_out=$(LC_ALL=C awk -v max="$TABLE_MAX_COLS" '
+    # RENDERED width, which is the only one that matters: `help` strips inline
+    # markup on a terminal (and emits ANSI for bold), so a table padded to line
+    # up in the SOURCE comes out ragged on screen -- each backtick pair costs 2
+    # columns and each ** costs 4, and the loss differs cell by cell. Verified
+    # under a PTY: an 85-column header over rows of 73-81. Markdown viewers
+    # reflow tables regardless of source padding, so aligning the rendered text
+    # is free.
+    function clen(s,   t) {
+        t = s; gsub(/`/, "", t); gsub(/\*\*/, "", t)
+        gsub(/[\200-\277]/, "", t)   # drop UTF-8 continuation bytes...
+        return length(t)              # ...so what is left IS the char count
+    }
+    function flush(   i, j, nf, sig, first, bad) {
+        if (nrow < 2) { nrow = 0; return }
+        bad = ""
+        for (i = 1; i <= nrow; i++) {
+            nf = split(row[i], f, "|")
+            sig = ""
+            for (j = 1; j <= nf; j++) sig = sig clen(f[j]) ","
+            if (i == 1) first = sig
+            else if (sig != first) bad = "ragged"
+            if (clen(row[i]) > max) bad = (bad == "" ? "wide" : bad "+wide")
+        }
+        if (bad != "") printf "%s:%d(%s) ", short, start, bad
+        nrow = 0
+    }
+    FNR == 1 { flush(); short = FILENAME; sub(/^.*\//, "", short) }
+    /^[ \t]*\|/ { if (nrow == 0) start = FNR; row[++nrow] = $0; next }
+    { flush() }
+    END { flush() }
+' "${tbl_files[@]}")
+if [ -z "$tbl_out" ]; then
+    printf "  ${GREEN}PASS${NC}  every help-path table is column-aligned and under %s columns\n" "$TABLE_MAX_COLS"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a help-path table is ragged or too wide for a terminal\n"
+    printf "    Bad: %s\n" "$tbl_out"; ((failed++))
 fi
 
 if [ -z "$hint_docs" ]; then
@@ -6302,7 +6789,7 @@ fi
 # in backticks. Skipped: indented lines (code blocks) and "#" headings, both
 # of which the renderer passes through verbatim; `...` spans are stripped
 # first because their contents are already safe.
-md_star=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+md_star=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md; do
     sed -e 's/`[^`]*`//g' "$f" | grep -nE '^[^ #].*[A-Za-z0-9]\*[A-Za-z0-9]' \
         | sed "s|^|$(basename "$f"):|"
 done)
@@ -6324,7 +6811,7 @@ fi
 # Skipped: indented lines (verbatim code blocks) and fenced blocks, whose ```
 # would itself count three -- there are no fences in these dirs today, but a
 # future one must not be reported as a wrapped span.
-md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorial/*.md; do
+md_span=$(for f in "$REPO_ROOT"/docs/Language-Reference/*.md "$REPO_ROOT"/docs/Tutorials/*.md; do
     awk '/^ {4}|^\t/            { next }
          /^[ \t]*```/           { fence = !fence; next }
          fence                  { next }
@@ -6440,38 +6927,38 @@ fi
 
 # The shipped Arrays lesson: starts, has its 14 steps, and its examples run.
 arrays_out=$(printf 'tutorial Arrays\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$arrays_out" == *"no built-in array type"* && "$arrays_out" == *"step 1/14"* ]]; then
     printf "  ${GREEN}PASS${NC}  Arrays lesson opens with 14 steps\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  Arrays lesson opens with 14 steps\n"
     printf "    Got:      %s\n" "$(echo "$arrays_out" | head -4)"; ((failed++))
 fi
-assert_output "Arrays lesson examples work" \
+assert_contains "Arrays lesson examples work" \
     $'create nums 5 cells allot\n: nth ( i -- addr ) cells nums + ;\n: init 5 0 do i i * i nth ! loop ;\ninit\n: show 5 0 do i nth @ . loop cr ;\nshow' \
     "0 1 4 9 16"
-assert_output "Arrays lesson table example"  \
+assert_result "Arrays lesson table example"  \
     $'create days 31 , 28 , 31 , 30 , 31 , 30 , 31 , 31 , 30 , 31 , 30 , 31 ,\n: days-in ( month -- n ) 1- cells days + @ ;\n2 days-in .' \
     "28"
 
 # The shipped Strings lesson: opens with 11 steps, and its examples run.
 strings_out=$(printf 'tutorial Strings\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$strings_out" == *"Text on the Stack"* && "$strings_out" == *"step 1/11"* ]]; then
     printf "  ${GREEN}PASS${NC}  Strings lesson opens with 11 steps\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  Strings lesson opens with 11 steps\n"
     printf "    Got:      %s\n" "$(echo "$strings_out" | head -4)"; ((failed++))
 fi
-assert_output "Strings lesson compare example" \
+assert_contains "Strings lesson compare example" \
     $': yes? ( c-addr u -- flag ) s" yes" compare 0= ;\ns" yes" yes? . s" nope" yes? .' \
     "-1 0"
 # The transient-buffer round-robin the lesson teaches: two live at once, the
 # third s" reuses the oldest slot.
-assert_output "Strings lesson transient-buffer example" \
+assert_contains "Strings lesson transient-buffer example" \
     $'s" AAAA" s" BBBB" s" CCCC"\ntype space type space type' \
     "CCCC BBBB CCCC"
-assert_output "Strings lesson keep-a-string example" \
+assert_contains "Strings lesson keep-a-string example" \
     $'create name 16 allot variable name-len\n: name! ( c-addr u -- ) dup name-len ! name swap cmove ;\n: name@ ( -- c-addr u ) name name-len @ ;\ns" Ada" name!\ns" x" s" y" s" z" 2drop 2drop 2drop\n: greet ." Hello, " name@ type ." !" cr ;\ngreet' \
     "Hello, Ada!"
 
@@ -6479,7 +6966,7 @@ assert_output "Strings lesson keep-a-string example" \
 # drawing examples need SDL, but the art table and the frame-picking idiom are
 # pure Forth over an off-screen surface, so they run everywhere (incl. QEMU).
 sprites_out=$(printf 'tutorial Sprites\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$sprites_out" == *"Pixel Art That Moves"* && "$sprites_out" == *"step 1/14"* ]]; then
     printf "  ${GREEN}PASS${NC}  Sprites lesson opens with 14 steps\n"; ((passed++))
 else
@@ -6488,7 +6975,7 @@ else
 fi
 # The lesson's two-character color names typed as an art table, keyed blit:
 # the __ pixel leaves the red background, the GG pixel paints green.
-assert_output "Sprites lesson art table + transparency" "$GRP
+assert_contains "Sprites lesson art table + transparency" "$GRP
 magenta constant __
 green   constant GG
 : inv-art __ l, GG l, ;
@@ -6496,7 +6983,7 @@ create inv inv-art
 : g s red 0 0 8 6 fill-rect  magenta inv 0 0 2 1 blit-key  0 0 p 1 0 p ; g" \
     "16711680 65280"
 # The animation idiom: frame counter divided down, then alternating.
-assert_output "Sprites lesson frame-picking idiom" \
+assert_contains "Sprites lesson frame-picking idiom" \
     $': pick 16 0 do i 8 / 2 mod if 1 else 0 then . loop ;\npick' \
     "0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1"
 
@@ -6504,7 +6991,7 @@ assert_output "Sprites lesson frame-picking idiom" \
 # art and the colour-per-call payoff are pure Forth over an off-screen
 # surface, so they run everywhere (incl. QEMU) without SDL.
 bitmaps_out=$(printf 'tutorial Bitmaps\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
 if [[ "$bitmaps_out" == *"Sprites You Type in Binary"* && "$bitmaps_out" == *"step 1/19"* ]]; then
     printf "  ${GREEN}PASS${NC}  Bitmaps lesson opens with 19 steps\n"; ((passed++))
 else
@@ -6512,28 +6999,36 @@ else
     printf "    Got:      %s\n" "$(echo "$bitmaps_out" | head -4)"; ((failed++))
 fi
 # The lesson's alien, stamped in two colours from one piece of art.
-assert_output "Bitmaps lesson one shape two colours" "$GRP
+assert_contains "Bitmaps lesson one shape two colours" "$GRP
 : a-art %11000000 c, %01100000 c, ;
 create a a-art
 : g s red a 0 0 2 2 stamp  green a 0 3 2 2 stamp
   0 0 p 1 1 p 0 3 p 1 4 p ; g"   "16711680 16711680 65280 65280"
 # The palette table the lesson indexes with cells (one line, so save keeps it).
-assert_output "Bitmaps lesson palette table" "include $GR
+assert_contains "Bitmaps lesson palette table" "include $GR
 create palette  red , green , blue , yellow , cyan , magenta ,
 : pick ( i -- ) cells palette + @ . ;
 0 pick 3 pick 5 pick"   "16711680 16776960 16711935"
 
 # The real-docs listing shows each tutorial's "# Name — description" title
 real_tuts=$(printf 'tutorials\n' | BASICFORTH_PATH="$FORTH_LIB" \
-    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorial" timeout 2 $FORTH 2>&1)
-if [[ "$real_tuts" == *"Arrays — Your First Data Structure"* \
-   && "$real_tuts" == *"Strings — Text on the Stack"* \
-   && "$real_tuts" == *"Sprites — Pixel Art That Moves"* \
-   && "$real_tuts" == *"Bitmaps — Sprites You Type in Binary"* \
-   && "$real_tuts" == *"Snake — Build Your First Game"* ]]; then
-    printf "  ${GREEN}PASS${NC}  tutorials lists real titles with descriptions\n"; ((passed++))
+    BASICFORTH_DOCS="$REPO_ROOT/docs/Tutorials" timeout 2 $FORTH 2>&1)
+if [[ "$real_tuts" == *"Arrays              Your First Data Structure"* \
+   && "$real_tuts" == *"Strings             Text on the Stack"* \
+   && "$real_tuts" == *"Sprites             Pixel Art That Moves"* \
+   && "$real_tuts" == *"Machine-Code        What Your Words Compile To"* \
+   && "$real_tuts" == *"Snake               Build Your First Game"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials lists real names with descriptions\n"; ((passed++))
 else
-    printf "  ${RED}FAIL${NC}  tutorials lists real titles with descriptions\n"
+    printf "  ${RED}FAIL${NC}  tutorials lists real names with descriptions\n"
+    printf "    Got:      %s\n" "$(echo "$real_tuts" | head -5)"; ((failed++))
+fi
+# The em dash belongs to the title, not to the row: it separates the name from
+# the description in the FILE and must not reach the listing.
+if [[ "$real_tuts" != *"—"* ]]; then
+    printf "  ${GREEN}PASS${NC}  tutorials strips the title's em dash\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  tutorials strips the title's em dash\n"
     printf "    Got:      %s\n" "$(echo "$real_tuts" | head -5)"; ((failed++))
 fi
 
@@ -6559,14 +7054,14 @@ section "Shell Words"
 shell_start=$(pwd -P)
 
 # pwd prints the current (startup) directory
-assert_output "pwd shows cwd"          "pwd"                              "$shell_start"
+assert_contains "pwd shows cwd"          "pwd"                              "$shell_start"
 # cd changes directory; pwd reflects it
-assert_output "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
+assert_result "cd changes dir"         $'cd /tmp\npwd'                    "/tmp"
 # a failed cd reports the offending path
-assert_output "cd bad path errors"     "cd /no/such/dir"                 "cd: cannot access /no/such/dir"
+assert_contains "cd bad path errors"     "cd /no/such/dir"                 "cd: cannot access /no/such/dir"
 # bare cd returns to the startup directory (proves cd state really changes:
 # shell_start is not present in the input, so this can't pass on echo alone)
-assert_output "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
+assert_contains "bare cd goes home"      $'cd /tmp\ncd\npwd'               "$shell_start"
 
 # cd ~ expands to $HOME. Match $HOME + newline so it isn't satisfied by
 # shell_start (which lives *under* $HOME, i.e. contains it as a prefix). Use the
@@ -6636,15 +7131,15 @@ fi
 fw_dir="$(mktemp -d)"
 printf 'hello\nworld\n' > "$fw_dir/greet.txt"
 mkdir "$fw_dir/sub"
-assert_output "ls lists a directory"     "ls $fw_dir"               "greet.txt"
-assert_output "ls shows subdirectories"  "ls $fw_dir"               "sub"
-assert_output "cat dumps a file"         "cat $fw_dir/greet.txt"    "world"
-assert_output "more pages a file"        "more $fw_dir/greet.txt"   "hello"
-assert_output "cat missing file errors"  "cat $fw_dir/nope.txt"     "cat: cannot open file"
-assert_output "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot open directory"
+assert_contains "ls lists a directory"     "ls $fw_dir"               "greet.txt"
+assert_contains "ls shows subdirectories"  "ls $fw_dir"               "sub"
+assert_contains "cat dumps a file"         "cat $fw_dir/greet.txt"    "world"
+assert_contains "more pages a file"        "more $fw_dir/greet.txt"   "hello"
+assert_contains "cat missing file errors"  "cat $fw_dir/nope.txt"     "cat: cannot open file"
+assert_contains "ls missing dir errors"    "ls $fw_dir/nope"          "ls: cannot open directory"
 # cat on a directory: open() succeeds but read() fails (EISDIR). Must surface the
 # error, not silently stop and report success (a read error swallowed by the loop).
-assert_output "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read error"
+assert_contains "cat surfaces read error"  "cat $fw_dir/sub"          "cat: read error"
 
 # Error paths must ABORT (signal failure to the REPL), not print " ok" as if the
 # command succeeded. Check the message IS shown and " ok" is NOT, while a
@@ -6759,7 +7254,7 @@ else
 fi
 
 # the `version` word prints the version line at the REPL
-assert_output "version word"       "version"             "*** BasicForth"
+assert_contains "version word"       "version"             "*** BasicForth"
 
 # -v must stay exactly ONE line: scripts parse it, and the interactive banner's
 # extra two lines must not leak into it.
@@ -6773,10 +7268,10 @@ fi
 # `license` — the word the startup banner tells you to type. It must exist (a
 # banner promising a word that errors is worse than no banner) and must carry
 # both halves of the GPL notice.
-assert_output "license names the GPL" "license"  "GNU General Public License"
-assert_output "license disclaims"     "license"  "WITHOUT ANY WARRANTY"
-assert_output "license is copyright"  "license"  "Copyright (C) 2026 Brandon Blodget"
-assert_output "license stack clean"   "license depth ."  "0"
+assert_contains "license names the GPL" "license"  "GNU General Public License"
+assert_contains "license disclaims"     "license"  "WITHOUT ANY WARRANTY"
+assert_contains "license is copyright"  "license"  "Copyright (C) 2026 Brandon Blodget"
+assert_contains "license stack clean"   "license depth ."  "0"
 
 # =========================================================================
 section "Line Editor (BASICFORTH_EDITOR)"
@@ -6957,7 +7452,7 @@ pp_out=$(printf 'variable pf\ns" printf %s" r/o open-pipe . pf !\npad 80 pf @ re
     && { printf "  ${GREEN}PASS${NC}  r/o pipe: read-line captures output, clean EOF, clean close\n"; ((passed++)); } \
     || { printf "  ${RED}FAIL${NC}  r/o pipe capture\n    Got: %s\n" "$(echo "$pp_out"|head -8)"; ((failed++)); }
 # close-pipe returns the child's exit status as wretval ( -- wretval wior ).
-assert_output "close-pipe returns the child exit status" \
+assert_contains "close-pipe returns the child exit status" \
     's" exit 3" r/o open-pipe drop close-pipe . .' "0 3"
 # w/o pipe: what we write-line becomes the child's stdin.
 pw_dir="$(mktemp -d)"
@@ -6976,8 +7471,8 @@ p2_out=$(printf 'variable p1 variable p2\ns" echo one" r/o open-pipe drop p1 !\n
     || { printf "  ${RED}FAIL${NC}  two pipes\n    Got: %s\n" "$(echo "$p2_out"|head -6)"; ((failed++)); }
 # r/w is refused with EINVAL (deadlock trap), and an fd that never came from
 # open-pipe gets EBADF from close-pipe (close-file would leak a zombie).
-assert_output "open-pipe r/w -> EINVAL" 's" true" r/w open-pipe swap drop einval = .' "-1"
-assert_output "close-pipe on a non-pipe fd -> EBADF" '99 close-pipe . .' "9 0"
+assert_contains "open-pipe r/w -> EINVAL" 's" true" r/w open-pipe swap drop einval = .' "-1"
+assert_contains "close-pipe on a non-pipe fd -> EBADF" '99 close-pipe . .' "9 0"
 
 # =========================================================================
 section "REQUIRE (load a file only once)"
@@ -6989,27 +7484,27 @@ req_dir="$(mktemp -d)"
 echo '1 cnt +!' > "$req_dir/rlib.fs"
 printf 'require %s/rlib.fs\n' "$req_dir" > "$req_dir/rtop.fs"
 
-assert_output "require loads once"          "variable cnt 0 cnt !
+assert_contains "require loads once"          "variable cnt 0 cnt !
 require $req_dir/rlib.fs
 require $req_dir/rlib.fs
 cnt @ ."  "1"
-assert_output "required (string form) skips" "variable cnt 0 cnt !
+assert_contains "required (string form) skips" "variable cnt 0 cnt !
 require $req_dir/rlib.fs
 s\" $req_dir/rlib.fs\" required
 cnt @ ."  "1"
-assert_output "include still force-reloads"  "variable cnt 0 cnt !
+assert_contains "include still force-reloads"  "variable cnt 0 cnt !
 require $req_dir/rlib.fs
 include $req_dir/rlib.fs
 cnt @ ."  "2"
-assert_output "require by bare name skips a path-loaded file" "variable cnt 0 cnt !
+assert_contains "require by bare name skips a path-loaded file" "variable cnt 0 cnt !
 include $req_dir/rlib.fs
 require rlib.fs
 cnt @ ."  "1"
-assert_output "nested require dedups"        "variable cnt 0 cnt !
+assert_contains "nested require dedups"        "variable cnt 0 cnt !
 require $req_dir/rtop.fs
 require $req_dir/rlib.fs
 cnt @ ."  "1"
-assert_output "marker rollback -> require reloads" "variable cnt 0 cnt !
+assert_contains "marker rollback -> require reloads" "variable cnt 0 cnt !
 marker mm
 require $req_dir/rlib.fs
 mm
@@ -7017,7 +7512,7 @@ require $req_dir/rlib.fs
 cnt @ ."  "2"
 assert_error  "require of a missing file errors"  "require zz-no-such-file.fs"  "cannot open"
 assert_error  "include of a missing file errors"  "include zz-no-such-file.fs"  "cannot open"
-assert_output "require alone shows usage"    "require"  "usage: require <file>"
+assert_contains "require alone shows usage"    "require"  "usage: require <file>"
 
 # Cycle guard: the sentinel marks a file loaded only after it finishes, so a
 # file that loads itself (directly, or around a ring) used to recurse until the
@@ -7027,23 +7522,23 @@ printf 'require %s/rself.fs\n1 cnt +!\n'  "$req_dir" > "$req_dir/rself.fs"
 printf 'require %s/rb.fs\n1 acnt +!\n'    "$req_dir" > "$req_dir/ra.fs"
 printf 'require %s/ra.fs\n1 bcnt +!\n'    "$req_dir" > "$req_dir/rb.fs"
 
-assert_output "self-require is a no-op, body loads once" "variable cnt 0 cnt !
+assert_contains "self-require is a no-op, body loads once" "variable cnt 0 cnt !
 require $req_dir/rself.fs
 .( n=) cnt @ ."  "n=1"
-assert_output "self-include cannot recurse either" "variable cnt 0 cnt !
+assert_contains "self-include cannot recurse either" "variable cnt 0 cnt !
 include $req_dir/rself.fs
 .( n=) cnt @ ."  "n=1"
 # The skip says so: silence would surface only as an unexplained `? name`
 # wherever the missing library word is first used.
-assert_output "a skipped cycle is reported" "variable cnt 0 cnt !
+assert_contains "a skipped cycle is reported" "variable cnt 0 cnt !
 require $req_dir/rself.fs"  "is already loading — skipped"
-assert_output "a require ring loads each file once" "variable acnt 0 acnt !
+assert_contains "a require ring loads each file once" "variable acnt 0 acnt !
 variable bcnt 0 bcnt !
 require $req_dir/ra.fs
 .( ring=) acnt @ 10 * bcnt @ + ."  "ring=11"
 # The guard is scoped to the load: once it finishes, the file is an ordinary
 # candidate again (include still force-reloads it).
-assert_output "the loading mark does not outlive the load" "variable cnt 0 cnt !
+assert_contains "the loading mark does not outlive the load" "variable cnt 0 cnt !
 require $req_dir/rself.fs
 include $req_dir/rself.fs
 .( n=) cnt @ ."  "n=2"
@@ -7106,12 +7601,12 @@ section "SHELLUTIL (shell-command plumbing)"
 # =========================================================================
 # the composition layer other libraries require before shelling out
 shu_pre="include $FORTH_LIB/shellutil.fs"
-assert_output "shellutil quotes embedded quotes" \
+assert_contains "shellutil quotes embedded quotes" \
     "$(printf "%s\n(cmd0) s\" a b'c\" (cmd+q) (cmd\$) type" "$shu_pre")" \
     "'a b'\\''c'"
-assert_output "shellutil hex append" \
+assert_contains "shellutil hex append" \
     "$(printf '%s\n(cmd0) 255 (cmd+x) (cmd$) type' "$shu_pre")"  "0xFF"
-assert_output "shellutil line capture" \
+assert_result "shellutil line capture" \
     "$(printf '%s\n: t (cmd0) s" echo hello" (cmd+) (cmd-line1) if (cmd-ln) swap type then ; t' "$shu_pre")" \
     "hello"
 shu_forth="${FORTH/.\//$PWD/}"        # absolute, so it survives a cd
@@ -7340,14 +7835,39 @@ voice-cmd nip .  s" hi" s" d.wav" voice-render .')" \
 # and this runs; leave it unset and it skips, saying so. wavcore.fs rather
 # than wav.fs on purpose — decoding needs no SDL, so this works on a machine
 # with no audio device, and under qemu if an engine is installed there.
-if [ -n "$VOICE_ENGINE_CMD" ] && [ "${VOICE_ENGINE_CMD//\"/}" != "$VOICE_ENGINE_CMD" ]; then
+# This suite never sources setup.sh — it is deliberately environment-
+# independent — so an unset VOICE_ENGINE_CMD used to be reported as "not set",
+# which reads as a fact about the machine. It is not: it is a fact about the
+# caller's shell. On a Pi with piper installed and working, this printed
+# `(VOICE_ENGINE_CMD not set)` and was reported during the v0.16.0 verification
+# as "piper is not on the Pi". Derive the engine the way setup.sh does instead,
+# so the capability decides. Not a copy of setup.sh's value — an independent
+# derivation from the same source (PATH), which is why the two cannot drift
+# into pointing at different installs.
+vc_voices="${PIPER_VOICES:-$HOME/.local/share/piper-voices}"
+vc_engine="$VOICE_ENGINE_CMD"
+vc_why="VOICE_ENGINE_CMD not set and no engine found"
+if [ -z "$vc_engine" ]; then
+    vc_piper="$(command -v piper 2>/dev/null)"
+    if [ -z "$vc_piper" ]; then
+        vc_why="no engine: install piper, or export VOICE_ENGINE_CMD -- see help engines"
+    elif [ ! -d "$vc_voices" ]; then
+        # piper without voices is a half-finished install, not a code fault, so
+        # say which half is missing rather than failing the render.
+        vc_why="piper found but no voices in $vc_voices -- see help engines"
+    else
+        vc_engine="$vc_piper --data-dir $vc_voices -m ${PIPER_VOICE:-en_US-libritts-high} -f %o -- %t"
+    fi
+fi
+
+if [ -n "$vc_engine" ] && [ "${vc_engine//\"/}" != "$vc_engine" ]; then
     # A template is handed to voice-cmd! through s", which ends at the first
     # double quote — so one here would silently leave the DEFAULT template in
     # force and fail this test for a reason that looks nothing like the cause.
     printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD contains a \" — use single quotes)\n"
-elif [ -n "$VOICE_ENGINE_CMD" ]; then
+elif [ -n "$vc_engine" ]; then
     vc_real=$(printf 's" %s" voice-cmd!\ninclude %s/wavcore.fs\ns" you win" s" real.wav" voice-render .\n: t s" real.wav" wav-load dup 0= if drop ." LOADFAIL " wav-why type exit then\n  dup wav-frames 0> . dup wav-chans 0> . dup wav-rate . wav-free ;\nt\n' \
-        "$VOICE_ENGINE_CMD" "$FORTH_LIB")
+        "$vc_engine" "$FORTH_LIB")
     # a neural engine loads its model before it says anything: seconds, not ms
     vc_o=$( cd "$vc_dir" && printf '%s\n' "$vc_pre" "$vc_real" \
         | BASICFORTH_PATH="$FORTH_LIB" timeout 120 $vc_forth 2>&1 )
@@ -7360,7 +7880,7 @@ elif [ -n "$VOICE_ENGINE_CMD" ]; then
         printf "  ${RED}FAIL${NC}  real engine render+decode\n    Got: %q\n" "$vc_o"; ((failed++))
     fi
 else
-    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (VOICE_ENGINE_CMD not set)\n"
+    printf "  ${YELLOW}SKIP${NC}  real engine render+decode (%s)\n" "$vc_why"
 fi
 
 chmod -R u+w "$vc_dir" 2>/dev/null
@@ -7378,15 +7898,15 @@ elif [[ "$FORTH" == *qemu* ]] && ! command -v aarch64-linux-gnu-objdump >/dev/nu
     printf "  ${YELLOW}SKIP${NC}  dis tests (no aarch64-capable objdump on the host)\n"
 else
     dis_pre="include $FORTH_LIB/disasm.fs"
-    assert_output "dis colon word: banner" \
+    assert_contains "dis colon word: banner" \
         "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  "bytes at"
-    assert_output "dis colon word: call targets annotated" \
+    assert_contains "dis colon word: call targets annotated" \
         "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  '\ dup'
-    assert_output "dis colon word: ends at ret" \
+    assert_contains "dis colon word: ends at ret" \
         "$(printf '%s\n: sq dup * ;\ndis sq' "$dis_pre")"  "ret"
-    assert_output "dis primitive: bounded by symbol" \
+    assert_contains "dis primitive: bounded by symbol" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "<forth_dup>:"
-    assert_output "dis primitive: banner" \
+    assert_contains "dis primitive: banner" \
         "$(printf '%s\ndis dup' "$dis_pre")"  "(in the binary)"
     # stage 2: inline data is split out of the stream, not decoded as code.
     # A CONSTANT is the probe for that now, because a plain number compiles to
@@ -7394,22 +7914,22 @@ else
     # is the case that MUST still split -- when the disassembler's calibration
     # probe was left as `: five 5 ;` it silently stopped resolving and printed
     # a constant's 8 data bytes as three bogus instructions.
-    assert_output "dis splits a constant's inline cell" \
+    assert_contains "dis splits a constant's inline cell" \
         "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "literal: 42"
-    assert_output "dis keeps the ret after a constant's cell" \
+    assert_contains "dis keeps the ret after a constant's cell" \
         "$(printf '%s\n42 constant answer\ndis answer' "$dis_pre")"  "ret"
     # ...and a plain number is now an immediate: no call, and no cell to split.
     # Asserted as an ABSENCE because the instruction that replaced it differs
     # per architecture (movq $0x5 against movz #5), and this suite runs on both.
     assert_absent "dis: a number compiles no call to lit" \
         "$(printf '%s\n: five 5 ;\ndis five' "$dis_pre")"  "literal: 5"
-    assert_output "dis decodes inline strings" \
+    assert_contains "dis decodes inline strings" \
         "$(printf '%s\n: greet ." hi there" ;\ndis greet' "$dis_pre")"  's" hi there"'
-    assert_output "dis names an xt literal" \
+    assert_contains "dis names an xt literal" \
         "$(printf "%s\n: runner ['] dup execute ;\ndis runner" "$dis_pre")"  "xt: dup"
     assert_error  "dis unknown word" \
         "$(printf '%s\ndis nosuchword' "$dis_pre")"  "? nosuchword"
-    assert_output "dis without a name" \
+    assert_contains "dis without a name" \
         "$(printf '%s\ndis' "$dis_pre")"  "usage: dis <word>"
     # the temp file (dictionary path) must not survive the command; a private
     # TMPDIR keeps this assertion blind to other sessions' files in /tmp
@@ -7447,32 +7967,32 @@ section "TIME (benchmarking at the prompt)"
 # few ms of scheduler jitter can't make the fast case flaky, and the 100 ms
 # sleep would need a 100 ms overshoot to stop reading as "0.1".
 
-assert_output "time prints S.mmm s" \
+assert_contains "time prints S.mmm s" \
     ": q ;
 time q"                                                  "0.00"
-assert_output "time reports a real duration" \
+assert_contains "time reports a real duration" \
     ": nap 100 ms ;
 time nap"                                                "0.1"
-assert_output "time leaves the word's results on the stack" \
+assert_result "time leaves the word's results on the stack" \
     ": q 42 ;
 time q ."                                                "42"
-assert_output "time passes arguments through" \
+assert_result "time passes arguments through" \
     ": sink drop 7 ;
 5 time sink ."                                           "7"
-assert_output "time works on a primitive" "1 time 1+ ."   "2"
+assert_contains "time works on a primitive" "1 time 1+ ."   "2"
 # a duration is always decimal: .r and u.0r follow BASE, so in hex the 100 ms
 # sleep would misprint as 0.064 s. BASE itself must survive unchanged.
-assert_output "time prints decimal whatever BASE is" \
+assert_contains "time prints decimal whatever BASE is" \
     ": nap 100 ms ;
 hex
 time nap"                                                "0.1"
-assert_output "time leaves BASE alone" \
+assert_contains "time leaves BASE alone" \
     ": q ;
 hex
 time q
 ff ."                                                    "FF"
 assert_error  "time unknown word" "time nosuchword"       "time: nosuchword not found"
-assert_output "time without a name" "time"                "time: needs a word name"
+assert_contains "time without a name" "time"                "time: needs a word name"
 
 # =========================================================================
 section "UNCLOSED DEFINITION AT END OF FILE"
@@ -7578,13 +8098,18 @@ if [[ "$unb_out" == *"definition not closed (missing ;)"* && "$unb_out" == *"0  
 else
     printf "  ${RED}FAIL${NC}  stray ] at end of file\n    Got: %q\n" "$unb_out"; ((failed++))
 fi
-# Nested: the inner file reports, and the outer load carries on — same as a
-# line error in a nested file.
+# Nested: the inner file reports, and the outer load STOPS — since 2026-08-16,
+# when INCLUDED began propagating. It used to carry on, which meant a file whose
+# dependency failed to load kept compiling against words that were never
+# defined, turning one reported error into a cascade of unreported ones.
+# `outer` is defined AFTER the failing include and must therefore be missing;
+# `good` was defined by the inner file BEFORE its error and must survive, which
+# is what distinguishes "the load stopped" from "the load was rolled back".
 unn_out=$(printf 'outer .\ngood .\nbye\n' | BASICFORTH_SESSION=1 \
     BASICFORTH_PATH="$FORTH_LIB" timeout 5 $sv_forth "$unc_dir/nest.fs" 2>&1)
-if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"5  ok"* \
+if [[ "$unn_out" == *"definition not closed"* && "$unn_out" == *"? outer"* \
       && "$unn_out" == *"1  ok"* ]]; then
-    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load continues\n"; ((passed++))
+    printf "  ${GREEN}PASS${NC}  unclosed nested include reports; the outer load stops\n"; ((passed++))
 else
     printf "  ${RED}FAIL${NC}  unclosed nested include\n    Got: %q\n" "$unn_out"; ((failed++))
 fi
@@ -7619,11 +8144,28 @@ fi
 # with a broken chain (it segfaulted). The file is included twice on purpose:
 # the second load adds no require sentinel, so LATEST is not shifted and
 # saved_latest lands squarely on the caller's open definition.
+# REWRITTEN 2026-08-16, and honestly labelled: the version before this one used
+# `include` for both loads, and `include` is the FORTH wrapper, which refuses
+# outright when a definition is open ("load it before, or after, the
+# definition"). The asm forth_included was therefore never reached from inside
+# `[ ]`, and this assertion had been passing without exercising its subject
+# since that guard landed. Propagation made it fail, which is the only reason
+# anyone looked.
+# (included?) goes straight to the asm entry with no such guard, so the load
+# does now happen with the caller's definition open, and the inherited-header
+# comparison is on the live path.
+# STILL NOT FULLY NON-VACUOUS, measured: deleting the incl_entry_latest guard
+# before drop_partial_header changes nothing here, because the equality check at
+# the top of .Lincl_err_tail short-circuits first -- and it always can, since
+# build_header refuses the inner file's own `:` while a definition is open, so
+# LATEST cannot diverge by that route. Whether that inner guard is now dead code
+# is filed in TODO.md; what this test does cover is that a load inside an open
+# definition neither crashes nor eats the caller's work.
 unh_dir="$(mktemp -d)"
 printf ': cbad 1\n' > "$unh_dir/inner.fs"
-printf 'include %s/inner.fs\n: keeper 7 ;\n: foo [ include %s/inner.fs ] 42 ;\nkeeper .\n' \
+printf 's" %s/inner.fs" (included?) drop\n: keeper 7 ;\n: foo [ s" %s/inner.fs" (included?) drop ] 42 ;\n' \
     "$unh_dir" "$unh_dir" > "$unh_dir/outer.fs"
-unh_out=$(printf 'bye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
+unh_out=$(printf 'keeper .\nbye\n' | BASICFORTH_SESSION=1 BASICFORTH_PATH="$FORTH_LIB" \
     timeout 5 $sv_forth "$unh_dir/outer.fs" 2>&1)
 rm -rf "$unh_dir"
 if [[ "$unh_out" == *"7"* && "$unh_out" == *"Goodbye"* && "$unh_out" != *"dumped core"* ]]; then
@@ -7836,24 +8378,24 @@ section "LOCALS (stage 1: the runtime frame and its unwind contract)"
 # LP go back", which is a different question and the only one that fails when
 # a path is missed.
 
-# assert_result, not assert_output, wherever the expected text also occurs in
-# the input: run_forth captures the ECHOED line too, so `assert_output` would
+# assert_result, not assert_contains, wherever the expected text also occurs in
+# the input: run_forth captures the ECHOED line too, so `assert_contains` would
 # match the input and pass against a completely broken engine. That is not
 # hypothetical here -- the first draft of the assignability test below stored
 # with NO frame open, faulted into the guard page, and passed anyway on the
 # echoed "9".
 assert_result "frame: first declared is local 0" \
               "3 4 5 3 (lframe) 0 (local@) . 1 (local@) . 2 (local@) ."   "3 4 5"
-assert_output "frame: consumes its arguments"    "1 2 3 3 (lframe) depth ."       "0"
-assert_output "frame: costs exactly n cells"     "1 2 3 3 (lframe) (lp0@) (lp@) - ." "24"
-assert_output "frame: teardown restores LP"      "1 2 3 3 (lframe) 3 (lunframe) (lp@) (lp0@) = ." "-1"
-assert_output "frame: a zero-cell frame is a no-op, not a fault" \
+assert_contains "frame: consumes its arguments"    "1 2 3 3 (lframe) depth ."       "0"
+assert_contains "frame: costs exactly n cells"     "1 2 3 3 (lframe) (lp0@) (lp@) - ." "24"
+assert_contains "frame: teardown restores LP"      "1 2 3 3 (lframe) 3 (lunframe) (lp@) (lp0@) = ." "-1"
+assert_contains "frame: a zero-cell frame is a no-op, not a fault" \
               "0 (lframe) (lp@) (lp0@) = ."                              "-1"
 assert_result "frame: locals are assignable"     "1 1 (lframe) 42 0 (local!) 0 (local@) . 1 (lunframe)" "42"
-assert_output "locals stack is untouched at rest" "(lp@) (lp0@) = ."      "-1"
+assert_contains "locals stack is untouched at rest" "(lp@) (lp0@) = ."      "-1"
 # Writing outside the frame hits the guard page rather than scribbling on the
 # caller's locals -- the fence is what makes a stage-2 off-by-one findable.
-assert_output "a store past the frame hits the guard page" \
+assert_contains "a store past the frame hits the guard page" \
               "1 1 (lframe) 42 4 (local!)"                               "locals stack underflow"
 
 # --- the eight reset paths, one assertion each ---------------------------
@@ -7861,45 +8403,70 @@ assert_output "a store past the frame hits the guard page" \
 # opened and abandoned within ONE line, because LP is restored to the line's
 # ENTRY value -- at the outermost level that is lp0, but saying "one line"
 # keeps the test honest about which invariant it is checking.
-assert_output "unwind: caught throw"   ": t 1 1 (lframe) 99 throw ;
+assert_contains "unwind: caught throw"   ": t 1 1 (lframe) 99 throw ;
 ' t catch . (lp@) (lp0@) = ."                                            "99 -1"
-assert_output "unwind: uncaught throw" ": t 1 1 (lframe) 99 throw ;
+assert_contains "unwind: uncaught throw" ": t 1 1 (lframe) 99 throw ;
 t
 (lp@) (lp0@) = ."                                                        "-1"
-assert_output "unwind: QUIT"           ": t 1 1 (lframe) quit ;
+assert_contains "unwind: QUIT"           ": t 1 1 (lframe) quit ;
 t
 (lp@) (lp0@) = ."                                                        "-1"
-assert_output "unwind: aborted definition" ': bad [ 1 1 (lframe) ] nosuchword ;
+assert_contains "unwind: aborted definition" ': bad [ 1 1 (lframe) ] nosuchword ;
 (lp@) (lp0@) = .'                                                        "-1"
-assert_output "unwind: data-stack underflow (guard page)" "1 1 (lframe) drop
+assert_contains "unwind: data-stack underflow (guard page)" "1 1 (lframe) drop
 (lp@) (lp0@) = ."                                                        "-1"
-assert_output "unwind: data-stack overflow (guard page)" ": t 1 1 (lframe) begin 1 again ;
+assert_contains "unwind: data-stack overflow (guard page)" ": t 1 1 (lframe) begin 1 again ;
 t
 (lp@) (lp0@) = ."                                                        "-1"
-assert_output "unwind: dictionary full" ": t 1 1 (lframe) begin 1 , again ;
+assert_contains "unwind: dictionary full" ": t 1 1 (lframe) begin 1 , again ;
 t
 (lp@) (lp0@) = ."                                                        "-1"
 
 # --- nesting: the case a blanket "reset to lp0" gets WRONG ----------------
-# interpret_line nests. A compiled word holding a frame can call EVALUATE, and
-# an error inside that evaluation unwinds only the INNER interpret_line -- the
-# caller is still running and its frame is still live. Resetting to lp0 there
-# would hand the caller freed slots. Both error exits are covered because they
-# are separate code paths reached by different errors: an undefined word takes
-# .Lil_err_return, a control-flow abort takes .Lcf_longjmp.
-# Verified non-vacuous: breaking either exit to reset lp0 makes its test report
-# "locals stack underflow" instead, since local 0 then sits in the guard page.
+# interpret_line nests. A word holding a frame can trigger a nested one, and an
+# error inside it unwinds only the INNER level -- the caller is still running
+# and its frame is still live. Resetting to lp0 there would hand the caller
+# freed slots. Both error exits are covered because they are separate code
+# paths reached by different errors: an undefined word takes .Lil_err_return, a
+# control-flow abort takes .Lcf_longjmp.
+#
+# These used to drive the nested level with EVALUATE. They cannot any more:
+# EVALUATE now THROWS on error, so the caller does not survive to be asked, and
+# the abort is the whole point of that change. The natural-looking repair --
+# wrapping the EVALUATE in CATCH so the caller continues -- was MEASURED
+# VACUOUS: THROW restores LP from CATCH's own frame, so the probe reads 4242
+# even with the interpret_line epilogue deliberately broken. It tests THROW,
+# not the epilogue it is named for.
+#
+# (included?) is the remaining caller that takes an error status as a VALUE and
+# carries on -- deliberately, since main.s and Forth code both need it that way
+# -- so it still reaches the epilogue with a live caller frame behind it.
+# Verified non-vacuous the hard way, against a build with each exit patched to
+# reset lp0: both then report "locals stack underflow", local 0 having landed
+# in the guard page.
 # A distinctive value, and assert_result so the echo cannot supply it: the
 # local must read back as 4242, not merely as "something". Expecting "1" here
 # would have matched the "-1" from the LP check on the next line.
-assert_result "nesting: undefined word inside evaluate keeps the caller's frame" \
-              ': o 4242 1 (lframe) s" nosuchword" evaluate 0 (local@) . 1 (lunframe) ;
+lpn_dir="$(mktemp -d)"
+printf 'nosuchword\n'  > "$lpn_dir/badline.fs"
+printf ': q then ;\n'  > "$lpn_dir/badcf.fs"
+assert_result "nesting: a line error inside a load keeps the caller's frame" \
+              ": o 4242 1 (lframe) s\" $lpn_dir/badline.fs\" (included?) drop 0 (local@) . 1 (lunframe) ;
 o
-(lp@) (lp0@) = .'                                                        "4242"
-assert_result "nesting: control-flow abort inside evaluate keeps it too" \
-              ': o 4242 1 (lframe) s" : q then ;" evaluate 0 (local@) . 1 (lunframe) ;
+(lp@) (lp0@) = ."                                                        "4242"
+assert_result "nesting: control-flow abort inside a load keeps it too" \
+              ": o 4242 1 (lframe) s\" $lpn_dir/badcf.fs\" (included?) drop 0 (local@) . 1 (lunframe) ;
 o
-(lp@) (lp0@) = .'                                                        "4242"
+(lp@) (lp0@) = ."                                                        "4242"
+rm -rf "$lpn_dir"
+# The CATCH path is worth its own check even though it cannot cover the
+# epilogue: THROW must restore LP to the frame CATCH recorded, or a caught
+# EVALUATE error leaves the catching word running on a frame that moved.
+assert_result "a caught evaluate error leaves the catching word's frame intact" \
+              ": inner s\" nosuchword\" evaluate ;
+: o 4242 1 (lframe) ' inner catch drop 0 (local@) . 1 (lunframe) ;
+o
+(lp@) (lp0@) = ."                                                        "4242"
 
 # --- per-thread ----------------------------------------------------------
 # A worker gets its own locals stack from its own allocation, so LP is per
@@ -7935,10 +8502,10 @@ assert_result "locals: nested calls each get their own frame" \
 assert_result "locals: a local shadows the DO index" ": sh {: i :} 3 0 do i . loop ; 7 sh"  "7 7 7"
 
 # --- the frame must balance, whichever way the word is left ---------------
-assert_output "locals: LP balances after a normal return" ": u {: x :} x ; 1 u drop (lp@) (lp0@) = ."  "-1"
-assert_output "locals: LP balances after an early exit" \
+assert_contains "locals: LP balances after a normal return" ": u {: x :} x ; 1 u drop (lp@) (lp0@) = ."  "-1"
+assert_contains "locals: LP balances after an early exit" \
               ": e {: a :} a 5 > if a exit then 0 ; 9 e drop 1 e drop (lp@) (lp0@) = ."  "-1"
-assert_output "locals: LP balances after exit from a DO loop" \
+assert_contains "locals: LP balances after exit from a DO loop" \
               ": d {: n :} 10 0 do i n = if unloop n exit then loop 0 ;
 3 d drop 50 d drop 3 d drop (lp@) (lp0@) = ."                                  "-1"
 
@@ -7965,7 +8532,7 @@ assert_result "locals: allowed after a CLOSED if" \
               ": t 1 if 2 . then {: a :} a . ; 7 t"                            "2 7"
 assert_result "locals: allowed after a CLOSED do loop" \
               ": u 3 0 do i . loop {: a :} a . ; 9 u"                          "0 1 2 9"
-assert_output "locals: LP balances after a closed structure" \
+assert_contains "locals: LP balances after a closed structure" \
               ": t 1 if 2 . then {: a :} a . ; 7 t 7 t (lp@) (lp0@) = ."       "-1"
 # ...and the session still compiles afterwards, which is not implied by the
 # message: the definition-open guard printed correctly while wedging LATEST.
@@ -7973,7 +8540,7 @@ assert_result "locals: a refusal leaves the session usable" \
               ": t 0 if {: a :} then ;
 : fine {: z :} z 3 * ;
 4 fine ."                                                                      "12"
-assert_output "locals: a refusal leaves LP where it found it" \
+assert_contains "locals: a refusal leaves LP where it found it" \
               ": t 0 if {: a :} then ;
 (lp@) (lp0@) = ."                                                              "-1"
 
@@ -8059,7 +8626,7 @@ assert_result "locals: a val is writable after being zeroed" \
 # --- stage 3: the shadow warning -------------------------------------------
 # Shadowing is what locals are FOR, so this is a note, not an error -- but
 # Forth lets you shadow verbs, and `{: i :}` silently costs you the DO index.
-assert_output "locals: a shadowing name is called out" ": oops {: i :} 3 0 do i . loop ;"  "note: local i shadows an existing word"
+assert_contains "locals: a shadowing name is called out" ": oops {: i :} 3 0 do i . loop ;"  "note: local i shadows an existing word"
 assert_result "locals: ...and the definition still works" ": oops {: i :} 3 0 do i . loop ; 7 oops"  "7 7 7"
 assert_result "locals: an ordinary name draws no note" ": fine {: n lo hi :} n . ; 1 2 3 fine"  "1"
 # Prompt only, like `redefined`: a library declaring a local named `i` must not
@@ -8129,7 +8696,9 @@ fi
 # same test is the wrong home for the locals list too. Both clears are now
 # unconditional, above it.
 ld_dir="$(mktemp -d)"
-printf 'create ldblob 300000 allot\n' > "$ld_dir/full.fs"
+# DERIVE the overflow rather than hardcoding a size: `300000` was chosen to
+# exceed a 256 KB dictionary and silently stopped overflowing when it grew.
+printf 'create ldblob unused 1000 + allot\n' > "$ld_dir/full.fs"
 ld_out=$(printf 's" %s/full.fs" included\n: ldafter {: i :} i ;\nbye\n' "$ld_dir" \
     | BASICFORTH_PATH="$FORTH_LIB" timeout 10 $FORTH 2>&1)
 rm -rf "$ld_dir"
@@ -8159,10 +8728,464 @@ else
 fi
 
 # =========================================================================
+section "INSTALL (make install, and what the binary derives from its own path)"
+# =========================================================================
+# An installed binary has no setup.sh behind it: BASICFORTH_PATH and
+# BASICFORTH_DOCS are unset, and it must find core.fs and the docs anyway, by
+# deriving <prefix>/share/basicforth/... from /proc/self/exe. That coupling is
+# the thing worth testing — the Makefile's layout and main.s's templates have
+# to agree, and nothing else compares them. A drift shows up here rather than
+# as a mystery "(BASICFORTH_DOCS not set)" on someone's fresh install.
+#
+# Run under `env -i`: not merely unset-what-we-set, but nothing inherited at
+# all, which is the only way to be sure the derivation is doing the work and
+# not the developer's own environment.
+#
+# The arch under test, not the host's: a cross-compiled ARM64 run must install
+# and exercise the ARM64 binary, or it verifies the x86 build twice and the
+# ARM64 derivation never.
+case "$FORTH" in
+    *qemu*) inst_arch=arm64 ;;
+    *)      [ "$(uname -m)" = "aarch64" ] && inst_arch=arm64 || inst_arch=x86 ;;
+esac
+inst_pfx="$(mktemp -d)"
+# Replace the last word of $FORTH (the binary) with the installed one, keeping
+# any qemu prefix in front of it.
+inst_run="$(printf '%s' "$FORTH" | sed "s|[^ ]*\$|$inst_pfx/bin/basicforth|")"
+
+if make -C "$REPO_ROOT" install PREFIX="$inst_pfx" ARCH="$inst_arch" >/dev/null 2>&1; then
+    printf "  ${GREEN}PASS${NC}  make install completes\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  make install completes\n"; ((failed++))
+fi
+# core.fs found. The probe must use a word core.fs DEFINES, not one the
+# assembly already provides: the first version of this test compiled
+# `: isq dup * ;` and asserted 49, which passes with core.fs missing entirely
+# because `:`, `dup`, `*` and `.` are all built-ins. It was measured passing
+# against a deliberately broken library path before anyone noticed.
+# `2over` exists only in core.fs, and 12 appears nowhere else in the output.
+ins_core=$(printf '7 5 100 200 2over + . bye\n' | (cd / && env -i $inst_run) 2>&1)
+if [[ "$ins_core" == *"12"* && "$ins_core" != *"core.fs not found"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: core.fs loads with no environment at all\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: core.fs not found\n    Got: %q\n" "$ins_core"; ((failed++))
+fi
+# Docs found: help resolves a word's page.
+ins_help=$(printf 'help dup\nbye\n' | (cd / && env -i $inst_run) 2>&1)
+if [[ "$ins_help" == *"( x -- x x )"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: help finds the docs tree\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: help found no docs\n    Got: %q\n" "$(echo "$ins_help" | head -3)"; ((failed++))
+fi
+# Libraries found: require resolves against the installed forth directory.
+# ONE line, deliberately: with the require on its own line, a failure printed an
+# error and the NEXT line still announced success — the marker said nothing
+# about the require at all. Same line means a failed require aborts before
+# reaching it, which is only true because errors now propagate out of INCLUDED.
+# The prompt lines are stripped before matching, exactly as assert_result does.
+# Without that the marker matches the ECHOED INPUT and the assertion cannot
+# fail — measured: it passed against a build whose library path was broken and
+# whose `require` therefore did not exist.
+ins_req=$(printf 'require shellutil.fs ." OK-REQ" cr bye\n' | (cd / && env -i $inst_run) 2>&1 | sed '/^> /d')
+if [[ "$ins_req" == *"OK-REQ"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: require finds the library tree\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: require failed\n    Got: %q\n" "$(echo "$ins_req" | head -3)"; ((failed++))
+fi
+# RELOCATABLE — the property that chose derivation over a compiled-in prefix.
+# Move the whole tree and it must still work, with no rebuild.
+inst_moved="${inst_pfx}-moved"
+mv "$inst_pfx" "$inst_moved"
+ins_mv_run="$(printf '%s' "$FORTH" | sed "s|[^ ]*\$|$inst_moved/bin/basicforth|")"
+ins_mv=$(printf 'help dup\nbye\n' | (cd / && env -i $ins_mv_run) 2>&1)
+if [[ "$ins_mv" == *"( x -- x x )"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: the tree can be moved without rebuilding\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: moving the tree broke it\n    Got: %q\n" "$(echo "$ins_mv" | head -3)"; ((failed++))
+fi
+mv "$inst_moved" "$inst_pfx"
+# The environment still outranks the derived default, or setup.sh and every
+# suite here would be quietly overridden by an installation.
+ins_env=$(printf 'help dup\nbye\n' | (cd / && env -i BASICFORTH_DOCS=/nonexistent $inst_run) 2>&1)
+if [[ "$ins_env" == *"no help for dup"* ]]; then
+    printf "  ${GREEN}PASS${NC}  installed: BASICFORTH_DOCS still overrides the derived path\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  installed: the environment did not win\n    Got: %q\n" "$(echo "$ins_env" | head -3)"; ((failed++))
+fi
+if make -C "$REPO_ROOT" uninstall PREFIX="$inst_pfx" >/dev/null 2>&1 \
+   && [ ! -e "$inst_pfx/bin/basicforth" ] && [ ! -e "$inst_pfx/share/basicforth" ]; then
+    printf "  ${GREEN}PASS${NC}  make uninstall removes what it installed\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  make uninstall left something behind\n"; ((failed++))
+fi
+rm -rf "$inst_pfx" "$inst_moved"
+
+# =========================================================================
+section "PACKAGES (user package directories under ~/.basicforth)"
+# =========================================================================
+# Startup appends $BASICFORTH_PACKAGES/lib to the file search path and
+# .../docs/{Packages,Tutorials} to the help path, so a package installed there is
+# REQUIRE-able and answers `help` from any directory. What makes this worth
+# testing is the "from any directory" half: the failure it guards against is a
+# package that works only from the directory you installed it in.
+#
+# Every check runs from an unrelated working directory for that reason, and the
+# fixture root is handed in explicitly rather than inherited -- the suite's own
+# BASICFORTH_PACKAGES (set at the top of this file) points at nothing, so a
+# developer's real ~/.basicforth cannot reach these results.
+# These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
+# relative in a normal run, and carries a qemu prefix in a cross one.
+pkg_bin="${FORTH##* }"                        # last word is the binary
+pkg_pre="${FORTH% *}"                         # anything before it (qemu -L ...)
+[ "$pkg_pre" = "$FORTH" ] && pkg_pre=""       # single word: no prefix
+pkg_bin="$(cd "$(dirname "$pkg_bin")" && pwd)/$(basename "$pkg_bin")"
+pkg_forth="$pkg_pre $pkg_bin"
+
+pkg_home="$(mktemp -d)"
+pkg_cwd="$(mktemp -d)"
+mkdir -p "$pkg_home/lib" "$pkg_home/docs/Packages" "$pkg_home/docs/Tutorials"
+cat > "$pkg_home/lib/pkgfix.fs" <<'PKGEOF'
+\ pkgfix -- integration fixture
+: pkg-hello ." installed package speaking" cr ;
+PKGEOF
+cat > "$pkg_home/docs/Packages/Pkgfix.md" <<'PKGEOF'
+# Pkgfix
+
+## pkg-hello ( -- )
+Fixture page shipped beside an installed package.
+PKGEOF
+cat > "$pkg_home/docs/Tutorials/Pkglesson.md" <<'PKGEOF'
+# Pkglesson — a fixture lesson
+
+## Step 1
+Type `pkg-hello`.
+PKGEOF
+# Deliberately collides with a bundled lesson, to pin which one wins.
+cat > "$pkg_home/docs/Tutorials/Arrays.md" <<'PKGEOF'
+# Arrays — an installed lesson that collides with the bundled one
+
+## Step 1
+If you are reading this, an installed lesson displaced a bundled one.
+PKGEOF
+
+# assert_result cannot take a different HOME or a different working directory,
+# and hand-rolling the comparison per assertion is exactly how the ECHOED INPUT
+# gets matched instead of the output. So: one helper, stripping the prompt lines
+# the same way assert_result does.
+pkg_assert() {                      # name  cwd  input  expected
+    local name="$1" cwd="$2" input="$3" expected="$4"
+    local out
+    out=$( cd "$cwd" && printf '%s\n' "$input" \
+           | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+             BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:$REPO_ROOT/docs/Tutorials:$REPO_ROOT/docs/Guides" \
+             timeout 10 $pkg_forth 2>&1 | sed '/^> /d; /^>$/d' )
+    if [[ "$out" == *"$expected"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$name"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got: %q\n" \
+               "$name" "$expected" "$out"; ((failed++))
+    fi
+}
+
+pkg_assert "a package in lib/ is require-able from anywhere" "$pkg_cwd" \
+    'require pkgfix.fs
+pkg-hello' "installed package speaking"
+
+# `help <word>` is the expensive lookup -- it reads INSIDE every page in every
+# docs directory, where the listing below only reads their names. Measured at
+# 21s under qemu against 0.2s native, so it is skipped when emulated rather than
+# given a timeout long enough to hide a real hang. The Pi run covers it on real
+# ARM64, which is where ARM64 coverage was ever going to come from.
+case "$FORTH" in
+    *qemu*)
+        printf "  ${YELLOW}SKIP${NC}  a package's help page answers help <word> (21s emulated; run on real ARM64: ssh pi400, make run-integration)\n"
+        ;;
+    *)
+        pkg_assert "its help page answers help <word>" "$pkg_cwd" \
+            'help pkg-hello' "Fixture page shipped beside an installed package."
+        ;;
+esac
+
+pkg_assert "its page is attributed to the Packages section" "$pkg_cwd" \
+    'help' "Packages"
+
+pkg_assert "its lesson joins the tutorials listing" "$pkg_cwd" \
+    'tutorials' "Pkglesson"
+
+pkg_assert "its lesson replays" "$pkg_cwd" \
+    'tutorial Pkglesson
+next' "Type \`pkg-hello\`"
+
+# The append rule covers docs as well as code: an installed lesson must not
+# displace a bundled one of the same name. (It is still LISTED by `tutorials`,
+# which is why a package's lesson should be named after the package -- see
+# Package_Registry.md. What must never happen is the installed one opening.)
+pkg_assert "an installed lesson does not displace a bundled one" "$pkg_cwd" \
+    'tutorial Arrays' "Your First Data Structure"
+
+# deps must read the interpreter's search path, not getenv BASICFORTH_PATH.
+# pkgfix.fs is reachable ONLY through the appended lib dir -- the environment
+# variable names $FORTH_LIB and nothing else -- so this fails if deps goes back
+# to asking the environment. That was a real regression: on an installed binary,
+# where the path is derived rather than set, `deps sound.fs` answered "cannot
+# find" for a file `require sound.fs` loads.
+pkg_assert "deps resolves against the real search path, not the environment" \
+    "$pkg_cwd" 'deps pkgfix.fs' "pkgfix.fs: no requirements declared."
+
+# A docs directory that does not exist must not make help reprint the PREVIOUS
+# section. (collect-in) used to return before resetting its collection, so the
+# previous directory's topics and heading were printed a second time. Count the
+# headings rather than matching one: the wrong output CONTAINS the right one.
+pkg_dup=$( cd "$pkg_cwd" && printf 'help\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      BASICFORTH_DOCS="$REPO_ROOT/docs/Language-Reference:/nonexistent/zz:$REPO_ROOT/docs/Guides" \
+      timeout 10 $pkg_forth 2>&1 | grep -c '^Language-Reference$' )
+if [ "$pkg_dup" = "1" ]; then
+    printf "  ${GREEN}PASS${NC}  a missing docs dir does not duplicate a section\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  missing docs dir duplicated a section (%s headings)\n" "$pkg_dup"; ((failed++))
+fi
+
+# A package is installed as lib/<package> -> its own source directory, and it
+# finds its siblings through that link. Linking the FILES instead does not
+# work: beside-first resolution uses the path the file was reached BY, not the
+# symlink's target, so the sibling is looked for in lib/<package>/ where it is
+# not. Both forms are asserted, because a one-file package survives the wrong
+# one and that is what makes the mistake shippable.
+pkg_src="$(mktemp -d)"
+printf ': pkg-sibling ." sibling here" cr ;\n' > "$pkg_src/pkghelp.fs"
+printf 'require pkghelp.fs\n: pkg-entry ." entry here" cr ;\n' > "$pkg_src/pkgmain.fs"
+ln -s "$pkg_src" "$pkg_home/lib/pkgdir"
+mkdir -p "$pkg_home/lib/pkgfile"
+ln -s "$pkg_src/pkgmain.fs" "$pkg_home/lib/pkgfile/pkgmain.fs"
+
+pkg_dir_out=$( cd "$pkg_cwd" && printf 'require pkgdir/pkgmain.fs\npkg-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_dir_out" == *"sibling here"* && "$pkg_dir_out" != *"cannot open"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a directory-linked package finds its siblings\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a directory-linked package finds its siblings\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_dir_out" | head -4)"; ((failed++))
+fi
+# "cannot open pkghelp.fs" alone would NOT show that symlinks are the reason --
+# a plain copy of the entry file, with the sibling left behind, fails exactly
+# the same way. The two explanations have to predict different output, so put a
+# DECOY sibling next to the link: if resolution read through to $pkg_src the
+# real one would load, and if it uses the path the file was reached BY the
+# decoy does. Which one answers is the whole finding.
+printf ': pkg-sibling ." decoy here" cr ;\n' > "$pkg_home/lib/pkgfile/pkghelp.fs"
+pkg_file_out=$( cd "$pkg_cwd" && printf 'require pkgfile/pkgmain.fs\npkg-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_file_out" == *"decoy here"* && "$pkg_file_out" != *"sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  beside-first uses the link path, not its target\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  beside-first uses the link path, not its target\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_file_out" | head -4)"; ((failed++))
+fi
+# ...and the practical consequence: with no decoy there is nothing to find, so a
+# file-linked multi-file package fails outright. This one is the SYMPTOM; the
+# assertion above is what identifies the cause.
+rm -f "$pkg_home/lib/pkgfile/pkghelp.fs"
+pkg_bare_out=$( cd "$pkg_cwd" && printf 'require pkgfile/pkgmain.fs\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_bare_out" == *"cannot open pkghelp.fs"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file-linked package does not reach its siblings\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a file-linked package does not reach its siblings\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_bare_out" | head -4)"; ((failed++))
+fi
+rm -rf "$pkg_src"
+
+# The CWD attempt is the FIRST thing tried, and its failure must not end the
+# search. It used to: only "not found" fell through to BASICFORTH_PATH, so a
+# plain FILE named like the first path component (open -> ENOTDIR) or an
+# unreadable directory (EACCES) hid every copy behind it. Flat requires made
+# that near-impossible to hit; `require <pkg>/<file>.fs` made the first
+# component a DIRECTORY name, and a bin/<pkg> launcher script beside a <pkg>
+# package is exactly that collision.
+pkg_block="$(mktemp -d)"
+pkg_bsrc="$(mktemp -d)"                            # a package of our own to find
+printf ': blk-sibling ." blocked sibling here" cr ;\n' > "$pkg_bsrc/blkhelp.fs"
+printf 'require blkhelp.fs\n' > "$pkg_bsrc/blkmain.fs"
+ln -s "$pkg_bsrc" "$pkg_home/lib/pkgblk"
+( cd "$pkg_block" && : > pkgblk )                 # a FILE where a dir would be
+pkg_notdir=$( cd "$pkg_block" && printf 'require pkgblk/blkmain.fs\nblk-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_notdir" == *"blocked sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  a file in the way does not end the include search\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a file in the way does not end the include search\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_notdir" | head -3)"; ((failed++))
+fi
+rm -f "$pkg_block/pkgblk"
+mkdir -p "$pkg_block/pkgblk" && chmod 000 "$pkg_block/pkgblk"
+pkg_eacces=$( cd "$pkg_block" && printf 'require pkgblk/blkmain.fs\nblk-sibling\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+chmod 755 "$pkg_block/pkgblk"
+if [[ "$pkg_eacces" == *"blocked sibling here"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an unreadable dir does not end the include search\n"
+    ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  an unreadable dir does not end the include search\n"
+    printf "    Got:      %s\n" "$(echo "$pkg_eacces" | head -3)"; ((failed++))
+fi
+# A genuine miss reports ONCE. The old non-not-found path printed its own
+# "Error: cannot open X" and then the Forth wrapper printed "cannot open X"
+# too -- count the lines rather than matching one, since the doubled output
+# CONTAINS the right one.
+pkg_once=$( cd "$pkg_block" && : > blocker && printf 'require blocker/nope.fs\n' \
+    | BASICFORTH_PACKAGES="$pkg_home" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 | grep -c 'cannot open blocker/nope.fs' )
+if [ "$pkg_once" = "1" ]; then
+    printf "  ${GREEN}PASS${NC}  a blocked miss is reported once, not twice\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  a blocked miss reported %s times\n" "$pkg_once"; ((failed++))
+fi
+rm -rf "$pkg_block" "$pkg_bsrc"
+
+# An over-long root is refused rather than truncated: the include search SKIPS a
+# segment whose "<seg>/<name>" exceeds 511 bytes, so a truncated path would fail
+# later with nothing left to explain it.
+pkg_long="$pkg_home/$(printf 'd%.0s' $(seq 1 60))/$(printf 'e%.0s' $(seq 1 60))/$(printf 'f%.0s' $(seq 1 60))"
+mkdir -p "$pkg_long/lib"
+cp "$pkg_home/lib/pkgfix.fs" "$pkg_long/lib/"
+pkg_long_out=$( cd "$pkg_cwd" && printf 'bye\n' \
+    | BASICFORTH_PACKAGES="$pkg_long" BASICFORTH_PATH="$FORTH_LIB" \
+      timeout 10 $pkg_forth 2>&1 )
+if [[ "$pkg_long_out" == *"package directory path too long"* ]]; then
+    printf "  ${GREEN}PASS${NC}  an over-long package root is refused, and says so\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  over-long package root was not refused\n    Got: %q\n" \
+           "$pkg_long_out"; ((failed++))
+fi
+
+# With no root at all the mechanism sits out entirely -- which is what keeps
+# `env -i`, and every suite above, unaffected by it.
+pkg_bare=$( cd "$pkg_cwd" && printf '(forth-path) type cr\nbye\n' \
+    | env -i BASICFORTH_PATH="$FORTH_LIB" timeout 10 $pkg_forth 2>&1 \
+    | sed '/^> /d; /^>$/d' | sed -n 1p )
+if [[ "$pkg_bare" == "$FORTH_LIB" ]]; then
+    printf "  ${GREEN}PASS${NC}  with neither HOME nor BASICFORTH_PACKAGES, nothing is appended\n"; ((passed++))
+else
+    printf "  ${RED}FAIL${NC}  the search path changed with no package root set\n    Want: %q\n    Got: %q\n" \
+           "$FORTH_LIB" "$pkg_bare"; ((failed++))
+fi
+
+rm -rf "$pkg_home" "$pkg_cwd"
+
+# =========================================================================
+section "BESIDE (a package finds its own files)"
+# =========================================================================
+# require/include look beside the file doing the requiring, BEFORE the current
+# directory. The order is the point: a package must get its own art.fs even
+# when you are standing next to a different one, which is the `font.fs in the
+# launch directory' incident core.fs records.
+# These checks cd elsewhere, so the binary needs an absolute path -- $FORTH is
+# relative in a normal run and carries a qemu prefix in a cross one.
+bes_bin="${FORTH##* }"; bes_pre="${FORTH% *}"
+[ "$bes_pre" = "$FORTH" ] && bes_pre=""
+bes_bin="$(cd "$(dirname "$bes_bin")" && pwd)/$(basename "$bes_bin")"
+bes_forth="$bes_pre $bes_bin"
+
+bes_pkg="$(mktemp -d)"; bes_cwd="$(mktemp -d)"
+mkdir -p "$bes_pkg/pkg/data"
+echo ': bes-sib ." the package own" cr ;'      > "$bes_pkg/pkg/art.fs"
+echo 'payload'                                  > "$bes_pkg/pkg/data/thing.txt"
+cat > "$bes_pkg/pkg/main.fs" <<'BESEOF'
+require art.fs
+my-dir 2constant bes-home
+: bes-file ( c-addr u -- c-addr' u' )  bes-home 2swap path-join ;
+: bes-open ( -- )
+    s" data/thing.txt" bes-file r/o open-file
+    if  drop ." asset FAILED" cr  else  close-file drop ." asset ok" cr  then ;
+BESEOF
+echo ': bes-sib ." the DECOY" cr ;'             > "$bes_cwd/art.fs"
+
+bes_run() {                       # cwd  input  -> stdout, prompts stripped
+    ( cd "$1" && printf '%s\n' "$2" | BASICFORTH_PACKAGES="$REPO_ROOT/tests/.no-user-packages" \
+        BASICFORTH_PATH="$FORTH_LIB:$bes_pkg" timeout 20 $bes_forth 2>&1 | sed '/^> /d; /^>$/d' )
+}
+bes_assert() {                    # name  cwd  input  expected
+    local out; out=$(bes_run "$2" "$3")
+    if [[ "$out" == *"$4"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n    Want: %q\n    Got: %q\n" "$1" "$4" "$out"; ((failed++))
+    fi
+}
+
+bes_assert "a package finds its own sibling from anywhere" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# The ordering assertion, and the only one that can tell the two rules apart:
+# with CWD first this reports the decoy.
+bes_assert "a file of the same name in the working directory does not win" "$bes_cwd" \
+    'require pkg/main.fs
+bes-sib' "the package own"
+
+# A MISS must still fall through: requiring a library from inside a package is a
+# miss, and is the common case. bes-far.fs sits one directory ABOVE the package,
+# on BASICFORTH_PATH and NOT beside the file requiring it -- so the probe misses
+# and the ordinary search has to find it.
+#
+# The needle is what the far file DEFINES, not anything in the input. An earlier
+# version of this check ran `." fell through ok"` at the prompt and matched that
+# text in the echoed input, so it passed with the require failing -- and at the
+# prompt my-dir is empty, so it never exercised the fallback at all.
+echo ': bes-far-word ." reached the far one" cr ;' > "$bes_pkg/bes-far.fs"
+echo 'require bes-far.fs'                          > "$bes_pkg/pkg/usesfar.fs"
+bes_assert "a name that is not beside us still searches BASICFORTH_PATH" "$bes_cwd" \
+    'require pkg/usesfar.fs
+bes-far-word' "reached the far one"
+
+bes_assert "my-dir is empty at the prompt" "$bes_cwd" \
+    'my-dir nip .' "0"
+
+bes_assert "a captured my-dir still answers after the load" "$bes_cwd" \
+    'require pkg/main.fs
+bes-home type' "$bes_pkg/pkg"
+
+bes_assert "an asset opens through a captured my-dir" "$bes_cwd" \
+    'require pkg/main.fs
+bes-open' "asset ok"
+
+# The buffer-corruption regression: a file erroring AFTER a nested require was
+# reported against the nested file, at the outer file's length.
+mkdir -p "$bes_pkg/nest"
+echo 'require nleaf.fs
+nbadword'                                       > "$bes_pkg/nest/nmid.fs"
+echo ': nleaf-word ;'                           > "$bes_pkg/nest/nleaf.fs"
+bes_assert "a nested load reports the file that actually failed" "$bes_cwd" \
+    'require nest/nmid.fs' "nmid.fs:2: ? nbadword"
+
+bes_assert "path-join joins" "$bes_cwd" \
+    's" /a/b" s" c/d.wav" path-join type' "/a/b/c/d.wav"
+
+bes_assert "path-join with no directory returns the name" "$bes_cwd" \
+    's" " s" bare.fs" path-join type' "bare.fs"
+
+bes_assert "2constant returns both cells in order" "$bes_cwd" \
+    '11 22 2constant bes-pair  bes-pair . .' "22 11"
+
+bes_assert "2variable zero-inits, and round-trips" "$bes_cwd" \
+    '2variable bes-v  bes-v 2@ . .  33 44 bes-v 2!  bes-v 2@ . .' "0 0 44 33"
+
+rm -rf "$bes_pkg" "$bes_cwd"
+
+# =========================================================================
 section "BYE"
 # =========================================================================
 
-assert_output "bye prints goodbye" "bye"                 "Goodbye!"
+assert_contains "bye prints goodbye" "bye"                 "Goodbye!"
 
 # =========================================================================
 # Summary
@@ -8172,6 +9195,9 @@ total=$((passed + failed))
 echo ""
 echo "======================="
 printf "%d passed, %d failed, %d total\n" "$passed" "$failed" "$total"
+if [ -n "$BF_TEST_ROOT" ]; then
+    printf "${YELLOW}(filtered run — not the whole suite)${NC}\n"
+fi
 if [ -n "$slowest_name" ]; then
     printf "Slowest: %s (%d ms)\n" "$slowest_name" "$slowest_ms"
 fi

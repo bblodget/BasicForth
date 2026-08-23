@@ -36,40 +36,38 @@ and project phases.
 
 ## Status
 
-**v0.16.0** — **Names instead of juggling, and a number that is just a number.**
-**Local variables** arrive (Forth 2012 section 13): `{: a b c :}` names a word's
-arguments, so three or four of them stop being an exercise in `rot swap over`.
-`| t` adds a zeroed scratch value the caller never supplies, `TO` writes one,
-and a trailing `-- comment` lets the declaration carry its own stack comment.
-The point was never the syntax — a reference and the frame are **open-coded**,
-a load rather than a call, because locals that cost a call would be slower than
-the juggling they replace. Measured on a Raspberry Pi 400: 0.62 ns a reference
-against 2.24 ns for the `dup` it stands in for.
+**v0.17.0** — **Somewhere for your code to live.** BasicForth learns to
+**install**: `make install` puts a relocatable copy under a prefix, and the
+binary works out where its library and documentation are from its own path, so
+an installed BasicForth needs no environment at all. `~/.basicforth/` is yours —
+drop a file in `lib/` and `require` finds it from any directory, with nothing to
+set up.
 
-Chasing that led somewhere better. **A number now compiles to an immediate**
-instead of a call to `lit` with eight bytes of payload behind it. The old form
-reached its operand through its own return address and returned past it, so
-every literal mispredicted the return-stack predictor — the most expensive step
-in the engine. A loop containing one constant is **2.6x faster on ARM64**, 1.6x
-on x86-64, and usually smaller too. The call form is deliberately kept wherever
-the inline cell is *storage* someone reads or patches later, which is what let
-the two cases be separated instead of traded off.
+**Packages get a directory**, not a loose file. `~/.basicforth/lib/<name>/` is a
+symlink to the package's own source tree, so you load it as
+`require <name>/<file>.fs` and the name you type says where the code came from.
+Two packages can each ship an `art.fs`. A package can also **find its own
+files**: `require` and `include` look beside the file doing the including
+*before* the working directory, so a multi-file package loads its siblings and
+opens its own assets from anywhere — and a stray `art.fs` where you happen to be
+standing cannot hijack it.
 
-A file can now **say what it needs from the machine**, and you can ask before
-you load it. `NEEDS-CMD` and `NEEDS-LIB` stop a load that cannot work, with a
-message naming the file and what to do about it; `WANTS-CMD` and `WANTS-LIB`
-declare what a file runs degraded without, which is why `disasm.fs`, `speech.fs`
-and `voice.fs` finally have a dep block without giving up their retry-and-report
-behaviour. `DEPS <file>` reports the lot against this machine without running a
-line — following `require` into the files named there, because "found" is no
-comfort when the file underneath it cannot load. And **speech needs no file at
-all** now: `say` synthesizes through flite straight onto a channel.
+Two files can now hold the same name without one shadowing the other, which
+makes "which one am I running?" a question worth answering: **`where <word>`**
+prints the file a word came from — the full path, because a checkout and an
+installed tree can both hold a `disasm.fs`. **`word-deps <word>`** goes one
+step further and reports what that file requires.
 
-This is also the first release exercised on **real ARM64 hardware** rather than
-under emulation, which is where the boot-time `SIGILL` fix came from — a
-cache-maintenance bug every QEMU suite had passed, because QEMU models neither
-an incoherent instruction cache nor weak memory ordering. Builds on v0.15.0.
-123 unit tests + 1180 integration tests + 36 PTY tests + 32 lesson replays.
+The package *system* is still being built: this is the groundwork beneath one,
+usable by hand today, with the layer that would fetch and manage packages for
+you still a design sketch.
+
+The lessons directory is now `docs/Tutorials/`, matching the `tutorials` word
+that lists it, and that listing prints **the name you actually type** rather
+than a title that only agreed with it by luck. The dictionary is 512 KB, because
+`include core.fs` loads a second copy and every byte in `core.fs` was costing
+two. Builds on v0.16.0.
+123 unit tests + 1257 integration tests + 36 PTY tests + 32 lesson replays.
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 What works today:
@@ -337,7 +335,7 @@ BasicForth/
     lines.fs                stdout/stderr split demo
   docs/                     Design documentation
     Guides/                 Task pages, readable at the prompt (help install)
-    Tutorial/               Interactive tutorials (tutorial Snake)
+    Tutorials/              Interactive tutorials (tutorial Snake)
     Language-Reference/     Per-topic reference (help stack, …)
 ```
 

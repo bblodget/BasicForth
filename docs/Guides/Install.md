@@ -31,6 +31,8 @@ At a glance — each of these is `help <topic>`:
     clone           getting the source
     build           x86-64, ARM64 cross-compile, or both
     verify          the four test suites
+    installing      make install, for a permanent copy
+    packages        installing and using add-on packages
     path            setup.sh, and what it exports
     first-run       your first prompt
     libraries       SDL3, flite, piper — the optional half
@@ -38,6 +40,7 @@ At a glance — each of these is `help <topic>`:
     engines         `voice-render`, text to a WAV file
     sdl3-source     building SDL3 yourself, if apt has no package
     layout          where things live in the tree
+    next-steps      where to go once it runs
 
 For one library's own page rather than its install: `help sdl3`, `help sound`,
 `help speech`, `help voice`.
@@ -50,6 +53,10 @@ For one library's own page rather than its install: `help sdl3`, `help sound`,
     make
     . ./setup.sh
     basicforth
+
+That runs BasicForth out of the checkout, which is the whole of it for trying
+the language or working on it. To put a copy somewhere permanent that needs no
+`setup.sh`, add `sudo make install` — `help installing`.
 
 That is a complete installation, and a silent one. For graphics, sound,
 gamepads and `say`, one more command:
@@ -144,7 +151,8 @@ SDL3 install below clones too.
 Makefile reads `uname -m` and dispatches. `make all` builds both.
 
 The binary lands in `src/arch/x86/basicforth` or `src/arch/arm64/basicforth`.
-There is no `make install` — see `help path`.
+That is enough to run from the checkout — see `help path`. To put it somewhere
+permanent instead, `help installing`.
 
 ## verify
 
@@ -154,12 +162,132 @@ There is no `make install` — see `help path`.
 Two further suites need `python3`:
 
     make run-pty            # terminal/line-editor behaviour
-    make run-lessons        # replays every docs/Tutorial lesson
+    make run-lessons        # replays every docs/Tutorials lesson
 
 The suites set their own environment, so they pass in a bare shell without
 `setup.sh` having been sourced. Lessons and integration checks that need a
 library you have not installed report `SKIP` with a reason rather than
 failing.
+
+## installing
+
+Everything above runs BasicForth out of the checkout. To install it properly:
+
+    sudo make install                 # to /usr/local
+    make install PREFIX=~/.local      # or somewhere that needs no root
+    basicforth
+
+**An installed BasicForth needs no `setup.sh` and no environment at all.** It
+works out where its own files are from the path of the running binary, so
+`help`, `tutorial`, `include` and `require` all resolve on a bare shell:
+
+    $ env -i /usr/local/bin/basicforth
+    > help dup
+    ## dup        ( x -- x x )
+
+That also means the installed tree is **relocatable** — move or rename it and
+it keeps working, with no rebuild and nothing to edit.
+
+What lands where, under `PREFIX`:
+
+    bin/basicforth                    the binary
+    share/basicforth/forth/           core.fs and the libraries
+    share/basicforth/examples/        runnable programs
+    share/basicforth/docs/            the pages help and tutorial read
+
+`make uninstall` removes exactly those (use the same `PREFIX`). `DESTDIR` is
+honoured for package builds.
+
+**If `basicforth` is not found afterwards**, the install's `bin` directory is
+not on your `PATH` — likely with `PREFIX=~/.local`, where `~/.local/bin` often
+is not. `make install` says so when it happens, and prints the line to add.
+
+**Ten characters is a lot at a prompt you use constantly.** If you want it
+shorter, that is a shell alias rather than a second installed name:
+
+    echo "alias bforth=basicforth" >> ~/.bashrc
+
+`bforth` follows the convention the other Forths use — `gforth`, `pforth`,
+`yforth`. **`make install` never creates that name**, so nothing BasicForth
+ships can collide with it. Whether it is free on *your* machine is a question
+only your machine can answer:
+
+    command -v bforth        # prints nothing if the name is unused here
+
+Worth running first: an alias silently shadows an existing command of the same
+name, and gives no sign it has done so. Any name works — pick one that is free.
+
+An alias only applies at an interactive prompt. A script's `#!` line, or
+anything invoking BasicForth from another program, needs the real name.
+
+**The environment still wins.** Setting `BASICFORTH_PATH` or `BASICFORTH_DOCS`
+overrides what the binary works out for itself, so a checkout with `setup.sh`
+sourced keeps using the checkout even with a copy installed system-wide. That
+is what lets you develop against one and have the other installed.
+
+Nothing about installing changes the optional libraries: SDL3, flite and a
+speech engine are found the same way — see `help libraries`.
+
+## packages
+
+Files you drop in your own package directory are found from **any** working
+directory, without editing an environment variable:
+
+    ~/.basicforth/
+      lib/<package>/      the package's own files; `require <package>/<file>.fs`
+      docs/Packages/      a .md page here answers `help`
+      docs/Tutorials/     a lesson here is listed by `tutorials`
+
+Nothing creates this for you — `make install` deliberately does not, since it
+may run as root and this directory is yours. Make it when you want it:
+
+    mkdir -p ~/.basicforth/lib ~/.basicforth/docs/Packages ~/.basicforth/docs/Tutorials
+
+A single loose file works — `~/.basicforth/lib/greet.fs` loads with
+`require greet.fs` from wherever you happen to be. But **a package gets a
+directory of its own**, named for the package:
+
+    ~/.basicforth/lib/greeting/          -> the package's own src/
+    ~/.basicforth/lib/mygame/            -> likewise
+
+    require greeting/greeting.fs
+
+The directory is the scope. Two packages can each ship an `art.fs` without
+either shadowing the other, one package can carry as many files as it likes,
+and the name you type says where the code came from — the same job `pkg::page`
+does for documentation pages.
+
+**Link the directory, not the files inside it.** A package finds its own
+siblings by looking beside the file being loaded, and that means beside the
+*path it was reached by*, not beside whatever a symlink points at:
+
+    lib/greeting -> ~/Dev/Greeting/src          require greeting/greeting.fs   works
+    lib/greeting/greeting.fs -> ~/Dev/.../src/greeting.fs   its `require art.fs` fails
+
+A one-file package survives the second form, having no siblings to miss, which
+is exactly what makes the mistake easy to ship.
+
+Three things worth knowing:
+
+- **These are searched last.** The current directory comes first, then
+  `BASICFORTH_PATH`, then your package directory. So a file you install can
+  never shadow one that ships with BasicForth, and a copy in the directory
+  you are working in still wins over both.
+- **Your pages get their own `help` section**, listed as `Packages`, so you can
+  see at a glance which topics came from something you installed.
+- **`BASICFORTH_PACKAGES` moves the whole thing** if `~/.basicforth` is not where
+  you want it. It names the directory itself, not its parent, so
+  `BASICFORTH_PACKAGES=/opt/bf` means `/opt/bf/lib`. Set it to a directory that does
+  not exist and the mechanism sits out entirely, which is what the test suites
+  do. Every variable BasicForth reads is listed in `help environment`.
+
+**Name your files for the package, not the topic.** These directories are flat
+and shared — every package's pages sit in one `docs/Packages/`, every package's
+lessons in one `docs/Tutorials/`, and subdirectories are not searched. So a
+`Sound.md` of yours sits beside the bundled `Sound` lesson: `tutorials` lists
+both, and `tutorial Sound` opens the bundled one, leaving yours advertised and
+unreachable. Prefix instead — `mygame.md`, `mygame-levels.md` — and
+nothing collides.
 
 ## path
 
@@ -188,10 +316,13 @@ your own checkout:
 
     echo ". $PWD/setup.sh" >> ~/.bashrc      # run from the checkout
 
-Without it, BasicForth still runs — but `include`, `require` and `help` will
-not find anything, so pass the paths yourself:
+Without it, a binary run **from the checkout** still starts, but `include`,
+`require` and `help` will not find anything, so pass the paths yourself:
 
     BASICFORTH_PATH=src/forth src/arch/x86/basicforth
+
+An **installed** binary needs none of this: it locates its own files from where
+it is, and `setup.sh` is only for working in a checkout. See `help installing`.
 
 ## first-run
 
@@ -202,8 +333,8 @@ not find anything, so pass the paths yourself:
     > tutorial
     usage: tutorial <name> [step]   then  next / back / step  to move
     Tutorials (start one with:  tutorial <name>):
-      Arrays — Your First Data Structure
-      Bitmaps — Sprites You Type in Binary
+      Arrays              Your First Data Structure
+      Bitmaps             Sprites You Type in Binary
       ...
 
 `tutorial <name>` starts a lesson; `help <word>` explains a word; `apropos`
@@ -218,11 +349,11 @@ pages.
 Each of these adds one capability. Skipping one costs exactly that
 capability, and never the build.
 
-| Library | Install | Without it you lose |
-|---|---|---|
-| **SDL3** | `sudo apt install libsdl3-dev` | windows, graphics, all audio, gamepads |
-| **flite** | `sudo apt install libflite1` | `say` — speaking immediately |
-| **TTS engine** (piper) | `help engines` | `voice-render` — text to WAV |
+| Library    | Install                      | Without it you lose        |
+|------------|------------------------------|----------------------------|
+| **SDL3**       | `sudo apt install libsdl3-dev` | graphics, audio, gamepads  |
+| **flite**      | `sudo apt install libflite1`   | `say` — speaking immediately |
+| **TTS engine** | `help engines`                 | `voice-render` — text to WAV |
 
 On a distribution that packages SDL3, the whole optional half is one command:
 
@@ -393,8 +524,14 @@ output. That is how 3.2.10 was cleared.
     examples/           runnable programs
     docs/               design documentation
     docs/Guides/        task pages (this one) that `help` reads
-    docs/Tutorial/      the lessons `tutorial` reads
+    docs/Tutorials/     the lessons `tutorial` reads
     docs/Language-Reference/   the pages `help` reads
+
+Your own package directory sits outside the checkout — see `help packages`:
+
+    ~/.basicforth/lib/          .fs files, searched after BASICFORTH_PATH
+    ~/.basicforth/docs/Packages/    .md pages, listed under "Packages"
+    ~/.basicforth/docs/Tutorials/   lessons, listed by `tutorials`
 
 ## next-steps
 

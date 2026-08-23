@@ -93,14 +93,22 @@ Writing to a W register zeroes the upper 32 bits of the corresponding X register
 ### BasicForth Register Allocation
 
 ```
-X19 = Data stack pointer (DSP)     — callee-saved, points to top item
-X20 = scratch (available)          — callee-saved, no longer used for TOS
-X21 = HERE pointer                 — dictionary free space
-X22 = LATEST pointer               — most recent dictionary entry
-X23-X28 = Available for STATE, BASE, etc.
+X19 = Data stack pointer (DSP)     — reserved, points to top item
+X21 = HERE pointer                 — reserved, dictionary free space
+X22 = LATEST pointer               — reserved, newest dictionary entry
 SP  = Return stack                 — hardware stack
-X30 = Link register                — saved/restored by BL/RET
+X30 = Link register                — written by every BL; a definition that
+                                     calls anything must spill it first
 ```
+
+Those four are the engine state and are held across every call. Everything
+else is scratch — including the registers that look spare. `X20` was freed
+when TOS-in-register was dropped, but it is free only on paper: it carries
+the thread context across calls in the worker trampoline, and the locals
+pointer lives in TLS rather than in X20 for exactly that reason. `X23`-`X28`
+are likewise in heavy scratch use (`X23`/`X24` are pushed as a pair at 32
+sites in `core.s`), not held in reserve for STATE or BASE. All of them are
+callee-saved, so whoever borrows one saves and restores it.
 
 ## Key Differences from x86
 
@@ -414,7 +422,25 @@ of where it's loaded in memory. On ARM64, you can't load a full 64-bit
 address in a single instruction anyway (instructions are only 32 bits wide).
 `ADR` can reach +/- 1MB from the current instruction, which is plenty for
 string constants and nearby data. For larger ranges, use `ADRP` + `ADD`
-(page-relative, +/- 4GB).
+(page-relative, +/- 4GB):
+
+    ADRP X9, dict_space_end            // the 4 KB page it lives in
+    ADD  X9, X9, :lo12:dict_space_end  // + its offset within that page
+
+`ADRP` spends the same 21 bits counting 4 KB pages instead of bytes, which is
+where the 4096x reach comes from — but it lands on the page *base*, so the
+`ADD` is not optional.
+
+**Use `ADRP` for anything whose distance you do not control.** `ADR` is a trap
+for symbols past a large `.space`: raising `DICT_SPACE_SIZE` from 256 KB to
+512 KB in August 2026 put `dict_space_end` more than 1 MB from the code
+checking against it, and the *linker* refused with `relocation truncated to
+fit: R_AARCH64_ADR_PREL_LO21`. Nothing on x86 noticed — `lea sym(%rip)` has a
+32-bit displacement, so it reaches +/- 2GB in one instruction, and x86 can
+afford that because its instructions are variable-length.
+
+That one fails loudly. The quiet failure is writing `ADRP` and forgetting the
+`ADD`: no error, and an address up to 4095 bytes below the one you wanted.
 
 **Q: Why `as` + `ld` instead of `gcc -nostdlib`?**
 

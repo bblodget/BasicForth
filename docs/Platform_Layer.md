@@ -44,13 +44,17 @@ the Forth layer) is written against them and nothing else.
    but never compare it to a specific number. On Linux the magnitude is the
    errno; another backend may use its own numbering.
 
-3. **One distinguished value: "file not found."** `INCLUDED` must
-   distinguish not-found (try the next `BASICFORTH_PATH` segment; silent
-   skip for a missing `core.fs`) from every other open failure (report it).
-   The platform layer therefore exports the comparable value as a data
-   symbol, **`platform_err_not_found`** (`-2` = `-ENOENT` on Linux); core.s
-   compares against the symbol, never against a literal. A new backend sets
-   it to whatever its `platform_open_file` returns for a missing file.
+3. **No distinguished values — rule 2 has no exceptions.** There used to be
+   one: `INCLUDED` compared against an exported `platform_err_not_found`
+   (`-2` = `-ENOENT` on Linux) to tell "not found" from every other open
+   failure, so a new backend had to supply that value. **Removed 2026-08-22**,
+   because the distinction was wrong. A search path has no business reporting
+   one member's error as the whole lookup's: a plain file sitting where a
+   directory name was expected (`ENOTDIR`) or an unreadable directory
+   (`EACCES`) abandoned the search and hid every copy behind it. Every place
+   is now tried and any failure is passed over, so nothing above the boundary
+   needs to know *why* an open failed — only that it did. A backend
+   implements one fewer thing, and error magnitudes are uniformly opaque.
 
 4. **Abstract input enums are translated below the boundary.** The
    file-access method `fam` (`r/o`=0, `w/o`=1, `r/w`=2) is a backend-neutral
@@ -338,8 +342,9 @@ mode = 0 (no fam translation needed) and jumps to the shared open path, so
 | **Input**    | X0 = path, X1 = length            | RSI = path, RDX = length           |
 | **Output**   | X0 = fd (or negative errno)        | RAX = fd (or negative errno)       |
 
-Returns the `platform_err_not_found` value (-2 = -ENOENT on Linux) if the
-file does not exist — the one error magnitude callers may compare against.
+Returns a negative errno on failure (-2 = -ENOENT on Linux if the file does
+not exist). The magnitude is opaque above the boundary — callers test the sign
+and report it, never compare it. See rule 3.
 
 ### platform_create_file
 

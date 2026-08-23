@@ -128,7 +128,7 @@ rather than deferring to the next read.
 
 ## Dictionary Full (Software Check)
 
-Dictionary space (`dict_space`, 64KB) does not have a guard page.
+Dictionary space (`dict_space`, 512 KB — `DICT_SPACE_SIZE`) has no guard page.
 Instead, the `CHECK_DICT n` macro performs an explicit bounds check
 before writing.  It is used by:
 
@@ -152,27 +152,68 @@ definition.  This is handled by:
    before modifying anything.
 2. `repl_loop` also saves them at the start of each line, so they always
    reflect the most recent good state.
-3. On error, the recovery code (either the signal handler or the
-   not-found handler in main.s) restores LATEST and HERE from the saved
-   values and resets STATE to 0.
+3. On error, the recovery code (the signal handler, or `.Lil_not_found` and
+   the other abort routes in `core.s`) restores LATEST and HERE from the
+   saved values and resets STATE to 0.
 
 This ensures that:
 - The partial definition is fully discarded
 - Earlier completed definitions on the same line are preserved
 - The user returns to a clean interpret-mode prompt
 
+**"Is a definition open" is not `STATE`.** `[` interprets *inside* an open
+definition, so the test is `STATE` **or** `F_HIDDEN` on LATEST. Conflating the
+two has produced seven separate bugs, each one silent. Every route that decides
+whether to roll back is listed in [Abort_Routes.md](Abort_Routes.md), along
+with which of them are gated by nesting depth and which are not.
+
 ## Recovery State
 
-After any error recovery (guard page or software), the system state is:
+There are **three** recovery shapes, and they differ in what happens to the
+data stack. Confusing them is easy, because all three end at a fresh prompt.
+
+**Full reset** — guard-page fault, `dict_full`, and an uncaught `THROW`
+(including `ABORT`, which is `-1 THROW`). These abandon every nesting level at
+once and resume at `repl_loop`:
 
 | State       | Value                                     |
 |-------------|-------------------------------------------|
 | DSP         | sp0 (empty data stack)                    |
 | RSP / SP    | rp0 (clean return stack)                  |
+| LP          | lp0 (locals stack empty)                  |
 | LATEST      | Last good value (from `saved_latest`)     |
 | HERE        | Last good value (from `saved_here`)       |
 | STATE       | 0 (interpreting)                          |
 | Execution   | Resumes at `repl_loop` (prints prompt) — but see "Startup Script Errors" below |
+
+**`QUIT`** — resets the return stack and LP and lands at `repl_loop` like the
+above, but **leaves the data stack untouched**:
+
+    > 1 2 quit
+    > .s
+    <2> 1 2  ok
+
+That is Forth 2012: `QUIT ( -- ) ( R: i*x -- )` empties the *return* stack and
+says nothing about the data stack — emptying that one is `ABORT`'s job. Neither
+architecture's `forth_quit` writes DSP. Worth stating because `QUIT` sits beside
+the full-reset paths in the source and reads like one of them.
+
+**Interpreter error return** — an undefined word, a compile-only word used
+while interpreting, a control-flow mismatch. These return a status from
+`forth_interpret_line` rather than resetting, and **deliberately leave the data
+stack alone**:
+
+    > 1 2 nosuchword
+    ? nosuchword
+    > .s
+    <2> 1 2  ok
+
+That is intentional: the values you had are usually the ones you wanted, and
+clearing them turns a typo into lost work. `.Lcf_longjmp` exists precisely as
+the entry point that skips the compile-state restore for this reason. LP does
+get released, but to the value saved at *entry* to that `interpret_line`, never
+to `lp0` — at nesting depth those differ, and using `lp0` would free a caller's
+live locals frame. See [Abort_Routes.md](Abort_Routes.md).
 
 ## Recoverable Errors (CATCH / THROW)
 

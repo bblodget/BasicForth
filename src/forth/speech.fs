@@ -13,8 +13,8 @@
 \ so there is nothing to render, nothing to load, and nothing on disk.
 \
 \ SAY BLOCKS WHILE IT SYNTHESIZES, and that is the whole reason voice.fs
-\ exists alongside it. Measured here, cmu_us_slt: "Go!" 7 ms, "Dark Star,
-\ ready." 16 ms, a full sentence 38 ms. A 60 Hz frame is 16.7 ms. So say is
+\ exists alongside it. Measured here, cmu_us_slt: "Go!" 7 ms, a two-word
+\ phrase 16 ms, a full sentence 38 ms. A 60 Hz frame is 16.7 ms. So say is
 \ for the prompt, for menus, and for the pause between levels -- inside a
 \ frame loop it drops frames, and a game wants voice.fs's pre-rendered WAVs
 \ (help voice). The audio itself plays in the background either way; it is
