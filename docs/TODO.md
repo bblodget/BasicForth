@@ -136,6 +136,116 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       a deliberately broken commit is shown to FAIL the run, and the skip lines
       are checked to still name what they skipped.
 
+- [ ] **`pkg.fs`: the packaging slice — `add-source`, `packages`, `install`,
+      `remove`.** Designed 2026-08-22 as a user story; the walkthrough below is
+      most of the specification. This is the thing that replaces the hand-rolled
+      `install-package.sh` in each package repo.
+
+      **No `[ENGINE]` work needed** — checked, and the prerequisite invented
+      while scoping turns out to already exist. `argc` / `argv` / `arg` are
+      shipped and documented (`help arg`, `Scripting.md`), and BasicForth
+      already shifts the script path out so a script's own arguments start at
+      index 1. So this is pure Forth plus a `#!` front door, and it does not
+      contend for the engine slot.
+
+      **Two front doors, one implementation.** The verbs are ordinary words in
+      a bundled `pkg.fs`, so the REPL gets them with `require pkg.fs`; the CLI
+      reads argv and calls the same words. Same shape settled for `run` and a
+      package's launcher script.
+
+      **The CLI is `chip`** — *CHIP Handles Installing Packages* — a SEPARATE
+      executable, `pip` to BasicForth's `python`. NOT `basicforth pkg`: that
+      was the first choice and it collides, because **`argv[1]` is already a
+      script name** (measured — `basicforth pkg` runs `./pkg` if it exists). A
+      subcommand would have to be a reserved word checked ahead of script
+      dispatch, and the ambiguity has no good resolution in either direction.
+      The `cargo install` analogy misleads: those are subcommands of a BUILD
+      tool, and the analogue of `basicforth` is `python`, which kept packaging
+      in a separate `pip`.
+
+      The story, with the whole flow from an empty configuration:
+
+          > add-source brandon https://github.com/brandonblodget/basicforth-packages
+          Adding a source is a decision to trust it. ... Add brandon? (y/n) y
+          brandon: 12 packages.
+          > packages                 \ what each source carries, installed marked
+          > packages dark-star       \ the detail view: repo, pinned SHA, needs, run
+          > install dark-star
+          From brandon, pinned at 4f1c9a2b.
+            clone   -> ~/.basicforth/packages/dark-star
+            link    -> ~/.basicforth/lib/dark-star
+            page    -> help dark-star::instructions
+            lesson  -> tutorial dark-star::tutorial
+            command -> ~/.local/bin/dark-star
+          Install? (y/n) y
+
+      **`install` shows its plan and asks.** Every line is something it will
+      create, and it is the only moment the user sees a write OUTSIDE
+      `~/.basicforth` — the command in `~/.local/bin`, where a name can collide
+      with something unrelated to BasicForth, so `install` refuses rather than
+      overwrites. `link` is the package's DIRECTORY, never its files; see Open
+      Question 8 for the decoy measurement behind that.
+
+      **Deletion is bounded TWICE, and a path must satisfy both.** (1) The
+      `installed` manifest authorises it — `install` recorded creating it and
+      it still looks like what was recorded. (2) Its SHAPE permits it — one of
+      the five forms `install` can ever produce for that package name. Neither
+      is sufficient alone, and each looks adequate in isolation: the manifest
+      is a plain text file anything can edit, so trusting it alone obeys
+      whatever it says; the shape rule alone is a path heuristic, and this
+      machine's `~/.basicforth` is entirely HAND-made links from each package's
+      own `install-package.sh` — "under the root" calls those ours.
+      `BASICFORTH_PACKAGES` moves the root too. A package absent from the
+      manifest is refused, not guessed at, which leaves an open migration
+      question for the hand-made layout that exists today.
+
+      **A package name must be a validated identifier**, because the five
+      shapes are patterns with a hole in them: `<root>/lib/<name>` with a
+      `<name>` of `../../.ssh` matches perfectly and lands outside the root.
+      The name is remote data — it comes from a manifest in a source repo — so
+      validate on READ, not just at the prompt: lowercase, digits, internal
+      `-`, bounded, no `/` `.` `..` `::` or whitespace. Same for the `<page>`
+      half of `<name>::<page>.md`. §Naming rules says "no paths" but as a
+      usability rule about names vs filenames; it defines no charset and is
+      enforced nowhere.
+
+      **The shape test compares CANONICAL paths** — resolve the PARENT and
+      require it to equal the expected directory, with the last component the
+      validated name. Not the entry itself: all but the clone are symlinks into
+      the user's source tree, so resolving them would reject what should pass.
+
+      **`remove` never follows a link** — every path but the clone is a symlink
+      into the user's own source tree, so it unlinks rather than recursing. The
+      clone is the one recursive delete, and its parent components have to be
+      verified as real directories so a redirected `packages/` cannot aim it
+      elsewhere.
+
+      **The `(y/n)` needs a non-interactive path** for the CLI: an explicit
+      `--yes`, plus the non-terminal-stdin test the session and line editor
+      already do.
+
+      **Three things the story exposed that the design has not decided:**
+
+      - **Where does a package's one-line description come from?** The manifest
+        sketch is `name repo commit run` with no description column. Either it
+        grows one, or `packages` clones every package to read its
+        `package.info` — far too eager for a listing.
+      - **What happens when `needs` is unsatisfied?** `needs-lib libSDL3.so.0`
+        fails at LOAD today. Warn at install, or install and let the failure
+        arrive later? Warning is friendlier; a check at install can go stale.
+      - **Nothing shows a version**, per §Versioning "resist it" — so
+        reinstalling is the upgrade path, and `packages <name>` on an installed
+        package has to say whether your pin still matches the source's.
+
+      Prerequisites are all shipped: `shellutil.fs` for the git calls,
+      beside-first resolution, `lib/<pkg>/`, `pkg::page`, `path-join`.
+      Done when: `add-source`, `packages`, `install` and `remove` work from
+      both the REPL and the CLI against a real source repo; `remove` refuses a
+      `~/.local/bin` entry it does not own; and Dark Star and Greeting install
+      through it instead of their own scripts.
+      Detail: `docs/Package_Install.md` is the full story with the rejected
+      alternatives; `docs/Package_Registry.md` §Sources and §Local Layout.
+
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
       miscompile and the bare `unresolved control flow` message both came out
