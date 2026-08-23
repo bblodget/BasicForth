@@ -308,7 +308,8 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       accepts, for a bundled lesson and an installed package alike, with a suite
       case that would fail if the listing went back to the title.
 
-- [ ] **`help` should say where the live definition came from.** When two pages
+- [~] **`help` should say where the live definition came from — SUPERSEDED by
+      `where`, 2026-08-22.** When two pages
       document the same word, `help` gathers both — correctly — but prints them
       in docs-path order, which need not match the dictionary. Measured
       2026-08-19: after a package redefines `depth`, `depth .` answers the
@@ -338,6 +339,26 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       That needs no mapping, cannot be wrong, and gives the reader exactly the
       fact they were missing. It handles the cases `see` already distinguishes:
       a primitive says so, a word typed this session says so.
+
+      **Why it is parked rather than built.** `where <name>` (2026-08-22)
+      answers exactly this on demand, so the ambiguity is no longer silent: you
+      see two entries, you ask, you get the fact. The remaining argument was the
+      *other* case — a page documenting a word that is not loaded, where there
+      is no visual cue at all — and that turned out to be covered already: every
+      library page names its `require` in the preamble, so a reader of
+      `help sdl3` is told what to load before reaching any word. Checked, not
+      assumed; the "silent trap" framing was asserted and was wrong.
+
+      What is left is a line on *every* `help <word>` — usually restating what
+      the entry above it just said — to cover a case one word already covers.
+
+      **Reopen when packages redefining core words is normal rather than
+      hypothetical.** The measurement used a constructed `bignum` redefining
+      `depth`; once the registry exists there will be real collisions to look
+      at, and the cost/benefit changes. Keep the paragraph above about why
+      marking the live entry is impossible — no `.md` page declares which `.fs`
+      file it documents — because anyone revisiting this will propose exactly
+      that first.
       Small, standalone, not packaging-specific, and it makes shadowing
       *visible* — the property missing when `dice.fs` redefined `seed`.
       Done when: `help <word>` names the source of the definition currently in
