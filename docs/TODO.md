@@ -75,16 +75,22 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       taken 2026-08-22: the release is cut Sunday 2026-08-23 and the Pi 400 is
       not to hand until **Friday 2026-08-28**.
 
-      **Exactly one branch is unverified** — `engine/1-include-search` (the
-      include-search errno fix and the removal of `platform_err_not_found`).
-      Everything else in the release ran on the Pi at `ba8c236` on 2026-08-21,
-      all four suites, which contains all seven of the release's other
-      engine-touching commits.
+      Everything up to `ba8c236` ran on the Pi on 2026-08-21, all four suites.
+      Recomputed at release time, the commits merged after it are:
 
-      Judged low risk because the ARM64 delta is a deleted `CMP`/`B.NE` pair, a
-      deleted dead block and a deleted `.quad` — no new instructions, no
-      barriers, nothing writing memory it then executes. That is not the shape
-      qemu mispredicts; see `docs/Versioning.md` §Before the tag.
+      - `engine/1-include-search` (`9fd02c6`) — **the only unverified assembly.**
+      - `2-where-word` (`8c14743`) — `where` / `where-path` / `deps-path` /
+        `word-deps`: `core.fs`, docs and tests, no assembly.
+      - `6043ded` — the Dark Star sweep: `.s` **comment-only**, verified
+        mechanically (zero non-comment lines in the `src/arch` diff).
+      - `4c68734`, `8d0092a`, `26a5491` — `docs/TODO.md` only.
+
+      Judged low risk because the assembly delta is **entirely deletions** — a
+      `CMP`/`B.NE` pair, a dead block and a `.quad`, checked at release time by
+      diffing `src/arch/*/*.s` from `ba8c236` and finding no added lines. No new
+      instructions, no barriers, nothing writing memory it then executes. That
+      is not the shape qemu mispredicts; see `docs/Versioning.md` §Before the
+      tag.
       Done when: `make run-test run-integration run-lessons run-pty` are green
       on the Pi at the v0.17.0 tag. A failure is a `v0.17.1`, not a retraction.
 
