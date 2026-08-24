@@ -495,148 +495,52 @@ blobs. Someone — or something — can genuinely read the whole thing. That is 
 structural advantage over ecosystems where review means auditing a tarball
 nobody opens.
 
-**Declare capabilities, and declare them for the whole package.** The dep block
-already says what a package needs from the machine; capabilities are the same
-idea one step on — what it *touches*:
+**No capability declaration. Decided 2026-08-23, after building one and taking
+it apart.** A package declares what it is built on — a fact — and nothing about
+what it might do.
 
-        Uses:      file-write (~/.basicforth)
-        Unbounded: shell-out (git)
+        Standard Requires: sdl3.fs, sound.fs, wav.fs, pad.fs
+        External Requires: -
 
-**Two tiers, and which tier a thing goes in is the whole point.** Revised
-2026-08-23. An earlier version was one flat list with `ffi` in it beside
-`file-read`, as though they described the same kind of thing.
+This is derivable from the entry file's dep block, so it cannot be quietly
+wrong, and it points at documentation a reader already has: `help sdl3` says
+what that library can do. It is a *fact*, where a capability list is a
+judgement.
 
-A **bounded** capability is an effect the language mediates, so the declaration
-can be close to complete: `file-read`, `file-write`, `network`. A qualifier
-carries most of the information — `file-write (~/.basicforth)` is a very
-different claim from `file-write` unqualified.
+**Why the capability list was dropped.** Earlier drafts had a `Uses:` line —
+`file-read`, `shell-out (piper)`, `ffi` — then a two-tier version separating
+effects the language mediates from the ones that escape it. Both were wrong,
+for two independent reasons.
 
-An **unbounded** capability escapes the language entirely. Anything reachable
-this way can do everything on the bounded list without touching a single word
-that would show up in it:
+*It does not work.* Gating a capability behind a library was the obvious fix,
+and the FFI precedent seemed to prove it: `lib-open` is unknown until `ffi.fs`
+loads. But `(dlopen)` is in the dictionary from the start — measured
+2026-08-23 — so `ffi.fs` is a friendly wrapper, not a guard, and a package can
+call native code without appearing to need FFI at all. The same holds for
+everything else: `open-pipe`, `open-file`, `create-file` and `write-file` are
+all core words needing no `require`. So a declaration cannot be enforced, a
+`Standard Requires:` line cannot bound behaviour, and a scanner cannot see
+computed code.
 
-- **`ffi`** — `dlopen` plus a call to an arbitrary symbol. Opens sockets and
-  writes files without using a network or file word.
-- **`shell-out`** — `system` or `open-pipe`. Runs any program, which can do
-  anything the user can. No symbol lookup required; it is the *easier* escape
-  of the two.
-- **`evaluate` over text the package did not write** — computed source, so a
-  scanner cannot see what will run.
+*It costs the thing the project is for.* BasicForth's pitch is a 1980s home
+computer — boot up and start coding, poke anything. The comparison holds better
+than it first appears: those machines had no security *inside* either, and no
+package manager. You typed a program in from a magazine, or ran a tape a friend
+handed you, and the trust decision was social and real. Making package authors
+file capability paperwork, and adding gates that do not gate, would trade that
+character for the appearance of safety.
 
-        Uses:      file-read
-        Unbounded: ffi (libSDL3.so.0, libflite.so.1), shell-out (piper)
+**What actually carries the trust, and it is already here:**
 
-**The tier is promoted out of `Uses` because it bounds what `Uses` is worth.**
-A package with an empty `Unbounded:` line has made claims the language can
-mostly keep; one with anything on it has made claims that are a courtesy. That
-distinction is the single most useful thing a reader can be told, and a flat
-list hides it — every entry then carries the same unstated caveat, so the
-caveat stops meaning anything.
+- **Adding a source is a decision to trust it** — one prompt, once, at the only
+  point where the decision is real.
+- **A full pinned commit SHA** — the one property a mechanism enforces.
+- **The code is small, plain, and someone reads it** — a structural advantage,
+  not a process.
 
-**A qualifier there is intent, not a limit.** `shell-out (git)` says what the
-author meant to run; it does not stop the package running something else, and
-`ffi (libSDL3.so.0)` does not stop it dlopening anything else. The
-parenthetical is useful — it tells a reader what to expect and what to check —
-but it must not be read as a bound, which is exactly the mistake an earlier
-draft of this section made by leaving `shell-out` in the bounded tier because
-it *looked* qualified.
-
-Naming the specifics costs nothing extra: the libraries are already in the dep
-block as `needs-lib`, and the commands as `needs-cmd`.
-
-**The declaration covers effective behaviour, not one file's text.** If a
-package `require`s something that shells out, the package shells out and must
-say so. A user asking "will this thing run commands on my machine?" is asking
-about the thing they installed, not about which file the call happens to sit
-in, and a declaration scoped to one file would let a package disclaim
-everything by moving it one `require` away. That would make the line worse than
-useless: it would be a disclaimer wearing the costume of a disclosure.
-
-This is why **bundled libraries need capability lines too** — `shellutil.fs`
-and `disasm.fs` shell out, `sdl3.fs` and `sound.fs` open native code — since a
-package's declaration is only as good as what it can inherit and restate.
-
-The obvious operations are a short list — shelling out (`shellutil.fs`,
-`open-pipe`), native code (FFI, `dlopen`), file writes and removals, network
-access, and `evaluate` over text the package did not write — though it is a
-list of what we have thought of, not a closed set. Keep it short: Android's
-permissions became noise because there were too many and each was vague, and
-this design's advantage is that the list is small and the source is readable.
-
-**Prefer deriving it to trusting it, and be honest about the limit.** A
-declaration is forgettable — the `dark-star` entry declared `-`, meaning plain
-Forth, while requiring SDL3 and shipping a shell-out — so the useful check is
-mechanical: scan a package's files, transitively, for those names and compare
-the result with what it declared. Cheap, and it catches the honest mistake,
-which is the common one.
-
-It cannot be a guarantee. Forth resolves words at run time and can `evaluate`
-text it computed, so a determined author can put anything beyond the reach of a
-scanner; and once anything on the unbounded tier is in play, the language is
-not the boundary at all.
-Three levels, and it is worth not confusing them:
-
-- **the declaration** — cheap, and only as good as the author's care
-- **a static scan** — catches forgetfulness, not evasion; the right tool for
-  curation, and the one that would have caught the `dark-star` entry
-- **runtime enforcement** — would need a real sandbox, and FFI defeats it
-
-So the scan is a curator's aid and a cross-check, not a proof. What makes the
-model work is still that the code is small and someone reads it.
-
-**It is triage, not a test.** It says where to look first. It does not decide
-anything, and both directions are weak:
-
-- **A clean scan means nothing obvious turned up.** Forth is close to the worst
-  case for static analysis: word names can be built at run time and reached
-  through `evaluate` or `find`/`execute`, a name can be assembled byte by byte,
-  the dictionary can be walked and an xt executed without the name ever
-  appearing, and immediate words run during compilation. Nothing stops a
-  package from calling `open-pipe` with the string `open-pipe` nowhere in its
-  source.
-- **A hit is not a finding either.** A token in the source is not a call. It
-  may sit in a comment, in a string the package prints, or inside a name the
-  package defines itself. And the commonest cause of a genuine mismatch is not
-  deceit but a declaration the author forgot to update — which is worth a
-  question, not an accusation.
-- **The scan is file-local; the declaration is not.** That asymmetry is
-  deliberate, and it means the two differ in normal, honest cases: a package
-  that declares `shell-out` because a dependency does it will show nothing in
-  its own text. A declaration *broader* than the file's own scan is therefore
-  expected and is not a signal. Only the other direction — the file plainly
-  reaching for something the declaration omits — is worth a question.
-
-One part of this *is* mechanically checkable, because a package may only depend
-on bundled libraries and default-source packages, so every dependency has a
-declaration. A tool can compose the declared capabilities of everything a
-package loads and check that the package's own line covers the union — which
-catches the common, honest failure: a package that gained a dependency and
-forgot to widen its declaration.
-
-**It cannot reuse `deps`' traversal to do it.** `deps` stops at a file that is
-already in memory:
-
-        2dup (inc-recorded?) if                 \ in memory: its own deps were met
-            s" loaded" (dp-okw!)  true (dp-line)  exit  then
-
-That file is reported and never queued, so `deps` does not descend into it.
-This is correct for the question `deps` asks — *can this load here, now* — where
-an already-loaded file has demonstrably met its own requirements. It is wrong
-for capability composition, which is a property of the package rather than of
-the session: reuse that walk and the union silently shrinks to whatever the
-reviewer had not already loaded, reporting "clean" for the worst reason.
-
-So the union needs a traversal that ignores what is loaded, and the check must
-run in a **fresh interpreter** — which curation would want regardless, since a
-reviewer's session state must not be able to influence a verdict. Same
-dependency graph, different traversal rule, and the difference is invisible if
-nobody writes it down.
-
-What stays uncheckable is a file doing something it never declared. So the
-capability line is **documentation, not a control**. Its value is that it gives
-a reader a stated intent to read *against*, and it makes a deliberate lie
-something a person can point at afterwards. That is worth having. It is not
-worth reporting as a check that passed.
+That is the whole of it, and none of it burdens a package author or touches the
+language. The calculus changes at hundreds of packages and several curators;
+revisit it then, not before.
 
 **An AI review is a reasonable part of the gate, and should be described as
 what it is.** Having an assistant read a candidate package before it enters the
@@ -653,9 +557,8 @@ next to that:
 - **A reviewing model is itself an attack surface.** A package author can write
   text in a comment aimed at whatever reads the file. The file is read as data,
   never as instructions — and a reviewer who has observed something does not
-  get talked out of it by prose in the file claiming otherwise. (This does not
-  make the scan the senior partner; per above it decides nothing. It means
-  neither the scan nor the narrative gets to overrule what was actually read.)
+  get talked out of it by prose in the file claiming otherwise. Narrative in a
+  file does not overrule what was actually read.
 
 **The review attaches to a commit, not to a name** — which is the second reason
 the manifest pins one. "Approved" means *this tree was read*, so a version bump
