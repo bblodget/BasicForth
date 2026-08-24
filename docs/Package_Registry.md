@@ -499,8 +499,13 @@ nobody opens.
 it apart.** A package declares what it is built on — a fact — and nothing about
 what it might do.
 
-        Standard Requires: sdl3.fs, sound.fs, wav.fs, pad.fs
+        Standard Requires: sdl3.fs, sound.fs, font-vga-8x8.fs, pad.fs, wav.fs
         External Requires: -
+
+(That is dark-star's real dep block, in order, minus `art.fs` — which is the
+package's own file, not a bundled library. The distinction is what the two
+lines are for: `Standard` is what BasicForth ships, `External` is other
+packages, and a package's own files are neither.)
 
 This is derivable from the entry file's dep block, so it cannot be quietly
 wrong, and it points at documentation a reader already has: `help sdl3` says
