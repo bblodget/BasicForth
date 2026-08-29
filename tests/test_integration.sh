@@ -265,6 +265,18 @@ assert_result() {
     fi
 }
 
+# hw_check NAME OUTPUT EXPECTED -- assert against output already captured, for
+# cases that must run with an explicit environment rather than run_forth's.
+hw_check() {
+    if [[ "$2" == *"$3"* ]]; then
+        printf "  ${GREEN}PASS${NC}  %s\n" "$1"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  %s\n" "$1"
+        printf "    Expected: %s\n" "$3"
+        printf "    Got:      %s\n" "$(echo "$2" | head -5)"; ((failed++))
+    fi
+}
+
 # assert_absent: the output must NOT contain the substring. Same echo-stripping
 # as assert_result, which is the point of having it: run_forth captures the
 # ECHOED INPUT too, so a hand-rolled `[[ "$out" != *x* ]]` can be defeated by
@@ -5552,15 +5564,32 @@ assert_result "word-deps with no name given" \
 # native, so this still runs there. Raising the timeout would only make the
 # next doc page push it over again.
 if [[ "$FORTH" != *qemu* ]]; then
+    # These name their OWN docs path. assert_result goes through run_forth,
+    # which sets BASICFORTH_PATH and nothing else, so as written they inherited
+    # BASICFORTH_DOCS from whatever shell ran the suite -- passing after
+    # `. ./setup.sh` and failing in a clean environment, which is the
+    # env-independence the suite is supposed to have. Found on the Pi 400,
+    # where no ~/.basicforth exists to supply a docs path by accident; it
+    # failed identically on x86 once the inheritance was removed.
+    hw_docs="$REPO_ROOT/docs/Language-Reference"
+    hw_out=$(printf 'help where-path\nhelp deps-path\nbye\n' \
+        | BASICFORTH_PATH="$FORTH_LIB" BASICFORTH_DOCS="$hw_docs" timeout 10 $FORTH 2>&1)
     # Assert what only the real entry carries: "no help for where-path" also
     # contains "where-path", so the obvious needle passes when help is broken.
-    assert_result "help answers for where-path with its entry" \
-                  'help where-path'                        "( c-addr u -- c-addr u true | false )"
-    assert_result "help answers for deps-path with its entry" \
-                  'help deps-path'                         "( c-addr u -- )"
-    assert_absent "...and neither is a help miss" \
-                  'help where-path
-help deps-path'                                            "no help for"
+    hw_check "help answers for where-path with its entry" \
+             "$hw_out" "( c-addr u -- c-addr u true | false )"
+    hw_check "help answers for deps-path with its entry" \
+             "$hw_out" "( c-addr u -- )"
+    # A miss must be absent for the RIGHT reason. This passed vacuously before:
+    # the output was "(BASICFORTH_DOCS not set)", which contains no "no help
+    # for" either -- so it passed hardest when help was most broken. Requiring
+    # the docs path to have been read is what makes the absence mean something.
+    if [[ "$hw_out" != *"no help for"* && "$hw_out" != *"BASICFORTH_DOCS not set"* ]]; then
+        printf "  ${GREEN}PASS${NC}  ...and neither is a help miss\n"; ((passed++))
+    else
+        printf "  ${RED}FAIL${NC}  ...and neither is a help miss\n"
+        printf "    Got:      %s\n" "$(echo "$hw_out" | head -3)"; ((failed++))
+    fi
 else
     printf "  ${YELLOW}SKIP${NC}  help lookups for where-path/deps-path (help word-scan is ~3 s under qemu; runs natively)\n"
 fi
