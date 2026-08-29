@@ -71,9 +71,39 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 
 ### Queued
 
-- [ ] **Run the ARM64 hardware suites against v0.17.0.** Deliberate exception,
-      taken 2026-08-22: the release is cut Sunday 2026-08-23 and the Pi 400 is
-      not to hand until **Friday 2026-08-28**.
+- [x] **Run the ARM64 hardware suites against v0.17.0 — DONE 2026-08-29.**
+      **At the tag, the criterion FAILED: integration 1255/2** on the Pi in a
+      bare shell (`HEAD == v0.17.0`, banner `v0.17.0`, not dirty). Unit 123/0,
+      lessons 32/0, PTY 36/0.
+
+      A bare shell is the required context, not a strict reading of it:
+      `docs/Guides/Install.md` states "the suites set their own environment, so
+      they pass in a bare shell without `setup.sh` having been sourced". The
+      same run after `. ./setup.sh` is 1257/0 — that number is **contaminated
+      and satisfies nothing**. It is recorded only because it is how the defect
+      stayed invisible through the release.
+
+      **The release is sound.** The two integration failures are not an ARM64
+      fault — they fail identically on x86, and the unverified assembly that
+      prompted this entry behaved correctly. The deliberate exception taken on
+      2026-08-22 was justified after the fact.
+
+      **What the hardware run actually caught was the suite.** Three `help`
+      assertions added by `2-where-word` inherited `BASICFORTH_DOCS` from the
+      surrounding shell: green after `. ./setup.sh`, `(BASICFORTH_DOCS not
+      set)` in a clean environment. The Pi exposed them because it has no
+      `~/.basicforth` to supply a docs path by accident, where this laptop
+      does. One of the three was **vacuous** — it asserted `no help for` was
+      absent, which it also is from `(BASICFORTH_DOCS not set)`, so it passed
+      hardest when help was most broken. Fixed in `1-help-env-dep`.
+
+      Worth keeping: the run's value was not the arch. It was a machine
+      without the developer's convenience state, which is the same thing
+      `env -u` is supposed to simulate and evidently did not, since these
+      assertions predate this run and the suite is checked that way.
+
+      Original entry follows.
+      The Pi 400 was not to hand until 2026-08-28.
 
       Everything up to `ba8c236` ran on the Pi on 2026-08-21, all four suites.
       Recomputed at release time, the commits merged after it are:
@@ -91,9 +121,40 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       instructions, no barriers, nothing writing memory it then executes. That
       is not the shape qemu mispredicts; see `docs/Versioning.md` §Before the
       tag.
-      Done when: `make run-test run-integration run-lessons run-pty` are green
-      on the Pi at the v0.17.0 tag. A failure is a `v0.17.1`, not a retraction.
+      **Done when — REDEFINED 2026-08-29.** The original gate was:
 
+          all four suites green on the Pi at the v0.17.0 tag;
+          a failure is a v0.17.1, not a retraction.
+
+      It **cannot be met, now or ever**: `1-help-env-dep` showed the fault is
+      in the tag's own test file, so a bare-shell run at the tag is 1255/2 on
+      every machine and no change to BasicForth can alter that — the files are
+      frozen by the tag. Left as written, this item stays open permanently
+      while describing a release that is actually fine.
+
+      The gate is therefore, naming the tree rather than "the binary":
+
+          all four suites green on the Pi, in a bare shell, on a checkout at
+          v0.17.0 with EXACTLY ONE file replaced -- tests/test_integration.sh,
+          carrying the 1-help-env-dep fix.
+
+      **MET** — unit 123/0, integration 1257/0, lessons 32/0, PTY 36/0.
+
+      "The release binary" was the wrong phrase and is dropped. The suites do
+      not all run one artefact:
+
+      - `run-test` builds a **separate** binary — `test_basicforth.c` plus
+        `test_helper_arm64.s` linked against `core.o`. It never runs
+        `basicforth` at all; what it shares with the release is `core.o`.
+      - `run-integration`, `run-pty`, `run-lessons` run the built `basicforth`,
+        but also read the checkout's `src/forth/core.fs`, `docs/` and lesson
+        files — all at the tag here.
+
+      So what is verified is **the v0.17.0 tree on real ARM64, minus one test
+      file**, not a single shipped artefact. That is narrower than the original
+      gate, which would have proven the tag good as shipped, tests included.
+      It is the most that can be shown once the tag's own tests are the fault,
+      and it is the part that decides whether the release is sound.
 - [ ] **CI on GitHub Actions, including native ARM64.** There is no CI at all
       today: nothing checks a push except remembering to run four suites twice.
       Scoped 2026-08-22, not started.
