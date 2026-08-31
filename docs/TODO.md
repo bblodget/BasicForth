@@ -307,6 +307,55 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Detail: `docs/Package_Install.md` is the full story with the rejected
       alternatives; `docs/Package_Registry.md` §Sources and §Local Layout.
 
+- [ ] **`[ENGINE]` `+to` silently does the wrong thing on a local.** Found
+      2026-08-29 while writing a game loop. It behaves as plain `to`, storing
+      the increment instead of adding it:
+
+          : t1 {: | n :}  5 0 do  1 +to n  n .  loop ;   ->  1 1 1 1 1
+          0 value gv
+          : t2  5 0 do  1 +to gv  gv .  loop ;           ->  1 2 3 4 5
+          : t3 {: | n :}  5 0 do  n 1 + to n  n .  loop ; ->  1 2 3 4 5
+
+      **Cause is in `+to` itself** (`core.fs`), not in locals. It compiles the
+      fetch by looking the name up with `find`, and **a local is not in the
+      dictionary** — it is resolved by the locals mechanism. So `find` misses,
+      the `else 2drop then` arm compiles neither the fetch nor the `+`, and the
+      trailing `postpone to` stores the bare increment.
+
+      The faulty assumption is written in its own comment: *"no name, or
+      unknown: TO reports it."* True for a typo; false for a local, where `to`
+      succeeds. So nothing reports anything.
+
+      **Wrong numbers in silence is the same failure class that got `does>` and
+      `is <local>` refused** (see the locals entry). Whatever is done here, it
+      must not be a quiet half-answer: either `+to` resolves locals the way
+      `to` does, or it refuses them and says so.
+      Done when: `+to` on a local either accumulates correctly or is refused
+      with a message, `+to` on a value and on a variable are unchanged, and a
+      suite case covers the local — one that FAILS against today's build.
+
+- [ ] **Put `s,` and `nl,` in `core.fs`.** Compiling a string at `HERE` has no
+      word, so anything laying down text data writes its own:
+
+          : s, ( c-addr u -- )  here over allot swap cmove ;
+          : nl, 10 c, ;
+
+      Written for Dark Star's instruction pages 2026-08-29. `c,` and `,` exist
+      for bytes and cells; a string is the obvious third, and `row,` in
+      `graphics.fs` is already the same shape for bitmap art.
+
+      It pairs with `text`, which honours an embedded newline (10), so a whole
+      page of prose is one blob and one draw call. Without `s,` the choices are
+      `c,` per character or a separate `s"` and `text` call per line.
+
+      Note the capture idiom is `HERE TO <value>`, not `here constant <name>`:
+      `constant` builds its header **at** `HERE`, so the recorded address is
+      the header, not the data. Measured — the string came back with the
+      header's bytes in front of it.
+      Done when: both are in `core.fs`, documented on the Language-Reference
+      page that covers `c,` and `,`, and a suite case round-trips a compiled
+      string with `type`.
+
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
       miscompile and the bare `unresolved control flow` message both came out
