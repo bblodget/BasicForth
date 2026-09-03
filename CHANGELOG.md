@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **`s,` and `nl,`** — append the bytes of a string, and a newline, to the
+  dictionary. `,` and `c,` existed for cells and bytes; a string is the obvious
+  third, and anything laying down text data had been writing its own. No count
+  is stored and nothing is aligned, so `s" ..." s, nl,` lines run together into
+  one blob that `text` draws in a single call. Written for Dark Star's
+  instruction pages.
+
 ### Fixed
 
 - **`+to` on a local stored the increment instead of adding it.** `1 +to n`

@@ -208,6 +208,13 @@
 : HOLDS     begin dup 0 > while 1- 2dup + c@ hold repeat 2drop ;
 : .(        \ parse and print text up to the closing paren
             [char] ) parse type ; immediate
+\ S, appends the BYTES of a string at HERE — the third of `,` (a cell) and
+\ `c,` (a byte). No count is stored and nothing is aligned: it lays text down
+\ the way `c,` lays bytes, so a page of prose is one blob and `text` draws it
+\ in one call (it honours an embedded 10). NL, is that newline. Take HERE
+\ before and after if the length is wanted; ALIGN before any cell that follows.
+: S,        ( c-addr u -- )  here over allot swap move ;
+: NL,       ( -- )  10 c, ;
 
 \ Defining words
 \ The cell is COMMA'd, not ALLOTed, so a new variable reads 0. `allot` hands

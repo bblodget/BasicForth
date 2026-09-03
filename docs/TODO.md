@@ -322,27 +322,13 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       interpreter already had the lookup, `+to` just was not asking it. Three
       suite cases added, each verified to FAIL against the v0.17.0 `core.fs`.
 
-- [ ] **Put `s,` and `nl,` in `core.fs`.** Compiling a string at `HERE` has no
-      word, so anything laying down text data writes its own:
-
-          : s, ( c-addr u -- )  here over allot swap cmove ;
-          : nl, 10 c, ;
-
-      Written for Dark Star's instruction pages 2026-08-29. `c,` and `,` exist
-      for bytes and cells; a string is the obvious third, and `row,` in
-      `graphics.fs` is already the same shape for bitmap art.
-
-      It pairs with `text`, which honours an embedded newline (10), so a whole
-      page of prose is one blob and one draw call. Without `s,` the choices are
-      `c,` per character or a separate `s"` and `text` call per line.
-
-      Note the capture idiom is `HERE TO <value>`, not `here constant <name>`:
-      `constant` builds its header **at** `HERE`, so the recorded address is
-      the header, not the data. Measured — the string came back with the
-      header's bytes in front of it.
-      Done when: both are in `core.fs`, documented on the Language-Reference
-      page that covers `c,` and `,`, and a suite case round-trips a compiled
-      string with `type`.
+- [x] **Put `s,` and `nl,` in `core.fs` — DONE 2026-09-03** (branch
+      `2-string-comma`). Exactly the two definitions written for Dark Star's
+      instruction pages, next to `.(` under core extension words; documented
+      on the Memory page after `c,`, with a round-trip case in the suite.
+      Bytes only — no count, no align — so a page of prose is one blob and
+      one `text` call. The capture idiom is still `HERE TO <value>`, not
+      `here constant <name>`: `constant` builds its header **at** `HERE`.
 
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
