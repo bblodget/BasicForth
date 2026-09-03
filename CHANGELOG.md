@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`+to` on a local stored the increment instead of adding it.** `1 +to n`
+  in a loop gave `1 1 1 1 1`, silently, where a `value` gave `1 2 3 4 5`. The
+  fetch was compiled by looking the name up with `find`, and a local is not in
+  the dictionary — the interpreter resolves it before `find` is ever asked. So
+  nothing was fetched, nothing was added, and `to` stored the bare `n`. The
+  fetch now goes through `evaluate`, which is the interpreter, so a local
+  resolves — and shadows a `value` of the same name — exactly as it does when
+  read. `+to` on a `value` and on a variable are unchanged, and the error paths
+  are still `to`'s, verbatim. Found writing Dark Star's intro loop.
+
 ## v0.17.0 — 2026-08-23
 
 **The package system is still being built.** What lands here is the groundwork
