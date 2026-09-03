@@ -188,6 +188,23 @@ Append a single byte to the dictionary.
     create greet 72 c, 105 c,
     greet c@ emit  greet 1+ c@ emit   \ Hi
 
+## s, ( c-addr u -- )
+Append the bytes of a string to the dictionary — the third of `,` (a cell) and
+`c,` (a byte). No count is stored and nothing is aligned, so several `s,` and
+`nl,` run together into one blob; keep the length yourself by taking `here`
+before and after.
+
+    : two-lines  here  s" Hello" s,  nl,  s" World" s,  here over - ;
+    two-lines type                \ Hello, newline, World
+    two-lines drop 5 + c@ .       \ 10
+
+`text` honours an embedded newline, so a page of prose built this way is one
+draw call. Follow with `align` before storing cells.
+
+## nl, ( -- )
+Append a newline (10) to the dictionary. `s" ..." s,  nl,` ends a line of
+text laid down with `s,`.
+
 ## align ( -- )
 Advance `here` to the next 8-byte boundary (a no-op if already aligned). Use
 after byte-granular building (`c,`, string data) before storing cells.

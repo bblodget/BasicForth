@@ -912,6 +912,12 @@ assert_contains "constant arith"     "42 constant x x x + ."                   "
 assert_result "create allot"       "create buf 100 allot 42 buf ! buf @ ."   "42"
 assert_contains "here"               "here 0 <> ."                             "-1"
 assert_contains "comma"              "here 42 , here swap - ."                 "8"
+# S, lays down bytes only: no count, no align. Length = here after - here before.
+# Built inside a definition because s" is compile-only here.
+assert_result "s, round-trips through type" ': mk here s" abc" s, nl, s" de" s, here over - ; mk type'  "abc
+de"
+assert_result "s, length"          ': mk here s" abc" s, nl, s" de" s, here swap - ; mk .'   "6"
+assert_result "nl, is a 10"        ': mk here s" abc" s, nl, ; mk 3 + c@ .'                  "10"
 assert_result "variable"           "variable x 99 x ! x @ ."                "99"
 assert_contains "two variables"      "variable a variable b 10 a ! 20 b ! a @ b @ + ."  "30"
 assert_result "variable starts 0"  "variable z0 z0 @ ."                      "0"
