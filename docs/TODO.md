@@ -359,7 +359,15 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
 - [ ] **Finish the Dark Star port.** Nearly done — needs polish. A good stress
       test of the engine, and historically our best bug-finder: the `CASE`
       miscompile and the bare `unresolved control flow` message both came out
-      of it. Lives in a private repo outside this tree for now.
+      of it — and, 2026-08-29, `+to` on a local (filed above), found while
+      writing its intro-screen loop. Lives in a private repo outside this tree
+      for now.
+
+      Current state 2026-08-31: entry word and idempotent `on-start` done, the
+      intro screens are in progress (page 1 slides in and renders). It also
+      turned up two things worth having here — `s,`/`nl,` (filed above) and the
+      fact that `set-surface` is a general off-screen draw target, not just
+      something the SDL backend calls.
 
 - [x] **Word the voice-engine skip so it names its remedy — DONE 2026-08-16**
       (branch `2-suite-skip-wording`). Both fixes taken: the suite now derives
