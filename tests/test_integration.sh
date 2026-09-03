@@ -2879,6 +2879,12 @@ assert_contains "+to twice in one def" '0 value x 0 value y : t 1 +to x 2 +to y 
 assert_contains "+to twice on a line"  '0 value x 1 +to x 2 +to x x .'                "3"
 assert_contains "+to negative"         '10 value x -4 +to x x .'                      "6"
 assert_result "+to leaves no cells"  '0 value x 1 +to x depth .'                    "0"
+# A local is not in the dictionary, so the fetch must go through the interpreter
+# (EVALUATE), which resolves locals before FIND. A FIND-based fetch compiled
+# nothing for a local and TO stored the bare increment: 1 1 1 1 1, silently.
+assert_result "+to on a local"             ': t {: | n :} 5 0 do 1 +to n n . loop ; t'         "1 2 3 4 5"
+assert_result "+to on a named local"       ': t {: a | b :} a to b 3 +to b b ; 4 t .'          "7"
+assert_result "+to local shadows a value"  '0 value n : t {: | n :} 3 0 do 2 +to n loop n . ; t n .'  "6 0"
 # The error paths are TO's, verbatim — nothing is caught and re-reported here.
 assert_error  "+to refuses a variable"     'variable v 1 +to v'   "v: not a value or deferred word"
 assert_error  "+to on an unknown name"     '1 +to no-such-value'  "? no-such-value"

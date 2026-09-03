@@ -120,16 +120,17 @@ ordinary word's compiled code.
     5 value count   9 to count   count .   \ 9
 
 ## +to ( n "name" -- )
-Add `n` to a `value` — `1 +to count` is `count 1 + to count`, said once instead
-of naming the value twice. Works the same at the prompt and inside a definition,
-including in a loop, and takes a negative `n` to subtract.
+Add `n` to a `value` or a local — `1 +to count` is `count 1 + to count`, said
+once instead of naming the target twice. Works the same at the prompt and inside
+a definition, including in a loop, and takes a negative `n` to subtract.
 
     5 value count   3 +to count   count .   \ 8
     : tick  1 +to count ;
+    : sum  {: n | acc :}  n 0 do  i +to acc  loop  acc ;
 
-The target must be a `value`: anything else is refused by `to` itself, with the
-same message a bare `to` would give. An extension, not Forth 2012 — spelled as
-gforth spells it.
+The target must be a `value` or a local: anything else is refused by `to`
+itself, with the same message a bare `to` would give. An extension, not Forth
+2012 — spelled as gforth spells it.
 
 ## defer ( "name" -- )
 Create a word whose behavior is filled in *later* — a named seam. Running it

@@ -307,32 +307,20 @@ lessons, tests and tooling carry no such limit and run in parallel freely.
       Detail: `docs/Package_Install.md` is the full story with the rejected
       alternatives; `docs/Package_Registry.md` §Sources and §Local Layout.
 
-- [ ] **`[ENGINE]` `+to` silently does the wrong thing on a local.** Found
-      2026-08-29 while writing a game loop. It behaves as plain `to`, storing
-      the increment instead of adding it:
-
-          : t1 {: | n :}  5 0 do  1 +to n  n .  loop ;   ->  1 1 1 1 1
-          0 value gv
-          : t2  5 0 do  1 +to gv  gv .  loop ;           ->  1 2 3 4 5
-          : t3 {: | n :}  5 0 do  n 1 + to n  n .  loop ; ->  1 2 3 4 5
-
-      **Cause is in `+to` itself** (`core.fs`), not in locals. It compiles the
-      fetch by looking the name up with `find`, and **a local is not in the
-      dictionary** — it is resolved by the locals mechanism. So `find` misses,
-      the `else 2drop then` arm compiles neither the fetch nor the `+`, and the
-      trailing `postpone to` stores the bare increment.
-
-      The faulty assumption is written in its own comment: *"no name, or
-      unknown: TO reports it."* True for a typo; false for a local, where `to`
-      succeeds. So nothing reports anything.
-
-      **Wrong numbers in silence is the same failure class that got `does>` and
-      `is <local>` refused** (see the locals entry). Whatever is done here, it
-      must not be a quiet half-answer: either `+to` resolves locals the way
-      `to` does, or it refuses them and says so.
-      Done when: `+to` on a local either accumulates correctly or is refused
-      with a message, `+to` on a value and on a variable are unchanged, and a
-      suite case covers the local — one that FAILS against today's build.
+- [x] **`+to` silently did the wrong thing on a local — DONE 2026-09-03**
+      (branch `2-plus-to-locals`). Found 2026-08-29 while writing a game loop:
+      `1 +to n` in a loop gave `1 1 1 1 1` where a `value` gave `1 2 3 4 5`.
+      The fetch was compiled by looking the name up with `find`, and a local is
+      not in the dictionary — so nothing was fetched, nothing was added, and
+      `to` stored the bare increment. Fixed in `core.fs` alone: the fetch now
+      goes through `evaluate`, which is the interpreter, and the interpreter
+      resolves a local before it consults `find`. That also fixes the case the
+      report missed — a local shadowing a `value` of the same name, where `find`
+      found the *global* and `to` stored into the local. Every error path is
+      still `to`'s verbatim, checked against the old build's suite text.
+      Filed as `[ENGINE]`, but no `.s` changed and no slot was used: the
+      interpreter already had the lookup, `+to` just was not asking it. Three
+      suite cases added, each verified to FAIL against the v0.17.0 `core.fs`.
 
 - [ ] **Put `s,` and `nl,` in `core.fs`.** Compiling a string at `HERE` has no
       word, so anything laying down text data writes its own:
