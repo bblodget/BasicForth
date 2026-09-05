@@ -168,7 +168,7 @@ help:
 	@echo ""
 	@echo "Install:"
 	@echo "  make install         Install to $(PREFIX) (override: PREFIX=~/.local)"
-	@echo "  make uninstall       Remove an installation from $(PREFIX)"
+	@echo "  make uninstall       Remove an installation from $(PREFIX) (use the PREFIX you installed with)"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean           Remove build artifacts for all architectures"
