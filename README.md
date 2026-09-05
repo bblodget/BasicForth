@@ -23,12 +23,9 @@ sudo make install              # or, without root: make install PREFIX=~/.local
 basicforth
 ```
 
-Build as yourself, then install: `make install` would build too, but under
-`sudo` that leaves root-owned files in the checkout. The installed copy works
-out where its own files are, so nothing needs setting up around it. The
-`~/.local` form needs `~/.local/bin` on your `PATH`; most distributions add
-it only if the directory existed at login, so a first install may need one
-log out and back in.
+The `~/.local` form needs `~/.local/bin` on your `PATH`; most distributions
+add it only if the directory existed at login, so a first install may need
+one log out and back in.
 
 To use the graphics, sound, gamepad or speech libraries, install them too;
 each is loaded on demand, so a missing one costs exactly its own feature:
