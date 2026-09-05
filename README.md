@@ -10,6 +10,41 @@ Threaded Code (STC) with 64-bit cells.
 Goal:  Fun, retro-inspired Forth environment for graphics, sounds, games
 and robotics on modern ARM64 and x86-64 hardware.
 
+## Quick Install
+
+Debian or Ubuntu, including Raspberry Pi OS:
+
+```sh
+sudo apt install git binutils gcc make
+git clone https://github.com/bblodget/BasicForth.git
+cd BasicForth
+make
+sudo make install              # or, without root: make install PREFIX=~/.local
+basicforth
+```
+
+Build as yourself, then install: `make install` would build too, but under
+`sudo` that leaves root-owned files in the checkout. The installed copy works
+out where its own files are, so nothing needs setting up around it. The
+`~/.local` form needs `~/.local/bin` on your `PATH`; most distributions add
+it only if the directory existed at login, so a first install may need one
+log out and back in.
+
+To use the graphics, sound, gamepad or speech libraries, install them too;
+each is loaded on demand, so a missing one costs exactly its own feature:
+
+```sh
+sudo apt install libsdl3-dev libflite1
+```
+
+To remove it, `sudo make uninstall`, or `make uninstall` with the same
+`PREFIX` you installed with.
+
+Building from the checkout instead, the ARM64 cross-compile, and what
+`setup.sh` exports: **[Building](#building)** below, or the full
+**[install guide](docs/Guides/Install.md)** — also `help install` at the
+prompt.
+
 ## Philosophy
 
 BasicForth grows out of my earlier bare-metal x86-32 Forth project. The
@@ -33,44 +68,6 @@ guiding ideas:
 
 See [docs/Planning.md](docs/Planning.md) for the full vision, design decisions,
 and project phases.
-
-## Quick Install
-
-Debian or Ubuntu, including Raspberry Pi OS:
-
-```sh
-sudo apt install git binutils gcc make
-git clone https://github.com/bblodget/BasicForth.git
-cd BasicForth
-make install PREFIX=~/.local
-basicforth
-```
-
-`make install` builds first, so there is no separate `make` step. It needs
-`~/.local/bin` on your `PATH` — most distributions add it only if the
-directory already existed at login, so a first install may need one log out
-and back in.
-
-The installed copy works out where its own files are, so it needs no
-environment set: `setup.sh` is for running from a checkout, not for this.
-
-Remove it with the **same** prefix you installed with:
-
-```sh
-make uninstall PREFIX=~/.local
-```
-
-Graphics, sound and speech are optional and `dlopen`ed on demand — a missing
-library costs exactly its own feature:
-
-```sh
-sudo apt install libsdl3-dev libflite1
-```
-
-Building from the checkout instead, the ARM64 cross-compile, and what
-`setup.sh` exports: **[Building](#building)** below, or the full
-**[install guide](docs/Guides/Install.md)** — also `help install` at the
-prompt.
 
 ## Status
 

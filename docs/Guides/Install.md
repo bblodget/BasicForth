@@ -171,7 +171,9 @@ failing.
 
 ## installing
 
-Everything above runs BasicForth out of the checkout. To install it properly:
+Everything above runs BasicForth out of the checkout. To install it properly,
+having built it as yourself first (`make install` would build too, but under
+`sudo` that leaves root-owned files in the checkout):
 
     sudo make install                 # to /usr/local
     make install PREFIX=~/.local      # or somewhere that needs no root
